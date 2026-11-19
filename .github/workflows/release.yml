@@ -1,0 +1,141 @@
+# Publishes @isokron/mcp-check to npm, then its server.json to the MCP Registry, when a release tag
+# v<version> is pushed (e.g. v1.0.0).
+#
+# npm trusted publishing (OIDC): no npm token is stored anywhere. npm accepts the publish only from this
+# repository, this workflow file (release.yml) and the environment named npm, as registered on npm
+# for the package (Settings > Trusted Publisher > GitHub Actions: isokron-ai / mcp-check /
+# release.yml / npm). The npm environment requires a reviewer's approval before the publish job runs.
+# Provenance is attached because the repository and the package are public.
+#
+# MCP Registry: the registry job logs in with GitHub OIDC (mcp-publisher login github-oidc), which
+# proves this workflow runs in the isokron-ai organization and so may publish io.github.isokron-ai/*
+# names. It runs in its own job without the npm environment, so its token is not one npm accepts.
+# mcp-publisher is a pinned release binary checked against its sha256.
+#
+# The tag must match package.json, package-lock.json and server.json; a prerelease version is refused
+# here (publish it by hand with --tag), and so is a tag on a commit that is not on main. Requirements (npm
+# docs): npm CLI 11.5.1 or later (pinned below to 11.21.3), Node 22.14.0 or later. The v1 tag that `uses: isokron-ai/mcp-check@v1` follows is moved by hand after a release.
+
+name: release
+
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # mcp-publisher v1.8.9 (github.com/modelcontextprotocol/registry), linux-amd64 release tarball;
+  # sha256 from registry_1.8.9_checksums.txt, recorded 18 Nov 2026.
+  MCP_PUBLISHER_URL: https://github.com/modelcontextprotocol/registry/releases/download/v1.8.9/mcp-publisher_linux_amd64.tar.gz
+  MCP_PUBLISHER_SHA256: 4d527ca8f1ced0394c962dc925c2a4a4addef441cbefd62501c875e9481823a8
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      name: ${{ steps.pkg.outputs.name }}
+      version: ${{ steps.pkg.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0   # the whole history, to check the tag is on main
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+          package-manager-cache: false
+      - id: pkg
+        name: The tag matches the version everywhere, and the version is not on npm yet
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          name="$(node -p "require('./package.json').name")"
+          version="$(node -p "require('./package.json').version")"
+          [ "$TAG" = "v$version" ] || { echo "::error::tag $TAG does not match $name $version (expected v$version)"; exit 1; }
+          case "$version" in *-*) echo "::error::prerelease $version: publish it by hand with --tag"; exit 1 ;; esac
+          for v in "$(node -p "require('./package-lock.json').version")" "$(node -p "require('./server.json').version")" "$(node -p "require('./server.json').packages[0].version")"; do
+            [ "$v" = "$version" ] || { echo "::error::package-lock.json or server.json says $v, package.json $version"; exit 1; }
+          done
+          if npm view "$name@$version" version >/dev/null 2>&1; then echo "::error::$name@$version is already on npm"; exit 1; fi
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: The tagged commit is on main
+        env:
+          SHA: ${{ github.sha }}
+        run: |
+          git merge-base --is-ancestor "$SHA" origin/main || { echo "::error::the tag points at $SHA, which is not on main"; exit 1; }
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npm test
+      - run: npm run vendor:verify
+      - name: Dry run (what would be published)
+        run: npm publish --dry-run --access public
+
+  publish:
+    needs: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # the npm Trusted Publisher entry names this environment; it also holds the owner's approval
+    environment:
+      name: npm
+      url: https://www.npmjs.com/package/${{ needs.check.outputs.name }}
+    permissions:
+      contents: read
+      id-token: write   # the OIDC token npm exchanges for a short-lived publish credential (and signs provenance with)
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # no registry-url: setup-node would write an .npmrc with a placeholder token
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+          package-manager-cache: false   # no cache in a job that can publish
+      - name: npm 11
+        run: npm install -g npm@11.21.3 --no-audit --no-fund --loglevel=error && npm --version
+      # Nothing is installed here: the package ships its own files only, so nothing third-party is installed or run
+      # in the job that holds the publish credential, and no lifecycle script runs.
+      - name: Publish
+        run: npm publish --provenance --access public --ignore-scripts
+
+  registry:
+    needs: [check, publish]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write   # GitHub OIDC for mcp-publisher login github-oidc
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Wait until npm serves the new version (the registry checks the package's mcpName)
+        env:
+          NAME: ${{ needs.check.outputs.name }}
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          for i in $(seq 1 30); do
+            got="$(npm view "$NAME@$VERSION" mcpName 2>/dev/null || true)"
+            if [ "$got" = "$(node -p "require('./server.json').name")" ]; then echo "npm serves $NAME@$VERSION"; exit 0; fi
+            sleep 10
+          done
+          echo "::error::npm does not serve $NAME@$VERSION with the right mcpName after 5 minutes"
+          exit 1
+      - name: Install mcp-publisher (pinned, checked)
+        run: |
+          d="$RUNNER_TEMP/mcp-publisher"
+          mkdir -p "$d"
+          curl -fsSL --retry 3 -o "$d/mp.tgz" "$MCP_PUBLISHER_URL"
+          echo "$MCP_PUBLISHER_SHA256  $d/mp.tgz" | sha256sum -c --quiet -
+          tar -xzf "$d/mp.tgz" -C "$d" mcp-publisher
+          echo "$d" >> "$GITHUB_PATH"
+      - name: Log in to the MCP Registry (GitHub OIDC)
+        run: mcp-publisher login github-oidc
+      - name: Publish server.json
+        run: mcp-publisher publish

@@ -1,0 +1,183 @@
+# Corpus (internal): grades the tools/list of pinned third-party open-source MCP servers, in batches
+# dispatched by hand. Results are a dataset kept private; no grade of a named server is published from
+# here (corpus/README.md says what has to exist first).
+#
+# Runner: isokron-ai/mcp-writecheck-action's corpus driver (corpus/run-shard.mjs), checked out at a
+# commit on its main, with its target list (corpus/targets.json.age), its digest-pinned images, its
+# sandbox, network guard, decrypt and encrypt scripts. Nothing of it is copied here. The driver runs with
+# --surface-only: each target is installed and started in its sandbox, sent initialize and tools/list,
+# and stopped. No tool is called, no manifest is written, mcp-writecheck is not run. The job stops
+# before anything is decrypted unless the checked-out driver has that flag.
+#
+# What is public: job and step names are generic; the log and the job summary carry only the runner's
+# label and one "run finished, exit N" line per target. The recorded tool lists and this repository's
+# grades (corpus/grade.mjs, run in a container with no network) are age-encrypted to IsoKron's archive
+# key (the runner's corpus/recipients.txt) before upload; the private key is not in CI. A target's
+# grades never fail a job: only a harness error, a time limit or a grader failure does.
+#
+# Security: manual dispatch only, from main; no pull_request or pull_request_target. CORPUS_TARGETS_KEY
+# lives only in this repository's `corpus` environment (deployment branches: main) and is read only by
+# the decrypt step. The plan job has no environment. The runner commit must be on the runner's main.
+# Third-party actions are pinned by full SHA.
+
+name: corpus
+
+on:
+  workflow_dispatch:
+    inputs:
+      only:
+        description: Target IDs for this batch, comma-separated (e.g. t13,t09,t08), each once; at most 40, run on up to 16 parallel shards. Empty runs every target on 16 shards.
+        required: false
+        default: ''
+      runner-ref:
+        description: isokron-ai/mcp-writecheck-action commit to run with (full 40-character SHA, on its main). Empty for RUNNER_REF below.
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: corpus
+  cancel-in-progress: false
+
+env:
+  RUNNER_REPO: isokron-ai/mcp-writecheck-action
+  # The first runner commit with --surface-only; set when that change lands on the runner's main.
+  RUNNER_REF: ''
+  # age v1.3.2, linux-amd64 release tarball (sha256 recorded 16 Nov 2026), as in the runner's corpus.yml.
+  AGE_URL: https://github.com/FiloSottile/age/releases/download/v1.3.2/age-v1.3.2-linux-amd64.tar.gz
+  AGE_SHA256: cbe24006683f8eb669266162894b9a522a1af52f2665fbc63a4bb032ed26ac10
+
+jobs:
+  plan:
+    if: github.repository == 'isokron-ai/mcp-check' && github.ref == 'refs/heads/main'
+    name: corpus-plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      shards: ${{ steps.batch.outputs.shards }}
+      matrix: ${{ steps.batch.outputs.matrix }}
+      ref: ${{ steps.ref.outputs.ref }}
+    steps:
+      - id: ref
+        name: Choose the runner commit
+        env:
+          INPUT_REF: ${{ inputs.runner-ref }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ref="${INPUT_REF:-$RUNNER_REF}"
+          [[ "$ref" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::runner-ref (or RUNNER_REF) must be a full 40-character commit SHA"; exit 1; }
+          status=$(gh api "repos/$RUNNER_REPO/compare/${ref}...main" --jq .status || true)
+          if [ "$status" != "ahead" ] && [ "$status" != "identical" ]; then
+            echo "::error::runner-ref $ref is not on $RUNNER_REPO main (compare: ${status:-error})"
+            exit 1
+          fi
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ env.RUNNER_REPO }}
+          ref: ${{ steps.ref.outputs.ref }}
+          path: runner
+          sparse-checkout: /corpus/check-batch.sh
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - id: batch
+        name: Plan the batch
+        env:
+          ONLY_IN: ${{ inputs.only }}
+        run: runner/corpus/check-batch.sh output "$GITHUB_OUTPUT"
+
+  corpus:
+    needs: plan
+    if: github.repository == 'isokron-ai/mcp-check' && github.ref == 'refs/heads/main'
+    name: corpus-shard-${{ matrix.shard }}
+    runs-on: ubuntu-24.04
+    environment: corpus
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      max-parallel: 16
+      matrix:
+        shard: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          package-manager-cache: false
+      - name: Check out the runner (public)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ env.RUNNER_REPO }}
+          ref: ${{ needs.plan.outputs.ref }}
+          path: runner
+          sparse-checkout: /corpus/
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: Check the batch
+        # The input is checked again here, from inputs.only, not taken from the plan job (runner/corpus/check-batch.sh).
+        env:
+          ONLY_IN: ${{ inputs.only }}
+          PLAN_SHARDS: ${{ needs.plan.outputs.shards }}
+          SHARD: ${{ matrix.shard }}
+          JOB_INDEX: ${{ strategy.job-index }}
+          JOB_TOTAL: ${{ strategy.job-total }}
+        run: runner/corpus/check-batch.sh env "$GITHUB_ENV"
+      - name: Require the surface-only runner
+        run: |
+          grep -q -- "'--surface-only'" runner/corpus/run-shard.mjs || {
+            echo "::error::the runner at this commit has no --surface-only mode (corpus/README.md, The runner hook)"
+            exit 1
+          }
+      - name: Install age
+        working-directory: runner
+        run: corpus/install-age.sh
+      - name: Guard the container networks
+        working-directory: runner
+        run: sudo corpus/net-guard.sh
+      - name: Decrypt the target list
+        working-directory: runner
+        env:
+          CORPUS_TARGETS_KEY: ${{ secrets.CORPUS_TARGETS_KEY }}
+        run: corpus/decrypt-targets.sh
+      - id: run
+        name: Run the shard
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: corpus/run-surface-shard.sh
+      - id: grade
+        name: Grade the recorded tool lists
+        if: always() && steps.run.outcome == 'success'
+        run: corpus/grade-shard.sh
+      - id: encrypt
+        name: Encrypt the results
+        if: always()
+        working-directory: runner
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: corpus/encrypt-results.sh
+      - name: Upload the encrypted results
+        if: always() && steps.encrypt.outcome == 'success'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: corpus-shard-${{ matrix.shard }}
+          path: ${{ runner.temp }}/corpus-upload/
+          if-no-files-found: error
+          retention-days: 90
+      - name: Job summary
+        if: always()
+        working-directory: runner
+        run: corpus/summary.sh
+      - name: Job status
+        if: always()
+        env:
+          RC: ${{ steps.run.outputs.rc }}
+          GRADE: ${{ steps.grade.outcome }}
+        run: |
+          [[ "${RC:-}" =~ ^[0-9]{1,3}$ ]] || RC=125
+          echo "run finished, exit $RC"
+          [ "$GRADE" = success ] || { echo "grader: $GRADE"; exit 1; }
+          [ "$RC" = "0" ]

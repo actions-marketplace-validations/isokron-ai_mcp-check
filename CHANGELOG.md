@@ -1,0 +1,16 @@
+# Changelog
+
+All notable changes to `@isokron/mcp-check` and the `isokron-ai/mcp-check` Action. The package follows [semantic versioning](https://semver.org/); the grading rubric has its own version (`rubric_version`), noted with each release.
+
+## 1.0.0 (unreleased)
+
+Rubric 2.1.0, MCP specification 2026-07-28, directory rules as read on 18 November 2026.
+
+First public release: the engine of the [isokron.ai/mcp-check](https://isokron.ai/mcp-check) web checker as a package, a command line, an MCP server and a GitHub Action, at one version.
+
+- **Engine**: 76 checks with stable IDs in six sections (MCP spec, Anthropic directory, OpenAI directory, poisoning and hidden text, schema and description quality, write-surface design), each with its source quoted verbatim, an explanation and a fix. Per-section grades A to F from severity-weighted deductions with published bands and caps ([RUBRIC.md](RUBRIC.md)). JSON Schema 2020-12 validation with the bundled Ajv 8.17.1. Safe-fix list, SHA-256 definition hashes and a diff that flags high-risk annotation changes.
+- **CLI** (`mcp-check`): text, Markdown, JSON and SARIF output; `--min-grade`, `--sections`, `--fix`, `--compare`, `--stdin`, `--sarif-uri`, `-o`. `mcp-check serve` runs the MCP server.
+- **Inputs**: `--url` (Streamable HTTP, 2026-07-28 stateless and the earlier handshake, SSE, paging; `--header` values read from the environment and never printed), `-- <command>` / `--command` (stdio), `--config auto|<file>` (Claude Desktop, Claude Code, Cursor, Windsurf, VS Code JSONC, Zed), `--repo` (static extraction with a provenance label), `--registry`, `--save`, a `Source:` line on every report, exit code 3 when a server cannot be reached. Every path sends `initialize` and `tools/list` only and keeps the size, page, time and output limits.
+- **MCP server** (`mcp-check serve`, `mcp-check-server`): `check_tools_list`, `explain_check`, `compare_tools_lists`, all read-only with output schemas; input limits of 2 MiB, 64 levels and 2,000 tools. Grades A in every graded section against itself. Registry name `io.github.isokron-ai/mcp-check`.
+- **GitHub Action** (`isokron-ai/mcp-check@v1`): a tool-list file or a server command; job summary with the grade table; reports artifact; SARIF with file locations and optional code-scanning upload; minimum-grade gate; baseline comparison; README badge as a shields.io endpoint file committed to the user's repository.
+- **Hardening**: job-summary text from the list or the server is escaped so it cannot form links, images or HTML; the Action never reads or writes through a symlink and writes only into a results folder it made; the server's stderr is fenced with `::stop-commands::`; the 2 MiB, 64-level and 2,000-tool limits apply in the CLI and the Action too.

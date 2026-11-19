@@ -1,0 +1,10 @@
+[
+{"jsonrpc":"2.0","id":1,"result":{"tools":[
+{"name":"list_operations","title":"List operations","description":"Lists every operation the backend supports, with ids. Use this when you need an operation id for execute_operation.","inputSchema":{"type":"object","properties":{"cursor":{"type":"string","description":"Page cursor"}},"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false,"openWorldHint":false}},
+{"name":"get_operation_schema","title":"Get operation schema","description":"Returns the JSON Schema of an operation's parameters. Use this before execute_operation.","inputSchema":{"type":"object","properties":{"operation_id":{"type":"string","description":"Operation id from list_operations"}},"required":["operation_id"],"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false,"openWorldHint":false}}
+],"nextCursor":"page-2"}},
+{"jsonrpc":"2.0","id":2,"result":{"tools":[
+{"name":"execute_operation","title":"Execute operation","description":"Executes any backend operation by id with the given parameters. Long operations run as tasks.","inputSchema":{"type":"object","properties":{"operation_id":{"type":"string","description":"Operation id"},"params":{"type":"object","description":"Parameters matching the operation schema"}},"required":["operation_id","params"]},"execution":{"taskSupport":"optional"},"annotations":{"readOnlyHint":false,"destructiveHint":true,"openWorldHint":false}},
+{"name":"op_17","description":"Legacy.","inputSchema":{"type":"object","properties":{}}}
+]}}
+]

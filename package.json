@@ -1,0 +1,51 @@
+{
+  "name": "@isokron/mcp-check",
+  "version": "1.0.0",
+  "description": "Grades an MCP server's tools/list against the MCP specification 2026-07-28, the Claude and ChatGPT directory rules, hidden-instruction patterns, schema quality and write-surface design. CLI, library, MCP server and GitHub Action.",
+  "mcpName": "io.github.isokron-ai/mcp-check",
+  "type": "module",
+  "main": "./engine/core.js",
+  "exports": {
+    ".": {
+      "import": "./src/index.js",
+      "require": "./engine/core.js"
+    },
+    "./core": "./engine/core.js",
+    "./server": "./src/server.js",
+    "./tools": "./src/tools.js",
+    "./capture": "./src/capture.js",
+    "./report": "./src/report.js",
+    "./package.json": "./package.json"
+  },
+  "bin": {
+    "mcp-check": "bin/mcp-check.js",
+    "mcp-check-server": "bin/mcp-check-server.js"
+  },
+  "files": [
+    "bin/",
+    "src/",
+    "engine/",
+    "RUBRIC.md",
+    "CHANGELOG.md",
+    "NOTICE",
+    "server.json"
+  ],
+  "scripts": {
+    "test": "node scripts/test.mjs",
+    "dogfood": "node scripts/dogfood.mjs",
+    "vendor": "node scripts/vendor.mjs",
+    "vendor:verify": "node scripts/vendor.mjs --verify"
+  },
+  "keywords": ["mcp", "model-context-protocol", "mcp-server", "linter", "tool-annotations", "tools-list", "claude", "chatgpt", "sarif", "github-action", "isokron"],
+  "author": "Joshua Bryan, IsoKron (Stormhaven Enterprises LLC) (https://isokron.ai)",
+  "license": "MIT",
+  "homepage": "https://isokron.ai/mcp-check",
+  "repository": { "type": "git", "url": "git+https://github.com/isokron-ai/mcp-check.git" },
+  "bugs": { "url": "https://github.com/isokron-ai/mcp-check/issues" },
+  "engines": { "node": ">=20" },
+  "publishConfig": { "access": "public" },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "zod": "^4.6.7"
+  }
+}

@@ -1,0 +1,4 @@
+node_modules/
+*.tgz
+mcp-check-results/
+PUBLISH-CHECKLIST.md

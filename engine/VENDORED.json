@@ -1,0 +1,26 @@
+{
+  "from": "the isokron.ai/mcp-check web checker",
+  "rubric_version": "2.1.0",
+  "files": [
+    {
+      "path": "core.js",
+      "source": "core.js",
+      "sha256": "17bd7f7ed48e2ffe915275a378227daadc8bbe6a9404ea4bcb99366574a234c9"
+    },
+    {
+      "path": "vendor/ajv2020.min.js",
+      "source": "vendor/ajv2020.min.js",
+      "sha256": "d2f97a24636c44135e1ffffeea29656c06a1c1f71b315e958c88d0e8126c2100"
+    },
+    {
+      "path": "vendor/AJV-LICENSE.txt",
+      "source": "vendor/AJV-LICENSE.txt",
+      "sha256": "b48fc4370d9d3d3794f5c368b54ad097847f62a43663085832316376ec1193d0"
+    },
+    {
+      "path": "vendor/THIRD-PARTY-LICENSES.txt",
+      "source": null,
+      "sha256": "989430e06b114f008a165ce303ac68c5cbc8b4c28ce1fe41950599b29bc719bd"
+    }
+  ]
+}

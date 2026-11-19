@@ -1,0 +1,19 @@
+IsoKron MCP check (@isokron/mcp-check)
+Copyright (c) 2026 Stormhaven Enterprises LLC, doing business as IsoKron, and Joshua Bryan.
+Licensed under the MIT License (see LICENSE).
+
+"IsoKron" is a name of Stormhaven Enterprises LLC. The MIT License does not grant rights to it.
+
+This product bundles:
+
+- Ajv 8.17.1 (engine/vendor/ajv2020.min.js), the ajv-dist browser bundle of the JSON Schema 2020-12
+  validator. MIT License, Copyright (c) 2015-2021 Evgeny Poberezkin. Full texts of every licence below: engine/vendor/THIRD-PARTY-LICENSES.txt.
+  The bundle includes:
+    fast-deep-equal 3.1.3, MIT License, Copyright (c) 2017 Evgeny Poberezkin
+    fast-uri 3.0.1, BSD-3-Clause, Copyright (c) 2021 The Fastify Team, Copyright (c) 2011-2021 Gary Court
+    json-schema-traverse 1.0.0, MIT License, Copyright (c) 2017 Evgeny Poberezkin
+
+Check texts quote the published rules they test (the MCP specification, the Anthropic connector
+pre-submission checklist, the OpenAI plugin guidelines, the OWASP MCP Security Cheat Sheet and
+Anthropic's "Writing effective tools for agents"), each with its source URL, for the purpose of
+citing the rule a finding refers to. Those texts remain the property of their authors.

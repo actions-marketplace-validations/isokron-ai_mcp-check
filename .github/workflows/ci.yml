@@ -1,0 +1,108 @@
+# Tests every pull request and every push to main on GitHub's runners.
+#
+#   test        npm test on Node 20, 22 and 24 (the engine, the CLI, the MCP server, the Action script,
+#               the corpus grader), the engine's vendored hashes, and what npm would publish
+#   action      the Action itself (uses: ./) on a saved list, before any npm install (the Action runs
+#               with no dependencies), then on this package's own server, with a min-grade A gate, no
+#               SARIF upload and no badge
+#   ci-ok       passes only if every job above succeeded: the one required status check
+#
+# No secrets, read-only token, no pull_request_target: a pull request from a fork runs with the same
+# permissions as any other.
+
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["20", "22", "24"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ matrix.node }}
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npm test
+      - name: Engine files match engine/VENDORED.json
+        run: npm run vendor:verify
+      - name: What npm would publish
+        if: matrix.node == '22'
+        run: npm pack --dry-run
+
+  action:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+      # The Action needs no npm install: this step runs before any dependency exists in the checkout.
+      - name: No node_modules yet
+        run: test ! -e node_modules
+      - name: A saved tool list
+        id: file
+        uses: ./
+        with:
+          tools-file: test/catalogs/well-designed.json
+          min-grade: A
+          sections: spec,anthropic,openai,security,quality
+          artifact-name: mcp-check-file
+          results-dir: mcp-check-file
+      # The server under test (this package's MCP server) needs its own dependencies, as any user's would.
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: This package's own MCP server
+        id: server
+        uses: ./
+        with:
+          command: node bin/mcp-check-server.js
+          min-grade: A
+          artifact-name: mcp-check-server
+          results-dir: mcp-check-server
+      - name: The outputs are set
+        env:
+          FILE_PASSED: ${{ steps.file.outputs.passed }}
+          SERVER_PASSED: ${{ steps.server.outputs.passed }}
+          SERVER_ANTHROPIC: ${{ steps.server.outputs.grade-anthropic }}
+        run: |
+          [ "$FILE_PASSED" = true ] && [ "$SERVER_PASSED" = true ] && [ "$SERVER_ANTHROPIC" = A ] \
+            || { echo "::error::unexpected outputs: $FILE_PASSED $SERVER_PASSED $SERVER_ANTHROPIC"; exit 1; }
+
+  # The required status check (branch protection names this job, not the others).
+  ci-ok:
+    needs: [test, action]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every job succeeded
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "results: $RESULTS"
+          n=0
+          for r in $RESULTS; do
+            n=$((n + 1))
+            [ "$r" = success ] || { echo "::error::a required job ended $r"; exit 1; }
+          done
+          [ "$n" -eq 2 ] || { echo "::error::expected 2 job results, got $n"; exit 1; }

@@ -1,0 +1,25 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.isokron-ai/mcp-check",
+  "title": "IsoKron MCP check",
+  "description": "Grades an MCP tools/list against the MCP spec and Claude and ChatGPT directory rules. Read-only.",
+  "version": "1.0.0",
+  "websiteUrl": "https://isokron.ai/mcp-check",
+  "repository": {
+    "url": "https://github.com/isokron-ai/mcp-check",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "@isokron/mcp-check",
+      "version": "1.0.0",
+      "runtimeHint": "npx",
+      "packageArguments": [
+        { "type": "positional", "value": "serve" }
+      ],
+      "transport": { "type": "stdio" }
+    }
+  ]
+}
