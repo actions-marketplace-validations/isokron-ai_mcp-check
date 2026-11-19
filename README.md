@@ -10,7 +10,7 @@ One engine, four ways to run it:
 
 | | |
 |---|---|
-| **Web** | [isokron.ai/mcp-check](https://isokron.ai/mcp-check): paste a tool list; it is graded in your browser and never uploaded. |
+| **Web** | [isokron.ai/mcp-check](https://isokron.ai/mcp-check?utm_source=mcp-check-readme&utm_medium=readme): paste a tool list; it is graded in your browser and never uploaded. |
 | **CLI** | `npx @isokron/mcp-check tools.json` with text, Markdown, JSON or SARIF output and a minimum-grade gate. |
 | **GitHub Action** | `uses: isokron-ai/mcp-check@v1`: job summary, SARIF for code scanning, a gate, and a README badge. |
 | **MCP server** | `npx @isokron/mcp-check serve`: coding agents grade the server they are building. |
@@ -60,7 +60,8 @@ Every report of a fetched list carries a `Source:` line (and `source` in JSON). 
 | `--compare old.json` | Diff by SHA-256 definition hash; exit 1 when an annotation change lets a client run a tool with less confirmation (for example `readOnlyHint` flipped to `true`). |
 | `--sarif-uri path` | With `--format sarif`, the list's path in the repository, so each result points at the tool's line. |
 | `--timeout seconds` | One overall limit for reaching a server and listing its tools (default 60). |
-| `-o, --output file` | Write the report to a file; a text summary goes to stderr. |
+| `-o, --output file` | Write the report to a file. With a format other than `text`, the text summary also goes to stderr. |
+| `-v, --version`, `-h, --help` | Print the version, or this list of inputs and options. |
 
 Exit codes: `0` pass, `1` below `--min-grade` or a high-risk change, `2` bad input or usage, `3` a server could not be reached or listed.
 
@@ -189,7 +190,7 @@ The package follows semantic versioning. The rubric has its own version, `rubric
 
 ## Privacy
 
-The CLI, the library, the Action and the MCP server run on your machine or runner. They read the JSON they are given, or fetch the tool list themselves from the server, repository or registry you name (directly, from your machine: GitHub, jsDelivr or the MCP Registry for `--repo` and `--registry`). Nothing is sent to IsoKron. The Action keeps its results on GitHub, in your repository and run: it uploads the reports as a workflow artifact, uploads SARIF to code scanning when `upload-sarif` is on, and commits the badge files when `badge` is on. The docs URLs in findings are links for you to open.
+The CLI, the library, the Action and the MCP server run on your machine or runner. They read the JSON they are given, or fetch the tool list themselves from the server, repository or registry you name (directly, from your machine: GitHub, jsDelivr or the MCP Registry for `--repo` and `--registry`). Nothing is sent to IsoKron. The Action keeps its results on GitHub, in your repository and run: it uploads the reports as a workflow artifact, uploads SARIF to code scanning when `upload-sarif` is on, and commits the badge files when `badge` is on. The docs URLs in findings are links for you to open. Links to isokron.ai that the tools print (in `--help` and the text report, the job summary, SARIF help links, the badge's `report.md` and the MCP server's `websiteUrl`) carry a fixed channel tag, for example `utm_source=mcp-check-cli&utm_medium=cli`, so the site can count visits per channel. The tag names the place the link was printed and nothing about you, your server or the run; the `docs` values in JSON reports and in the MCP server's tool results carry no tag.
 
 ## Development
 
@@ -206,4 +207,4 @@ The engine is the same file as the web checker; `engine/VENDORED.json` records i
 
 MIT, Copyright (c) 2026 Stormhaven Enterprises LLC / IsoKron, Joshua Bryan. Third-party notices: [NOTICE](NOTICE).
 
-Built by [IsoKron](https://isokron.ai), which audits and builds write-safe MCP servers.
+Built by [IsoKron](https://isokron.ai/?utm_source=mcp-check-readme&utm_medium=readme), which audits and builds write-safe MCP servers.

@@ -39,7 +39,7 @@
   "keywords": ["mcp", "model-context-protocol", "mcp-server", "linter", "tool-annotations", "tools-list", "claude", "chatgpt", "sarif", "github-action", "isokron"],
   "author": "Joshua Bryan, IsoKron (Stormhaven Enterprises LLC) (https://isokron.ai)",
   "license": "MIT",
-  "homepage": "https://isokron.ai/mcp-check",
+  "homepage": "https://isokron.ai/mcp-check?utm_source=mcp-check-npm&utm_medium=npm",
   "repository": { "type": "git", "url": "git+https://github.com/isokron-ai/mcp-check.git" },
   "bugs": { "url": "https://github.com/isokron-ai/mcp-check/issues" },
   "engines": { "node": ">=20" },

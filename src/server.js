@@ -8,6 +8,7 @@ import M from './engine.js';
 
 export { VERSION } from './version.js';
 import { VERSION } from './version.js';
+import { tagged } from './links.js';
 
 const READ_ONLY = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
 
@@ -100,7 +101,7 @@ export function toolDefinitions() {
 export function createServer() {
   DEFS.length = 0;
   const server = new McpServer(
-    { name: 'mcp-check', title: 'IsoKron MCP check', version: VERSION, websiteUrl: 'https://isokron.ai/mcp-check' },
+    { name: 'mcp-check', title: 'IsoKron MCP check', version: VERSION, websiteUrl: tagged('https://isokron.ai/mcp-check', 'server') },
     { instructions: 'Grades an MCP server\'s tools/list answer against the MCP specification ' + M.SPEC_VERSION + ', the Anthropic and OpenAI directory rules, hidden-instruction patterns, schema quality and write-surface design. Everything runs locally on the JSON you pass; nothing is sent anywhere.' },
   );
 

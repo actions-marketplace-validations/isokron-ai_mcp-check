@@ -1,6 +1,7 @@
 // Report helpers shared by the CLI and the GitHub Action: SARIF with file locations, the job-summary
 // Markdown, the README badge file and the web-checker link. Pure functions over an analyse() result.
 import M from './engine.js';
+import { tagged } from './links.js';
 
 export const GRADES = ['A', 'B', 'C', 'D', 'F'];
 export const ALL_SECTIONS = ['spec', 'anthropic', 'openai', 'security', 'quality', 'surface'];
@@ -29,12 +30,18 @@ function lineOf(text, tool) {
 }
 
 /**
- * SARIF 2.1.0 from the engine, with a physical location on every result so GitHub code scanning can
- * show it: `uri` is the tool-list file relative to the repository root, and the line is the tool's
+ * SARIF 2.1.0 from the engine, with the channel tag on its help links and, when `uri` is given, a
+ * physical location on every result so GitHub code scanning can show it: `uri` is the tool-list file relative to the repository root, and the line is the tool's
  * "name" in that file (line 1 for findings on the whole list).
  */
 export function sarifWithLocations(r, text, uri) {
   const s = JSON.parse(M.toSarif(r));
+  // The links code scanning shows for the tool and for each rule carry the SARIF channel tag (links.js).
+  for (const run of s.runs) {
+    const d = run.tool.driver;
+    if (d.informationUri) d.informationUri = tagged(d.informationUri, 'sarif');
+    for (const rule of d.rules || []) if (rule.helpUri) rule.helpUri = tagged(rule.helpUri, 'sarif');
+  }
   if (!uri) return s;
   for (const run of s.runs) {
     for (const res of run.results) {
@@ -90,7 +97,7 @@ export function summaryMarkdown(r, { sections = DEFAULT_SECTIONS, minGrade = nul
   fs.sort((a, b) => order[a.severity] - order[b.severity]);
   if (fs.length) {
     out.push('', '### Blocking and attention findings', '', '| Severity | Tool | Check | Finding |', '|---|---|---|---|');
-    fs.slice(0, maxFindings).forEach((f) => out.push('| ' + f.severity + ' | ' + (f.tool ? code(f.tool) : '(list)') + ' | [' + f.id + '](' + M.CHECK[f.id].docs + ') | ' + esc(f.message) + ' |'));
+    fs.slice(0, maxFindings).forEach((f) => out.push('| ' + f.severity + ' | ' + (f.tool ? code(f.tool) : '(list)') + ' | [' + f.id + '](' + tagged(M.CHECK[f.id].docs, 'action') + ') | ' + esc(f.message) + ' |'));
     if (fs.length > maxFindings) out.push('', fs.length - maxFindings + ' more in the report artifact.');
   } else {
     out.push('', 'No blocking or attention findings in the gated sections.');
