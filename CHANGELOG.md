@@ -2,7 +2,7 @@
 
 All notable changes to `@isokron/mcp-check` and the `isokron-ai/mcp-check` Action. The package follows [semantic versioning](https://semver.org/); the grading rubric has its own version (`rubric_version`), noted with each release.
 
-## 1.0.0 (unreleased)
+## 1.0.0 (2026-11-19)
 
 Rubric 2.1.0, MCP specification 2026-07-28, directory rules as read on 18 November 2026.
 
