@@ -188,8 +188,13 @@ test('cli: one input only; --header only with --url', async () => {
 
 // ------------------------------------------------------------ static extraction (ground truth from the real SDKs)
 test('extract: TS registerTool / server.tool with zod == what TS SDK 1.32 lists', () => {
-  const got = R.extractFromFile('src/index.ts', src('register-tool.ts')).map((x) => x.tool);
+  // SDK 1.32 adds { taskSupport: 'forbidden' } to every McpServer tool; the version is known from the manifest (detectSdk).
+  const got = R.extractFromFile('src/index.ts', src('register-tool.ts'), { sdk: { kind: 'v1', version: '1.32.2' } }).map((x) => x.tool);
   assert.deepEqual(sortKeys(got), sortKeys(JSON.parse(src('register-tool.ts.truth.json'))));
+  // With no SDK version known the reader does not invent the field (see test/repo-reader.test.mjs).
+  const bare = R.extractFromFile('src/index.ts', src('register-tool.ts')).map((x) => x.tool);
+  const truth = JSON.parse(src('register-tool.ts.truth.json')); truth.forEach((x) => { delete x.execution; });
+  assert.deepEqual(sortKeys(bare), sortKeys(truth));
 });
 test('extract: Python @mcp.tool == what the Python SDK lists; its snake_case hints trip spec-annotation-key-case', () => {
   const got = R.extractFromFile('server.py', src('server.py')).map((x) => x.tool);
