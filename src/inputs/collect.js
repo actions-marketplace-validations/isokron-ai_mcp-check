@@ -34,6 +34,15 @@ export const FIDELITY = {
   names: () => 'names only: an MCPB manifest lists names and descriptions; schema checks do not apply',
 };
 
+/** The provenance of a repository list: its fidelity, then the tools left out as off by default and the ones kept under a condition. */
+export function repoProvenance(c) {
+  const left = Array.isArray(c.excluded) ? c.excluded : [];
+  const cond = (Array.isArray(c.marked) ? c.marked : []).filter((m) => !m.excluded && m.reasons.some((x) => /^conditional-/.test(x)));
+  const reasons = [...new Set(left.flatMap((x) => x.reasons.map((y) => y.replace(/ \(.*$/, ''))))];
+  const extra = (left.length ? '; ' + left.length + ' tool' + (left.length === 1 ? '' : 's') + ' left out (' + reasons.join(', ') + ')' : '') + (cond.length ? '; ' + cond.length + ' kept but registered under a condition' : '');
+  return { provenance: FIDELITY[c.fidelity](c) + extra, left, cond };
+}
+
 const withDeadline = (p, ms, what) => {
   let t;
   return Promise.race([p, new Promise((_, rej) => { t = setTimeout(() => rej(new Client.McpFetchError('timeout', what + ' did not finish within the time limit of ' + Math.round(ms / 1000) + ' s.')), ms); })]).finally(() => clearTimeout(t));
@@ -79,7 +88,8 @@ async function fromRepo(ref, opt, via = null) {
   }
   if (!r.best) throw new InputFailure('no tool definitions found in ' + r.repo + ' (scanned ' + r.scanned.source + ' of ' + r.scanned.sourceTotal + ' source files). Run the server and use --command or --url.', 'unreachable');
   const c = r.best;
-  return { data: c.tools, source: { kind: 'repo', repo: r.repo, sha: r.sha, via: r.via, fidelity: c.fidelity, provenance: FIDELITY[c.fidelity](c), from: c.kind, files: c.files || [c.path], ...(via ? { registry: via } : {}) } };
+  const { provenance, left, cond } = repoProvenance(c);
+  return { data: c.tools, source: { kind: 'repo', repo: r.repo, sha: r.sha, via: r.via, fidelity: c.fidelity, provenance, from: c.kind, files: c.files || [c.path], ...(left.length ? { left_out: left.map((x) => ({ name: line(x.name, 128), reasons: x.reasons.map((y) => line(y, 160)) })) } : {}), ...(cond.length ? { conditional: cond.map((x) => line(x.name, 128)) } : {}), ...(via ? { registry: via } : {}) } };
 }
 
 async function fromRegistry(name, opt, note) {

@@ -87,3 +87,17 @@ test('a draft-07 schema is labelled as a structural check, not as "Ajv not avail
   const r2 = M.analyse(M.parseData({ tools: [tool()] }));
   assert.match(r2.validator, /^Ajv 8\.17\.1/);
 });
+
+test('annot-write-marked-readonly: "open" reads when its object already exists (open_nodes), still creates for open_pull_request', () => {
+  silent('annot-write-marked-readonly', [tool({ name: 'open_nodes' })]);
+  silent('annot-write-marked-readonly', [tool({ name: 'open_file' })]);
+  fires('annot-write-marked-readonly', [tool({ name: 'open_pull_request' })], 'attention');
+  fires('annot-write-marked-readonly', [tool({ name: 'open_issue' })], 'attention');
+});
+
+test('surface-full-replace: moving or reassigning with two required operands is not a replacement', () => {
+  const req = (props, required) => ({ type: 'object', properties: props, required, additionalProperties: false });
+  silent('surface-full-replace', [wr({ name: 'move_file', inputSchema: req({ source: S(), destination: S() }, ['source', 'destination']) })]);
+  silent('surface-full-replace', [wr({ name: 'assign_issue', inputSchema: req({ assignee: S(), label: S() }, ['assignee', 'label']) })]);
+  fires('surface-full-replace', [wr({ name: 'update_record', inputSchema: req({ title: S(), body: S(), state: S() }, ['title', 'body', 'state']) })]);
+});
