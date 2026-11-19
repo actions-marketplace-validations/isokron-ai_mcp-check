@@ -7,6 +7,7 @@ import { parseList } from './tools.js';
 import { InputError, MAX_BYTES, MAX_DEPTH, MAX_TOOLS } from './limits.js';
 import { ALL_SECTIONS, DEFAULT_SECTIONS, GRADES, belowMinGrade, sarifWithLocations } from './report.js';
 import { collect, InputFailure, line, sourceLine, savedList } from './inputs/collect.js';
+import { tagged } from './links.js';
 
 const USAGE = `mcp-check ${VERSION}: grade an MCP server's tools/list (rubric ${M.RUBRIC_VERSION})
 
@@ -47,7 +48,7 @@ Options:
 printed. Limits: ${MAX_BYTES / 1048576} MiB of JSON, ${MAX_DEPTH} levels of nesting and ${MAX_TOOLS} tools per list.
 Exit codes: 0 pass, 1 below --min-grade or a high-risk change, 2 bad input or usage, 3 a server could not be
 reached or listed.
-Docs: https://isokron.ai/mcp-check
+Docs: ${tagged('https://isokron.ai/mcp-check', 'cli')}
 `;
 
 class UsageError extends Error {}
@@ -139,7 +140,7 @@ function textReport(r, opt, below, diff, source) {
   fs.forEach((f) => out.push('  [' + f.severity + '] ' + (f.tool ? line(f.tool, 200) : '(list)') + ': ' + f.id + ': ' + line(f.message, 2000)));
   if (diff) out.push('', 'Compared with ' + opt.compare + ': ' + diff.added.length + ' added, ' + diff.removed.length + ' removed, ' + diff.changed.length + ' changed' + (diff.highRisk.length ? '; HIGH RISK: ' + diff.highRisk.map((t) => line(t, 200)).join(', ') : ''));
   if (below.length) out.push('', 'Below --min-grade ' + opt.minGrade + ': ' + below.join(', '));
-  out.push('', 'Docs for each check: ' + M.DOCS_BASE + '<id>');
+  out.push('', 'Docs for each check: ' + tagged(M.DOCS_BASE + '<id>', 'cli'));
   return out.join('\n');
 }
 

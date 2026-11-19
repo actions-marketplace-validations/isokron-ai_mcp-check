@@ -41,7 +41,7 @@ test('action: tools-file, grades as outputs, job summary, reports and SARIF with
   assert.match(r.stdout, /::error::mcp-check: below min-grade B: anthropic C, openai C/);
   assert.match(r.summary, /\| Anthropic directory \| C \| 70 \|/);
   assert.match(r.summary, /\*\*Below the minimum grade B:\*\* anthropic C, openai C/);
-  assert.match(r.summary, /\[anthropic-title\]\(https:\/\/isokron\.ai\/mcp-check\/checks\/anthropic-title\)/);
+  assert.match(r.summary, /\[anthropic-title\]\(https:\/\/isokron\.ai\/mcp-check\/checks\/anthropic-title\?utm_source=mcp-check-action&utm_medium=action\)/);
   assert.match(r.summary, /\[Open this report in the web checker\]\(https:\/\/isokron\.ai\/mcp-check#r=2\.1\.0&z=/);
   for (const f of ['report.md', 'report.json', 'report.sarif']) assert.ok(existsSync(join(ws, 'mcp-check-results', f)), f);
   const sarif = JSON.parse(readFileSync(join(ws, 'mcp-check-results', 'report.sarif'), 'utf8'));

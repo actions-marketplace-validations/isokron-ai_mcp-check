@@ -8,6 +8,7 @@ import { VERSION } from '../src/version.js';
 import { capture, CaptureError, splitCommand as split } from '../src/capture.js';
 import { parseList } from '../src/tools.js';
 import { InputError as LimitError } from '../src/limits.js';
+import { tagDocsLinks } from '../src/links.js';
 import { ALL_SECTIONS, DEFAULT_SECTIONS, GRADES, badgeFile, badgeSnippet, belowMinGrade, mdCode, sarifWithLocations, summaryMarkdown, webLink } from '../src/report.js';
 
 const env = process.env;
@@ -194,7 +195,7 @@ export async function run() {
       safeWrite(badgePath, JSON.stringify(json, null, 2) + '\n', badgeDir.rel + '/badge.json');
       const head = ['# MCP check report', '', 'Commit `' + (env.GITHUB_SHA || 'unknown') + '`' + (runUrl ? ', [workflow run](' + runUrl + ')' : '') + ', graded ' + json.date + ' with @isokron/mcp-check ' + VERSION + '.', ''];
       if (link) head.push('[Open this report in the web checker](' + link + ')', '');
-      safeWrite(join(badgeDir.abs, 'report.md'), head.join('\n') + M.toMarkdown(r).replace(/^# MCP tool list check\n/, '') + '\n', badgeDir.rel + '/report.md');
+      safeWrite(join(badgeDir.abs, 'report.md'), head.join('\n') + tagDocsLinks(M.toMarkdown(r), 'badge', { docsBase: M.DOCS_BASE, ids: Object.keys(M.CHECK) }).replace(/^# MCP tool list check\n/, '') + '\n', badgeDir.rel + '/report.md');
       badgeChanged = true;
       badgeNote = 'Badge updated in ' + badgeDir.rel + '/badge.json.';
     }

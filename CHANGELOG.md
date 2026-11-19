@@ -2,11 +2,18 @@
 
 All notable changes to `@isokron/mcp-check` and the `isokron-ai/mcp-check` Action. The package follows [semantic versioning](https://semver.org/); the grading rubric has its own version (`rubric_version`), noted with each release.
 
+## Unreleased
+
+To be released as 1.0.1. No change to the engine, the rubric (2.1.0) or any grade.
+
+- **Channel tags on links to isokron.ai.** The links this package prints or writes for a person to open now carry a fixed `utm_source` and `utm_medium` naming the place they appear: `mcp-check-cli` (`--help` and the text report), `mcp-check-action` (the job summary), `mcp-check-badge` (the `report.md` committed beside `badge.json`), `mcp-check-sarif` (`informationUri` and each rule's `helpUri`), `mcp-check-server` (the MCP server's `websiteUrl`), `mcp-check-npm` (the package's `homepage`), `mcp-check-registry` (`websiteUrl` in `server.json`) and `mcp-check-readme` (the README and this file). A tag names the surface and carries nothing about the reader, the server or the run. Not tagged: the `docs` values in JSON reports and in the MCP server's tool results, the Markdown and JSON exports, and the web-checker link that carries a tool list in its fragment. New module `src/links.js`; `test/link-tags.test.mjs` fails when a link lacks its tag or uses an unknown source.
+- **Docs**: the README's option table lists `-v, --version` and `-h, --help`, and says that `-o` sends the text summary to stderr only for a format other than `text`. `test/docs.test.mjs` checks the Action's inputs, outputs and defaults in `docs/github-action.md` against `action.yml`, and the options, exit codes, sections and limits in the README against the command line.
+
 ## 1.0.0 (2026-11-19)
 
 Rubric 2.1.0, MCP specification 2026-07-28, directory rules as read on 18 November 2026.
 
-First public release: the engine of the [isokron.ai/mcp-check](https://isokron.ai/mcp-check) web checker as a package, a command line, an MCP server and a GitHub Action, at one version.
+First public release: the engine of the [isokron.ai/mcp-check](https://isokron.ai/mcp-check?utm_source=mcp-check-readme&utm_medium=readme) web checker as a package, a command line, an MCP server and a GitHub Action, at one version.
 
 - **Engine**: 76 checks with stable IDs in six sections (MCP spec, Anthropic directory, OpenAI directory, poisoning and hidden text, schema and description quality, write-surface design), each with its source quoted verbatim, an explanation and a fix. Per-section grades A to F from severity-weighted deductions with published bands and caps ([RUBRIC.md](RUBRIC.md)). JSON Schema 2020-12 validation with the bundled Ajv 8.17.1. Safe-fix list, SHA-256 definition hashes and a diff that flags high-risk annotation changes.
 - **CLI** (`mcp-check`): text, Markdown, JSON and SARIF output; `--min-grade`, `--sections`, `--fix`, `--compare`, `--stdin`, `--sarif-uri`, `-o`. `mcp-check serve` runs the MCP server.
