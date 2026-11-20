@@ -34,6 +34,8 @@ const FILE_TAGS = {
 const UNTAGGED = {
   // A URL pattern in a code span, not a link: the reader replaces <id>.
   'README.md': ['https://isokron.ai/mcp-check/checks/<id>'],
+  // The registry listing's address pattern, `https://isokron.ai/mcp-check/registry/<owner>/<repo>`, in a code span.
+  'docs/github-action.md': ['https://isokron.ai/mcp-check/registry/'],
   // The author field's URL: package tooling reads it; npm's package page links the homepage, which is tagged.
   'package.json': ['https://isokron.ai'],
 };
@@ -155,4 +157,21 @@ test('link tags: job summary, SARIF, badge report and serverInfo carry their own
 
   const info = createServer().server._serverInfo;
   assertTag(info.websiteUrl, LINK_TAGS.server, 'serverInfo.websiteUrl');
+});
+
+test('link tags: the registry line and the PR comment carry their surface tags; the listing path names the repository only', async () => {
+  const { registryUrl, REGISTRY_BASE } = await import('../src/links.js');
+  const { renderComment } = await import('../action/pr-comment.mjs');
+  const { publishHint } = await import('../action/main.mjs');
+  assert.equal(REGISTRY_BASE, 'https://isokron.ai/mcp-check/registry/');
+  assertTag(registryUrl('Owner', 'Repo', 'action'), LINK_TAGS.action, 'registry line in the job summary');
+  assertTag(registryUrl('owner', 'repo', 'comment'), LINK_TAGS.comment, 'registry line in the PR comment');
+  assert.equal(registryUrl('Owner', 'Repo.js', 'action').split('?')[0], 'https://isokron.ai/mcp-check/registry/owner/repo.js');
+  const ev = { repository: { private: false } };
+  const hint = publishHint({ GITHUB_REPOSITORY: 'o/r', GITHUB_SERVER_URL: 'https://github.com' }, ev, 'comment');
+  const r = M.analyse(M.parseInput(read('test/fixtures/example.json')));
+  const body = renderComment(r, { sections: ['spec', 'anthropic', 'openai', 'security'], minGrade: 'B', hint });
+  const urls = body.match(URL_RE) || [];
+  assert.ok(urls.length >= 2);
+  for (const u of urls) assertTag(u, LINK_TAGS.comment, 'PR comment');
 });

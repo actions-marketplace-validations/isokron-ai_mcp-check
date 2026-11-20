@@ -64,6 +64,18 @@ export function splitCommand(s) {
  * Rejects with a CaptureError (with .stderr, the server's last stderr output) when the server does not start,
  * does not answer, or answers tools/list with an error.
  */
+/**
+ * The server's environment: `env` plus `extraEnv`, without the GitHub Actions file-command paths (GITHUB_ENV,
+ * GITHUB_PATH, GITHUB_OUTPUT, GITHUB_STATE, GITHUB_STEP_SUMMARY), so the server is not handed the files that set
+ * the environment, PATH, outputs and summary of later steps.
+ */
+export const RUNNER_FILE_VARS = ['GITHUB_ENV', 'GITHUB_PATH', 'GITHUB_OUTPUT', 'GITHUB_STATE', 'GITHUB_STEP_SUMMARY'];
+export function serverEnv(env, extraEnv = null) {
+  const out = { ...env, ...(extraEnv || {}) };
+  for (const k of RUNNER_FILE_VARS) delete out[k];
+  return out;
+}
+
 export function capture(argv, { timeoutMs = 60_000, cwd, env = process.env, extraEnv = null, stderr = process.stderr, fence = process.env.GITHUB_ACTIONS === 'true' } = {}) {
   if (!Array.isArray(argv) || argv.length === 0 || argv.some((a) => typeof a !== 'string')) {
     return Promise.reject(new CaptureError('capture needs the server command as a non-empty list of strings', null, 'usage'));
@@ -77,7 +89,7 @@ export function capture(argv, { timeoutMs = 60_000, cwd, env = process.env, extr
       // detached: the server gets its own process group, so the whole group is stopped at the end
       // (a shell wrapper's or npx's children included). On Windows a shell is needed for npx.cmd and the like.
       child = spawn(argv[0], argv.slice(1), {
-        cwd, env: extraEnv ? { ...env, ...extraEnv } : env, stdio: ['pipe', 'pipe', 'pipe'],
+        cwd, env: serverEnv(env, extraEnv), stdio: ['pipe', 'pipe', 'pipe'],
         detached: process.platform !== 'win32', windowsHide: true, shell: process.platform === 'win32',
       });
     } catch (e) {

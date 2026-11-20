@@ -2,15 +2,19 @@
 // interpolation into a shell command. Uses only the engine and Node built-ins: no install step.
 import { appendFileSync, closeSync, constants, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, unlinkSync, writeSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import M from '../src/engine.js';
 import { VERSION } from '../src/version.js';
 import { capture, CaptureError, splitCommand as split } from '../src/capture.js';
 import { parseList } from '../src/tools.js';
 import { InputError as LimitError } from '../src/limits.js';
-import { tagDocsLinks } from '../src/links.js';
-import { ALL_SECTIONS, DEFAULT_SECTIONS, GRADES, badgeFile, badgeSnippet, belowMinGrade, mdCode, sarifWithLocations, summaryMarkdown, webLink } from '../src/report.js';
+import { registryUrl, tagDocsLinks } from '../src/links.js';
+import { foreignNote, repoProvenance } from '../src/inputs/collect.js';
+import { commentAction, markerFor, MODES as COMMENT_MODES, prContext, renderComment, runStamp, validKey } from './pr-comment.mjs';
+import { ALL_SECTIONS, DEFAULT_SECTIONS, GRADES, badgeFile, badgeSnippet, belowMinGrade, mdCode, mdText, sarifWithLocations, summaryMarkdown, webLink } from '../src/report.js';
 
+const Repo = createRequire(import.meta.url)('../src/inputs/repo-source.cjs');
 const env = process.env;
 const input = (name, def = '') => (env['INPUT_' + name.toUpperCase().replace(/-/g, '_')] ?? def).trim() || def;
 const bool = (name, def) => {
@@ -90,10 +94,51 @@ function ownFolder(dir, what) {
 const splitCommand = split;
 export { splitCommand };
 
+/** The event payload GitHub writes for the run, or {} (a local run, or an unreadable file). */
+function eventPayload() {
+  try { return env.GITHUB_EVENT_PATH ? JSON.parse(readFileSync(env.GITHUB_EVENT_PATH, 'utf8')) : {}; } catch { return {}; }
+}
+
+/**
+ * The registry line (input publish-hint): only for a public repository on github.com, known from the event payload
+ * (a schedule event carries no repository, so it gets no line). Builds a link and nothing else: no request is made.
+ */
+export function publishHint(e, ev, surface) {
+  const repo = e.GITHUB_REPOSITORY || '';
+  const m = /^([^/]+)\/([^/]+)$/.exec(repo);
+  if (!m || e.GITHUB_SERVER_URL !== 'https://github.com') return null;
+  const r = ev && ev.repository;
+  if (!r || r.private !== false || (r.visibility && r.visibility !== 'public')) return null;
+  const url = registryUrl(m[1], m[2], surface);
+  if (!url) return null;
+  return '**[List this server in the IsoKron MCP registry](' + url + ')** (free): a public page with its CI-verified grade, and a README badge.';
+}
+
+/** A repository path as a SARIF artifactLocation.uri: each segment percent-encoded. */
+export const uriPath = (p) => String(p).split('/').map(encodeURIComponent).join('/');
+
+const ZERO_CONFIG_DOCS = 'https://github.com/isokron-ai/mcp-check/blob/main/docs/github-action.md#where-the-tool-list-comes-from';
+
+/**
+ * Before anything else, even input checks: a comment body an earlier run left in the results folder is removed, so
+ * a run that stops early never leaves one for the comment step. Best effort; the folder is checked again later.
+ */
+function removeStaleComment() {
+  try {
+    const ws = realpathSync(env.GITHUB_WORKSPACE || process.cwd());
+    const dir = resolve(ws, input('results-dir', 'mcp-check-results'));
+    const rel = relative(ws, dir);
+    if (!rel || rel.startsWith('..') || isAbsolute(rel)) return;
+    const d = lstatOrNull(dir); const m = lstatOrNull(join(dir, MARKER)); const f = lstatOrNull(join(dir, 'pr-comment.md'));
+    if (d && d.isDirectory() && m && m.isFile() && f && f.isFile()) unlinkSync(join(dir, 'pr-comment.md'));
+  } catch { /* nothing to remove */ }
+}
+
 export async function run() {
+  removeStaleComment();
   const toolsFile = input('tools-file');
   const command = input('command');
-  if (!!toolsFile === !!command) throw new InputError('set exactly one of tools-file and command');
+  if (toolsFile && command) throw new InputError('set one of tools-file and command, not both (or neither, to read the tool definitions from the repository code)');
   const minGrade = input('min-grade').toUpperCase() || null;
   if (minGrade && !GRADES.includes(minGrade)) throw new InputError('min-grade must be one of A, B, C, D, F, or empty');
   const sections = input('sections', DEFAULT_SECTIONS.join(',')).split(',').map((s) => s.trim()).filter(Boolean);
@@ -103,6 +148,11 @@ export async function run() {
   const wantSarif = bool('sarif', true);
   const wantBadge = bool('badge', false);
   const useShell = bool('shell', false);
+  const wantHint = bool('publish-hint', true);
+  const commentMode = input('pr-comment', 'off').toLowerCase();
+  if (!COMMENT_MODES.includes(commentMode)) throw new InputError('pr-comment must be off, auto or always');
+  const commentKey = input('pr-comment-key');
+  if (!validKey(commentKey)) throw new InputError('pr-comment-key may hold only letters, digits, ".", "_" and "-" (at most 64, no "--")');
   const results = inWorkspace(input('results-dir', 'mcp-check-results'), 'results-dir');
   const badgeDir = inWorkspace(input('badge-dir', '.github/mcp-check'), 'badge-dir');
   const baseline = input('baseline') ? inWorkspace(input('baseline'), 'baseline') : null;
@@ -116,14 +166,63 @@ export async function run() {
     }
   };
 
-  // 1. The tool list: a file in the repository, or tools/list from the server the command starts.
-  let text, listRel, source;
+  // 1. The tool list: a file in the repository, tools/list from the server the command starts, or (neither set) the
+  //    tool definitions read from the repository code, without running anything.
+  let text, listRel, source, sourceKind, note = null, where = null, commentSource = '', sarifText = null, sarifUri = null;
   if (toolsFile) {
+    sourceKind = 'tools-file';
     const f = inWorkspace(toolsFile, 'tools-file');
     text = safeRead(f.abs, 'tools-file ' + f.rel);
     listRel = f.rel;
     source = mdCode(f.rel);
+  } else if (!command) {
+    sourceKind = 'repo-static';
+    const dir = inWorkspace(input('working-directory', '.'), 'working-directory', true);
+    const st = lstatOrNull(dir.abs);
+    if (!st || !st.isDirectory()) throw new InputError('working-directory is not a folder: ' + input('working-directory', '.'));
+    const ws = realpathSync(env.GITHUB_WORKSPACE || process.cwd());
+    process.stdout.write('Reading the tool definitions from the source in ' + dir.rel + ' (nothing is run).\n');
+    // Not read: the results folder and any folder an earlier run of this action made (they hold a tools-list.json that
+    // is not the repository's), and the baseline, which is what the list is compared with, never the list itself.
+    const toDir = (abs) => relative(dir.abs, abs).split(sep).join('/');
+    const scan = await Repo.fromDirectory(dir.abs, { rootDir: ws, exclude: [toDir(results.abs)].concat(baseline ? [toDir(baseline.abs)] : []), skipIfContains: MARKER });
+    const noUsable = (what) => {
+      const msg = what + ' Set command (the command that starts the server, for example node dist/index.js) or tools-file (a saved tools/list answer).';
+      summary('## MCP check\n\n' + mdText(what) + ' Nothing was run. Set `command` to the command that starts your server, or `tools-file` to a saved `tools/list` answer: [how](' + ZERO_CONFIG_DOCS + ').\n');
+      return new InputError(msg);
+    };
+    if (!scan.best) throw noUsable('No tool definitions found in the source in ' + dir.rel + ' (scanned ' + scan.scanned.source + ' of ' + scan.scanned.sourceTotal + ' source files, and the committed tool lists and MCPB manifests' + (scan.truncated ? '; the folder holds more files than the listing limit, and the deepest were not listed' : '') + ').' + foreignNote(scan));
+    const c = scan.best;
+    // Names without schemas (an MCPB manifest's tools array) would be graded on schemas that do not exist.
+    if (c.fidelity === 'names') throw noUsable('Only tool names were found in the source in ' + dir.rel + ' (' + c.path + ' lists names and descriptions without schemas), which cannot be graded.');
+    const candidateAbs = c.path ? join(dir.abs, c.path) : null;
+    if (baseline && candidateAbs && (candidateAbs === baseline.abs || (c.path.endsWith('/') && baseline.abs.startsWith(candidateAbs)))) throw new InputError('the tool list found in the source is the baseline ' + baseline.rel + ' itself; set command or tools-file');
+    text = JSON.stringify({ tools: c.tools }, null, 2) + '\n';
+    out('tools-list.json', text);
+    listRel = results.rel + '/tools-list.json';
+    const prefix = dir.rel === '.' ? '' : dir.rel + '/';
+    if (Array.isArray(c.where)) where = new Map(c.where.map((w) => [w.name, { uri: prefix + w.path, line: w.line }]));
+    else if (c.path && !c.path.endsWith('/') && c.kind !== 'mcpb') {
+      // A committed list (or an mcp-catalog-snap snapshot): SARIF points at the tool's "name" line in that file.
+      const st2 = lstatOrNull(candidateAbs);
+      if (st2 && st2.isFile()) { sarifText = readFileSync(candidateAbs, 'utf8'); sarifUri = prefix + c.path; }
+    }
+    const { provenance } = repoProvenance(c);
+    const committed = c.kind !== 'source';
+    source = committed ? 'the committed list ' + mdCode(prefix + (c.path || '')) : 'the repository code in ' + mdCode(dir.rel);
+    const how = ' For the exact list your server sends, set `command` (the command that starts it, for example `node dist/index.js`) or `tools-file` (a saved `tools/list` answer): [how](' + ZERO_CONFIG_DOCS + ').';
+    const foreignSnap = c.kind === 'catalog' && c.foreign;
+    note = (foreignSnap
+      ? '**Graded a committed snapshot of ' + mdCode(String(c.server || 'an unnamed server').slice(0, 100)) + ' (' + mdCode(prefix + c.path) + '); it may not be this repository\'s server, and it may be stale.** Nothing was run. No tool is defined in the source, and its server name does not match this repository\'s.'
+      : committed
+      ? '**Graded the committed list ' + mdCode(prefix + (c.path || '')) + ', not the code; it may be stale.** Nothing was run. It was found in the repository and ranks above tool definitions read from code (' + mdText(provenance) + ').'
+      : '**Source: repository code; nothing was run.** ' + mdText(provenance.charAt(0).toUpperCase() + provenance.slice(1)) + '.'
+        + (c.built ? ' Read from build output, since no source file defines a tool.' : ''))
+      + (scan.truncated ? ' **The folder holds more files than the listing limit (' + (20000).toLocaleString('en-US') + '); the deepest were not read.** Set `working-directory` to the server\'s folder.' : '')
+      + how;
+    commentSource = foreignSnap ? 'Source: a committed snapshot of ' + mdCode(String(c.server || 'an unnamed server').slice(0, 100)) + ' (' + mdCode(prefix + c.path) + '); it may not be this repository\'s server.' : committed ? 'Source: the committed list ' + mdCode(prefix + (c.path || '')) + ', not the code; it may be stale.' : 'Source: repository code, nothing was run (' + c.fidelity + ').';
   } else {
+    sourceKind = 'command';
     const cwd = inWorkspace(input('working-directory', '.'), 'working-directory', true);
     if (!existsSync(cwd.abs)) throw new InputError('working-directory not found: ' + input('working-directory'));
     let argv;
@@ -150,7 +249,10 @@ export async function run() {
   const below = belowMinGrade(r, sections, minGrade);
   let diff = null;
   if (baseline) {
-    const prev = parse(safeRead(baseline.abs, 'baseline ' + baseline.rel), 'baseline');
+    const btext = safeRead(baseline.abs, 'baseline ' + baseline.rel);
+    // An mcp-catalog-snap snapshot (.mcp-catalog/<server>.json) works as a baseline too: its catalog.tools.
+    const snap = /(^|\/)\.mcp-catalog\//.test(baseline.rel) ? Repo.fromCatalogSnap(btext) : null;
+    const prev = parse(snap ? JSON.stringify({ tools: snap.tools }) : btext, 'baseline');
     diff = M.diffCatalogs(prev.tools, parsed.tools);
   }
 
@@ -159,8 +261,13 @@ export async function run() {
   out('report.json', M.toJSON(Object.assign({}, r, { engine_version: VERSION }, diff ? { compare: diff } : {})) + '\n');
   let sarifRel = '';
   if (wantSarif) {
-    const s = sarifWithLocations(r, text, listRel);
+    const s = sarifWithLocations(r, sarifText || text, uriPath(sarifUri || listRel));
     s.runs[0].tool.driver.semanticVersion = VERSION;
+    // Read from source: each result points at the line that registers its tool.
+    if (where) for (const res of s.runs[0].results) {
+      const w = where.get(res.locations?.[0]?.logicalLocations?.[0]?.name);
+      if (w) res.locations[0].physicalLocation = { artifactLocation: { uri: uriPath(w.uri) }, region: { startLine: w.line || 1 } };
+    }
     out('report.sarif', JSON.stringify(s, null, 2) + '\n');
     sarifRel = results.rel + '/report.sarif';
   }
@@ -201,14 +308,29 @@ export async function run() {
     }
   }
 
-  // 5. Job summary and outputs.
-  let md = summaryMarkdown(r, { sections, minGrade, source, badgeSnippet: snippet, webLink: link });
+  // 5. Job summary, the pull-request comment, and outputs.
+  const event = eventPayload();
+  const hint = wantHint ? publishHint(env, event, 'action') : null;
+  const failed = below.length > 0 || !!(diff && diff.highRisk.length);
+  let commentNote = null, commentDo = null;
+  if (commentMode !== 'off') {
+    const pr = prContext(env.GITHUB_EVENT_NAME || '', event);
+    if (pr && pr.skip) commentNote = 'PR comment skipped: ' + pr.skip + '.';
+    else if (pr) {
+      commentDo = commentAction(commentMode, failed);
+      const body = renderComment(r, { sections, minGrade, diff, sourceNote: commentSource, runUrl, hint: wantHint ? publishHint(env, event, 'comment') : null, marker: markerFor(commentKey, env.GITHUB_JOB), stamp: runStamp(env) });
+      out('pr-comment.md', body);
+    }
+  }
+  let md = summaryMarkdown(r, { sections, minGrade, source, note, badgeSnippet: snippet, webLink: link, hint });
   if (diff) md += '\n### Compared with ' + mdCode(baseline.rel) + '\n\n' + diff.added.length + ' added, ' + diff.removed.length + ' removed, ' + diff.changed.length + ' changed.' + (diff.highRisk.length ? ' **High risk** (a client may now run these with less confirmation): ' + diff.highRisk.map((t) => mdCode(t)).join(', ') + '.' : ' No high-risk annotation changes.') + '\n';
   if (badgeNote) md += '\n' + badgeNote + '\n';
+  if (commentNote) md += '\n' + commentNote + '\n';
   summary(md);
   for (const k of ALL_SECTIONS) output('grade-' + k, r.sections[k].grade || '');
-  const failed = below.length > 0 || !!(diff && diff.highRisk.length);
   output('passed', failed ? 'false' : 'true');
+  output('source', sourceKind);
+  output('pr-comment-action', commentDo || '');
   output('catalog-hash', r.input.catalogHash);
   output('results-dir', results.rel);
   output('sarif-file', sarifRel);

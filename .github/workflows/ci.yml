@@ -5,6 +5,8 @@
 #   action      the Action itself (uses: ./) on a saved list, before any npm install (the Action runs
 #               with no dependencies), then on this package's own server, with a min-grade A gate, no
 #               SARIF upload and no badge
+#   zero-config the Action with no inputs on this repository, exactly as the docs show it: it reads the
+#               tool definitions from src/server.js, runs nothing, and needs no setup-node or install
 #   ci-ok       passes only if every job above succeeded: the one required status check
 #
 # No secrets, read-only token, no pull_request_target: a pull request from a fork runs with the same
@@ -88,9 +90,31 @@ jobs:
           [ "$FILE_PASSED" = true ] && [ "$SERVER_PASSED" = true ] && [ "$SERVER_ANTHROPIC" = A ] \
             || { echo "::error::unexpected outputs: $FILE_PASSED $SERVER_PASSED $SERVER_ANTHROPIC"; exit 1; }
 
+  zero-config:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: The zero-config workflow
+        id: zero
+        uses: ./
+      - name: The tools came from the source, and nothing was run
+        env:
+          SOURCE: ${{ steps.zero.outputs.source }}
+          RESULTS: ${{ steps.zero.outputs.results-dir }}
+          ANTHROPIC: ${{ steps.zero.outputs.grade-anthropic }}
+        run: |
+          n=$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).tools.map((t) => t.name).sort().join(","))' "$RESULTS/tools-list.json")
+          echo "source=$SOURCE tools=$n anthropic=$ANTHROPIC"
+          [ "$SOURCE" = repo-static ] && [ "$n" = "check_tools_list,compare_tools_lists,explain_check" ] && [ "$ANTHROPIC" = A ] \
+            || { echo "::error::unexpected zero-config result: $SOURCE $n $ANTHROPIC"; exit 1; }
+          test ! -e node_modules
+
   # The required status check (branch protection names this job, not the others).
   ci-ok:
-    needs: [test, action]
+    needs: [test, action, zero-config]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -105,4 +129,4 @@ jobs:
             n=$((n + 1))
             [ "$r" = success ] || { echo "::error::a required job ended $r"; exit 1; }
           done
-          [ "$n" -eq 2 ] || { echo "::error::expected 2 job results, got $n"; exit 1; }
+          [ "$n" -eq 3 ] || { echo "::error::expected 3 job results, got $n"; exit 1; }

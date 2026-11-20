@@ -1,7 +1,8 @@
 name: IsoKron MCP check
 description: >-
   Grades an MCP server's tools/list against the MCP specification, the Claude and ChatGPT directory
-  rules, hidden-instruction patterns and schema quality. Job summary, SARIF, minimum-grade gate, README badge.
+  rules, hidden-instruction patterns and schema quality. Zero-config: with no input it reads the tool
+  definitions from your repository's code and runs nothing. Job summary, SARIF, gate, badge, PR comment.
 author: IsoKron
 branding:
   icon: check-circle
@@ -11,7 +12,8 @@ inputs:
   tools-file:
     description: >-
       Path (in the workspace) of a saved tools/list answer: a JSON-RPC answer, {"tools": [...]}, a
-      bare array of tools, or an array of pages. Set this or command, not both.
+      bare array of tools, or an array of pages. Set this or command, not both. With neither, the
+      action reads the tool definitions from the source in working-directory and runs nothing.
     required: false
     default: ''
   command:
@@ -26,7 +28,7 @@ inputs:
     required: false
     default: 'false'
   working-directory:
-    description: Folder (in the workspace) the command runs in.
+    description: Folder (in the workspace) the command runs in, or, with neither command nor tools-file, the folder whose source is read.
     required: false
     default: '.'
   timeout:
@@ -81,11 +83,40 @@ inputs:
     description: Name of the uploaded artifact (empty for no artifact). Give each job of a matrix its own name.
     required: false
     default: mcp-check-results
+  publish-hint:
+    description: >-
+      On a public github.com repository, add one line to the job summary (and the PR comment) linking
+      to this repository's page in the IsoKron MCP registry, where it can be listed for free. Makes no
+      request. Default true; false for no line.
+    required: false
+    default: 'true'
+  pr-comment:
+    description: >-
+      Comment the grades on pull requests from branches of this repository (never from forks): off,
+      auto (only when a gated section is below min-grade or the baseline comparison finds a high-risk
+      change; an existing comment is then kept up to date) or always. One comment, updated in place.
+      Needs permissions pull-requests: write. Default off.
+    required: false
+    default: 'off'
+  pr-comment-key:
+    description: >-
+      Set when more than one job (or matrix leg) comments on the same pull request, for example to
+      the matrix value: each key keeps its own comment. Letters, digits, ".", "_" and "-". Empty
+      (default): one comment per pull request.
+    required: false
+    default: ''
+  github-token:
+    description: Token for the PR comment. Used only by the comment step, never by the step that may start your server.
+    required: false
+    default: ${{ github.token }}
 
 outputs:
   passed:
     description: '"true" when every gated section meets min-grade and the baseline comparison found no high-risk change.'
     value: ${{ steps.run.outputs.passed }}
+  source:
+    description: 'Where the tool list came from: "repo-static" (read from the source, nothing run), "command" or "tools-file".'
+    value: ${{ steps.run.outputs.source }}
   grade-spec:
     description: Grade of the MCP specification section.
     value: ${{ steps.run.outputs.grade-spec }}
@@ -117,6 +148,14 @@ outputs:
 runs:
   using: composite
   steps:
+    # Before anything from the repository runs: where node is, for the comment step (a server started later could
+    # change PATH for later steps, but not this step's output, which is already recorded).
+    - name: Locate Node.js
+      id: node
+      shell: bash
+      run: |
+        echo "path=$(command -v node || true)" >> "$GITHUB_OUTPUT"
+
     # Inputs reach the script as environment variables, never by interpolation into a command.
     - name: Grade the tool list
       id: run
@@ -134,6 +173,9 @@ runs:
         INPUT_BADGE: ${{ inputs.badge }}
         INPUT_BADGE_DIR: ${{ inputs.badge-dir }}
         INPUT_RESULTS_DIR: ${{ inputs.results-dir }}
+        INPUT_PUBLISH_HINT: ${{ inputs.publish-hint }}
+        INPUT_PR_COMMENT: ${{ inputs.pr-comment }}
+        INPUT_PR_COMMENT_KEY: ${{ inputs.pr-comment-key }}
         MCP_CHECK_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
       run: |
         node -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 20 ? 0 : 1)' 2>/dev/null || {
@@ -179,6 +221,31 @@ runs:
         done
         echo "::error::could not push the badge to $BRANCH (branch protection, or permissions contents: write missing)"
         exit 1
+
+    # Only on pull_request runs with pr-comment auto or always. The token reaches this step alone. The script re-reads
+    # the pull request from the event payload and the body from the results folder (not from the run step's outputs),
+    # and runs with a clean environment and the node found before the run step. A failure is a warning: the script
+    # exits 0, and the step may not fail the job either way.
+    - name: Comment on the pull request
+      if: ${{ always() && inputs.pr-comment != 'off' && github.event_name == 'pull_request' }}
+      continue-on-error: true
+      shell: bash
+      env:
+        NODE_BIN: ${{ steps.node.outputs.path }}
+        COMMENT_ACTION: ${{ steps.run.outputs.pr-comment-action }}
+        INPUT_PR_COMMENT: ${{ inputs.pr-comment }}
+        INPUT_RESULTS_DIR: ${{ inputs.results-dir }}
+        INPUT_PR_COMMENT_KEY: ${{ inputs.pr-comment-key }}
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+      run: |
+        case "$NODE_BIN" in /*) ;; *) echo "::warning::mcp-check: PR comment not posted: node was not found"; exit 0 ;; esac
+        exec /usr/bin/env -i \
+          GITHUB_TOKEN="$GITHUB_TOKEN" GITHUB_REPOSITORY="$GITHUB_REPOSITORY" GITHUB_API_URL="$GITHUB_API_URL" \
+          GITHUB_EVENT_NAME="$GITHUB_EVENT_NAME" GITHUB_EVENT_PATH="$GITHUB_EVENT_PATH" GITHUB_WORKSPACE="$GITHUB_WORKSPACE" \
+          GITHUB_STEP_SUMMARY="$GITHUB_STEP_SUMMARY" INPUT_PR_COMMENT="$INPUT_PR_COMMENT" INPUT_RESULTS_DIR="$INPUT_RESULTS_DIR" \
+          COMMENT_ACTION="$COMMENT_ACTION" INPUT_PR_COMMENT_KEY="$INPUT_PR_COMMENT_KEY" GITHUB_JOB="$GITHUB_JOB" \
+          GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT" \
+          "$NODE_BIN" "$GITHUB_ACTION_PATH/action/pr-comment.mjs"
 
     - name: Set the job status
       if: ${{ always() }}

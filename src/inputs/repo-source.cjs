@@ -2,11 +2,12 @@
 // Every download is size-capped (MAX_FILE per file, MAX_JSON per API answer); nothing fetched is executed.
 //
 //   await RepoSource.fromGitHub('github.com/owner/repo', { fetch })   -> { candidates, best, hints }
+//   await RepoSource.fromDirectory('/path/to/checkout')               -> the same, from a local folder (Node only, no network)
 //   await RepoSource.fromRegistry('io.github.owner/name', { fetch })  -> server.json summary (remotes, packages, repo)
 //   RepoSource.extractFromFile(path, text)                            -> tools found statically in one file
 //
 // Nothing is executed. Sources, best first:
-//   exact    a committed tool list (tools.json, __toolsnaps__/*.snap), or an MCPB manifest.json with
+//   exact    a committed tool list (tools.json, __toolsnaps__/*.snap, an mcp-catalog-snap .mcp-catalog/*.json), or an MCPB manifest.json with
 //            _meta[*].static_responses["tools/list"]
 //   literal  JS/TS object literals { name, description, inputSchema: {JSON Schema literal} }
 //   derived  SDK registrations converted the way the SDK would: TS registerTool / server.tool with zod shapes,
@@ -376,8 +377,31 @@
       if (!tool || typeof tool.name !== 'string' || !tool.name || seen.has(tool.name)) return;
       seen.add(tool.name); tools.push(Object.assign({ tool, fidelity, line: src.slice(0, at).split('\n').length, offset: at }, extra || {}));
     };
+    // registerTool's config object at token j, as the SDK lists it.
+    const fromConfig = (name, j, at) => {
+      const tool = { name };
+      const cfg = parseObjectWithZod(t, j, ctx);
+      const c = cfg.value && cfg.value !== SKIP ? cfg.value : {};
+      if (c.title) tool.title = c.title;
+      if (c.description) tool.description = c.description;
+      tool.inputSchema = c.inputSchema || { type: 'object', properties: {} };
+      if (c.outputSchema) tool.outputSchema = c.outputSchema;
+      if (c.annotations) tool.annotations = c.annotations;
+      if (c._meta) tool._meta = c._meta;
+      if (ctx.fl.execution) tool.execution = { taskSupport: 'forbidden' };
+      add(tool, 'derived', at);
+    };
+    const wrappers = registerWrappers(t);
     for (let i = 0; i < t.length; i++) {
       const tok = t[i];
+      // 0. A function of this file that forwards two of its parameters to X.registerTool(name, config, ...):
+      //    register(server, 'name', { description, inputSchema }, handler) is read as registerTool('name', {...}).
+      if (tok.type === 'id' && wrappers.has(tok.value) && isP(t[i + 1], '(') && !(t[i - 1] && (isP(t[i - 1], '.') || (t[i - 1].type === 'id' && /^(function|async)$/.test(t[i - 1].value))))) {
+        const w = wrappers.get(tok.value); const args = argStarts(t, i + 1);
+        const nt = t[args[w.nameIdx]]; const ct = args[w.cfgIdx];
+        if (nt && nt.type === 'str' && (isP(t[args[w.nameIdx] + 1], ',') || isP(t[args[w.nameIdx] + 1], ')')) && ct !== undefined && isP(t[ct], '{')) fromConfig(nt.value, ct, tok.start);
+        continue;
+      }
       // 1. SDK calls: X.registerTool('name', { title, description, inputSchema, outputSchema, annotations }, cb)
       //               X.tool('name', 'desc'?, shape?, annotations?, cb)
       // Also a bare call to a wrapper with the same signature: registerTool('name', 'desc', shape, cb).
@@ -399,16 +423,7 @@
         if (!isP(t[j], ',')) continue; j++;
         if (fn === 'registerTool') {
           if (!isP(t[j], '{')) continue;
-          const cfg = parseObjectWithZod(t, j, ctx); exact = cfg.exact;
-          const c = cfg.value && cfg.value !== SKIP ? cfg.value : {};
-          if (c.title) tool.title = c.title;
-          if (c.description) tool.description = c.description;
-          tool.inputSchema = c.inputSchema || { type: 'object', properties: {} };
-          if (c.outputSchema) tool.outputSchema = c.outputSchema;
-          if (c.annotations) tool.annotations = c.annotations;
-          if (c._meta) tool._meta = c._meta;
-          if (ctx.fl.execution) tool.execution = { taskSupport: 'forbidden' };
-          add(tool, 'derived', at); continue;
+          fromConfig(tool.name, j, at); continue;
         }
         // server.tool(name, [description], [paramsSchema], [annotations], cb)
         const isConstStr = t[j] && t[j].type === 'id' && ctx.consts[t[j].value] && typeof ctx.consts[t[j].value].value === 'string';
@@ -450,6 +465,45 @@
       }
     }
     return tools;
+  }
+  // Token index where each argument of the call whose "(" is at token `open` starts.
+  function argStarts(t, open) {
+    const close = matchClose(t, open); const out = []; let k = open + 1;
+    while (k < close) { out.push(k); k = skipExpr(t, k); if (isP(t[k], ',')) k++; else break; }
+    return out;
+  }
+  // Functions of one file that pass two of their own parameters on as the name and config of X.registerTool(...):
+  //   function register(server, name, config, fn) { server.registerTool(name, config, wrap(fn)); }
+  //   const reg = (name, config, cb) => server.registerTool(name, config, cb);
+  // Returns Map(function name -> { nameIdx, cfgIdx }), the parameter positions.
+  function registerWrappers(t) {
+    const out = new Map();
+    const params = (open) => { // simple identifiers, with optional TS types and defaults; null if anything else
+      const ps = []; for (const a of argStarts(t, open)) { const x = t[a]; if (!x || x.type !== 'id') return null; ps.push(x.value); } return ps;
+    };
+    for (let i = 0; i < t.length - 3; i++) {
+      let name = null; let open = -1;
+      if (t[i].type === 'id' && t[i].value === 'function' && t[i + 1] && t[i + 1].type === 'id' && isP(t[i + 2], '(')) { name = t[i + 1].value; open = i + 2; }
+      else if (t[i].type === 'id' && /^(const|let|var)$/.test(t[i].value) && t[i + 1] && t[i + 1].type === 'id' && isP(t[i + 2], '=')) {
+        let k = i + 3; if (t[k] && t[k].type === 'id' && t[k].value === 'async') k++;
+        if (isP(t[k], '(') && isP(t[matchClose(t, k) + 1], '=>')) { name = t[i + 1].value; open = k; }
+      }
+      if (!name || SDK_CALLS.has(name)) continue;
+      const ps = params(open); if (!ps || ps.length < 2) continue;
+      // the body: from the closing ")" to the end of the block or the arrow's expression
+      let b = matchClose(t, open) + 1; if (isP(t[b], '=>')) b++;
+      while (t[b] && !isP(t[b], '{') && !(t[b].type === 'id' || isP(t[b], '('))) b++; // skip a TS return type
+      const end = isP(t[b], '{') ? matchClose(t, b) : skipExpr(t, b);
+      for (let k = b; k < end - 2; k++) {
+        if (!(isP(t[k], '.') && t[k + 1].type === 'id' && t[k + 1].value === 'registerTool' && isP(t[k + 2], '('))) continue;
+        const as = argStarts(t, k + 2);
+        const a0 = t[as[0]]; const a1 = t[as[1]];
+        if (!a0 || !a1 || a0.type !== 'id' || a1.type !== 'id' || !isP(t[as[0] + 1], ',') || !(isP(t[as[1] + 1], ',') || isP(t[as[1] + 1], ')'))) continue;
+        const ni = ps.indexOf(a0.value); const ci = ps.indexOf(a1.value);
+        if (ni >= 0 && ci >= 0) { out.set(name, { nameIdx: ni, cfgIdx: ci }); break; }
+      }
+    }
+    return out;
   }
   function findKeyToken(t, from, to, key) { for (let k = from + 1, d = 0; k < to; k++) { if (isP(t[k], '{') || isP(t[k], '[') || isP(t[k], '(')) d++; else if (isP(t[k], '}') || isP(t[k], ']') || isP(t[k], ')')) d--; else if (d === 0 && (t[k].type === 'id' || t[k].type === 'str') && t[k].value === key && isP(t[k + 1], ':')) return k; } return -1; }
   function isZodShapeLike(s) { return s && s.type === 'object' && s.properties; }
@@ -665,6 +719,15 @@
   }
 
   // ------------------------------------------------------------ committed lists and manifests
+  // A snapshot written by mcp-catalog-snap (.mcp-catalog/<server>.json): { capturedWith | format: "mcp-catalog-snap/…",
+  // catalog: { tools, prompts, resourceTemplates }, server, sha256 }. The tools are the server's tools/list, canonical JSON.
+  function fromCatalogSnap(text) {
+    let d; try { d = JSON.parse(text); } catch (e) { return null; }
+    if (!d || typeof d !== 'object' || !d.catalog || !Array.isArray(d.catalog.tools)) return null;
+    if (!/^mcp-catalog-snap\//.test(String(d.capturedWith || '')) && !/^mcp-catalog-snap\//.test(String(d.format || ''))) return null;
+    const tools = d.catalog.tools.filter((x) => x && typeof x.name === 'string');
+    return tools.length ? { tools, server: d.server && typeof d.server.name === 'string' ? d.server.name : null, capturedAt: typeof d.capturedAt === 'string' ? d.capturedAt : null } : null;
+  }
   function toolsFromJson(text) {
     let d; try { d = JSON.parse(text); } catch (e) { return null; }
     if (Array.isArray(d) && d.length && d.every((x) => x && typeof x.name === 'string' && (x.inputSchema || x.input_schema))) return d;
@@ -683,21 +746,24 @@
   }
 
   // Classify every file of a repo listing; returns the paths worth fetching, best first.
-  const SKIP_DIR = /(^|\/)(node_modules|dist|build|out|\.next|vendor|coverage|__pycache__|\.venv|venv|site-packages|examples?|docs?|fixtures?)\//i;
+  const SKIP_DIR = /(^|\/)(node_modules|dist|build|out|\.next|vendor|coverage|__pycache__|\.venv|venv|site-packages|examples?|docs?|fixtures?|tests?|__tests__)\//i;
+  const SKIP_DIR_SRC_ONLY = /(^|\/)(node_modules|\.next|coverage|__pycache__|\.venv|venv|site-packages|examples?|docs?|fixtures?|tests?|__tests__)\//i; // build output and vendor allowed
   const TEST_FILE = /(^|\/)(tests?|__tests__|spec)\/|\.(test|spec)\.[jt]sx?$|(^|\/)test_[^/]*\.py$|_test\.py$/i;
-  function planFiles(paths) {
+  function planFiles(paths, popts) {
     const exact = []; const manifests = []; const serverJson = []; const src = [];
+    const srcSkip = popts && popts.allowBuilt ? SKIP_DIR_SRC_ONLY : SKIP_DIR;
     paths.forEach((p) => {
       const q = p.replace(/^\//, '');
       if (/(^|\/)__toolsnaps__\/[^/]+\.snap$/.test(q)) exact.push(q);
+      else if (!SKIP_DIR.test(q) && /(^|\/)\.mcp-catalog\/[^/]+\.json$/.test(q)) exact.push(q); // mcp-catalog-snap snapshots
       else if (!SKIP_DIR.test(q) && /(^|\/)(tools(-list|_list)?|mcp-tools|tool-list)\.json$/i.test(q)) exact.push(q);
       else if (!SKIP_DIR.test(q) && /(^|\/)manifest\.json$/.test(q)) manifests.push(q);
       else if (/(^|\/)server\.json$/.test(q) && !SKIP_DIR.test(q)) serverJson.push(q);
-      else if (!SKIP_DIR.test(q) && !TEST_FILE.test(q) && /\.(ts|mts|cts|js|mjs|cjs|py)$/.test(q) && !/\.d\.ts$/.test(q) && !/\.min\.js$/.test(q)) src.push(q);
+      else if (!srcSkip.test(q) && !TEST_FILE.test(q) && /\.(ts|mts|cts|js|mjs|cjs|py)$/.test(q) && !/\.d\.ts$/.test(q) && !/\.min\.js$/.test(q)) src.push(q);
     });
     // likely tool files first
     const score = (p) => (/(^|\/)(tools?|server|index|main|mcp|handlers?)[^/]*\.(ts|js|py|mjs)$/i.test(p) ? 0 : /tool/i.test(p) ? 1 : 2) + p.split('/').length * 0.01;
-    src.sort((a, b) => score(a) - score(b));
+    src.sort((a, b) => score(a) - score(b) || (a < b ? -1 : a > b ? 1 : 0)); // then by path, so every listing order reads the same files
     return { exact, manifests, serverJson, src };
   }
 
@@ -930,7 +996,7 @@
     opts = opts || {};
     const all = files instanceof Map ? Array.from(files.entries()) : files;
     const paths = all.map(([p]) => p);
-    const plan = planFiles(paths);
+    const plan = planFiles(paths, opts.allowBuilt ? { allowBuilt: true } : null);
     const text = new Map(all);
     const sdk = Object.assign({}, detectSdk(text), opts.sdk || {});
     const srcList = plan.src.slice(0, opts.maxSourceFiles || 600).map((p) => [p, text.get(p)]).filter(([, x]) => typeof x === 'string' && x.length <= 600000);
@@ -1007,44 +1073,178 @@
     const ref = parseRepoRef(input);
     if (!ref) throw new Error('Not a GitHub repository URL.');
     const listing = await listRepo(f, ref, opts);
-    let paths = listing.paths;
-    if (ref.subdir) paths = paths.filter((p) => p === ref.subdir || p.startsWith(ref.subdir + '/'));
-    const plan = planFiles(paths);
-    const maxSrc = opts.maxSourceFiles || 60;
-    const candidates = []; const hints = { serverJson: [] };
     const fetchMany = async (ps, n) => {
       const out = []; let k = 0;
       const worker = async () => { while (k < ps.length) { const p = ps[k++]; try { out.push([p, await getText(f, listing.raw(p))]); } catch (e) { out.push([p, null]); } } };
       await Promise.all(Array.from({ length: Math.min(n, ps.length) }, worker));
       return out;
     };
+    const scan = await scanFiles({ all: listing.paths, subdir: ref.subdir, readMany: fetchMany, maxSourceFiles: opts.maxSourceFiles });
+    return Object.assign({ repo: ref.owner + '/' + ref.repo, ref: ref.ref, sha: listing.sha, via: listing.via, truncated: listing.truncated }, scan);
+  }
+
+  // The reading shared by fromGitHub and fromDirectory. all: every file path of the repository (relative, "/"-separated);
+  // subdir: the folder to read, or null; readMany(paths, concurrency) -> [[path, text | null]].
+  // o.builtFallback: when the sources find nothing, read build output and vendor folders (dist, build, out, vendor) too.
+  async function scanFiles(o) {
+    let paths = o.all;
+    if (o.subdir) paths = paths.filter((p) => p === o.subdir || p.startsWith(o.subdir + '/'));
+    let plan = planFiles(paths);
+    const maxSrc = o.maxSourceFiles || 60;
+    const candidates = []; const hints = { serverJson: [] };
+    const readMany = o.readMany;
     // exact lists
-    const exactFiles = await fetchMany(plan.exact.slice(0, 400), 8);
+    const exactFiles = await readMany(plan.exact.slice(0, 400), 8);
     const snaps = exactFiles.filter(([p, t]) => t && /__toolsnaps__/.test(p));
     if (snaps.length) {
       const tools = []; const seen = new Set();
       snaps.sort((a, b) => a[0].length - b[0].length).forEach(([p, t]) => { const ts = toolsFromJson(t); (ts || []).forEach((x) => { if (!seen.has(x.name)) { seen.add(x.name); tools.push(x); } }); });
       if (tools.length) candidates.push({ kind: 'snapshots', fidelity: 'exact', path: snaps[0][0].replace(/[^/]+$/, ''), tools });
     }
-    exactFiles.filter(([p, t]) => t && !/__toolsnaps__/.test(p)).forEach(([p, t]) => { const ts = toolsFromJson(t); if (ts && ts.length) candidates.push({ kind: 'committed', fidelity: 'exact', path: p, tools: ts }); });
-    for (const [p, t] of await fetchMany(plan.manifests.slice(0, 10), 4)) { const m = t && fromMcpbManifest(t); if (m) candidates.push({ kind: 'mcpb', fidelity: m.fidelity, path: p, tools: m.tools, generated: m.generated }); }
-    for (const [p, t] of await fetchMany(plan.serverJson.slice(0, 5), 4)) { try { const d = JSON.parse(t); if (d && d.name) hints.serverJson.push({ path: p, name: d.name, remotes: d.remotes || [], packages: d.packages || [] }); } catch (e) { /* ignore */ } }
+    const catalogs = []; // mcp-catalog-snap snapshots: placed after the source is read, once the repository's own server name is known
+    exactFiles.filter(([p, t]) => t && !/__toolsnaps__/.test(p)).forEach(([p, t]) => {
+      if (/(^|\/)\.mcp-catalog\//.test(p)) { const c = fromCatalogSnap(t); if (c) catalogs.push({ kind: 'catalog', fidelity: 'exact', path: p, tools: c.tools, server: c.server, capturedAt: c.capturedAt }); return; }
+      const ts = toolsFromJson(t); if (ts && ts.length) candidates.push({ kind: 'committed', fidelity: 'exact', path: p, tools: ts });
+    });
+    for (const [p, t] of await readMany(plan.manifests.slice(0, 10), 4)) { const m = t && fromMcpbManifest(t); if (m) candidates.push({ kind: 'mcpb', fidelity: m.fidelity, path: p, tools: m.tools, generated: m.generated }); }
+    for (const [p, t] of await readMany(plan.serverJson.slice(0, 5), 4)) { try { const d = JSON.parse(t); if (d && d.name) hints.serverJson.push({ path: p, name: d.name, remotes: d.remotes || [], packages: d.packages || [] }); } catch (e) { /* ignore */ } }
     // source extraction: the manifests (SDK and zod versions), then the sources, then one analysis over all of them
-    const metaPaths = paths.filter((p) => META_FILE.test(p) && !SKIP_DIR.test(p) && p.split('/').length <= (ref.subdir ? ref.subdir.split('/').length : 0) + 2).slice(0, 8);
-    const rootMeta = listing.paths.filter((p) => /^(package\.json|package-lock\.json|pyproject\.toml)$/.test(p) && !paths.includes(p));
-    const metaFiles = await fetchMany(metaPaths.concat(rootMeta).slice(0, 10), 4);
-    const srcFiles = await fetchMany(plan.src.slice(0, maxSrc), 8);
-    const repoFiles = new Map(); metaFiles.concat(srcFiles).forEach(([p, t]) => { if (t) repoFiles.set(p, t); });
-    const an = analyseRepo(repoFiles, { maxSourceFiles: maxSrc });
+    const metaPaths = paths.filter((p) => META_FILE.test(p) && !SKIP_DIR.test(p) && p.split('/').length <= (o.subdir ? o.subdir.split('/').length : 0) + 2).slice(0, 8);
+    const rootMeta = o.all.filter((p) => /^(package\.json|package-lock\.json|pyproject\.toml)$/.test(p) && !paths.includes(p));
+    const metaFiles = await readMany(metaPaths.concat(rootMeta).slice(0, 10), 4);
+    let readFiles = new Map();
+    const analyse = async (pl, allowBuilt) => {
+      const srcFiles = await readMany(pl.src.slice(0, maxSrc), 8);
+      const repoFiles = new Map(); metaFiles.concat(srcFiles).forEach(([p, t]) => { if (t) repoFiles.set(p, t); });
+      readFiles = repoFiles;
+      return analyseRepo(repoFiles, { maxSourceFiles: maxSrc, allowBuilt });
+    };
+    let an = await analyse(plan);
+    let built = false;
+    if (!an.tools.length && !candidates.length && o.builtFallback) {
+      // Only build output (a repository that commits dist/ and no sources, or a checkout after its build step)
+      const bp = planFiles(paths, { allowBuilt: true });
+      if (bp.src.length > plan.src.length) { const b = await analyse(bp, true); if (b.tools.length) { an = b; plan = bp; built = true; } }
+    }
     const found = an.tools;
     if (found.length) {
       const allLiteral = found.every((x) => x.fidelity === 'literal');
       const marked = an.found.filter((x) => x.marks.length).map((x) => ({ name: x.tool.name, reasons: x.marks.map((m) => m.reason), excluded: x.excluded }));
-      candidates.push({ kind: 'source', fidelity: allLiteral ? 'literal' : 'derived', path: null, files: Array.from(new Set(found.map((x) => x.path))), tools: found.map((x) => x.tool), where: found.map((x) => ({ name: x.tool.name, path: x.path, line: x.line, fidelity: x.fidelity })), excluded: an.excluded.map((x) => ({ name: x.tool.name, path: x.path, line: x.line, reasons: x.marks.filter((m) => m.exclude).map((m) => m.reason + (m.detail ? ' (' + m.detail + ')' : '')) })), marked, sdk: an.sdk });
+      candidates.push({ kind: 'source', fidelity: allLiteral ? 'literal' : 'derived', path: null, built, files: Array.from(new Set(found.map((x) => x.path))), tools: found.map((x) => x.tool), where: found.map((x) => ({ name: x.tool.name, path: x.path, line: x.line, fidelity: x.fidelity })), excluded: an.excluded.map((x) => ({ name: x.tool.name, path: x.path, line: x.line, reasons: x.marks.filter((m) => m.exclude).map((m) => m.reason + (m.detail ? ' (' + m.detail + ')' : '')) })), marked, sdk: an.sdk });
     }
+    // A snapshot counts as this repository's exact list only when it names this repository's server. A snapshot of
+    // another server (one this repository uses or tests against) is never chosen over tools read from source; with
+    // no such tools, a single one is used and marked foreign; several are not used at all.
+    const own = ownServerNames(readFiles);
+    const mine = catalogs.filter((c) => c.server && own.has(normName(c.server)));
+    const foreign = catalogs.filter((c) => !mine.includes(c));
+    mine.forEach((c) => candidates.push(c));
+    if (foreign.length) hints.foreignSnapshots = foreign.map((c) => ({ path: c.path, server: c.server }));
+    if (!found.length && foreign.length === 1) candidates.push(Object.assign(foreign[0], { foreign: true }));
+    hints.ownNames = Array.from(own);
     const rank = { exact: 0, literal: 1, derived: 2, names: 3 };
-    candidates.sort((a, b) => rank[a.fidelity] - rank[b.fidelity] || b.tools.length - a.tools.length);
-    return { repo: ref.owner + '/' + ref.repo, ref: ref.ref, sha: listing.sha, via: listing.via, truncated: listing.truncated, scanned: { exact: plan.exact.length, manifests: plan.manifests.length, source: Math.min(plan.src.length, maxSrc), sourceTotal: plan.src.length }, candidates, best: candidates[0] || null, hints };
+    candidates.sort((a, b) => (a.foreign ? 1 : 0) - (b.foreign ? 1 : 0) || rank[a.fidelity] - rank[b.fidelity] || b.tools.length - a.tools.length);
+    return { scanned: { exact: plan.exact.length, manifests: plan.manifests.length, source: Math.min(plan.src.length, maxSrc), sourceTotal: plan.src.length }, candidates, best: candidates[0] || null, hints };
+  }
+
+  // ------------------------------------------------------------ the repository's own server name
+  // Compared without case, an npm scope, or an "mcp-" / "-mcp" affix: "@acme/Notes-MCP" and "notes" are one name.
+  function normName(n) {
+    let s = String(n || '').trim().toLowerCase().replace(/^@[^/]+\//, '').replace(/[\s_.]+/g, '-');
+    for (let k = 0; k < 3; k++) s = s.replace(/^mcp-/, '').replace(/-mcp$/, '');
+    return s;
+  }
+  // The names this repository gives its own server: McpServer({ name }) / Server({ name }) / FastMCP({ name }) in
+  // TypeScript and JavaScript, FastMCP("name") / MCPServer("name") in Python, and the package.json or pyproject.toml name.
+  function ownServerNames(files) {
+    const out = new Set(); const add = (n) => { const x = normName(n); if (x) out.add(x); };
+    const entries = files instanceof Map ? Array.from(files.entries()) : files;
+    entries.forEach(([p, text]) => {
+      if (typeof text !== 'string') return;
+      let m;
+      if (/\.(ts|mts|cts|js|mjs|cjs)$/.test(p)) {
+        const re = /new\s+(?:McpServer|Server|FastMCP)\s*\(\s*\{[^{}]*?\bname\s*:\s*(['"`])([^'"`\n]{1,100})\1/g;
+        while ((m = re.exec(text))) add(m[2]);
+      } else if (/\.py$/.test(p)) {
+        const re = /\b(?:FastMCP|MCPServer)\s*\(\s*(?:name\s*=\s*)?(['"])([^'"\n]{1,100})\1/g;
+        while ((m = re.exec(text))) add(m[2]);
+      } else if (/(^|\/)package\.json$/.test(p)) {
+        try { const j = JSON.parse(text); if (j && typeof j.name === 'string') add(j.name); } catch (e) { /* ignore */ }
+      } else if (/(^|\/)pyproject\.toml$/.test(p)) {
+        const sec = /^\[(?:project|tool\.poetry)\]\s*$([\s\S]*?)(?=^\[|$(?![\s\S]))/m.exec(text);
+        const nm = sec && /^\s*name\s*=\s*["']([^"'\n]+)["']/m.exec(sec[1]);
+        if (nm) add(nm[1]);
+      }
+    });
+    return out;
+  }
+
+  // ------------------------------------------------------------ a local checkout (Node only)
+  // Folders never entered: installed dependencies, caches and version control. Build output (dist, build, out) and vendor
+  // are listed but skipped by planFiles, and read only when nothing else holds a tool (builtFallback).
+  const WALK_SKIP = /^(node_modules|\.git|\.hg|\.svn|\.venv|venv|__pycache__|site-packages|\.next|\.nuxt|\.turbo|\.cache|\.tox|\.mypy_cache|\.pytest_cache|coverage|bower_components|jspm_packages)$/;
+  const MAX_LIST = 20000; // paths listed from a directory (GitHub's recursive tree answer stops near 100,000 entries)
+  const MAX_WALK_DEPTH = 16;
+  const LIKELY_SRC = /^(src|lib|server|servers|app|packages|mcp|\.mcp-catalog)$/i;
+  /**
+   * The same reading as fromGitHub, over a folder on this machine: no network, nothing executed. Symlinks are not
+   * followed (a link could lead outside the folder); files over MAX_FILE are not read, as on GitHub.
+   * opts: { rootDir } a parent folder whose package.json / package-lock.json / pyproject.toml also count (a monorepo
+   * package read from its own folder); { maxSourceFiles } as fromGitHub (default 60, so a local read and --repo agree);
+   * { exclude } folders and files (relative paths) not to read, such as a baseline list; { skipIfContains } a file name
+   * that marks a folder not to read; { maxList } the listing limit (default MAX_LIST). The answer's `truncated` says
+   * the folder held more files than the limit (the deepest and least likely ones were not listed).
+   */
+  async function fromDirectory(dir, opts) {
+    opts = opts || {};
+    const fs = require('node:fs'); const pathMod = require('node:path');
+    const base = pathMod.resolve(String(dir));
+    let st; try { st = fs.statSync(base); } catch (e) { const err = new Error('Folder not found: ' + dir); err.code = 'not_found'; throw err; }
+    if (!st.isDirectory()) { const err = new Error('Not a folder: ' + dir); err.code = 'not_found'; throw err; }
+    const all = []; let truncated = false;
+    const maxList = opts.maxList || MAX_LIST;
+    const exclude = new Set((opts.exclude || []).map((x) => String(x).replace(/\\/g, '/').replace(/^\.\/|\/+$/g, '')));
+    // Breadth first, and the folders that usually hold a server's source (and everything in them) first, so a folder
+    // over the listing limit loses its deepest and least likely files, not src/.
+    // Two queues: folders inside a likely source folder (src, lib, ...) are listed before every other folder.
+    const rank = (n) => (LIKELY_SRC.test(n) ? 0 : 1);
+    const likely = []; const other = [[base, '', 0, false]];
+    while ((likely.length || other.length) && !truncated) {
+      const [abs, rel, depth, inLikely] = likely.length ? likely.shift() : other.shift();
+      let ents; try { ents = fs.readdirSync(abs, { withFileTypes: true }); } catch (e) { continue; }
+      ents.sort((a, b) => rank(a.name) - rank(b.name) || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+      for (const e of ents) {
+        const r = rel ? rel + '/' + e.name : e.name;
+        if (e.isSymbolicLink() || exclude.has(r)) continue;
+        if (e.isDirectory()) {
+          if (WALK_SKIP.test(e.name) || depth >= MAX_WALK_DEPTH) continue;
+          const sub = pathMod.join(abs, e.name);
+          if (opts.skipIfContains) { let marked = false; try { marked = fs.lstatSync(pathMod.join(sub, opts.skipIfContains)).isFile(); } catch (x) { marked = false; } if (marked) continue; }
+          const l = inLikely || LIKELY_SRC.test(e.name);
+          (l ? likely : other).push([sub, r, depth + 1, l]); continue;
+        }
+        if (!e.isFile()) continue;
+        if (all.length >= maxList) { truncated = true; break; }
+        all.push(r);
+      }
+    }
+    const extra = new Map(); // root manifests of the parent folder, under a name that cannot clash with a file of the folder
+    if (opts.rootDir && pathMod.resolve(String(opts.rootDir)) !== base) {
+      const root = pathMod.resolve(String(opts.rootDir));
+      ['package.json', 'package-lock.json', 'pyproject.toml'].forEach((n) => { if (!all.includes(n)) extra.set(n, pathMod.join(root, n)); });
+    }
+    const readOne = (p) => {
+      const abs = extra.has(p) ? extra.get(p) : pathMod.join(base, p);
+      try {
+        const s = fs.lstatSync(abs);
+        if (!s.isFile() || s.size > MAX_FILE) return null;
+        return fs.readFileSync(abs, 'utf8');
+      } catch (e) { return null; }
+    };
+    const readMany = async (ps) => ps.map((p) => [p, readOne(p)]);
+    all.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)); // the walk order only decides what a truncated listing keeps
+    const scan = await scanFiles({ all: all.concat(Array.from(extra.keys())), subdir: null, readMany, maxSourceFiles: opts.maxSourceFiles, builtFallback: true });
+    return Object.assign({ repo: String(dir), ref: null, sha: null, via: 'directory', truncated }, scan);
   }
 
   // Registry: name -> latest server.json. The registry's search is a substring match on the name.
@@ -1069,5 +1269,5 @@
     return null;
   }
 
-  return { fromGitHub, fromRegistry, extractFromFile, extractJs, extractPy, planFiles, detectSdk, collectGlobalConsts, analyseRepo, markConditionals, parseRepoRef, toolsFromJson, fromMcpbManifest, tokenize, commandFor };
+  return { fromGitHub, fromDirectory, fromCatalogSnap, ownServerNames, normName, fromRegistry, extractFromFile, extractJs, extractPy, planFiles, detectSdk, collectGlobalConsts, analyseRepo, markConditionals, parseRepoRef, toolsFromJson, fromMcpbManifest, tokenize, commandFor };
 });
