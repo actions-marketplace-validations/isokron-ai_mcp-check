@@ -22,6 +22,7 @@ Usage:
                                                    Claude Code, Cursor, Windsurf, VS Code, Zed
   mcp-check --repo github.com/owner/repo [--github-token-env NAME]
                                                    read the tool definitions from the source, run nothing
+  mcp-check --repo-dir <path>                      the same, from a local checkout (no network)
   mcp-check --registry <server name>               an MCP Registry entry: its remote, else its source
   mcp-check capture [--timeout S] -- <server command...>
                                                    print a stdio server's tools/list answer
@@ -47,7 +48,7 @@ Options:
 --header values may name environment variables ("Authorization: Bearer $TOKEN"); header values are never
 printed. Limits: ${MAX_BYTES / 1048576} MiB of JSON, ${MAX_DEPTH} levels of nesting and ${MAX_TOOLS} tools per list.
 Exit codes: 0 pass, 1 below --min-grade or a high-risk change, 2 bad input or usage, 3 a server could not be
-reached or listed.
+reached or listed, or no tool definitions were found in the source.
 Docs: ${tagged('https://isokron.ai/mcp-check', 'cli')}
 `;
 
@@ -56,7 +57,7 @@ class UsageError extends Error {}
 export function parseArgs(argv) {
   const opt = {
     cmd: 'check', format: 'text', minGrade: null, sections: DEFAULT_SECTIONS.slice(), fix: null, compare: null, file: null, sarifUri: null, output: null, timeout: 60, server: null,
-    url: null, headers: {}, protocol: 'auto', command: null, argv: null, env: {}, config: null, repo: null, registry: null, save: null, githubTokenEnv: null,
+    url: null, headers: {}, protocol: 'auto', command: null, argv: null, env: {}, config: null, repo: null, repoDir: null, registry: null, save: null, githubTokenEnv: null,
   };
   const timeout = (v) => { const n = Number(v); if (!(n > 0 && n <= 600)) throw new UsageError('--timeout must be 1 to 600 seconds'); return n; };
   if (argv[0] === 'serve') { opt.cmd = 'serve'; if (argv.length > 1) throw new UsageError('serve takes no arguments'); return opt; }
@@ -100,6 +101,7 @@ export function parseArgs(argv) {
     else if (a === '--config') opt.config = next();
     else if (a === '--server') opt.server = next();
     else if (a === '--repo') opt.repo = next();
+    else if (a === '--repo-dir') opt.repoDir = next();
     else if (a === '--registry') opt.registry = next();
     else if (a === '--github-token-env') opt.githubTokenEnv = next();
     else if (a === '--save') opt.save = next();
@@ -110,9 +112,9 @@ export function parseArgs(argv) {
     else if (!opt.file) opt.file = a;
     else throw new UsageError('unexpected argument ' + a);
   }
-  const inputs = [opt.file, opt.url, opt.command || opt.argv, opt.config, opt.repo, opt.registry].filter(Boolean).length;
-  if (inputs > 1) throw new UsageError('give one input: a file, --url, --command or --, --config, --repo or --registry');
-  if (!inputs) throw new UsageError('no input: give a tools.json file, -, --stdin, --url, -- <command>, --config, --repo or --registry');
+  const inputs = [opt.file, opt.url, opt.command || opt.argv, opt.config, opt.repo, opt.repoDir, opt.registry].filter(Boolean).length;
+  if (inputs > 1) throw new UsageError('give one input: a file, --url, --command or --, --config, --repo, --repo-dir or --registry');
+  if (!inputs) throw new UsageError('no input: give a tools.json file, -, --stdin, --url, -- <command>, --config, --repo, --repo-dir or --registry');
   if (Object.keys(opt.headers).length && !opt.url) throw new UsageError('--header goes with --url only (config files carry their own headers)');
   if (Object.keys(opt.env).length && !(opt.command || opt.argv)) throw new UsageError('--env goes with --command or -- only');
   if (opt.server && !opt.config) throw new UsageError('--server goes with --config');
@@ -224,7 +226,7 @@ export async function main(argv, { stdout = process.stdout, stderr = process.std
   let prevTools = null;
   if (opt.compare) {
     let prev;
-    try { prev = (await collect({ ...opt, url: null, argv: null, command: null, config: null, repo: null, registry: null, file: opt.compare }, note))[0]; } catch (e) {
+    try { prev = (await collect({ ...opt, url: null, argv: null, command: null, config: null, repo: null, repoDir: null, registry: null, file: opt.compare }, note))[0]; } catch (e) {
       stderr.write('mcp-check: ' + e.message + '\n'); return 2;
     }
     try { prevTools = parseList(prev.text, '--compare file ' + opt.compare).tools; } catch (e) {

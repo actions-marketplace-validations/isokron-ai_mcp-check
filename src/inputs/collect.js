@@ -2,7 +2,7 @@
 //   { label, text }                       a file or stdin, graded as given
 //   { label, data, source }               a fetched list: data is what the engine's parseData accepts
 //   { label, error, code }                a server that could not be listed (code 'unreachable' or 'usage')
-// Live inputs run or call the user's own servers from this machine; static inputs read published source.
+// Live inputs run or call the user's own servers from this machine; static inputs read published source or a local folder.
 // Nothing is sent to IsoKron. Header values are never printed: notes name the headers only.
 import { createRequire } from 'node:module';
 import { existsSync, readFileSync } from 'node:fs';
@@ -90,6 +90,26 @@ async function fromRepo(ref, opt, via = null) {
   const c = r.best;
   const { provenance, left, cond } = repoProvenance(c);
   return { data: c.tools, source: { kind: 'repo', repo: r.repo, sha: r.sha, via: r.via, fidelity: c.fidelity, provenance, from: c.kind, files: c.files || [c.path], ...(left.length ? { left_out: left.map((x) => ({ name: line(x.name, 128), reasons: x.reasons.map((y) => line(y, 160)) })) } : {}), ...(cond.length ? { conditional: cond.map((x) => line(x.name, 128)) } : {}), ...(via ? { registry: via } : {}) } };
+}
+
+/** No tool definitions in a folder: the message names the live alternatives (the CLI's and the Action's). */
+export function noToolsMessage(where, r) {
+  return 'no tool definitions found in ' + where + ' (scanned ' + r.scanned.source + ' of ' + r.scanned.sourceTotal + ' source files, and the committed tool lists and MCPB manifests). '
+    + 'Grade the live list instead: start the server with --command "<start command>", or give a saved tools/list file '
+    + '(in the GitHub Action: set command or tools-file).';
+}
+
+/** A local checkout, read like --repo: no network, nothing run. */
+async function fromRepoDir(dir, opt) {
+  let r;
+  try { r = await withDeadline(Repo.fromDirectory(dir), opt.timeout * 1000, 'Reading ' + dir); } catch (e) {
+    if (e && e.code === 'not_found') throw new InputFailure(line(e.message), 'usage');
+    throw new InputFailure('could not read ' + line(dir) + ': ' + line(e && e.message), 'unreachable');
+  }
+  if (!r.best) throw new InputFailure(noToolsMessage(line(dir), r), 'unreachable');
+  const c = r.best;
+  const { provenance, left, cond } = repoProvenance(c);
+  return { data: c.tools, where: c.where || null, source: { kind: 'dir', dir: r.repo, fidelity: c.fidelity, provenance, from: c.kind, files: c.files || [c.path], ...(c.built ? { built: true } : {}), ...(r.truncated ? { truncated: true } : {}), ...(left.length ? { left_out: left.map((x) => ({ name: line(x.name, 128), reasons: x.reasons.map((y) => line(y, 160)) })) } : {}), ...(cond.length ? { conditional: cond.map((x) => line(x.name, 128)) } : {}) } };
 }
 
 async function fromRegistry(name, opt, note) {
@@ -182,6 +202,7 @@ export async function collect(opt, note = () => {}) {
   }
   if (opt.config) return fromConfig(opt, note);
   if (opt.repo) { const got = await fromRepo(opt.repo, opt); note('found ' + got.data.length + ' tools in ' + got.source.repo + '@' + String(got.source.sha).slice(0, 12) + ' (' + got.source.provenance + ')'); return [{ label: got.source.repo, ...got }]; }
+  if (opt.repoDir) { const got = await fromRepoDir(opt.repoDir, opt); note('found ' + got.data.length + ' tools in ' + line(opt.repoDir) + ' (' + got.source.provenance + ')'); return [{ label: line(opt.repoDir), ...got }]; }
   if (opt.registry) { const got = await fromRegistry(opt.registry, opt, note); return [{ label: opt.registry, ...got }]; }
   return [];
 }
@@ -193,6 +214,7 @@ export function sourceLine(s) {
   const reg = s.registry ? ' via MCP Registry ' + line(s.registry.name, 120) + (s.registry.version ? ' ' + line(s.registry.version, 40) : '') : '';
   if (s.kind === 'http') return 'Source: live server ' + line(s.url) + ' (' + s.era + (s.protocolVersion ? ', protocol ' + line(s.protocolVersion, 20) : '') + si + ')' + reg;
   if (s.kind === 'stdio') return 'Source: local server ' + line(s.command || s.server) + ' (' + s.era + ', protocol ' + line(s.protocolVersion, 20) + si + ')';
+  if (s.kind === 'dir') return 'Source: local folder ' + line(s.dir) + ' (read statically, nothing was run), ' + s.provenance + (s.built ? '; read from build output, since no source file defines a tool' : '');
   if (s.kind === 'repo') return 'Source: ' + s.repo + '@' + String(s.sha).slice(0, 12) + ' (' + s.via + '), ' + s.provenance + reg;
   return null;
 }

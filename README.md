@@ -12,7 +12,7 @@ One engine, four ways to run it:
 |---|---|
 | **Web** | [isokron.ai/mcp-check](https://isokron.ai/mcp-check?utm_source=mcp-check-readme&utm_medium=readme): paste a tool list; it is graded in your browser and never uploaded. |
 | **CLI** | `npx @isokron/mcp-check tools.json` with text, Markdown, JSON or SARIF output and a minimum-grade gate. |
-| **GitHub Action** | `uses: isokron-ai/mcp-check@v1`: job summary, SARIF for code scanning, a gate, and a README badge. |
+| **GitHub Action** | `uses: isokron-ai/mcp-check@v1`: zero-config (reads your source, runs nothing), job summary, SARIF for code scanning, a gate, a README badge and an optional PR comment. |
 | **MCP server** | `npx @isokron/mcp-check serve`: coding agents grade the server they are building. |
 
 All four run the same file, [`engine/core.js`](engine/core.js), under the published [rubric](RUBRIC.md) (`rubric_version` 2.1.0). It reads only the JSON it is given: no network access, nothing stored.
@@ -37,6 +37,7 @@ npx @isokron/mcp-check --command "uvx mcp-server-time" --env TZ=UTC
 npx @isokron/mcp-check --config auto                     # every server your MCP clients run
 npx @isokron/mcp-check --config .vscode/mcp.json --server github --min-grade B
 npx @isokron/mcp-check --repo github.com/owner/repo      # reads the source, runs nothing
+npx @isokron/mcp-check --repo-dir .                      # the same, from a local checkout (no network)
 npx @isokron/mcp-check --registry io.github.owner/name --save tools.json
 ```
 
@@ -47,6 +48,7 @@ npx @isokron/mcp-check --registry io.github.owner/name --save tools.json
 | `-- <command>`, `--command` | A local server over stdio, started and stopped by the checker. `--env KEY=VALUE` adds environment variables. |
 | `--config auto\|<file>` | Every server in an MCP client config: Claude Desktop, Claude Code (`.mcp.json`), Cursor, Windsurf, VS Code (`.vscode/mcp.json` with JSONC, `${env:X}` resolved, `${input:x}` reported), VS Code settings and Zed. `auto` reads the usual locations. `--server name` picks one. |
 | `--repo` | A GitHub repository, read without running anything: committed tool lists and snapshots, MCPB manifests, tool literals, and TypeScript and Python SDK registrations reproduced as the SDK lists them. The report's `Source:` line names the provenance (`exact`, `literal`, `derived` or `names only`). `--github-token-env NAME` for private repositories or rate limits. |
+| `--repo-dir` | A folder on this machine, read the same way as `--repo`, with no network access and nothing run. Skips `node_modules`, `.git`, virtual environments, tests, examples and docs; reads build output (`dist`, `build`, `out`) and `vendor` only when no source file defines a tool; does not follow symlinks; up to 60 source files of at most 1.5 MiB each. Exit code 3 when no tool definition is found. |
 | `--registry` | An [MCP Registry](https://registry.modelcontextprotocol.io) entry: its public https remote, else its GitHub source. |
 
 Every report of a fetched list carries a `Source:` line (and `source` in JSON). `--save file` keeps the fetched list for `--compare` or the web checker. `capture -- <command>` prints a stdio server's `tools/list` answer without grading it.
@@ -63,25 +65,33 @@ Every report of a fetched list carries a `Source:` line (and `source` in JSON). 
 | `-o, --output file` | Write the report to a file. With a format other than `text`, the text summary also goes to stderr. |
 | `-v, --version`, `-h, --help` | Print the version, or this list of inputs and options. |
 
-Exit codes: `0` pass, `1` below `--min-grade` or a high-risk change, `2` bad input or usage, `3` a server could not be reached or listed.
+Exit codes: `0` pass, `1` below `--min-grade` or a high-risk change, `2` bad input or usage, `3` a server could not be reached or listed, or no tool definitions were found in the source.
 
 ## GitHub Action
 
+Zero-config: with no inputs, the Action reads the tool definitions from your repository's code, the same way `--repo-dir` does, and runs nothing.
+
 ```yaml
-name: mcp-check
+# .github/workflows/mcp-check.yml
+name: MCP check
 on:
   push:
-    branches: [main]
   pull_request:
-
 permissions:
   contents: read
-
 jobs:
   mcp-check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: isokron-ai/mcp-check@v1
+```
+
+The job summary says the list was read from source and how exact it is. For the exact list your server sends, start it with `command` (or give a saved list with `tools-file`):
+
+```yaml
       - uses: actions/setup-node@v7
         with:
           node-version: 22
@@ -90,9 +100,10 @@ jobs:
         with:
           command: node dist/index.js     # or: tools-file: tools.json
           min-grade: B
+          pr-comment: auto                # needs permissions: pull-requests: write
 ```
 
-The job summary shows the grade table and the blocking and attention findings with their docs links. The reports (`report.md`, `report.json`, `report.sarif`, and the captured `tools-list.json`) are uploaded as an artifact. Set `upload-sarif: true` (with `permissions: security-events: write`) to send the findings to code scanning, and `baseline:` to a committed tool list to fail on rug-pull annotation changes.
+The job summary shows the grade table and the blocking and attention findings with their docs links. The reports (`report.md`, `report.json`, `report.sarif`, and the captured `tools-list.json`) are uploaded as an artifact. Set `upload-sarif: true` (with `permissions: security-events: write`) to send the findings to code scanning, and `baseline:` to a committed tool list to fail on rug-pull annotation changes. With `pr-comment: auto` the Action comments on a pull request (one comment, updated in place, never on pull requests from forks) when a gated section falls below `min-grade`; `always` comments on every run. On a public repository the job summary ends with a link to list the server in the [IsoKron MCP registry](https://isokron.ai/mcp-check/registry?utm_source=mcp-check-readme&utm_medium=readme) for free (`publish-hint: false` to leave it out; no request is made).
 
 ### README badge
 
@@ -190,7 +201,7 @@ The package follows semantic versioning. The rubric has its own version, `rubric
 
 ## Privacy
 
-The CLI, the library, the Action and the MCP server run on your machine or runner. They read the JSON they are given, or fetch the tool list themselves from the server, repository or registry you name (directly, from your machine: GitHub, jsDelivr or the MCP Registry for `--repo` and `--registry`). Nothing is sent to IsoKron. The Action keeps its results on GitHub, in your repository and run: it uploads the reports as a workflow artifact, uploads SARIF to code scanning when `upload-sarif` is on, and commits the badge files when `badge` is on. The docs URLs in findings are links for you to open. Links to isokron.ai that the tools print (in `--help` and the text report, the job summary, SARIF help links, the badge's `report.md` and the MCP server's `websiteUrl`) carry a fixed channel tag, for example `utm_source=mcp-check-cli&utm_medium=cli`, so the site can count visits per channel. The tag names the place the link was printed and nothing about you, your server or the run; the `docs` values in JSON reports and in the MCP server's tool results carry no tag.
+The CLI, the library, the Action and the MCP server run on your machine or runner. They read the JSON they are given, or fetch the tool list themselves from the server, repository or registry you name (directly, from your machine: GitHub, jsDelivr or the MCP Registry for `--repo` and `--registry`; `--repo-dir` and the zero-config Action read local files only). Nothing is sent to IsoKron. The Action keeps its results on GitHub, in your repository and run: it uploads the reports as a workflow artifact, uploads SARIF to code scanning when `upload-sarif` is on, commits the badge files when `badge` is on, and writes a pull-request comment when `pr-comment` is on. The docs URLs in findings are links for you to open. Links to isokron.ai that the tools print (in `--help` and the text report, the job summary, the PR comment, SARIF help links, the badge's `report.md` and the MCP server's `websiteUrl`) carry a fixed channel tag, for example `utm_source=mcp-check-cli&utm_medium=cli`, so the site can count visits per channel. The tag names the place the link was printed and nothing about you, your server or the run; the `docs` values in JSON reports and in the MCP server's tool results carry no tag.
 
 ## Development
 

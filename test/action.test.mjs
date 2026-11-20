@@ -122,7 +122,7 @@ test('action: input errors fail the step with an error annotation', () => {
   const ws = workspace();
   const both = act(ws, { 'tools-file': 'mcp/tools.json', command: 'node x.js' });
   assert.equal(both.status, 1);
-  assert.match(both.stdout, /::error::mcp-check: set exactly one of tools-file and command/);
+  assert.match(both.stdout, /::error::mcp-check: set one of tools-file and command, not both/);
   assert.equal(both.outputs['exit-status'], '1');
   assert.match(act(ws, { 'tools-file': '../etc/passwd' }).stdout, /must be a path inside the workspace/);
   assert.match(act(ws, { 'tools-file': 'mcp/tools.json', 'results-dir': '/tmp/x' }).stdout, /results-dir must be a path inside the workspace/);

@@ -49,3 +49,13 @@ test('corpus: manual dispatch only, guarded to this repository and main, one sec
   assert.match(y, /environment: corpus/);
   assert.ok(!/tools\/call/.test(readFileSync(fileURLToPath(new URL('../corpus/run-surface-shard.sh', import.meta.url)), 'utf8')));
 });
+
+test('ci: the zero-config job runs the Action with no inputs, after a plain checkout, and is required by ci-ok', () => {
+  const y = wf['ci.yml'];
+  const job = y.slice(y.indexOf('\n  zero-config:\n'), y.indexOf('\n  ci-ok:'));
+  assert.match(job, /- name: The zero-config workflow\n        id: zero\n        uses: \.\/\n      - name:/, 'uses: ./ with no with: block');
+  assert.ok(!/setup-node|npm (ci|install)/.test(job), 'no setup-node or install, as in the documented workflow');
+  assert.match(job, /\[ "\$SOURCE" = repo-static \]/);
+  assert.match(y, /needs: \[test, action, zero-config\]/);
+  assert.match(y, /\[ "\$n" -eq 3 \]/);
+});

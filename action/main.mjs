@@ -2,15 +2,19 @@
 // interpolation into a shell command. Uses only the engine and Node built-ins: no install step.
 import { appendFileSync, closeSync, constants, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, unlinkSync, writeSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import M from '../src/engine.js';
 import { VERSION } from '../src/version.js';
 import { capture, CaptureError, splitCommand as split } from '../src/capture.js';
 import { parseList } from '../src/tools.js';
 import { InputError as LimitError } from '../src/limits.js';
-import { tagDocsLinks } from '../src/links.js';
-import { ALL_SECTIONS, DEFAULT_SECTIONS, GRADES, badgeFile, badgeSnippet, belowMinGrade, mdCode, sarifWithLocations, summaryMarkdown, webLink } from '../src/report.js';
+import { registryUrl, tagDocsLinks } from '../src/links.js';
+import { repoProvenance } from '../src/inputs/collect.js';
+import { commentAction, MODES as COMMENT_MODES, prContext, renderComment } from './pr-comment.mjs';
+import { ALL_SECTIONS, DEFAULT_SECTIONS, GRADES, badgeFile, badgeSnippet, belowMinGrade, mdCode, mdText, sarifWithLocations, summaryMarkdown, webLink } from '../src/report.js';
 
+const Repo = createRequire(import.meta.url)('../src/inputs/repo-source.cjs');
 const env = process.env;
 const input = (name, def = '') => (env['INPUT_' + name.toUpperCase().replace(/-/g, '_')] ?? def).trim() || def;
 const bool = (name, def) => {
@@ -90,10 +94,32 @@ function ownFolder(dir, what) {
 const splitCommand = split;
 export { splitCommand };
 
+/** The event payload GitHub writes for the run, or {} (a local run, or an unreadable file). */
+function eventPayload() {
+  try { return env.GITHUB_EVENT_PATH ? JSON.parse(readFileSync(env.GITHUB_EVENT_PATH, 'utf8')) : {}; } catch { return {}; }
+}
+
+/**
+ * The registry line (input publish-hint): only for a public repository on github.com, known from the event payload
+ * (a schedule event carries no repository, so it gets no line). Builds a link and nothing else: no request is made.
+ */
+export function publishHint(e, ev, surface) {
+  const repo = e.GITHUB_REPOSITORY || '';
+  const m = /^([^/]+)\/([^/]+)$/.exec(repo);
+  if (!m || e.GITHUB_SERVER_URL !== 'https://github.com') return null;
+  const r = ev && ev.repository;
+  if (!r || r.private !== false || (r.visibility && r.visibility !== 'public')) return null;
+  const url = registryUrl(m[1], m[2], surface);
+  if (!url) return null;
+  return '**[List this server in the IsoKron MCP registry](' + url + ')** (free): a public page with its CI-verified grade, and a README badge.';
+}
+
+const ZERO_CONFIG_DOCS = 'https://github.com/isokron-ai/mcp-check/blob/main/docs/github-action.md#where-the-tool-list-comes-from';
+
 export async function run() {
   const toolsFile = input('tools-file');
   const command = input('command');
-  if (!!toolsFile === !!command) throw new InputError('set exactly one of tools-file and command');
+  if (toolsFile && command) throw new InputError('set one of tools-file and command, not both (or neither, to read the tool definitions from the repository code)');
   const minGrade = input('min-grade').toUpperCase() || null;
   if (minGrade && !GRADES.includes(minGrade)) throw new InputError('min-grade must be one of A, B, C, D, F, or empty');
   const sections = input('sections', DEFAULT_SECTIONS.join(',')).split(',').map((s) => s.trim()).filter(Boolean);
@@ -103,6 +129,9 @@ export async function run() {
   const wantSarif = bool('sarif', true);
   const wantBadge = bool('badge', false);
   const useShell = bool('shell', false);
+  const wantHint = bool('publish-hint', true);
+  const commentMode = input('pr-comment', 'off').toLowerCase();
+  if (!COMMENT_MODES.includes(commentMode)) throw new InputError('pr-comment must be off, auto or always');
   const results = inWorkspace(input('results-dir', 'mcp-check-results'), 'results-dir');
   const badgeDir = inWorkspace(input('badge-dir', '.github/mcp-check'), 'badge-dir');
   const baseline = input('baseline') ? inWorkspace(input('baseline'), 'baseline') : null;
@@ -116,14 +145,43 @@ export async function run() {
     }
   };
 
-  // 1. The tool list: a file in the repository, or tools/list from the server the command starts.
-  let text, listRel, source;
+  // 1. The tool list: a file in the repository, tools/list from the server the command starts, or (neither set) the
+  //    tool definitions read from the repository code, without running anything.
+  let text, listRel, source, sourceKind, note = null, where = null, commentSource = '';
   if (toolsFile) {
+    sourceKind = 'tools-file';
     const f = inWorkspace(toolsFile, 'tools-file');
     text = safeRead(f.abs, 'tools-file ' + f.rel);
     listRel = f.rel;
     source = mdCode(f.rel);
+  } else if (!command) {
+    sourceKind = 'repo-static';
+    const dir = inWorkspace(input('working-directory', '.'), 'working-directory', true);
+    const st = lstatOrNull(dir.abs);
+    if (!st || !st.isDirectory()) throw new InputError('working-directory is not a folder: ' + input('working-directory', '.'));
+    const ws = realpathSync(env.GITHUB_WORKSPACE || process.cwd());
+    process.stdout.write('Reading the tool definitions from the source in ' + dir.rel + ' (nothing is run).\n');
+    // The results folder, and any folder an earlier run of this action made, hold a tools-list.json: not the repository's.
+    const scan = await Repo.fromDirectory(dir.abs, { rootDir: ws, exclude: [relative(dir.abs, results.abs).split(sep).join('/')], skipIfContains: MARKER });
+    if (!scan.best) {
+      const msg = 'no tool definitions found in the source in ' + dir.rel + ' (scanned ' + scan.scanned.source + ' of ' + scan.scanned.sourceTotal + ' source files, and the committed tool lists and MCPB manifests). Set command (the command that starts the server, for example node dist/index.js) or tools-file (a saved tools/list answer).';
+      summary('## MCP check\n\nNo tool definitions found in the repository code in ' + mdCode(dir.rel) + ' (' + scan.scanned.sourceTotal + ' source files read; nothing was run). Set `command` to the command that starts your server, or `tools-file` to a saved `tools/list` answer: [how](' + ZERO_CONFIG_DOCS + ').\n');
+      throw new InputError(msg);
+    }
+    const c = scan.best;
+    text = JSON.stringify({ tools: c.tools }, null, 2) + '\n';
+    out('tools-list.json', text);
+    listRel = results.rel + '/tools-list.json';
+    const prefix = dir.rel === '.' ? '' : dir.rel + '/';
+    if (Array.isArray(c.where)) where = new Map(c.where.map((w) => [w.name, { uri: prefix + w.path, line: w.line }]));
+    const { provenance } = repoProvenance(c);
+    source = 'the repository code in ' + mdCode(dir.rel);
+    note = '**Source: repository code; nothing was run.** ' + mdText(provenance.charAt(0).toUpperCase() + provenance.slice(1)) + '.'
+      + (c.built ? ' Read from build output, since no source file defines a tool.' : '')
+      + ' For the exact list your server sends, set `command` (the command that starts it, for example `node dist/index.js`) or `tools-file` (a saved `tools/list` answer): [how](' + ZERO_CONFIG_DOCS + ').';
+    commentSource = 'Source: repository code, nothing was run (' + c.fidelity + ').';
   } else {
+    sourceKind = 'command';
     const cwd = inWorkspace(input('working-directory', '.'), 'working-directory', true);
     if (!existsSync(cwd.abs)) throw new InputError('working-directory not found: ' + input('working-directory'));
     let argv;
@@ -161,6 +219,11 @@ export async function run() {
   if (wantSarif) {
     const s = sarifWithLocations(r, text, listRel);
     s.runs[0].tool.driver.semanticVersion = VERSION;
+    // Read from source: each result points at the line that registers its tool.
+    if (where) for (const res of s.runs[0].results) {
+      const w = where.get(res.locations?.[0]?.logicalLocations?.[0]?.name);
+      if (w) res.locations[0].physicalLocation = { artifactLocation: { uri: w.uri }, region: { startLine: w.line || 1 } };
+    }
     out('report.sarif', JSON.stringify(s, null, 2) + '\n');
     sarifRel = results.rel + '/report.sarif';
   }
@@ -201,14 +264,32 @@ export async function run() {
     }
   }
 
-  // 5. Job summary and outputs.
-  let md = summaryMarkdown(r, { sections, minGrade, source, badgeSnippet: snippet, webLink: link });
+  // 5. Job summary, the pull-request comment, and outputs.
+  const event = eventPayload();
+  const hint = wantHint ? publishHint(env, event, 'action') : null;
+  const failed = below.length > 0 || !!(diff && diff.highRisk.length);
+  let commentNote = null, commentDo = null, prNumber = '';
+  if (commentMode !== 'off') {
+    const pr = prContext(env.GITHUB_EVENT_NAME || '', event);
+    if (pr && pr.skip) commentNote = 'PR comment skipped: ' + pr.skip + '.';
+    else if (pr) {
+      commentDo = commentAction(commentMode, failed);
+      prNumber = String(pr.number);
+      const body = renderComment(r, { sections, minGrade, diff, sourceNote: commentSource, runUrl, hint: wantHint ? publishHint(env, event, 'comment') : null });
+      out('pr-comment.md', body);
+    }
+  }
+  let md = summaryMarkdown(r, { sections, minGrade, source, note, badgeSnippet: snippet, webLink: link, hint });
   if (diff) md += '\n### Compared with ' + mdCode(baseline.rel) + '\n\n' + diff.added.length + ' added, ' + diff.removed.length + ' removed, ' + diff.changed.length + ' changed.' + (diff.highRisk.length ? ' **High risk** (a client may now run these with less confirmation): ' + diff.highRisk.map((t) => mdCode(t)).join(', ') + '.' : ' No high-risk annotation changes.') + '\n';
   if (badgeNote) md += '\n' + badgeNote + '\n';
+  if (commentNote) md += '\n' + commentNote + '\n';
   summary(md);
   for (const k of ALL_SECTIONS) output('grade-' + k, r.sections[k].grade || '');
-  const failed = below.length > 0 || !!(diff && diff.highRisk.length);
   output('passed', failed ? 'false' : 'true');
+  output('source', sourceKind);
+  output('pr-comment-action', commentDo || '');
+  output('pr-number', prNumber);
+  output('pr-comment-file', commentDo ? results.rel + '/pr-comment.md' : '');
   output('catalog-hash', r.input.catalogHash);
   output('results-dir', results.rel);
   output('sarif-file', sarifRel);

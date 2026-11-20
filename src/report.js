@@ -75,13 +75,15 @@ const code = mdCode;
 /**
  * Short Markdown for a GitHub job summary: the grade table, the gate, and the first blocking and
  * attention findings with their docs links. The full report is the Markdown export (M.toMarkdown).
- * `source` is Markdown the caller composed (with mdText/mdCode for anything taken from the server);
- * every other string taken from the list is escaped here.
+ * `source`, `note` (a paragraph under the first line) and `hint` (the last line) are Markdown the caller
+ * composed (with mdText/mdCode for anything taken from the server); every other string taken from the list
+ * is escaped here.
  */
-export function summaryMarkdown(r, { sections = DEFAULT_SECTIONS, minGrade = null, maxFindings = 25, source = null, badgeSnippet = null, webLink: link = null } = {}) {
+export function summaryMarkdown(r, { sections = DEFAULT_SECTIONS, minGrade = null, maxFindings = 25, source = null, note = null, badgeSnippet = null, webLink: link = null, hint = null } = {}) {
   const out = [];
   out.push('## MCP check', '');
   out.push('Rubric ' + r.rubric_version + ', MCP specification ' + r.spec_version + ', directory rules as read on ' + r.sources_read + '. ' + r.input.tools + ' tools' + (source ? ' from ' + source : '') + '.', '');
+  if (note) out.push(note, '');
   out.push('| Section | Grade | Score | Blocking | Attention | Advice | Gate |', '|---|---|---|---|---|---|---|');
   for (const k of ALL_SECTIONS) {
     const s = r.sections[k];
@@ -105,6 +107,7 @@ export function summaryMarkdown(r, { sections = DEFAULT_SECTIONS, minGrade = nul
   out.push('', 'Catalog hash `' + r.input.catalogHash + '`.');
   if (link) out.push('', '[Open this report in the web checker](' + link + ') (the tool list travels in the link fragment, which is never sent to a server).');
   if (badgeSnippet) out.push('', '### README badge', '', '```markdown', badgeSnippet, '```');
+  if (hint) out.push('', hint);
   return out.join('\n') + '\n';
 }
 
