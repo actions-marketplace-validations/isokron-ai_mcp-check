@@ -1113,6 +1113,9 @@
   const isPrecondition = (n) => /^(expect|expected)_/.test(n) || /^base_(sha|revision|rev|version|etag)$/.test(n) ||
     /^(if_match|if_unmodified_since|if_generation_match|if_metageneration_match|etag|e_tag|last_modified|confirm_token|version|revision|rev|generation|resource_version|current_version|object_version|lock_token|sha|precondition|preconditions|updated_at)$/.test(n) ||
     /_(etag|e_tag|if_match)$/.test(n);
+  // One level down, a bare version, revision, sha or updated_at is usually data of the nested item (a trigger's version),
+  // so only the names that can only be preconditions count there (ops[].expect_version, items[].if_match).
+  const BARE_VERSION = /^(version|revision|rev|generation|sha|updated_at|current_version|object_version|resource_version)$/;
   const VERSION_HEADER = /^(if-match|etag|if-unmodified-since|version|revision|if_match)$/i;
   // A delete guard previews or asks for confirmation. force is the opposite of a guard, and allow_* opts in.
   const isGuard = (n) => /^(confirm|confirmed|confirmation|dry_run|dryrun|preview|preview_only|acknowledge|acknowledged|plan_only|what_if|whatif|validate_only|simulate|check_only)$/.test(n) || /^confirm_/.test(n);
@@ -1174,9 +1177,9 @@
       const entries = info[idx].entries;
       const kind = kind0 || 'other write';
       const headerVersion = schemaFacts(schemaOf(t) || {}).headers.some((h) => typeof h.value === 'string' && VERSION_HEADER.test(h.value));
-      const pick = (pred) => { const e = entries.find((x) => pred(x.norm)); return e ? e.label : null; };
+      const pick = (pred) => { const e = entries.find((x) => pred(x.norm, x.depth)); return e ? e.label : null; };
       const retryArg = pick(isRetryKey);
-      const versionArg = pick(isPrecondition);
+      const versionArg = pick((n, depth) => isPrecondition(n) && !(depth > 0 && BARE_VERSION.test(n)));
       const guardArg = pick(isGuard);
       const found = [], missing = [], notes = [];
       const push = (id, msg) => perTool[idx].findings.push({ id, section: 'surface', affects: ['surface'], severity: CHECK[id].severity, message: msg, path: 'inputSchema.properties' });

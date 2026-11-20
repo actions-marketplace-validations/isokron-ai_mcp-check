@@ -207,6 +207,9 @@ test('surface 2.2.0: camelCase and one level of nested arguments are read (expec
   assert.deepEqual(row([W('update_records', { ops: { type: 'array', description: 'x', items: { type: 'object', properties: { id: S(), expect_version: N, value: S() } } } })], 'update_records').found, ['precondition "ops[].expect_version"']);
   assert.deepEqual(row([W('append_events', { events: { type: 'array', description: 'x', items: { type: 'object', properties: { event_key: S(), body: S() } } } })], 'append_events').found, ['retry key "events[].event_key"']);
   assert.deepEqual(row([W('delete_rows', { table: S(), options: { type: 'object', description: 'x', properties: { dryRun: B } }, expectedVersion: N })], 'delete_rows').found, ['precondition "expectedVersion"', 'guard argument "options.dryRun"']);
+  // One level down, a bare version is the nested item's own data, not a precondition.
+  assert.deepEqual(row([W('update_action', { action_id: S(), supported_triggers: { type: 'array', description: 'x', items: { type: 'object', properties: { id: S(), version: S() } } } })], 'update_action').found, []);
+  assert.deepEqual(row([W('update_action', { action_id: S(), version: S() })], 'update_action').found, ['precondition "version"']);
   // Two levels down is not read.
   assert.deepEqual(row([W('update_doc', { doc_id: S(), body: { type: 'object', description: 'x', properties: { meta: { type: 'object', description: 'x', properties: { expected_version: N } } } } })], 'update_doc').found, []);
 });
