@@ -281,6 +281,22 @@ test('write-surface is recounted without the tools whose schema could not be rea
   assert.notDeepEqual(r.sections.surface, plain.sections.surface);
 });
 
+test('write-surface (rubric 2.2.0 coverage): a write tool with an unreadable schema is not counted as a guard opportunity', () => {
+  const list = { tools: [
+    { name: 'delete_record', title: 'Delete record', description: 'Delete one record by id. Use this to remove a record.', inputSchema: { type: 'object', [UNKNOWN_MARK]: true }, annotations: { readOnlyHint: false, destructiveHint: true } },
+    { name: 'update_record', title: 'Update record', description: 'Update a record.', inputSchema: { type: 'object', properties: { id: { type: 'string' }, body: { type: 'string' }, expected_version: { type: 'string' } }, required: ['id'] }, annotations: { readOnlyHint: false, destructiveHint: false } },
+  ] };
+  const plain = M.analyse(M.parseInput(JSON.stringify(list)));
+  const r = analyseList(M.parseInput(JSON.stringify(list)), { unreadable: { inputSchema: ['delete_record'] }, unresolved: [] });
+  assert.equal(plain.sections.surface.state, 'coverage');
+  assert.deepEqual([plain.sections.surface.coverage.version, plain.sections.surface.coverage.guard], [{ have: 1, of: 2 }, { have: 0, of: 1 }], 'graded as {}: the delete counts as unguarded');
+  // one opportunity left (the update): too few to report coverage
+  assert.equal(r.sections.surface.state, 'not-enough');
+  assert.deepEqual([r.sections.surface.coverage.version, r.sections.surface.coverage.guard], [{ have: 1, of: 1 }, { have: 0, of: 0 }]);
+  assert.equal(r.sections.surface.writeTools, 1);
+  assert.equal(r.sections.surface.grade, plain.sections.surface.grade);
+});
+
 test('the regrade mirrors the engine: on every test catalog it reproduces the engine\'s section grades, scores, counts and caps', () => {
   const dir = new URL('./catalogs/', import.meta.url);
   for (const f of readdirSync(dir).filter((x) => x.endsWith('.json'))) {

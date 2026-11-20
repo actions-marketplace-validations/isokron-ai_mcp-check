@@ -15,8 +15,8 @@ const PARTS = ['inputSchema', 'description', 'annotations'];
 
 // Checks that read the input schema, the description, or the annotations.
 export const NEEDS = {
-  inputSchema: (f) => /^(spec-input-schema-|spec-schema-|spec-ref-remote|spec-composition-bounds|spec-x-mcp-header|anthropic-read-write-split|anthropic-api-docs|anthropic-conversation-data|openai-conversation-input|openai-restricted-input|openai-precise-location|openai-generic-executor|schema-|surface-)/.test(f.id) && f.id !== 'schema-output-schema',
-  description: (f) => /^(anthropic-description|openai-description|anthropic-api-docs|anthropic-unsupported-use|openai-retry|design-use-when|design-handle-lifetime)$/.test(f.id),
+  inputSchema: (f) => /^(spec-input-schema-|spec-schema-|spec-ref-remote|spec-composition-bounds|spec-x-mcp-header|anthropic-read-write-split|anthropic-api-docs|anthropic-conversation-data|openai-conversation-input|openai-restricted-input|openai-precise-location|openai-generic-executor|openai-retry|schema-|surface-)/.test(f.id) && f.id !== 'schema-output-schema', // openai-retry reads argument descriptions and retry-key arguments (rubric 2.2.0)
+  description: (f) => /^(anthropic-description|openai-description|anthropic-api-docs|anthropic-unsupported-use|openai-retry|openai-precise-location|design-use-when|design-handle-lifetime)$/.test(f.id), // precise-location reads "near me" text (2.2.0)
   annotations: (f) => /^(anthropic-title|anthropic-hint|anthropic-hint-platforms-differ|openai-hints-explicit|openai-retry|openai-readonly-starts-job|openai-readonly-destructive|annot-delete-marked-safe|annot-write-marked-readonly|spec-annotation-key-case|schema-output-schema|surface-)/.test(f.id),
 };
 
