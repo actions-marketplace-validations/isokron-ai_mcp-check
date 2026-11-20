@@ -8,7 +8,7 @@ const good = readFileSync(new URL('./catalogs/well-designed.json', import.meta.u
 
 test('check_tools_list: grades, findings with docs URLs, fixes', () => {
   const { report, text } = checkToolsList({ tools_list: ex });
-  assert.equal(report.rubric_version, '2.1.0');
+  assert.equal(report.rubric_version, '2.1.1');
   assert.deepEqual(report.sections.map((s) => s.id), ['spec', 'anthropic', 'openai', 'security', 'quality', 'surface']);
   const g = Object.fromEntries(report.sections.map((s) => [s.id, s.grade]));
   assert.equal(g.anthropic, 'C');

@@ -59,16 +59,16 @@ export function commentAction(mode, problem) {
 }
 
 /**
- * The comment body: the marker, a heading with the result, the grade table, the gate, up to five findings with
- * their check pages, and the registry line. Text from the tool list is escaped as in the job summary.
+ * The comment body: the marker, a heading with the result (marked approximate for a list read from source), the grade
+ * table, the gate, up to five findings with their check pages, and the registry line. Text from the tool list is escaped as in the job summary.
  */
-export function renderComment(r, { sections, minGrade = null, diff = null, sourceNote = '', runUrl = null, hint = null, marker = MARKER, stamp = null } = {}) {
+export function renderComment(r, { sections, minGrade = null, diff = null, sourceNote = '', approximate = false, runUrl = null, hint = null, marker = MARKER, stamp = null } = {}) {
   const below = belowMinGrade(r, sections, minGrade);
   const highRisk = diff ? diff.highRisk : [];
   const failed = below.length > 0 || highRisk.length > 0;
   const out = [marker];
   if (stamp) out.push(stamp);
-  out.push('### MCP check' + (failed ? ': needs attention' : minGrade ? ': passes min-grade ' + minGrade : ''), '');
+  out.push('### MCP check' + (approximate ? ' (approximate)' : '') + (failed ? ': needs attention' : minGrade ? ': passes min-grade ' + minGrade : ''), '');
   out.push('| ' + ALL_SECTIONS.map((k) => r.sections[k].name).join(' | ') + ' |');
   out.push('|' + ALL_SECTIONS.map(() => '---').join('|') + '|');
   out.push('| ' + ALL_SECTIONS.map((k) => {
@@ -98,6 +98,20 @@ export function renderComment(r, { sections, minGrade = null, diff = null, sourc
   let body = out.join('\n') + '\n';
   if (body.length > MAX_BODY) body = body.slice(0, MAX_BODY) + '\n\n(cut to fit a comment)\n';
   return body;
+}
+
+/**
+ * The comment body for a run that graded nothing (the source gave no list): it replaces an earlier verdict, so a stale
+ * grade does not stay up on the pull request. `reason` is plain text, escaped here.
+ */
+export function renderNotGraded(reason, { runUrl = null, marker = MARKER, stamp = null } = {}) {
+  const out = [marker];
+  if (stamp) out.push(stamp);
+  out.push('### MCP check: not graded on this run', '', commentText(String(reason).slice(0, 1500)), '',
+    'Earlier grades on this pull request no longer apply. For exact grades, set `command` (the command that starts the server) or `tools-file` (a saved `tools/list` answer).');
+  if (runUrl) out.push('', '[Workflow run](' + runUrl + ')');
+  out.push('', '<sub>Updated on every run by isokron-ai/mcp-check. Set pr-comment: off to stop.</sub>');
+  return out.join('\n') + '\n';
 }
 
 /** The GitHub REST call, with the error text kept short and the token never in a message. */

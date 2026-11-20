@@ -7,6 +7,7 @@
 import { createRequire } from 'node:module';
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
+import { isAbsolute, relative, resolve, sep } from 'node:path';
 import { capture, CaptureError, splitCommand } from '../capture.js';
 
 const require = createRequire(import.meta.url);
@@ -28,7 +29,7 @@ export function expandEnv(v, env = process.env) {
 }
 
 export const FIDELITY = {
-  exact: (c) => 'exact: ' + (c.kind === 'snapshots' ? 'committed tool snapshots' : c.kind === 'mcpb' ? 'MCPB manifest static tools/list' : c.kind === 'catalog' ? 'committed mcp-catalog-snap snapshot ' + c.path + (c.foreign ? ' of ' + line(c.server || 'an unnamed server', 100) + ', which may not be this repository\'s server' : '') : 'committed tool list ' + c.path),
+  exact: (c) => 'exact: ' + (c.kind === 'snapshots' ? 'committed tool snapshots' : c.kind === 'mcpb' ? 'MCPB manifest static tools/list' : c.kind === 'catalog' ? 'committed mcp-catalog-snap snapshot ' + c.path + (c.foreign ? ' of ' + line(c.server || 'an unnamed server', 100) + ', which may not be this repository\'s server' : '') : 'committed tool list ' + c.path + (Array.isArray(c.notUsed) && c.notUsed.length ? ' (of ' + (c.notUsed.length + 1) + ' committed lists, the one nearest the server; not used: ' + c.notUsed.slice(0, 5).map((x) => line(x, 200)).join(', ') + (c.notUsed.length > 5 ? ' and ' + (c.notUsed.length - 5) + ' more' : '') + ')' : '')),
   literal: () => 'literal: tool definitions written as literals in the source',
   derived: () => 'derived: reproduced from SDK registrations in the source; schemas follow the SDK\'s output and may differ in detail',
   names: () => 'names only: an MCPB manifest lists names and descriptions; schema checks do not apply',
@@ -86,17 +87,21 @@ async function fromRepo(ref, opt, via = null) {
     if (e && /Not a GitHub repository URL/.test(e.message)) throw new InputFailure(e.message + ' Use github.com/owner/repo.', 'usage');
     throw new InputFailure('could not read ' + line(ref) + ': ' + line(e.message), 'unreachable');
   }
-  if (!r.best) throw new InputFailure('no tool definitions found in ' + r.repo + ' (scanned ' + r.scanned.source + ' of ' + r.scanned.sourceTotal + ' source files). Run the server and use --command or --url.', 'unreachable');
-  const c = r.best;
+  const parsed = Repo.parseRepoRef(ref) || {};
+  const where = r.repo + (parsed.subdir ? '/' + parsed.subdir : '');
+  const pick = (folder) => '--repo github.com/' + r.repo + '/tree/' + (parsed.ref || String(r.sha || 'HEAD')) + '/' + folder;
+  const c = cliUsable(r, line(where), pick);
   const { provenance, left, cond } = repoProvenance(c);
-  return { data: c.tools, source: { kind: 'repo', repo: r.repo, sha: r.sha, via: r.via, fidelity: c.fidelity, provenance, from: c.kind, files: c.files || [c.path], ...(left.length ? { left_out: left.map((x) => ({ name: line(x.name, 128), reasons: x.reasons.map((y) => line(y, 160)) })) } : {}), ...(cond.length ? { conditional: cond.map((x) => line(x.name, 128)) } : {}), ...(via ? { registry: via } : {}) } };
+  return { data: c.tools, source: { kind: 'repo', repo: r.repo, sha: r.sha, via: r.via, fidelity: c.fidelity, approximate: isApproximate(c), provenance, from: c.kind, files: c.files || [c.path], ...(left.length ? { left_out: left.map((x) => ({ name: line(x.name, 128), reasons: x.reasons.map((y) => line(y, 160)) })) } : {}), ...(cond.length ? { conditional: cond.map((x) => line(x.name, 128)) } : {}), ...(via ? { registry: via } : {}) } };
 }
+
+/** The advice every "cannot grade this read" message ends with (the CLI's and the Action's names for the live inputs). */
+export const LIVE_ADVICE = 'Grade the live list instead: start the server with --command "<start command>", or give a saved tools/list file '
+  + '(in the GitHub Action: set command or tools-file).';
 
 /** No tool definitions in a folder: the message names the live alternatives (the CLI's and the Action's). */
 export function noToolsMessage(where, r) {
-  return 'no tool definitions found in ' + where + ' (scanned ' + r.scanned.source + ' of ' + r.scanned.sourceTotal + ' source files, and the committed tool lists and MCPB manifests). '
-    + 'Grade the live list instead: start the server with --command "<start command>", or give a saved tools/list file '
-    + '(in the GitHub Action: set command or tools-file).';
+  return 'no tool definitions found in ' + where + ' (scanned ' + r.scanned.source + ' of ' + r.scanned.sourceTotal + ' source files, and the committed tool lists and MCPB manifests). ' + LIVE_ADVICE;
 }
 
 /** Snapshots of other servers that were found and not used (several, and no tool defined in the source). */
@@ -105,17 +110,81 @@ export function foreignNote(r) {
   return f.length ? ' Not used: ' + f.length + ' mcp-catalog-snap snapshots of other servers (' + f.map((x) => line(x.path, 200) + ': ' + line(x.server || 'unnamed', 100)).join(', ') + ').' : '';
 }
 
+/** A list read from source (literal or derived) is approximate; an exact committed list or snapshot is not. */
+export const isApproximate = (c) => !!c && c.fidelity !== 'exact';
+/** The words every surface uses for an approximate list. */
+export const APPROXIMATE = 'approximate: read from source, not the server\'s live list';
+
+/**
+ * What a repository scan (RepoSource.fromGitHub / fromDirectory) gives to grade. Shared by the CLI and the Action, so
+ * both decide the same way:
+ *   { candidate }                       one list to grade
+ *   { problem: 'none' }                 no tool definition found (or only in folders that are not the server)
+ *   { problem: 'names', candidate }     only tool names (an MCPB manifest), which cannot be graded
+ *   { problem: 'multiple' }             tools of more than one server (or several committed lists): nothing is merged or picked
+ */
+export function usableList(r) {
+  const c = r.best;
+  const multi = !!(r.hints && (r.hints.servers || r.hints.lists));
+  if ((!c || c.fidelity === 'names') && multi) return { problem: 'multiple' };
+  if (!c) return { problem: 'none' };
+  if (c.fidelity === 'names') return { problem: 'names', candidate: c };
+  return { candidate: c };
+}
+
+const plural = (n, w) => n + ' ' + w + (n === 1 ? '' : 's');
+/** The servers (or committed lists) a scan found, best first: "src/a (server constructor, 9 tools), src/b (3 tools)". */
+export function serverChoices(r) {
+  const h = r.hints || {};
+  if (h.servers) return h.servers.map((x) => line(x.path || '.', 200) + ' (' + [x.constructor ? 'server constructor' : null, x.tools ? plural(x.tools, 'tool') : 'no tool read'].filter(Boolean).join(', ') + ')').join(', ');
+  return (h.lists || []).map((x) => line(x.path, 200) + ' (' + plural(x.tools, 'tool') + ')').join(', ');
+}
+/** The folders to choose from, for the advice: package folders, or the folders of the committed lists. */
+export function serverFolders(r) {
+  const h = r.hints || {};
+  if (h.servers) return h.servers.map((x) => x.path || '.');
+  return Array.from(new Set((h.lists || []).map((x) => (x.path.includes('/') ? x.path.slice(0, x.path.lastIndexOf('/')) : '.'))));
+}
+
+/** Why nothing usable was found, beyond "no tool definitions": languages not read, folders set aside, lists not used. */
+export function whyNothing(r) {
+  const h = r.hints || {};
+  let s = '';
+  const lang = (h.otherLanguages || [])[0];
+  if (lang && lang.files >= lang.readFiles) s += ' The source here is ' + lang.name + ' (' + plural(lang.files, '.' + ({ Go: 'go', Rust: 'rs', 'C#': 'cs', Java: 'java', Kotlin: 'kt', Ruby: 'rb', PHP: 'php', Swift: 'swift' }[lang.name] || lang.name) + ' file') + '): ' + lang.name + ' source is not read yet (the reader reads TypeScript, JavaScript and Python).';
+  const ign = (h.ignoredFolders || []).filter((x) => x.tools);
+  if (ign.length) s += ' Tool definitions were found only in folders that look like admin, console, docs, examples, evaluation or test code, which are not graded from a parent folder: ' + ign.map((x) => line(x.path, 200) + ' (' + plural(x.tools, 'tool') + ')').join(', ') + '; if one of them is the server, point the check at that folder.';
+  if (h.serverWithoutTools) s += ' A server is constructed in ' + line(h.serverWithoutTools || '.', 200) + ', but none of its tools could be read.';
+  if (h.lists) s += ' Not used: ' + plural(h.lists.length, 'committed tool list') + ' in different places (' + h.lists.map((x) => line(x.path, 200)).join(', ') + '); grade one by giving the file itself.';
+  return s + foreignNote(r);
+}
+
+/** The CLI's reading of a scan: the candidate to grade, or an InputFailure (exit 3) with the same advice as the Action. */
+function cliUsable(r, where, pick) {
+  const u = usableList(r);
+  if (u.problem === 'none') throw new InputFailure(noToolsMessage(where, r) + whyNothing(r), 'unreachable');
+  if (u.problem === 'names') throw new InputFailure('only tool names were found in ' + where + ' (' + line(u.candidate.path, 200) + ' lists names and descriptions without schemas), which cannot be graded. ' + LIVE_ADVICE, 'unreachable');
+  if (u.problem === 'multiple') {
+    throw new InputFailure('found tool definitions of more than one server in ' + where + ': ' + serverChoices(r) + '. Nothing was merged or picked. '
+      + 'Check one server at a time (' + serverFolders(r).slice(0, 3).map((f) => pick(f)).join(', ') + '), or ' + LIVE_ADVICE.charAt(0).toLowerCase() + LIVE_ADVICE.slice(1), 'unreachable');
+  }
+  return u.candidate;
+}
+
 /** A local checkout, read like --repo: no network, nothing run. */
 async function fromRepoDir(dir, opt) {
   let r;
-  try { r = await withDeadline(Repo.fromDirectory(dir), opt.timeout * 1000, 'Reading ' + dir); } catch (e) {
+  // The --compare file is what the list is compared with, never the list itself.
+  const cmp = opt.compare ? relative(resolve(String(dir)), resolve(String(opt.compare))).split(sep).join('/') : '';
+  const exclude = cmp && !cmp.startsWith('..') && !isAbsolute(cmp) ? [cmp] : [];
+  try { r = await withDeadline(Repo.fromDirectory(dir, { exclude }), opt.timeout * 1000, 'Reading ' + dir); } catch (e) {
     if (e && e.code === 'not_found') throw new InputFailure(line(e.message), 'usage');
     throw new InputFailure('could not read ' + line(dir) + ': ' + line(e && e.message), 'unreachable');
   }
-  if (!r.best) throw new InputFailure(noToolsMessage(line(dir), r) + foreignNote(r), 'unreachable');
-  const c = r.best;
+  const base = String(dir).replace(/\/+$/, '') || '.';
+  const c = cliUsable(r, line(dir), (folder) => '--repo-dir ' + (folder === '.' ? base : base + '/' + folder));
   const { provenance, left, cond } = repoProvenance(c);
-  return { data: c.tools, where: c.where || null, source: { kind: 'dir', dir: r.repo, fidelity: c.fidelity, provenance, from: c.kind, files: c.files || [c.path], ...(c.built ? { built: true } : {}), ...(r.truncated ? { truncated: true } : {}), ...(left.length ? { left_out: left.map((x) => ({ name: line(x.name, 128), reasons: x.reasons.map((y) => line(y, 160)) })) } : {}), ...(cond.length ? { conditional: cond.map((x) => line(x.name, 128)) } : {}) } };
+  return { data: c.tools, where: c.where || null, source: { kind: 'dir', dir: r.repo, fidelity: c.fidelity, approximate: isApproximate(c), provenance, from: c.kind, files: c.files || [c.path], ...(c.built ? { built: true } : {}), ...(r.truncated ? { truncated: true } : {}), ...(left.length ? { left_out: left.map((x) => ({ name: line(x.name, 128), reasons: x.reasons.map((y) => line(y, 160)) })) } : {}), ...(cond.length ? { conditional: cond.map((x) => line(x.name, 128)) } : {}) } };
 }
 
 async function fromRegistry(name, opt, note) {
@@ -223,6 +292,12 @@ export function sourceLine(s) {
   if (s.kind === 'dir') return 'Source: local folder ' + line(s.dir) + ' (read statically, nothing was run), ' + s.provenance + (s.built ? '; read from build output, since no source file defines a tool' : '') + (s.truncated ? '; the folder holds more files than the listing limit, so the deepest were not read' : '');
   if (s.kind === 'repo') return 'Source: ' + s.repo + '@' + String(s.sha).slice(0, 12) + ' (' + s.via + '), ' + s.provenance + reg;
   return null;
+}
+
+/** For a list read from source: the line every report of it carries, saying the grades are approximate and how to get exact ones. */
+export function approximateLine(s) {
+  if (!s || !s.approximate) return null;
+  return 'Approximate: read from source, not the server\'s live list. For exact grades, run the server (--command "<start command>") or grade a saved tools/list file.';
 }
 
 /** What --save writes: the fetched list in a shape every input accepts (a JSON-RPC answer, pages, or {tools}). */

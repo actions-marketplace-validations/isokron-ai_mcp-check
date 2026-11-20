@@ -6,7 +6,7 @@ import { capture, CaptureError } from './capture.js';
 import { parseList } from './tools.js';
 import { InputError, MAX_BYTES, MAX_DEPTH, MAX_TOOLS } from './limits.js';
 import { ALL_SECTIONS, DEFAULT_SECTIONS, GRADES, belowMinGrade, sarifWithLocations } from './report.js';
-import { collect, InputFailure, line, sourceLine, savedList } from './inputs/collect.js';
+import { approximateLine, collect, InputFailure, line, sourceLine, savedList } from './inputs/collect.js';
 import { tagged } from './links.js';
 
 const USAGE = `mcp-check ${VERSION}: grade an MCP server's tools/list (rubric ${M.RUBRIC_VERSION})
@@ -48,7 +48,8 @@ Options:
 --header values may name environment variables ("Authorization: Bearer $TOKEN"); header values are never
 printed. Limits: ${MAX_BYTES / 1048576} MiB of JSON, ${MAX_DEPTH} levels of nesting and ${MAX_TOOLS} tools per list.
 Exit codes: 0 pass, 1 below --min-grade or a high-risk change, 2 bad input or usage, 3 a server could not be
-reached or listed, or no tool definitions were found in the source.
+reached or listed, or the source gave no list to grade (no tool definitions, names only, or more than one server).
+Grades of a list read from source (--repo, --repo-dir) are approximate; --command or a saved list gives exact ones.
 Docs: ${tagged('https://isokron.ai/mcp-check', 'cli')}
 `;
 
@@ -133,6 +134,8 @@ function textReport(r, opt, below, diff, source) {
   out.push('MCP check ' + VERSION + ', rubric ' + r.rubric_version + ' (' + r.input.tools + ' tools, era ' + r.input.era + ')');
   const sl = sourceLine(source);
   if (sl) out.push(sl);
+  const al = approximateLine(source);
+  if (al) out.push(al);
   ALL_SECTIONS.forEach((k) => {
     const s = r.sections[k];
     out.push('  ' + s.name.padEnd(32) + (s.grade || 'n/a').padEnd(3) + (s.score == null ? '' : String(s.score).padStart(3) + '/100') + (s.ready === false ? '  not ready' : '') + (s.caps && s.caps.length ? '  ' + s.caps.join(' ') : '') + (opt.sections.includes(k) ? '' : '  (not gated)'));
@@ -176,8 +179,8 @@ function render(item, x, opt, multi) {
   }
   if (opt.format === 'md') {
     const md = M.toMarkdown(x.r);
-    const sl = sourceLine(src);
-    return (multi ? '<!-- ' + line(item.label).replace(/--/g, '- -') + ' -->\n' : '') + (sl ? md.replace(/^(# [^\n]*\n)/, (m) => m + '\n' + mdEscape(sl) + '\n') : md);
+    const sl = [sourceLine(src), approximateLine(src)].filter(Boolean).map(mdEscape).join('\n\n');
+    return (multi ? '<!-- ' + line(item.label).replace(/--/g, '- -') + ' -->\n' : '') + (sl ? md.replace(/^(# [^\n]*\n)/, (m) => m + '\n' + sl + '\n') : md);
   }
   return (multi ? '== ' + item.label + '\n' : '') + textReport(x.r, opt, x.below, x.diff, src);
 }

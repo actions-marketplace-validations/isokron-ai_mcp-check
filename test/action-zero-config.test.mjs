@@ -39,7 +39,7 @@ function act(ws, inputs, { event = PUBLIC, ...extra } = {}) {
   const outputs = Object.fromEntries(readFileSync(out, 'utf8').split('\n').filter(Boolean).map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)]));
   return { ...r, outputs, summary: readFileSync(sum, 'utf8') };
 }
-const REGISTRY_LINE = /\*\*\[List this server in the IsoKron MCP registry\]\(https:\/\/isokron\.ai\/mcp-check\/registry\/example\/notes\?utm_source=mcp-check-action&utm_medium=action\)\*\* \(free\): a public page with its CI-verified grade, and a README badge\./;
+const REGISTRY_LINE = /\*\*\[List this server in the IsoKron MCP registry \(beta\)\]\(https:\/\/isokron\.ai\/mcp-check\/registry\/example\/notes\?utm_source=mcp-check-action&utm_medium=action\)\*\* \(free\): a public page with its grades, and a README badge\./;
 
 // ------------------------------------------------------------ zero-config
 test('zero-config: no tools-file or command reads the source, says so, and points SARIF at the registering lines', () => {
@@ -52,7 +52,11 @@ test('zero-config: no tools-file or command reads the source, says so, and point
   assert.equal(r.outputs.passed, 'true');
   assert.match(r.stdout, /Reading the tool definitions from the source in \. \(nothing is run\)/);
   assert.match(r.summary, /2 tools from the repository code in `\.`\./);
-  assert.match(r.summary, /\*\*Source: repository code; nothing was run\.\*\* Derived: reproduced from SDK registrations in the source; schemas follow the SDK's output and may differ in detail\. For the exact list your server sends, set `command` .* or `tools-file` .*\[how\]\(https:\/\/github\.com\/isokron-ai\/mcp-check\/blob\/main\/docs\/github-action\.md#where-the-tool-list-comes-from\)/);
+  assert.match(r.summary, /^## MCP check \(approximate\)\n/);
+  assert.equal(r.outputs.approximate, 'true');
+  assert.match(r.stdout, /::warning::mcp-check: min-grade B is applied to approximate grades read from source, at your own risk/);
+  assert.match(r.summary, /\*\*min-grade B is applied to approximate grades read from source, at your own risk/);
+  assert.match(r.summary, /\*\*Approximate: read from source, not the server's live list\.\*\* Source: repository code; nothing was run\. Derived: reproduced from SDK registrations in the source; schemas follow the SDK's output and may differ in detail\. For exact grades of the list your server sends, set `command` .* or `tools-file` .*\[how\]\(https:\/\/github\.com\/isokron-ai\/mcp-check\/blob\/main\/docs\/github-action\.md#where-the-tool-list-comes-from\)/);
   const list = JSON.parse(readFileSync(join(ws, 'mcp-check-results', 'tools-list.json'), 'utf8'));
   assert.deepEqual(list.tools.map((t) => t.name), ['search_notes', 'delete_note'], 'node_modules is not read');
   const sarif = JSON.parse(readFileSync(join(ws, 'mcp-check-results', 'report.sarif'), 'utf8'));
@@ -65,7 +69,8 @@ test('zero-config: no tools-file or command reads the source, says so, and point
   // A second run in the same workspace does not take the first run's tools-list.json for a committed list.
   const again = act(ws, {});
   assert.equal(again.status, 0);
-  assert.match(again.summary, /\*\*Source: repository code; nothing was run\.\*\* Derived/);
+  assert.match(again.summary, /\*\*Approximate: read from source, not the server's live list\.\*\* Source: repository code; nothing was run\. Derived/);
+  assert.ok(!/at your own risk/.test(again.summary + again.stdout), 'no gate, no risk note');
 });
 
 test('zero-config: a subfolder as working-directory; Python and JavaScript fixtures; SARIF paths keep the folder', () => {
@@ -79,20 +84,101 @@ test('zero-config: a subfolder as working-directory; Python and JavaScript fixtu
   assert.ok(sarif.runs[0].results.some((x) => x.locations[0].physicalLocation.artifactLocation.uri === 'servers/py/src/notes_server/server.py'));
   const js = act(ws, { 'working-directory': 'servers/js', 'results-dir': 'out-js' });
   assert.equal(js.status, 0);
-  assert.match(js.summary, /\*\*Source: repository code; nothing was run\.\*\* Literal: tool definitions written as literals in the source\./);
+  assert.match(js.summary, /\*\*Approximate: read from source, not the server's live list\.\*\* Source: repository code; nothing was run\. Literal: tool definitions written as literals in the source\./);
 });
 
-test('zero-config: no tool definitions fails the job, in the log and the summary, naming command and tools-file', () => {
+test('zero-config: no tool definitions ends neutral (a warning and the fix), or fails with fail-on-no-tools: true', () => {
   const ws = workspace(null);
   writeFileSync(join(ws, 'README.md'), '# a library\n');
   writeFileSync(join(ws, 'index.js'), 'module.exports = 1;\n');
   const r = act(ws, {});
-  assert.equal(r.status, 1);
-  assert.equal(r.outputs['exit-status'], '1');
-  assert.match(r.stdout, /::error::mcp-check: No tool definitions found in the source in \. \(scanned 1 of 1 source files, .*\)\. Set command \(the command that starts the server, for example node dist\/index\.js\) or tools-file \(a saved tools\/list answer\)\./);
-  assert.match(r.summary, /No tool definitions found in the source in \. \(scanned 1 of 1 source files.*\)\. Nothing was run\. Set `command` .* or `tools-file`/);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.equal(r.outputs['exit-status'], '0');
+  assert.equal(r.outputs.passed, '');
+  assert.equal(r.outputs.source, 'repo-static');
+  assert.equal(r.outputs['results-dir'], undefined, 'no artifact of an empty folder');
+  assert.ok(!/::error::/.test(r.stdout));
+  assert.match(r.stdout, /::warning::mcp-check: not graded: No tool definitions found in the source in \. \(scanned 1 of 1 source files, .*\)\. Set command \(the command that starts the server, for example node dist\/index\.js\) or tools-file \(a saved tools\/list answer\)\./);
+  assert.match(r.summary, /^## MCP check: not graded\n\nNo tool definitions found in the source in \. \(scanned 1 of 1 source files.*\)\. Nothing was run\. Set `command` .* or `tools-file`/);
+  assert.match(r.summary, /The job is not failed for this; set `fail-on-no-tools: true` to fail it\./);
+  const strict = act(ws, { 'fail-on-no-tools': 'true' });
+  assert.equal(strict.status, 1);
+  assert.equal(strict.outputs['exit-status'], '1');
+  assert.match(strict.stdout, /::error::mcp-check: No tool definitions found in the source in \. \(scanned 1 of 1 source files, .*\)\. Set command \(the command that starts the server, for example node dist\/index\.js\) or tools-file \(a saved tools\/list answer\)\./);
+  assert.match(strict.summary, /The job fails because `fail-on-no-tools` is `true`\./);
+  assert.match(act(ws, { 'fail-on-no-tools': 'maybe' }).stdout, /::error::mcp-check: fail-on-no-tools must be true or false/);
   assert.match(act(ws, { 'working-directory': 'README.md' }).stdout, /working-directory is not a folder/);
   assert.match(act(ws, { 'working-directory': '../x' }).stdout, /working-directory must be a path inside the workspace/);
+});
+
+test('zero-config: a Go (or Rust, C#) server is not a red job: neutral, and the summary says the language is not read yet', () => {
+  const ws = workspace(null);
+  mkdirSync(join(ws, 'pkg', 'tools'), { recursive: true });
+  writeFileSync(join(ws, 'go.mod'), 'module example.com/notes\n');
+  writeFileSync(join(ws, 'main.go'), 'package main\nfunc main() { s := server.NewMCPServer("notes", "1.0") }\n');
+  writeFileSync(join(ws, 'pkg', 'tools', 'notes.go'), 'package tools\nvar T = mcp.NewTool("search_notes", mcp.WithDescription("Search notes."))\n');
+  writeFileSync(join(ws, 'pkg', 'tools', 'notes_test.go'), 'package tools\n');
+  writeFileSync(join(ws, 'scripts.js'), 'module.exports = 1;\n');
+  const r = act(ws, { 'min-grade': 'A' });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.equal(r.outputs['exit-status'], '0');
+  assert.match(r.summary, /The source here is Go \(2 \.go files\): Go source is not read yet \(the reader reads TypeScript, JavaScript and Python\)\./);
+  assert.match(r.stdout, /::warning::mcp-check: not graded: .*Go source is not read yet/);
+});
+
+test('zero-config: tools of several servers are not merged or picked; the summary lists the folders to choose from', () => {
+  const ws = workspace(null);
+  writeFileSync(join(ws, 'package.json'), JSON.stringify({ name: 'mono', private: true, workspaces: ['packages/*'] }));
+  for (const [pkg, tool] of [['notes', 'search_notes'], ['tickets', 'list_tickets']]) {
+    mkdirSync(join(ws, 'packages', pkg, 'src'), { recursive: true });
+    writeFileSync(join(ws, 'packages', pkg, 'package.json'), JSON.stringify({ name: pkg + '-mcp', dependencies: { '@modelcontextprotocol/sdk': '1.20.0', zod: '3.25.0' } }));
+    writeFileSync(join(ws, 'packages', pkg, 'src', 'index.ts'), "import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';\nconst server = new McpServer({ name: '" + pkg + "', version: '1' });\nserver.registerTool('" + tool + "', { title: 'T', description: 'Does one thing.', inputSchema: {}, annotations: { readOnlyHint: true } }, async () => ({ content: [] }));\n");
+  }
+  const r = act(ws, {});
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.equal(r.outputs['exit-status'], '0');
+  assert.ok(!existsSync(join(ws, 'mcp-check-results', 'tools-list.json')), 'nothing graded');
+  assert.match(r.summary, /Tool definitions of more than one server were found in \.: packages\/notes \(server constructor, 1 tool\), packages\/tickets \(server constructor, 1 tool\)\. Nothing was merged or picked\./);
+  assert.match(r.summary, /Set `working-directory` to one server's folder \(`packages\/notes`, `packages\/tickets`\), one job or matrix leg per server/);
+  assert.match(act(ws, { 'fail-on-no-tools': 'true' }).stdout, /::error::mcp-check: Tool definitions of more than one server .* Set working-directory to one server's folder \(packages\/notes, packages\/tickets\)/);
+  // Pointed at one package, it grades that one.
+  const one = act(ws, { 'working-directory': 'packages/tickets', 'results-dir': 'out-tickets' });
+  assert.equal(one.status, 0, one.stdout);
+  assert.deepEqual(JSON.parse(readFileSync(join(ws, 'out-tickets', 'tools-list.json'), 'utf8')).tools.map((t) => t.name), ['list_tickets']);
+});
+
+test('zero-config: a neutral run replaces an earlier PR verdict with "not graded on this run"', () => {
+  const ws = workspace(null);
+  writeFileSync(join(ws, 'main.go'), 'package main\n');
+  const ctx = { event: pr(), GITHUB_EVENT_NAME: 'pull_request', GITHUB_REF: 'refs/pull/7/merge' };
+  const auto = act(ws, { 'pr-comment': 'auto' }, ctx);
+  assert.equal(auto.status, 0);
+  assert.equal(auto.outputs['pr-comment-action'], 'update', 'auto only refreshes an existing comment');
+  const body = readFileSync(join(ws, 'mcp-check-results', 'pr-comment.md'), 'utf8');
+  assert.ok(body.startsWith(MARKER + '\n<!-- mcp-check-run: 42-1 -->\n### MCP check: not graded on this run\n'), body.slice(0, 120));
+  assert.match(body, /No tool definitions found in the source/);
+  assert.match(body, /Earlier grades on this pull request no longer apply\./);
+  assert.equal(act(ws, { 'pr-comment': 'always' }, ctx).outputs['pr-comment-action'], 'upsert');
+  assert.equal(act(ws, {}, ctx).outputs['pr-comment-action'], undefined, 'off: no comment');
+  assert.match(act(ws, { 'pr-comment': 'always' }, { ...ctx, event: pr('fork/Notes') }).summary, /PR comment skipped: the pull request comes from a fork/);
+});
+
+test('zero-config: tools only in an admin, docs or eval package are not graded from the root as the server', () => {
+  const ws = workspace(null);
+  writeFileSync(join(ws, 'package.json'), JSON.stringify({ name: 'mono', private: true }));
+  mkdirSync(join(ws, 'packages', 'admin-mcp', 'src'), { recursive: true });
+  mkdirSync(join(ws, 'packages', 'mcp', 'src'), { recursive: true });
+  writeFileSync(join(ws, 'packages', 'admin-mcp', 'package.json'), JSON.stringify({ name: 'admin-mcp' }));
+  writeFileSync(join(ws, 'packages', 'admin-mcp', 'src', 'index.ts'), "import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';\nconst s = new McpServer({ name: 'admin', version: '1' });\ns.registerTool('internal_stats', { description: 'Internal data.', inputSchema: {} }, async () => ({ content: [] }));\n");
+  writeFileSync(join(ws, 'packages', 'mcp', 'package.json'), JSON.stringify({ name: 'public-mcp' }));
+  writeFileSync(join(ws, 'packages', 'mcp', 'src', 'index.ts'), "import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';\nimport { NAME } from './names.js';\nconst s = new McpServer({ name: 'public', version: '1' });\ns.registerTool(NAME, { description: 'Resolve.', inputSchema: {} }, async () => ({ content: [] }));\n");
+  const r = act(ws, {});
+  assert.equal(r.status, 0, r.stdout);
+  assert.ok(!existsSync(join(ws, 'mcp-check-results', 'tools-list.json')), 'the admin package is not graded as the repository');
+  assert.match(r.summary, /Tool definitions were found only in folders that look like admin, console, docs, examples, evaluation or test code, which are not graded from a parent folder: packages\/admin-mcp \(1 tool\)/);
+  assert.match(r.summary, /A server is constructed in packages\/mcp, but none of its tools could be read\./);
+  const admin = act(ws, { 'working-directory': 'packages/admin-mcp', 'results-dir': 'out-admin' });
+  assert.match(admin.summary, /1 tools from the repository code in `packages\/admin-mcp`/, 'pointed at it, it is graded');
 });
 
 test('zero-config: setting one of tools-file and command keeps the old behaviour; both is still an error', () => {
@@ -138,8 +224,8 @@ test('pr-comment: off by default; always on a same-repository pull request rende
   assert.equal(on.outputs['pr-comment-action'], 'upsert');
   assert.equal(on.outputs['pr-number'], undefined, 'the comment step reads the pull request from the event itself');
   const body = readFileSync(join(ws, 'mcp-check-results', 'pr-comment.md'), 'utf8');
-  assert.ok(body.startsWith(MARKER + '\n<!-- mcp-check-run: 42-1 -->\n### MCP check: passes min-grade B\n'), body.slice(0, 120));
-  assert.match(body, /Source: repository code, nothing was run \(derived\)\./);
+  assert.ok(body.startsWith(MARKER + '\n<!-- mcp-check-run: 42-1 -->\n### MCP check (approximate): passes min-grade B\n'), body.slice(0, 120));
+  assert.match(body, /\*\*Approximate: read from source, not the server's live list\*\* \(derived; nothing was run\)\. For exact grades, set `command` or `tools-file`\./);
   assert.match(body, /registry\/example\/notes\?utm_source=mcp-check-pr-comment&utm_medium=action/);
   assert.ok(!/GITHUB_TOKEN|ghp_|Bearer/.test(on.stdout + on.summary + body));
 });
@@ -413,14 +499,18 @@ test('zero-config: a committed list is graded only with a clear label, and SARIF
   assert.match(asBaseline.summary, /from the repository code in `\.`/, 'the snapshot used as the baseline is not also the list');
 });
 
-test('zero-config: names without schemas (an MCPB manifest) are not graded, even under min-grade; the advice is the same', () => {
+test('zero-config: names without schemas (an MCPB manifest) are not graded, even under min-grade: neutral, or red with fail-on-no-tools', () => {
   const ws = workspace(null);
   writeFileSync(join(ws, 'manifest.json'), JSON.stringify({ manifest_version: '0.2', name: 'x', server: { type: 'node', entry_point: 'server/index.js' }, tools: [{ name: 'search', description: 'Searches.' }, { name: 'delete_all' }] }));
   const r = act(ws, { 'min-grade': 'B' });
-  assert.equal(r.status, 1);
-  assert.match(r.stdout, /::error::mcp-check: Only tool names were found in the source in \. \(manifest\.json lists names and descriptions without schemas\), which cannot be graded\. Set command .* or tools-file/);
+  assert.equal(r.status, 0);
+  assert.equal(r.outputs['exit-status'], '0');
+  assert.match(r.stdout, /::warning::mcp-check: not graded: Only tool names were found in the source in \. \(manifest\.json lists names and descriptions without schemas\), which cannot be graded\. Set command .* or tools-file/);
   assert.match(r.summary, /Only tool names were found .* Set `command` .* or `tools-file`/);
   assert.ok(!existsSync(join(ws, 'mcp-check-results', 'report.json')));
+  const strict = act(ws, { 'min-grade': 'B', 'fail-on-no-tools': 'true' });
+  assert.equal(strict.status, 1);
+  assert.match(strict.stdout, /::error::mcp-check: Only tool names were found in the source/);
 });
 
 test('zero-config: a folder over the listing limit says so in the summary', () => {
@@ -519,6 +609,6 @@ test('zero-config: a snapshot of another server is not graded instead of the cod
 
   writeFileSync(join(only, '.mcp-catalog', 'slack.json'), JSON.stringify({ ...up, server: { name: 'slack' } }));
   const two = act(only, {});
-  assert.equal(two.outputs['exit-status'], '1');
+  assert.equal(two.outputs['exit-status'], '0', 'nothing to grade is neutral');
   assert.match(two.stdout, /No tool definitions found .* Not used: 2 mcp-catalog-snap snapshots of other servers \(\.mcp-catalog\/github\.json: github, \.mcp-catalog\/slack\.json: slack\)\./);
 });

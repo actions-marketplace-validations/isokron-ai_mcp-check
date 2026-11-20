@@ -10,8 +10,8 @@ import { capture, CaptureError, splitCommand as split } from '../src/capture.js'
 import { parseList } from '../src/tools.js';
 import { InputError as LimitError } from '../src/limits.js';
 import { registryUrl, tagDocsLinks } from '../src/links.js';
-import { foreignNote, repoProvenance } from '../src/inputs/collect.js';
-import { commentAction, markerFor, MODES as COMMENT_MODES, prContext, renderComment, runStamp, validKey } from './pr-comment.mjs';
+import { isApproximate, repoProvenance, serverChoices, serverFolders, usableList, whyNothing } from '../src/inputs/collect.js';
+import { commentAction, markerFor, MODES as COMMENT_MODES, prContext, renderComment, renderNotGraded, runStamp, validKey } from './pr-comment.mjs';
 import { ALL_SECTIONS, DEFAULT_SECTIONS, GRADES, badgeFile, badgeSnippet, belowMinGrade, mdCode, mdText, sarifWithLocations, summaryMarkdown, webLink } from '../src/report.js';
 
 const Repo = createRequire(import.meta.url)('../src/inputs/repo-source.cjs');
@@ -111,7 +111,7 @@ export function publishHint(e, ev, surface) {
   if (!r || r.private !== false || (r.visibility && r.visibility !== 'public')) return null;
   const url = registryUrl(m[1], m[2], surface);
   if (!url) return null;
-  return '**[List this server in the IsoKron MCP registry](' + url + ')** (free): a public page with its CI-verified grade, and a README badge.';
+  return '**[List this server in the IsoKron MCP registry (beta)](' + url + ')** (free): a public page with its grades, and a README badge.';
 }
 
 /** A repository path as a SARIF artifactLocation.uri: each segment percent-encoded. */
@@ -149,6 +149,7 @@ export async function run() {
   const wantBadge = bool('badge', false);
   const useShell = bool('shell', false);
   const wantHint = bool('publish-hint', true);
+  const failOnNoTools = bool('fail-on-no-tools', false);
   const commentMode = input('pr-comment', 'off').toLowerCase();
   if (!COMMENT_MODES.includes(commentMode)) throw new InputError('pr-comment must be off, auto or always');
   const commentKey = input('pr-comment-key');
@@ -168,7 +169,7 @@ export async function run() {
 
   // 1. The tool list: a file in the repository, tools/list from the server the command starts, or (neither set) the
   //    tool definitions read from the repository code, without running anything.
-  let text, listRel, source, sourceKind, note = null, where = null, commentSource = '', sarifText = null, sarifUri = null;
+  let text, listRel, source, sourceKind, note = null, where = null, commentSource = '', sarifText = null, sarifUri = null, approximate = false;
   if (toolsFile) {
     sourceKind = 'tools-file';
     const f = inWorkspace(toolsFile, 'tools-file');
@@ -186,15 +187,48 @@ export async function run() {
     // is not the repository's), and the baseline, which is what the list is compared with, never the list itself.
     const toDir = (abs) => relative(dir.abs, abs).split(sep).join('/');
     const scan = await Repo.fromDirectory(dir.abs, { rootDir: ws, exclude: [toDir(results.abs)].concat(baseline ? [toDir(baseline.abs)] : []), skipIfContains: MARKER });
-    const noUsable = (what) => {
-      const msg = what + ' Set command (the command that starts the server, for example node dist/index.js) or tools-file (a saved tools/list answer).';
-      summary('## MCP check\n\n' + mdText(what) + ' Nothing was run. Set `command` to the command that starts your server, or `tools-file` to a saved `tools/list` answer: [how](' + ZERO_CONFIG_DOCS + ').\n');
-      return new InputError(msg);
+    // Nothing to grade (no tool definitions, names only, or tools of several servers): by default the job ends neutral,
+    // with a warning and the fix in the summary, not red. fail-on-no-tools: true fails it, as 1.1.0 did.
+    const prefix0 = dir.rel === '.' ? '' : dir.rel + '/';
+    const notGraded = (what, fix) => {
+      const msg = what + ' ' + fix.text;
+      // With pr-comment on, an earlier verdict on the pull request is replaced by "not graded on this run" (auto: only an
+      // existing comment is updated; always: one is made), so a stale grade does not stay up.
+      let commentLine = '';
+      if (commentMode !== 'off') {
+        const pr = prContext(env.GITHUB_EVENT_NAME || '', eventPayload());
+        if (pr && pr.skip) commentLine = '\n\nPR comment skipped: ' + mdText(pr.skip) + '.';
+        else if (pr) {
+          const runUrl = env.GITHUB_SERVER_URL && env.GITHUB_REPOSITORY && env.GITHUB_RUN_ID ? env.GITHUB_SERVER_URL + '/' + env.GITHUB_REPOSITORY + '/actions/runs/' + env.GITHUB_RUN_ID : null;
+          out('pr-comment.md', renderNotGraded(msg, { runUrl, marker: markerFor(commentKey, env.GITHUB_JOB), stamp: runStamp(env) }));
+          output('pr-comment-action', commentAction(commentMode, false));
+        }
+      }
+      summary('## MCP check: not graded\n\n' + mdText(what) + ' Nothing was run. ' + fix.md + '\n\n'
+        + (failOnNoTools ? 'The job fails because `fail-on-no-tools` is `true`.' : 'The job is not failed for this; set `fail-on-no-tools: true` to fail it.') + commentLine + '\n');
+      if (failOnNoTools) return new InputError(msg);
+      annotate('warning', 'mcp-check: not graded: ' + msg);
+      output('source', sourceKind);
+      output('passed', '');
+      output('exit-status', 0);
+      return null;
     };
-    if (!scan.best) throw noUsable('No tool definitions found in the source in ' + dir.rel + ' (scanned ' + scan.scanned.source + ' of ' + scan.scanned.sourceTotal + ' source files, and the committed tool lists and MCPB manifests' + (scan.truncated ? '; the folder holds more files than the listing limit, and the deepest were not listed' : '') + ').' + foreignNote(scan));
-    const c = scan.best;
+    const LIVE = { text: 'Set command (the command that starts the server, for example node dist/index.js) or tools-file (a saved tools/list answer).', md: 'Set `command` to the command that starts your server, or `tools-file` to a saved `tools/list` answer: [how](' + ZERO_CONFIG_DOCS + ').' };
+    const u = usableList(scan);
+    let stop;
+    if (u.problem === 'none') stop = notGraded('No tool definitions found in the source in ' + dir.rel + ' (scanned ' + scan.scanned.source + ' of ' + scan.scanned.sourceTotal + ' source files, and the committed tool lists and MCPB manifests' + (scan.truncated ? '; the folder holds more files than the listing limit, and the deepest were not listed' : '') + ').' + whyNothing(scan), LIVE);
     // Names without schemas (an MCPB manifest's tools array) would be graded on schemas that do not exist.
-    if (c.fidelity === 'names') throw noUsable('Only tool names were found in the source in ' + dir.rel + ' (' + c.path + ' lists names and descriptions without schemas), which cannot be graded.');
+    else if (u.problem === 'names') stop = notGraded('Only tool names were found in the source in ' + dir.rel + ' (' + u.candidate.path + ' lists names and descriptions without schemas), which cannot be graded.', LIVE);
+    else if (u.problem === 'multiple') {
+      const folders = serverFolders(scan).map((f) => (f === '.' ? dir.rel : prefix0 + f));
+      stop = notGraded('Tool definitions of more than one server were found in ' + dir.rel + ': ' + serverChoices(scan) + '. Nothing was merged or picked.', {
+        text: 'Set working-directory to one server\'s folder (' + folders.slice(0, 3).join(', ') + '), or set command or tools-file.',
+        md: 'Set `working-directory` to one server\'s folder (' + folders.slice(0, 3).map((f) => mdCode(f)).join(', ') + '), one job or matrix leg per server, or set `command` or `tools-file`: [how](' + ZERO_CONFIG_DOCS + ').',
+      });
+    }
+    if (u.problem) { if (stop) throw stop; return 0; }
+    const c = u.candidate;
+    approximate = isApproximate(c);
     const candidateAbs = c.path ? join(dir.abs, c.path) : null;
     if (baseline && candidateAbs && (candidateAbs === baseline.abs || (c.path.endsWith('/') && baseline.abs.startsWith(candidateAbs)))) throw new InputError('the tool list found in the source is the baseline ' + baseline.rel + ' itself; set command or tools-file');
     text = JSON.stringify({ tools: c.tools }, null, 2) + '\n';
@@ -210,17 +244,17 @@ export async function run() {
     const { provenance } = repoProvenance(c);
     const committed = c.kind !== 'source';
     source = committed ? 'the committed list ' + mdCode(prefix + (c.path || '')) : 'the repository code in ' + mdCode(dir.rel);
-    const how = ' For the exact list your server sends, set `command` (the command that starts it, for example `node dist/index.js`) or `tools-file` (a saved `tools/list` answer): [how](' + ZERO_CONFIG_DOCS + ').';
+    const how = ' For exact grades of the list your server sends, set `command` (the command that starts it, for example `node dist/index.js`) or `tools-file` (a saved `tools/list` answer): [how](' + ZERO_CONFIG_DOCS + ').';
     const foreignSnap = c.kind === 'catalog' && c.foreign;
     note = (foreignSnap
       ? '**Graded a committed snapshot of ' + mdCode(String(c.server || 'an unnamed server').slice(0, 100)) + ' (' + mdCode(prefix + c.path) + '); it may not be this repository\'s server, and it may be stale.** Nothing was run. No tool is defined in the source, and its server name does not match this repository\'s.'
       : committed
       ? '**Graded the committed list ' + mdCode(prefix + (c.path || '')) + ', not the code; it may be stale.** Nothing was run. It was found in the repository and ranks above tool definitions read from code (' + mdText(provenance) + ').'
-      : '**Source: repository code; nothing was run.** ' + mdText(provenance.charAt(0).toUpperCase() + provenance.slice(1)) + '.'
+      : '**Approximate: read from source, not the server\'s live list.** Source: repository code; nothing was run. ' + mdText(provenance.charAt(0).toUpperCase() + provenance.slice(1)) + '.'
         + (c.built ? ' Read from build output, since no source file defines a tool.' : ''))
       + (scan.truncated ? ' **The folder holds more files than the listing limit (' + (20000).toLocaleString('en-US') + '); the deepest were not read.** Set `working-directory` to the server\'s folder.' : '')
       + how;
-    commentSource = foreignSnap ? 'Source: a committed snapshot of ' + mdCode(String(c.server || 'an unnamed server').slice(0, 100)) + ' (' + mdCode(prefix + c.path) + '); it may not be this repository\'s server.' : committed ? 'Source: the committed list ' + mdCode(prefix + (c.path || '')) + ', not the code; it may be stale.' : 'Source: repository code, nothing was run (' + c.fidelity + ').';
+    commentSource = foreignSnap ? 'Source: a committed snapshot of ' + mdCode(String(c.server || 'an unnamed server').slice(0, 100)) + ' (' + mdCode(prefix + c.path) + '); it may not be this repository\'s server.' : committed ? 'Source: the committed list ' + mdCode(prefix + (c.path || '')) + ', not the code; it may be stale.' : '**Approximate: read from source, not the server\'s live list** (' + c.fidelity + '; nothing was run). For exact grades, set `command` or `tools-file`.';
   } else {
     sourceKind = 'command';
     const cwd = inWorkspace(input('working-directory', '.'), 'working-directory', true);
@@ -312,17 +346,19 @@ export async function run() {
   const event = eventPayload();
   const hint = wantHint ? publishHint(env, event, 'action') : null;
   const failed = below.length > 0 || !!(diff && diff.highRisk.length);
+  // A gate on grades read from source is the user's choice (min-grade is empty by default), and at their own risk.
+  const riskNote = approximate && minGrade ? 'min-grade ' + minGrade + ' is applied to approximate grades read from source, at your own risk: the list can differ from what the server sends. For an exact gate, set command or tools-file.' : null;
   let commentNote = null, commentDo = null;
   if (commentMode !== 'off') {
     const pr = prContext(env.GITHUB_EVENT_NAME || '', event);
     if (pr && pr.skip) commentNote = 'PR comment skipped: ' + pr.skip + '.';
     else if (pr) {
       commentDo = commentAction(commentMode, failed);
-      const body = renderComment(r, { sections, minGrade, diff, sourceNote: commentSource, runUrl, hint: wantHint ? publishHint(env, event, 'comment') : null, marker: markerFor(commentKey, env.GITHUB_JOB), stamp: runStamp(env) });
+      const body = renderComment(r, { sections, minGrade, diff, sourceNote: commentSource, approximate, runUrl, hint: wantHint ? publishHint(env, event, 'comment') : null, marker: markerFor(commentKey, env.GITHUB_JOB), stamp: runStamp(env) });
       out('pr-comment.md', body);
     }
   }
-  let md = summaryMarkdown(r, { sections, minGrade, source, note, badgeSnippet: snippet, webLink: link, hint });
+  let md = summaryMarkdown(r, { sections, minGrade, source, note: riskNote ? note + '\n\n**' + mdText(riskNote) + '**' : note, approximate, badgeSnippet: snippet, webLink: link, hint });
   if (diff) md += '\n### Compared with ' + mdCode(baseline.rel) + '\n\n' + diff.added.length + ' added, ' + diff.removed.length + ' removed, ' + diff.changed.length + ' changed.' + (diff.highRisk.length ? ' **High risk** (a client may now run these with less confirmation): ' + diff.highRisk.map((t) => mdCode(t)).join(', ') + '.' : ' No high-risk annotation changes.') + '\n';
   if (badgeNote) md += '\n' + badgeNote + '\n';
   if (commentNote) md += '\n' + commentNote + '\n';
@@ -330,6 +366,7 @@ export async function run() {
   for (const k of ALL_SECTIONS) output('grade-' + k, r.sections[k].grade || '');
   output('passed', failed ? 'false' : 'true');
   output('source', sourceKind);
+  output('approximate', approximate ? 'true' : 'false');
   output('pr-comment-action', commentDo || '');
   output('catalog-hash', r.input.catalogHash);
   output('results-dir', results.rel);
@@ -339,7 +376,8 @@ export async function run() {
   output('badge-dir', badgeDir.rel);
   output('badge-branch', badgeChanged ? defaultBranch : '');
   output('exit-status', failed ? 1 : 0);
-  if (below.length) annotate('error', 'mcp-check: below min-grade ' + minGrade + ': ' + below.join(', '));
+  if (riskNote) annotate('warning', 'mcp-check: ' + riskNote);
+  if (below.length) annotate('error', 'mcp-check: below min-grade ' + minGrade + ': ' + below.join(', ') + (approximate ? ' (approximate grades read from source)' : ''));
   if (diff && diff.highRisk.length) annotate('error', 'mcp-check: high-risk annotation change against ' + baseline.rel + ': ' + diff.highRisk.join(', '));
   process.stdout.write(ALL_SECTIONS.map((k) => k + ' ' + (r.sections[k].grade || 'n/a')).join(', ') + '\n');
   return failed ? 1 : 0;

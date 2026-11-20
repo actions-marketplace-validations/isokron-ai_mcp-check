@@ -42,7 +42,7 @@ test('action: tools-file, grades as outputs, job summary, reports and SARIF with
   assert.match(r.summary, /\| Anthropic directory \| C \| 70 \|/);
   assert.match(r.summary, /\*\*Below the minimum grade B:\*\* anthropic C, openai C/);
   assert.match(r.summary, /\[anthropic-title\]\(https:\/\/isokron\.ai\/mcp-check\/checks\/anthropic-title\?utm_source=mcp-check-action&utm_medium=action\)/);
-  assert.match(r.summary, /\[Open this report in the web checker\]\(https:\/\/isokron\.ai\/mcp-check#r=2\.1\.0&z=/);
+  assert.match(r.summary, /\[Open this report in the web checker\]\(https:\/\/isokron\.ai\/mcp-check#r=2\.1\.1&z=/);
   for (const f of ['report.md', 'report.json', 'report.sarif']) assert.ok(existsSync(join(ws, 'mcp-check-results', f)), f);
   const sarif = JSON.parse(readFileSync(join(ws, 'mcp-check-results', 'report.sarif'), 'utf8'));
   assert.ok(sarif.runs[0].results.every((x) => x.locations[0].physicalLocation.artifactLocation.uri === 'mcp/tools.json'));
@@ -85,7 +85,7 @@ test('action: badge written on the default branch only, and not rewritten when n
   assert.equal(badge.label, 'MCP check');
   assert.equal(badge.message, 'Claude C · ChatGPT C · spec A');
   assert.equal(badge.color, 'yellow');
-  assert.equal(badge.rubric_version, '2.1.0');
+  assert.equal(badge.rubric_version, '2.1.1');
   assert.match(badge.date, /^\d{4}-\d{2}-\d{2}$/);
   assert.equal(badge.grades.anthropic, 'C');
   assert.equal(badge.report, 'https://github.com/example/server/blob/main/.github/mcp-check/report.md');

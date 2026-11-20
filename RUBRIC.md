@@ -1,6 +1,6 @@
 # IsoKron MCP check: grading rubric
 
-rubric_version: 2.1.0
+rubric_version: 2.1.1
 Applies from: 2026-11-18. Sources read: 2026-11-18. MCP specification revision: 2026-07-28.
 
 Every report, JSON export and private link carries `rubric_version`. When a link made under another version is opened, the page says so and grades with the current version. Any change to a weight, band, cap, severity or check bumps the version: patch for wording, minor for a new check, major for a change to weights, bands or caps.
@@ -87,6 +87,13 @@ The specification and directories give no numbers for these, so the values are o
 ## What the rubric does not claim
 
 The grades cover static rules read from the tool list. They do not test behavior: whether hints match what tools do, whether retries are safe, whether stale writes are refused. Those are MWS tests against a running server. Name-based checks are heuristics and say so in their findings.
+
+## Changes in rubric 2.1.1 (unreleased)
+
+Two poisoning heuristics read less into text that is not a request, and no more past text that is (no weight, band or cap changes):
+
+- `sec-secret-seeking` needs a space after the verb, so a short identifier such as the event name `post-update-password` no longer reads as "post … password"; a secret noun inside a hyphenated name ("upload the db-credentials") still counts. A `.env` file named without the model being asked to read, copy or send it is attention, not blocking. Only a tool whose name says it saves or writes a file (`save_…_file`, `write_env`, `write_config`) may read the file it updates; reading `.env` and copying it into something, or sending it, is blocking for every tool. `.env` after `/` (`./.env`) and gcloud's `application_default_credentials.json` are recognised. SSH keys, cloud credential files and MCP client configuration stay blocking wherever they appear.
+- The phrase checks (`sec-instruction-phrases`, `sec-cross-tool-steering`, `sec-external-instructions`, and asking for secrets) skip short identifiers only: one token of at most four segments joined by `.`, `_` or `-`, such as an enum value, an event name or an id. Blank and invisible characters (U+2800, U+3164, U+FFA0, U+115F, U+1160, zero-width) are read as spaces, and a longer run of words joined by `-`, `_` or `/` is read as words, so "Ignore-all-previous-instructions" and enum values written as sentences are still caught.
 
 ## Changes in rubric 2.1.0 (18 November 2026)
 

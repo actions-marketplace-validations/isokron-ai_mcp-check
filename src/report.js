@@ -75,13 +75,13 @@ const code = mdCode;
 /**
  * Short Markdown for a GitHub job summary: the grade table, the gate, and the first blocking and
  * attention findings with their docs links. The full report is the Markdown export (M.toMarkdown).
- * `source`, `note` (a paragraph under the first line) and `hint` (the last line) are Markdown the caller
+ * `approximate` (a list read from source) marks the heading. `source`, `note` (a paragraph under the first line) and `hint` (the last line) are Markdown the caller
  * composed (with mdText/mdCode for anything taken from the server); every other string taken from the list
  * is escaped here.
  */
-export function summaryMarkdown(r, { sections = DEFAULT_SECTIONS, minGrade = null, maxFindings = 25, source = null, note = null, badgeSnippet = null, webLink: link = null, hint = null } = {}) {
+export function summaryMarkdown(r, { sections = DEFAULT_SECTIONS, minGrade = null, maxFindings = 25, source = null, note = null, approximate = false, badgeSnippet = null, webLink: link = null, hint = null } = {}) {
   const out = [];
-  out.push('## MCP check', '');
+  out.push('## MCP check' + (approximate ? ' (approximate)' : ''), '');
   out.push('Rubric ' + r.rubric_version + ', MCP specification ' + r.spec_version + ', directory rules as read on ' + r.sources_read + '. ' + r.input.tools + ' tools' + (source ? ' from ' + source : '') + '.', '');
   if (note) out.push(note, '');
   out.push('| Section | Grade | Score | Blocking | Attention | Advice | Gate |', '|---|---|---|---|---|---|---|');
