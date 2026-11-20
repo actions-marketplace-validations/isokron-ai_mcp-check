@@ -468,3 +468,32 @@ test('surface 2.2.0 review: an HTTP client says http, request or client; a resou
     { http_post: 'http client', send_request: 'http client', client_put: 'http client', webhook_delete: 'delete', sitemap_delete: 'delete', pull_request_merge: 'update' });
   assert.equal(cov([W('delete_repo', { repo: S(), confirmation_text: S(), expected_sha: S() })]), 'version 1/1, guard 1/1');
 });
+
+// ---------------- rubric 2.2.0 confirm review
+test('anthropic-hint-platforms-differ 2.2.0 confirm: an additive lead verb does not exempt a money, send or ship object', () => {
+  const f = { readOnlyHint: false, destructiveHint: false, openWorldHint: false };
+  for (const n of ['create_refund', 'stripe_create_refund', 'create_charge', 'create_transfer', 'create_payout', 'create_payment', 'add_payment', 'insert_payment', 'create_and_send_invoice', 'create_message', 'create_deployment', 'create_release', 'create_invoices', 'add_notification'])
+    fires('anthropic-hint-platforms-differ', [wr({ name: n, annotations: f })], 'attention');
+  for (const n of ['create_issue', 'append_row', 'add_comment', 'create_entities', 'add_observations', 'idp_create_application_grant', 'slack_add_reaction'])
+    silent('anthropic-hint-platforms-differ', [wr({ name: n, annotations: f })]);
+});
+
+test('openai-precise-location 2.2.0 confirm: a negation counts only when it governs an asking verb; clauses split on ; and ,', () => {
+  const sev = (d) => ids([tool({ name: 'find_places', description: d, inputSchema: props({ latitude: N, longitude: N }) })], 'openai-precise-location').map((f) => f.severity);
+  for (const d of ['When latitude is not set, uses your current location.', 'If coordinates are not given, searches near the user.', 'Never stores data; finds shops near me.', 'Without a radius, finds shops near me.'])
+    assert.deepEqual(sev(d), ['blocking'], d);
+  for (const d of ['Do not ask for the user\'s location.', 'Search for places. Do not ask for the user\'s location.', 'Never request your current location; pass a city instead.', 'No need to send your GPS position.'])
+    assert.deepEqual(sev(d), ['attention'], d);
+});
+
+test('surface 2.2.0 confirm: a CMS with navigate/click/fill tools keeps its page, element and extension CRUD; delete_client(url) is a delete', () => {
+  const kinds = (tools) => Object.fromEntries(surf(tools).rows.map((w) => [w.name, w.kind]));
+  const cms = kinds(['navigate_site', 'click_element', 'fill_field', 'create_page', 'delete_page', 'update_element', 'delete_extension'].map((n) => W(n, { id: S() })));
+  assert.deepEqual([cms.create_page, cms.delete_page, cms.update_element, cms.delete_extension], ['create', 'delete', 'update', 'delete']);
+  assert.deepEqual([cms.navigate_site, cms.click_element, cms.fill_field], ['session', 'session', 'session']);
+  // A real browser list: page and extension with browser verbs are session tools.
+  const br = kinds(['navigate_page', 'click', 'hover', 'fill', 'close_page', 'new_page', 'select_page', 'uninstall_extension', 'install_extension'].map((n) => W(n, { id: S() })));
+  assert.deepEqual([br.close_page, br.new_page, br.uninstall_extension, br.install_extension], ['session', 'session', 'session', 'session']);
+  const http = kinds([W('delete_client', { url: S() }), W('update_oauth_client', { url: S() }), W('client_put', { url: S() }), W('http_post', { url: S() })]);
+  assert.deepEqual(http, { delete_client: 'delete', update_oauth_client: 'update', client_put: 'http client', http_post: 'http client' });
+});

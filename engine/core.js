@@ -153,7 +153,7 @@
     fix: 'Set "readOnlyHint": true on tools that only read. On tools that change data set "readOnlyHint": false and an explicit "destructiveHint".',
     example: { bad: '"annotations": { "openWorldHint": false }', good: '"annotations": { "readOnlyHint": false, "destructiveHint": true, "openWorldHint": false }' } });
   def({ id: 'anthropic-hint-platforms-differ', section: 'anthropic', affects: ['anthropic'], severity: 'attention', title: 'destructiveHint: false on a write: the platforms word this differently', src: 'anthropic', anchor: '#provide-tool-annotations', quote: A_HINT_QUOTE,
-    explain: 'This write tool sets destructiveHint: false and its name does not read as a create. OpenAI says false is right for "additive writes without destructive or irreversible effects". Anthropic\'s checklist asks for destructiveHint: true on "tools that modify or delete data". Neither text settles it for a tool that changes something it did not create, so this is not graded as blocking. Tools led by create, add, insert, append, record, new or comment purely add and are not flagged; other creates (send, pay, charge, transfer, publish, deploy, share, invite) still are. If the tool can overwrite, cancel, revoke or send something irreversible, it is destructive on both platforms.',
+    explain: 'This write tool sets destructiveHint: false and its name does not read as a create. OpenAI says false is right for "additive writes without destructive or irreversible effects". Anthropic\'s checklist asks for destructiveHint: true on "tools that modify or delete data". Neither text settles it for a tool that changes something it did not create, so this is not graded as blocking. Tools led by create, add, insert, append, record, new or comment purely add and are not flagged, unless the object moves money, sends or ships (create_refund, create_message, create_deployment); other creates (send, pay, charge, transfer, publish, deploy, share, invite) still are. If the tool can overwrite, cancel, revoke or send something irreversible, it is destructive on both platforms.',
     fix: 'Keep destructiveHint: false only if the tool purely adds (a new record, a new comment) and cannot overwrite or delete. Otherwise set it to true. If a reviewer asks, the OpenAI wording supports false for additive writes.' });
   def({ id: 'anthropic-name-length', section: 'anthropic', affects: ['anthropic'], severity: 'blocking', title: 'Tool name is 64 characters or fewer', src: 'anthropic', anchor: '#keep-tool-names-short',
     quote: 'Tool names must be 64 characters or fewer.',
@@ -455,6 +455,17 @@
   // Lead verbs of creates that purely add a new object (anthropic-hint-platforms-differ is not raised for them).
   const ADDITIVE_V = set('create add insert append record new comment');
   const createLead = (name) => { const tk = tokens(name); return LEAD_CREATE_V.has(tk[0]) ? tk[0] : (tk.find((x) => verbClass(x)) || ''); };
+  // Objects whose creation moves money, sends something or ships something: not purely additive (create_refund,
+  // create_message, create_deployment).
+  const NOT_ADDITIVE_NOUN = /^(refunds?|charges?|transfers?|payouts?|payments?|invoices?|messages?|emails?|notifications?|deployments?|releases?)$/;
+  // A create led by an additive verb, with no later send or pay word (create_and_send_invoice) and no money/send object.
+  const purelyAdditive = (name) => {
+    const tk = tokens(name);
+    const lead = createLead(name);
+    if (!ADDITIVE_V.has(lead)) return false;
+    const rest = tk.slice(tk.indexOf(lead) + 1);
+    return !rest.some((x) => (verbClass(x) === 'create' && !ADDITIVE_V.has(x)) || NOT_ADDITIVE_NOUN.test(x));
+  };
   const UPSERT_NAME = /(^|_)(create_or_update|update_or_create|create_or_replace|insert_or_update|add_or_update)(_|$)/;
   const JOB_V = set('start trigger launch queue enqueue schedule dispatch kick spawn deploy provision');
   // "open" reads (open_nodes, open_file) when its object is something that exists already; open_issue and open_pull_request create.
@@ -895,9 +906,10 @@
   // Text that asks for the user's own position ("your current location", "the user's coordinates"), as opposed to a place
   // the task is about (a search centre, an emulated position).
   const USER_LOCATION = /\b(user['’]?s|your|my|caller['’]?s)\b[^.\n]{0,40}\b(location|position|coordinates|whereabouts|latitude|longitude|gps|geolocation)\b|\b(current|precise|exact|real[- ]time|live) (location|position|coordinates|geolocation)\b|\bwhere (the user|you) (is|are)\b|\bwhere i am\b|\bnear (me|you|the user)\b|\baround (me|you)\b|\bnearby(?! (the|a|an|this|that|these|those|given|specified|chosen|selected)\b)/i;
-  // A sentence that says not to ask ("Do not ask for the user's location") does not ask.
-  const NEGATED = /\b(do not|don['’]t|never|not|without|no need to)\b/i;
-  const saysUserLocation = (text) => text.split(/[.!?\n]+/).some((sentence) => { const m = sentence.match(USER_LOCATION); return !!m && !NEGATED.test(sentence.slice(0, m.index)); });
+  // A clause that says not to ask ("Do not ask for the user's location") does not ask. The negation must govern an asking
+  // verb; "When latitude is not set, uses your current location" still asks. Clauses split on . ! ? ; , and new lines.
+  const NEGATED = /\b(do not|don['’]t|never|no need to)\s+(ask|request|collect|pass|send|use|store|track|need)\b[^,;]*$/i;
+  const saysUserLocation = (text) => text.split(/[.!?;,\n]+/).some((clause) => { const m = clause.match(USER_LOCATION); return !!m && !NEGATED.test(clause.slice(0, m.index)); });
   const asksUserLocation = (t, keys) => saysUserLocation(desc(t)) || keys.some((k) => isObj(props(t)[k]) && typeof props(t)[k].description === 'string' && saysUserLocation(props(t)[k].description));
 
   const SAFE_M = ['GET', 'HEAD', 'OPTIONS'];
@@ -1045,7 +1057,7 @@
       if (typeof a.destructiveHint !== 'boolean') push('anthropic-hint', null, 'Neither readOnlyHint: true nor destructiveHint is set' + (has.call(a, 'readOnlyHint') ? '' : ' (no annotations hint at all)') + '. A client treats a missing destructiveHint as true.', 'annotations');
       // A tool led by create, add, insert, append, record, new or comment purely adds, which both platforms' wording allows as
       // non-destructive. Other creates (send, pay, charge, transfer, publish, deploy) keep the item.
-      else if (a.destructiveHint === false && kind !== 'delete' && !(kind === 'create' && ADDITIVE_V.has(createLead(name)))) push('anthropic-hint-platforms-differ', null, 'destructiveHint: false on a write tool. OpenAI accepts false for purely additive writes; Anthropic\'s wording asks for true on tools that modify data.', 'annotations.destructiveHint');
+      else if (a.destructiveHint === false && kind !== 'delete' && !(kind === 'create' && purelyAdditive(name))) push('anthropic-hint-platforms-differ', null, 'destructiveHint: false on a write tool. OpenAI accepts false for purely additive writes; Anthropic\'s wording asks for true on tools that modify data.', 'annotations.destructiveHint');
     }
     if (name.length > 64) push('anthropic-name-length', null, 'The name is ' + name.length + ' characters.', 'name');
     const mixed = mixedMethodTool(t);
@@ -1161,7 +1173,11 @@
   // not make a browser list (create_snapshot, qdrant_scroll_points, evaluate_policy).
   const BROWSER_ACTION = set('click dblclick hover navigate goto fill press drag type_text');
   const BROWSER_PREFIX = set('browser playwright puppeteer selenium webdriver devtools');
-  const BROWSER_WORD = set('click dblclick hover navigate goto fill press drag screenshot snapshot heapsnapshot scroll evaluate select resize upload go back forward page pages tab tabs window windows frame iframe dialog extension extensions mock mocks webauthn pwa trace screencast emulate emulation viewport element elements cookie cookies console network codegen session sessions connection connections');
+  const BROWSER_WORD = set('click dblclick hover navigate goto fill press drag screenshot snapshot heapsnapshot scroll evaluate select resize upload go back forward tab tabs window windows frame iframe dialog mock mocks webauthn pwa trace screencast emulate emulation viewport cookie cookies console network codegen session sessions connection connections');
+  // Nouns a CMS or an app has too (page, element, extension): a session tool only with a browser verb (close_page,
+  // new_page, uninstall_extension), not with create, update or delete.
+  const BROWSER_GENERIC = set('page pages element elements extension extensions');
+  const BROWSER_GENERIC_V = set('close new open select switch reload resize focus bring install uninstall trigger launch');
   // Outside a browser list, only these mark a session tool (clear_codegen_session, close_session).
   const SESSION_NOUN = set('session sessions codegen browser browsers');
   function isBrowserCatalog(tools) {
@@ -1174,14 +1190,17 @@
     });
     return seen.size >= 3 || prefixed >= 2;
   }
-  const isSessionTool = (tk, browser) => tk.some((x) => SESSION_NOUN.has(x)) || (browser && (BROWSER_PREFIX.has(tk[0]) || tk.some((x, i) => BROWSER_WORD.has(x) || (x === 'type' && tk[i + 1] === 'text'))));
+  const isSessionTool = (tk, browser) => tk.some((x) => SESSION_NOUN.has(x)) || (browser && (BROWSER_PREFIX.has(tk[0]) ||
+    tk.some((x, i) => BROWSER_WORD.has(x) || (x === 'type' && tk[i + 1] === 'text')) || (tk.some((x) => BROWSER_GENERIC.has(x)) && BROWSER_GENERIC_V.has(tk[0]))));
   // An HTTP client (http_post, client_put, send_request with a url): it writes whatever the URL names, not an object of this
-  // server. The name must say http, request or client; webhook_delete(url) deletes a webhook.
+  // server. The name must say http or request, or end in a method after client (client_put); webhook_delete(url) deletes a
+  // webhook and delete_client(url) deletes a client.
+  const HTTP_METHOD = set('get post put patch delete head options');
   function isHttpClient(t) {
     const keys = argNames(t).map(norm);
     if (!keys.some((k) => /^(url|uri|endpoint|request_url)$/.test(k))) return false;
     const tk = tokens(apiName(t.name));
-    return tk.includes('http') || tk.includes('request') || tk.includes('client');
+    return tk.includes('http') || tk.includes('request') || (tk.includes('client') && HTTP_METHOD.has(tk[tk.length - 1]));
   }
   const resourceOf = (name) => tokens(name).filter((x) => !verbClass(x) && !LEAD_CREATE_V.has(x) && x !== 'or').join('_');
 
