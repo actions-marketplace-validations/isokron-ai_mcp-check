@@ -746,8 +746,12 @@
   }
 
   // Classify every file of a repo listing; returns the paths worth fetching, best first.
-  const SKIP_DIR = /(^|\/)(node_modules|dist|build|out|\.next|vendor|coverage|__pycache__|\.venv|venv|site-packages|examples?|docs?|fixtures?|tests?|__tests__)\//i;
-  const SKIP_DIR_SRC_ONLY = /(^|\/)(node_modules|\.next|coverage|__pycache__|\.venv|venv|site-packages|examples?|docs?|fixtures?|tests?|__tests__)\//i; // build output and vendor allowed
+  // Folders whose files are never read: dependencies and build output, and folders that hold examples, docs, tests,
+  // evaluation harnesses, benchmarks, mocks, playgrounds and web sites rather than a server (their tool literals are not
+  // the server's tools).
+  const NOT_SERVER = 'examples?|docs?|fixtures?|tests?|__tests__|evals?|bench|benches|benchmarks?|e2e|__mocks__|playground|website';
+  const SKIP_DIR = new RegExp('(^|\\/)(node_modules|dist|build|out|\\.next|vendor|coverage|__pycache__|\\.venv|venv|site-packages|' + NOT_SERVER + ')\\/', 'i');
+  const SKIP_DIR_SRC_ONLY = new RegExp('(^|\\/)(node_modules|\\.next|coverage|__pycache__|\\.venv|venv|site-packages|' + NOT_SERVER + ')\\/', 'i'); // build output and vendor allowed
   const TEST_FILE = /(^|\/)(tests?|__tests__|spec)\/|\.(test|spec)\.[jt]sx?$|(^|\/)test_[^/]*\.py$|_test\.py$/i;
   function planFiles(paths, popts) {
     const exact = []; const manifests = []; const serverJson = []; const src = [];
@@ -1102,10 +1106,14 @@
       if (tools.length) candidates.push({ kind: 'snapshots', fidelity: 'exact', path: snaps[0][0].replace(/[^/]+$/, ''), tools });
     }
     const catalogs = []; // mcp-catalog-snap snapshots: placed after the source is read, once the repository's own server name is known
+    const committed = [];
     exactFiles.filter(([p, t]) => t && !/__toolsnaps__/.test(p)).forEach(([p, t]) => {
       if (/(^|\/)\.mcp-catalog\//.test(p)) { const c = fromCatalogSnap(t); if (c) catalogs.push({ kind: 'catalog', fidelity: 'exact', path: p, tools: c.tools, server: c.server, capturedAt: c.capturedAt }); return; }
-      const ts = toolsFromJson(t); if (ts && ts.length) candidates.push({ kind: 'committed', fidelity: 'exact', path: p, tools: ts });
+      const ts = toolsFromJson(t); if (ts && ts.length) committed.push({ kind: 'committed', fidelity: 'exact', path: p, tools: ts });
     });
+    // Several committed lists (one per server of a monorepo, or a current and an old one): none is picked.
+    if (committed.length === 1) candidates.push(committed[0]);
+    else if (committed.length > 1) hints.lists = committed.map((c) => ({ path: c.path, tools: c.tools.length }));
     for (const [p, t] of await readMany(plan.manifests.slice(0, 10), 4)) { const m = t && fromMcpbManifest(t); if (m) candidates.push({ kind: 'mcpb', fidelity: m.fidelity, path: p, tools: m.tools, generated: m.generated }); }
     for (const [p, t] of await readMany(plan.serverJson.slice(0, 5), 4)) { try { const d = JSON.parse(t); if (d && d.name) hints.serverJson.push({ path: p, name: d.name, remotes: d.remotes || [], packages: d.packages || [] }); } catch (e) { /* ignore */ } }
     // source extraction: the manifests (SDK and zod versions), then the sources, then one analysis over all of them
@@ -1126,11 +1134,25 @@
       const bp = planFiles(paths, { allowBuilt: true });
       if (bp.src.length > plan.src.length) { const b = await analyse(bp, true); if (b.tools.length) { an = b; plan = bp; built = true; } }
     }
-    const found = an.tools;
+    // One server or several: the tools (and server constructors) grouped by package. With more than one package, nothing
+    // is merged or picked: hints.servers lists them and no source candidate is made.
+    const servers = serverPackages(paths, o.subdir || '', an.tools, readFiles);
+    let found = an.tools;
+    const setAside = [];
+    if (servers.kept.length > 1) { found = []; hints.servers = servers.kept; }
+    else if (servers.kept.length === 1 && servers.kept[0].tools) {
+      const keep = servers.kept[0].path;
+      found = an.tools.filter((x) => servers.rootOf(x.path) === keep);
+      an.tools.filter((x) => servers.rootOf(x.path) !== keep).forEach((x) => setAside.push({ name: x.tool.name, path: x.path, line: x.line, reasons: ['not-server-folder (' + servers.rootOf(x.path) + ')'] }));
+    } else {
+      found = [];
+      if (servers.kept.length === 1) hints.serverWithoutTools = servers.kept[0].path;
+    }
+    if (servers.ignored.length) hints.ignoredFolders = servers.ignored;
     if (found.length) {
       const allLiteral = found.every((x) => x.fidelity === 'literal');
-      const marked = an.found.filter((x) => x.marks.length).map((x) => ({ name: x.tool.name, reasons: x.marks.map((m) => m.reason), excluded: x.excluded }));
-      candidates.push({ kind: 'source', fidelity: allLiteral ? 'literal' : 'derived', path: null, built, files: Array.from(new Set(found.map((x) => x.path))), tools: found.map((x) => x.tool), where: found.map((x) => ({ name: x.tool.name, path: x.path, line: x.line, fidelity: x.fidelity })), excluded: an.excluded.map((x) => ({ name: x.tool.name, path: x.path, line: x.line, reasons: x.marks.filter((m) => m.exclude).map((m) => m.reason + (m.detail ? ' (' + m.detail + ')' : '')) })), marked, sdk: an.sdk });
+      const marked = an.found.filter((x) => x.marks.length && found.some((f) => servers.rootOf(f.path) === servers.rootOf(x.path))).map((x) => ({ name: x.tool.name, reasons: x.marks.map((m) => m.reason), excluded: x.excluded }));
+      candidates.push({ kind: 'source', fidelity: allLiteral ? 'literal' : 'derived', path: null, built, files: Array.from(new Set(found.map((x) => x.path))), tools: found.map((x) => x.tool), where: found.map((x) => ({ name: x.tool.name, path: x.path, line: x.line, fidelity: x.fidelity })), excluded: an.excluded.filter((x) => found.some((f) => servers.rootOf(f.path) === servers.rootOf(x.path))).map((x) => ({ name: x.tool.name, path: x.path, line: x.line, reasons: x.marks.filter((m) => m.exclude).map((m) => m.reason + (m.detail ? ' (' + m.detail + ')' : '')) })).concat(setAside), marked, sdk: an.sdk });
     }
     // A snapshot counts as this repository's exact list only when it names this repository's server. A snapshot of
     // another server (one this repository uses or tests against) is never chosen over tools read from source; with
@@ -1144,7 +1166,52 @@
     hints.ownNames = Array.from(own);
     const rank = { exact: 0, literal: 1, derived: 2, names: 3 };
     candidates.sort((a, b) => (a.foreign ? 1 : 0) - (b.foreign ? 1 : 0) || rank[a.fidelity] - rank[b.fidelity] || b.tools.length - a.tools.length);
+    const langs = otherLanguages(paths);
+    if (langs.length) hints.otherLanguages = langs;
     return { scanned: { exact: plan.exact.length, manifests: plan.manifests.length, source: Math.min(plan.src.length, maxSrc), sourceTotal: plan.src.length }, candidates, best: candidates[0] || null, hints };
+  }
+
+  // ------------------------------------------------------------ one server or several
+  // A repository can hold several servers: a monorepo of packages, or a collection of servers. Tools are grouped by their
+  // package, the nearest folder (at or below the folder read) holding a package.json, pyproject.toml or setup.py. A package
+  // that constructs a server (new McpServer, new Server from the SDK, FastMCP(...)) counts even when none of its tools could
+  // be read. Packages in folders whose name says they are not the server (admin, console, docs, evals, examples, fixtures,
+  // tests, bench, website, ...) are set aside (`ignored`) and never graded from a parent folder: point the reader at one
+  // of them to grade it.
+  const PKG_MANIFEST = /(^|\/)(package\.json|pyproject\.toml|setup\.py)$/;
+  const NOT_SERVER_WORD = /^(admin|console|docs?|evals?|examples?|fixtures?|tests?|bench|benches|benchmarks?|e2e|playground|demos?|samples?|mocks?|website)$/i;
+  function notServerFolder(rel) { return String(rel).split('/').some((seg) => seg.split(/[-_.]+/).some((w) => NOT_SERVER_WORD.test(w))); }
+  function constructsServer(p, text) {
+    if (typeof text !== 'string') return false;
+    if (/\.(ts|mts|cts|js|mjs|cjs)$/.test(p)) return /\bnew\s+(?:McpServer|FastMCP)\s*[(<]/.test(text) || (/\bnew\s+Server\s*\(/.test(text) && /@modelcontextprotocol\//.test(text));
+    if (/\.py$/.test(p)) return /\b(?:FastMCP|MCPServer)\s*\(/.test(text) || (/\bServer\s*\(\s*['"]/.test(text) && /\b(?:from|import)\s+mcp\b/.test(text));
+    return false;
+  }
+  // paths: the listing (inside `base`); found: the tools read ({ path }); files: Map(path -> text) of the files read.
+  // Returns { rootOf(path), kept: [{ path, tools, constructor }], ignored: [...] }, kept sorted constructors first.
+  function serverPackages(paths, base, found, files) {
+    const up = (d) => (d.includes('/') ? d.slice(0, d.lastIndexOf('/')) : '');
+    const dirs = new Set();
+    paths.forEach((p) => { if (PKG_MANIFEST.test(p) && !SKIP_DIR.test(p)) dirs.add(up(p)); });
+    const rootOf = (p) => { for (let d = up(p); ; d = up(d)) { if (dirs.has(d)) return d; if (d === base || d === '' || (base && !d.startsWith(base + '/'))) return base; } };
+    const groups = new Map();
+    const g = (r) => { if (!groups.has(r)) groups.set(r, { path: r, tools: 0, constructor: false }); return groups.get(r); };
+    found.forEach((x) => { g(rootOf(x.path)).tools++; });
+    (files instanceof Map ? files : new Map(files || [])).forEach((text, p) => { if (constructsServer(p, text)) g(rootOf(p)).constructor = true; });
+    const rel = (r) => (base && r.startsWith(base + '/') ? r.slice(base.length + 1) : r === base ? '' : r);
+    const all = Array.from(groups.values());
+    const ignored = all.filter((x) => rel(x.path) !== '' && notServerFolder(rel(x.path)));
+    const kept = all.filter((x) => !ignored.includes(x));
+    const order = (a, b) => (b.constructor ? 1 : 0) - (a.constructor ? 1 : 0) || b.tools - a.tools || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
+    return { rootOf, kept: kept.sort(order), ignored: ignored.sort(order) };
+  }
+
+  // Server source in languages the reader does not read yet, by file count (only when there are some).
+  const OTHER_LANGS = [['Go', /\.go$/], ['Rust', /\.rs$/], ['C#', /\.cs$/], ['Java', /\.java$/], ['Kotlin', /\.kts?$/], ['Ruby', /\.rb$/], ['PHP', /\.php$/], ['Swift', /\.swift$/]];
+  function otherLanguages(paths) {
+    const read = paths.filter((p) => /\.(ts|mts|cts|js|mjs|cjs|py)$/.test(p) && !SKIP_DIR.test(p) && !TEST_FILE.test(p) && !/\.d\.ts$/.test(p)).length;
+    return OTHER_LANGS.map(([name, re]) => ({ name, files: paths.filter((p) => re.test(p) && !SKIP_DIR.test(p) && !/(_test\.go|Tests?\.cs)$/.test(p) && !TEST_FILE.test(p)).length }))
+      .filter((x) => x.files > 0).sort((a, b) => b.files - a.files).map((x) => Object.assign(x, { readFiles: read }));
   }
 
   // ------------------------------------------------------------ the repository's own server name
@@ -1269,5 +1336,5 @@
     return null;
   }
 
-  return { fromGitHub, fromDirectory, fromCatalogSnap, ownServerNames, normName, fromRegistry, extractFromFile, extractJs, extractPy, planFiles, detectSdk, collectGlobalConsts, analyseRepo, markConditionals, parseRepoRef, toolsFromJson, fromMcpbManifest, tokenize, commandFor };
+  return { fromGitHub, fromDirectory, fromCatalogSnap, serverPackages, notServerFolder, constructsServer, ownServerNames, normName, fromRegistry, extractFromFile, extractJs, extractPy, planFiles, detectSdk, collectGlobalConsts, analyseRepo, markConditionals, parseRepoRef, toolsFromJson, fromMcpbManifest, tokenize, commandFor };
 });

@@ -59,16 +59,16 @@ export function commentAction(mode, problem) {
 }
 
 /**
- * The comment body: the marker, a heading with the result, the grade table, the gate, up to five findings with
- * their check pages, and the registry line. Text from the tool list is escaped as in the job summary.
+ * The comment body: the marker, a heading with the result (marked approximate for a list read from source), the grade
+ * table, the gate, up to five findings with their check pages, and the registry line. Text from the tool list is escaped as in the job summary.
  */
-export function renderComment(r, { sections, minGrade = null, diff = null, sourceNote = '', runUrl = null, hint = null, marker = MARKER, stamp = null } = {}) {
+export function renderComment(r, { sections, minGrade = null, diff = null, sourceNote = '', approximate = false, runUrl = null, hint = null, marker = MARKER, stamp = null } = {}) {
   const below = belowMinGrade(r, sections, minGrade);
   const highRisk = diff ? diff.highRisk : [];
   const failed = below.length > 0 || highRisk.length > 0;
   const out = [marker];
   if (stamp) out.push(stamp);
-  out.push('### MCP check' + (failed ? ': needs attention' : minGrade ? ': passes min-grade ' + minGrade : ''), '');
+  out.push('### MCP check' + (approximate ? ' (approximate)' : '') + (failed ? ': needs attention' : minGrade ? ': passes min-grade ' + minGrade : ''), '');
   out.push('| ' + ALL_SECTIONS.map((k) => r.sections[k].name).join(' | ') + ' |');
   out.push('|' + ALL_SECTIONS.map(() => '---').join('|') + '|');
   out.push('| ' + ALL_SECTIONS.map((k) => {

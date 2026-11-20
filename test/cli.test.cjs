@@ -14,7 +14,7 @@ test('cli: --min-grade fails below the threshold', () => { const r = run([ex, '-
 test('cli: --min-grade passes a well-designed list on every section', () => { assert.equal(run([path.join(__dirname, 'catalogs/well-designed.json'), '--min-grade', 'A', '--sections', 'spec,anthropic,openai,security,quality,surface']).status, 0); });
 test('cli: stdin, JSON and SARIF formats', () => {
   const j = JSON.parse(run(['-', '--format', 'json'], fs.readFileSync(ex, 'utf8')).stdout);
-  assert.equal(j.rubric_version, '2.1.0');
+  assert.equal(j.rubric_version, '2.1.1');
   assert.equal(JSON.parse(run([ex, '--format', 'sarif']).stdout).version, '2.1.0');
   assert.match(run([ex, '--format', 'md']).stdout, /^# MCP tool list check/);
 });

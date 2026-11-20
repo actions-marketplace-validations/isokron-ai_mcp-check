@@ -31,7 +31,7 @@ function run() {
 test('corpus grade: one record per target folder, errors recorded, never thrown', () => {
   const recs = gradeRun(run(), { gradedAt: '2026-11-18T12:00:00Z' });
   assert.deepEqual(recs.map((r) => r.target), ['t01', 't02', 't03', 't04', 't05', 't06', 't07']);
-  for (const r of recs) { assert.equal(r.format, FORMAT); assert.equal(r.graded_at, '2026-11-18T12:00:00Z'); assert.equal(r.rubric_version, '2.1.0'); }
+  for (const r of recs) { assert.equal(r.format, FORMAT); assert.equal(r.graded_at, '2026-11-18T12:00:00Z'); assert.equal(r.rubric_version, '2.1.1'); }
   const [t1, t2, t3, t4, t5, t6, t7] = recs;
   assert.equal(t1.error, null);
   assert.equal(t1.sections.anthropic.grade, 'A');

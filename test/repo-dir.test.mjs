@@ -108,7 +108,10 @@ test('fromDirectory: exclude and skipIfContains leave out folders such as an ear
   assert.equal(r.best.kind, 'source');
   assert.ok(!r.candidates.some((c) => c.tools.some((t) => t.name === 'stale')));
   const unguarded = await R.fromDirectory(dir);
-  assert.equal(unguarded.best.kind, 'committed', 'without the guards, a tools-list.json counts as a committed list (it ranks first)');
+  assert.equal(unguarded.best.kind, 'source', 'without the guards, the two leftover tools-list.json files are several committed lists: neither is picked');
+  assert.deepEqual(unguarded.hints.lists.map((x) => x.path).sort(), ['mcp-check-results/tools-list.json', 'old-results/tools-list.json']);
+  writeFileSync(join(dir, 'old-results', 'tools-list.json'), '[]');
+  assert.equal((await R.fromDirectory(dir)).best.kind, 'committed', 'one committed list still ranks first');
 });
 
 test('fromDirectory: a monorepo package reads the SDK version from the workspace root', async () => {
@@ -300,4 +303,103 @@ test('--repo-dir and --repo read the same source files, whatever order the listi
   assert.deepEqual(local.best.files.slice().sort(), remote.best.files.slice().sort());
   assert.deepEqual(local.best.tools.map((t) => t.name), remote.best.tools.map((t) => t.name));
   assert.equal(local.best.tools.length, 4);
+});
+
+// ------------------------------------------------------------ 1.1.1: one server or several, names only, approximate
+/** A workspace with packages/<name> servers, each registering the given tools; returns its folder. */
+function mono(pkgs, rootManifest = true) {
+  const ws = mkdtempSync(join(tmpdir(), 'mcpcheck-mono2-'));
+  if (rootManifest) writeFileSync(join(ws, 'package.json'), JSON.stringify({ name: 'mono', private: true }));
+  for (const [dir, tools, ctor = true] of pkgs) {
+    mkdirSync(join(ws, dir, 'src'), { recursive: true });
+    writeFileSync(join(ws, dir, 'package.json'), JSON.stringify({ name: dir.split('/').pop() }));
+    writeFileSync(join(ws, dir, 'src', 'index.ts'), 'import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";\nimport { z } from "zod";\n'
+      + (ctor ? 'const server = new McpServer({ name: "' + dir + '", version: "1" });\n' : '') + tools.map((n) => 'server.registerTool("' + n + '", { description: "d", inputSchema: { q: z.string() } }, async () => ({}));\n').join(''));
+  }
+  return ws;
+}
+
+test('reader: tools of several packages are not merged; one package is graded; admin, docs and eval packages are set aside', async () => {
+  const two = await R.fromDirectory(mono([['src/files', ['read_file', 'write_file']], ['src/memory', ['create_entities']]]));
+  assert.equal(two.best, null, 'no merged list');
+  assert.deepEqual(two.hints.servers, [{ path: 'src/files', tools: 2, constructor: true }, { path: 'src/memory', tools: 1, constructor: true }]);
+  // A constructor with no readable tools still counts as a server: the other package is not graded in its place.
+  const ctorOnly = await R.fromDirectory(mono([['packages/a', ['a_tool']], ['packages/b', []]]));
+  assert.equal(ctorOnly.best, null);
+  assert.deepEqual(ctorOnly.hints.servers.map((x) => x.path), ['packages/a', 'packages/b']);
+  // Admin, console, docs and eval packages are set aside when another package remains; their tools are listed as left out.
+  const withDocs = await R.fromDirectory(mono([['apps/docs-server', ['search_docs']], ['packages/core', ['real_tool']]]));
+  assert.deepEqual(withDocs.best.tools.map((t) => t.name), ['real_tool']);
+  assert.deepEqual(withDocs.best.excluded.map((x) => [x.name, x.reasons]), [['search_docs', ['not-server-folder (apps/docs-server)']]]);
+  const adminOnly = await R.fromDirectory(mono([['packages/admin-mcp', ['internal_stats']], ['packages/mcp', []]]));
+  assert.equal(adminOnly.best, null, 'the admin package is never graded from the root');
+  assert.equal(adminOnly.hints.serverWithoutTools, 'packages/mcp');
+  assert.deepEqual(adminOnly.hints.ignoredFolders.map((x) => x.path), ['packages/admin-mcp']);
+  // One package plus the root: one server, unchanged.
+  const single = await R.fromDirectory(mono([['.', ['one', 'two']]].map(([d, t]) => [d, t])));
+  assert.deepEqual(single.best.tools.map((t) => t.name), ['one', 'two']);
+  assert.equal(single.hints.servers, undefined);
+  assert.equal(R.notServerFolder('packages/admin-mcp'), true);
+  assert.equal(R.notServerFolder('mcp-evals'), true);
+  assert.equal(R.notServerFolder('packages/mcp-server'), false);
+  assert.equal(R.notServerFolder('packages/administrator'), false, 'whole words only');
+});
+
+test('reader: evaluation harnesses, benchmarks, playgrounds and web sites are not read as the server', async () => {
+  const dir = copy('ts-zod');
+  for (const d of ['evals/selection', 'bench', 'playground', 'website/src', 'e2e']) {
+    mkdirSync(join(dir, d), { recursive: true });
+    writeFileSync(join(dir, d, 'harness.ts'), 'export const tools = [{ name: "write_file", description: "Writes a file.", inputSchema: { type: "object" } }];\nserver.registerTool("phantom_' + d.replace(/\W/g, '_') + '", { description: "x", inputSchema: {} }, async () => ({}));\n');
+  }
+  const r = await R.fromDirectory(dir);
+  assert.deepEqual(r.best.tools.map((t) => t.name).sort(), ['delete_note', 'search_notes']);
+});
+
+test('reader: several committed lists in different folders are not picked from; the language of a Go server is named', async () => {
+  const ws = mkdtempSync(join(tmpdir(), 'mcpcheck-lists-'));
+  for (const d of ['lists/slack', 'lists/github']) { mkdirSync(join(ws, d), { recursive: true }); writeFileSync(join(ws, d, 'tools.json'), JSON.stringify({ tools: [{ name: d.split('/')[1] + '_x', inputSchema: { type: 'object' } }] })); }
+  const r = await R.fromDirectory(ws);
+  assert.equal(r.best, null);
+  assert.deepEqual(r.hints.lists.map((x) => x.path).sort(), ['lists/github/tools.json', 'lists/slack/tools.json']);
+  const go = mkdtempSync(join(tmpdir(), 'mcpcheck-go-'));
+  writeFileSync(join(go, 'main.go'), 'package main\n'); writeFileSync(join(go, 'tools.go'), 'package main\n'); writeFileSync(join(go, 'tools_test.go'), 'package main\n');
+  const g = await R.fromDirectory(go);
+  assert.deepEqual(g.hints.otherLanguages, [{ name: 'Go', files: 2, readFiles: 0 }]);
+});
+
+test('cli: --repo-dir with several servers exits 3 and names the folders; pointed into one package it grades that one', () => {
+  const ws = mono([['src/files', ['read_file']], ['src/memory', ['create_entities']]]);
+  const r = cli(['--repo-dir', ws]);
+  assert.equal(r.status, 3);
+  assert.match(r.stderr, /found tool definitions of more than one server in .*: src\/files \(server constructor, 1 tool\), src\/memory \(server constructor, 1 tool\)\. Nothing was merged or picked\. Check one server at a time \(--repo-dir .*\/src\/files, --repo-dir .*\/src\/memory\), or grade the live list instead/);
+  const one = cli(['--repo-dir', join(ws, 'src', 'memory'), '--format', 'json']);
+  assert.equal(one.status, 0, one.stderr);
+  const j = JSON.parse(one.stdout);
+  assert.equal(j.input.tools, 1);
+  assert.equal(j.source.approximate, true);
+});
+
+test('cli: names-only lists are never graded (exit 3, same advice as the Action); text output of a source read says approximate', () => {
+  const ws = mkdtempSync(join(tmpdir(), 'mcpcheck-names-'));
+  writeFileSync(join(ws, 'manifest.json'), JSON.stringify({ manifest_version: '0.2', name: 'x', server: { type: 'node', entry_point: 'server/index.js' }, tools: [{ name: 'search', description: 'Searches.' }] }));
+  const r = cli(['--repo-dir', ws, '--min-grade', 'F']);
+  assert.equal(r.status, 3);
+  assert.match(r.stderr, /only tool names were found in .* \(manifest\.json lists names and descriptions without schemas\), which cannot be graded\. Grade the live list instead: start the server with --command "<start command>", or give a saved tools\/list file/);
+  assert.equal(r.stdout, '');
+  const t = cli(['--repo-dir', join(repos, 'ts-zod')]);
+  assert.match(t.stdout, /^Approximate: read from source, not the server's live list\. For exact grades, run the server \(--command "<start command>"\) or grade a saved tools\/list file\.$/m);
+  const md = cli(['--repo-dir', join(repos, 'ts-zod'), '--format', 'md']);
+  assert.match(md.stdout, /Approximate: read from source, not the server's live list\./);
+  // An exact committed list is not approximate.
+  const snap = JSON.parse(cli(['--repo-dir', join(repos, 'catalog-snap'), '--format', 'json']).stdout);
+  assert.equal(snap.source.approximate, false);
+  assert.ok(!/Approximate/.test(cli(['--repo-dir', join(repos, 'catalog-snap')]).stdout));
+});
+
+test('cli: a Go repository exits 3 and says Go source is not read yet', () => {
+  const go = mkdtempSync(join(tmpdir(), 'mcpcheck-go-'));
+  writeFileSync(join(go, 'main.go'), 'package main\n');
+  const r = cli(['--repo-dir', go]);
+  assert.equal(r.status, 3);
+  assert.match(r.stderr, /The source here is Go \(1 \.go file\): Go source is not read yet/);
 });

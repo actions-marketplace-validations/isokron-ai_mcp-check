@@ -15,7 +15,7 @@ One engine, four ways to run it:
 | **GitHub Action** | `uses: isokron-ai/mcp-check@v1`: zero-config (reads your source, runs nothing), job summary, SARIF for code scanning, a gate, a README badge and an optional PR comment. |
 | **MCP server** | `npx @isokron/mcp-check serve`: coding agents grade the server they are building. |
 
-All four run the same file, [`engine/core.js`](engine/core.js), under the published [rubric](RUBRIC.md) (`rubric_version` 2.1.0). It reads only the JSON it is given: no network access, nothing stored.
+All four run the same file, [`engine/core.js`](engine/core.js), under the published [rubric](RUBRIC.md) (`rubric_version` 2.1.1). It reads only the JSON it is given: no network access, nothing stored.
 
 ## Command line
 
@@ -47,8 +47,8 @@ npx @isokron/mcp-check --registry io.github.owner/name --save tools.json
 | `--url` | A remote server over Streamable HTTP. Speaks both protocol eras: the 2026-07-28 stateless `tools/list` (no `initialize`) and the earlier `initialize` handshake with or without a session, JSON or SSE answers, with paging. `--header "Name: value"` (repeatable) may name environment variables (`$TOKEN`), so secrets stay out of shell history; header values are never printed, and with headers set a redirect is refused. `--protocol auto\|modern\|legacy`. |
 | `-- <command>`, `--command` | A local server over stdio, started and stopped by the checker. `--env KEY=VALUE` adds environment variables. |
 | `--config auto\|<file>` | Every server in an MCP client config: Claude Desktop, Claude Code (`.mcp.json`), Cursor, Windsurf, VS Code (`.vscode/mcp.json` with JSONC, `${env:X}` resolved, `${input:x}` reported), VS Code settings and Zed. `auto` reads the usual locations. `--server name` picks one. |
-| `--repo` | A GitHub repository, read without running anything: committed tool lists and snapshots, MCPB manifests, tool literals, and TypeScript and Python SDK registrations reproduced as the SDK lists them. The report's `Source:` line names the provenance (`exact`, `literal`, `derived` or `names only`). `--github-token-env NAME` for private repositories or rate limits. |
-| `--repo-dir` | A folder on this machine, read the same way as `--repo`, with no network access and nothing run. Skips `node_modules`, `.git`, virtual environments, tests, examples and docs; reads build output (`dist`, `build`, `out`) and `vendor` only when no source file defines a tool; does not follow symlinks; up to 60 source files of at most 1.5 MiB each. Exit code 3 when no tool definition is found. |
+| `--repo` | A GitHub repository, read without running anything: committed tool lists and snapshots, MCPB manifests, tool literals, and TypeScript and Python SDK registrations reproduced as the SDK lists them. The report's `Source:` line names the provenance (`exact`, `literal`, `derived`). Grades of a list read from source (`literal`, `derived`) are **approximate**: the report says so, and `--command` or a saved list gives exact ones. A manifest with tool names only is not graded, and neither is a repository whose tools belong to more than one server (a monorepo): both exit 3 and name what to do (for a monorepo, the package folders to point at, `github.com/owner/repo/tree/<ref>/<folder>`). Go, Rust and C# source is not read yet. `--github-token-env NAME` for private repositories or rate limits. |
+| `--repo-dir` | A folder on this machine, read the same way as `--repo`, with no network access and nothing run. Skips `node_modules`, `.git`, virtual environments, tests, examples, docs, evaluation harnesses, benchmarks, playgrounds and web sites; reads build output (`dist`, `build`, `out`) and `vendor` only when no source file defines a tool; does not follow symlinks; up to 60 source files of at most 1.5 MiB each. Exit code 3 when it finds no list to grade (no tool definition, names only, or more than one server; point it at one package's folder). |
 | `--registry` | An [MCP Registry](https://registry.modelcontextprotocol.io) entry: its public https remote, else its GitHub source. |
 
 Every report of a fetched list carries a `Source:` line (and `source` in JSON). `--save file` keeps the fetched list for `--compare` or the web checker. `capture -- <command>` prints a stdio server's `tools/list` answer without grading it.
@@ -65,7 +65,7 @@ Every report of a fetched list carries a `Source:` line (and `source` in JSON). 
 | `-o, --output file` | Write the report to a file. With a format other than `text`, the text summary also goes to stderr. |
 | `-v, --version`, `-h, --help` | Print the version, or this list of inputs and options. |
 
-Exit codes: `0` pass, `1` below `--min-grade` or a high-risk change, `2` bad input or usage, `3` a server could not be reached or listed, or no tool definitions were found in the source.
+Exit codes: `0` pass, `1` below `--min-grade` or a high-risk change, `2` bad input or usage, `3` a server could not be reached or listed, or the source gave no list to grade (no tool definitions, names only, or more than one server).
 
 ## GitHub Action
 
@@ -89,7 +89,7 @@ jobs:
       - uses: isokron-ai/mcp-check@v1
 ```
 
-The job summary says the list was read from source and how exact it is. For the exact list your server sends, start it with `command` (or give a saved list with `tools-file`):
+The job summary says the list was read from source and that its grades are **approximate**: the reader reproduces what your SDK registrations would list, and can miss or misread tools. It never fails the job on grades unless you set `min-grade` (a gate on approximate grades is at your own risk). When the source gives nothing to grade (for example a Go, Rust or C# server, a manifest with names only, or a monorepo with several servers), the job ends with a warning and the fix, not red (`fail-on-no-tools: true` to fail it). For exact grades of the list your server sends, start it with `command` (or give a saved list with `tools-file`):
 
 ```yaml
       - uses: actions/setup-node@v7
@@ -103,7 +103,7 @@ The job summary says the list was read from source and how exact it is. For the 
           pr-comment: auto                # needs permissions: pull-requests: write
 ```
 
-The job summary shows the grade table and the blocking and attention findings with their docs links. The reports (`report.md`, `report.json`, `report.sarif`, and the captured `tools-list.json`) are uploaded as an artifact. Set `upload-sarif: true` (with `permissions: security-events: write`) to send the findings to code scanning, and `baseline:` to a committed tool list to fail on rug-pull annotation changes. With `pr-comment: auto` the Action comments on a pull request (one comment, updated in place, never on pull requests from forks) when a gated section falls below `min-grade`; `always` comments on every run. On a public repository the job summary ends with a link to list the server in the [IsoKron MCP registry](https://isokron.ai/mcp-check/registry?utm_source=mcp-check-readme&utm_medium=readme) for free (`publish-hint: false` to leave it out; no request is made).
+The job summary shows the grade table and the blocking and attention findings with their docs links. The reports (`report.md`, `report.json`, `report.sarif`, and the captured `tools-list.json`) are uploaded as an artifact. Set `upload-sarif: true` (with `permissions: security-events: write`) to send the findings to code scanning, and `baseline:` to a committed tool list to fail on rug-pull annotation changes. With `pr-comment: auto` the Action comments on a pull request (one comment, updated in place, never on pull requests from forks) when a gated section falls below `min-grade`; `always` comments on every run. On a public repository the job summary ends with a link to get the server listed in the [IsoKron MCP registry (beta)](https://isokron.ai/mcp-check/registry?utm_source=mcp-check-readme&utm_medium=readme) for free (`publish-hint: false` to leave it out; no request is made).
 
 ### README badge
 
@@ -168,7 +168,7 @@ Output of `npm run dogfood`, which lists this server's own tools over MCP and gr
 | Schema and description quality | A | 100 | 0 | 0 | 0 | |
 | Write-surface design | not graded | | | | | Every tool declares readOnlyHint: true or is named as a read, so there is no write surface to grade. |
 
-Rubric 2.1.0, 3 tools, catalog hash `32462a67c35adecf5cbfe5c9e738a8efe69cc87afcc50f497ba2d23fb8de36b7`.
+Rubric 2.1.1, 3 tools, catalog hash `32462a67c35adecf5cbfe5c9e738a8efe69cc87afcc50f497ba2d23fb8de36b7`.
 
 ## What it checks
 

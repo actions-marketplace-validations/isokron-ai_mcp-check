@@ -2,7 +2,8 @@ name: IsoKron MCP check
 description: >-
   Grades an MCP server's tools/list against the MCP specification, the Claude and ChatGPT directory
   rules, hidden-instruction patterns and schema quality. Zero-config: with no input it reads the tool
-  definitions from your repository's code and runs nothing. Job summary, SARIF, gate, badge, PR comment.
+  definitions from your repository's code and runs nothing (approximate grades; set command for exact
+  ones). Job summary, SARIF, gate, badge, PR comment.
 author: IsoKron
 branding:
   icon: check-circle
@@ -38,9 +39,17 @@ inputs:
   min-grade:
     description: >-
       Lowest acceptable grade, A to F. The job fails when a section in sections grades below it.
-      Empty: no gate (the grades are still reported).
+      Empty: no gate (the grades are still reported). On a list read from source (neither command nor
+      tools-file) the grades are approximate, and a gate on them is at your own risk.
     required: false
     default: ''
+  fail-on-no-tools:
+    description: >-
+      With neither command nor tools-file: fail the job when the source gives no list to grade (no tool
+      definitions, for example a Go, Rust or C# server; names only; or tools of more than one server).
+      Default false: the job ends with a warning and the fix in the summary, not red.
+    required: false
+    default: 'false'
   sections:
     description: >-
       Sections to gate with min-grade, comma-separated: spec, anthropic, openai, security, quality,
@@ -86,8 +95,8 @@ inputs:
   publish-hint:
     description: >-
       On a public github.com repository, add one line to the job summary (and the PR comment) linking
-      to this repository's page in the IsoKron MCP registry, where it can be listed for free. Makes no
-      request. Default true; false for no line.
+      to this repository's page in the IsoKron MCP registry (beta), where it can be listed for free.
+      Makes no request. Default true; false for no line.
     required: false
     default: 'true'
   pr-comment:
@@ -112,11 +121,14 @@ inputs:
 
 outputs:
   passed:
-    description: '"true" when every gated section meets min-grade and the baseline comparison found no high-risk change.'
+    description: '"true" when every gated section meets min-grade and the baseline comparison found no high-risk change; empty when nothing was graded.'
     value: ${{ steps.run.outputs.passed }}
   source:
     description: 'Where the tool list came from: "repo-static" (read from the source, nothing run), "command" or "tools-file".'
     value: ${{ steps.run.outputs.source }}
+  approximate:
+    description: '"true" when the list was read from source (literal or derived), so the grades are approximate; "false" for a server, a saved list or an exact committed list.'
+    value: ${{ steps.run.outputs.approximate }}
   grade-spec:
     description: Grade of the MCP specification section.
     value: ${{ steps.run.outputs.grade-spec }}
@@ -174,6 +186,7 @@ runs:
         INPUT_BADGE_DIR: ${{ inputs.badge-dir }}
         INPUT_RESULTS_DIR: ${{ inputs.results-dir }}
         INPUT_PUBLISH_HINT: ${{ inputs.publish-hint }}
+        INPUT_FAIL_ON_NO_TOOLS: ${{ inputs.fail-on-no-tools }}
         INPUT_PR_COMMENT: ${{ inputs.pr-comment }}
         INPUT_PR_COMMENT_KEY: ${{ inputs.pr-comment-key }}
         MCP_CHECK_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
