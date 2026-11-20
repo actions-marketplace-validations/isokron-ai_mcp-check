@@ -224,7 +224,7 @@ test('surface 2.2.0: the precondition words (confirm_token, expect(ed)_*, base_*
 test('surface 2.2.0: retry keys are named as such; merge_request_id and pull_request_id are objects', () => {
   for (const k of ['idempotency_key', 'idempotencyKey', 'client_token', 'ClientRequestToken', 'client_request_id', 'request_id', 'dedupe_key'])
     assert.equal(cov([W('create_issue', { title: S(), [k]: S() })]), 'retry 1/1', k);
-  for (const k of ['merge_request_id', 'pull_request_id', 'mergeRequestId', 'requester_id'])
+  for (const k of ['merge_request_id', 'pull_request_id', 'mergeRequestId', 'requester_id', 'operation_id'])
     assert.equal(cov([W('create_note', { body: S(), [k]: S() })]), 'retry 0/1', k);
 });
 
@@ -336,6 +336,8 @@ test('openai-retry 2.2.0: raised only for tools read as writes; argument descrip
   // A name that says nothing, with no destructiveHint at all, counts as a write (a client takes it as destructive).
   fires('openai-retry', [wr({ name: 'execute_sql', description: 'Runs SQL. Use this when asked.', annotations: {} })], 'attention');
   fires('openai-retry', [wr({ name: 'op_17', description: 'Does it. Use this when asked.', annotations: { readOnlyHint: false } })], 'attention');
+  // operation_id names the operation to run; it is not a retry key.
+  fires('openai-retry', [wr({ name: 'execute_operation', description: 'Runs one operation. Use this when asked.', inputSchema: props({ operation_id: S('Operation to run.') }), annotations: { readOnlyHint: false, destructiveHint: true } })], 'attention');
   silent('openai-retry', [wr({ name: 'do_thing', description: 'Does it. Use this when asked.', annotations: { readOnlyHint: false, destructiveHint: false } })]);
   silent('openai-retry', [wr({ name: 'web_summarizer', description: 'Summarises. Use this when asked.', annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true } })]);
   silent('openai-retry', [wr(Object.assign({ name: 'create_issue', inputSchema: props({ title: S(), request_token: S('Unique token. A repeated call with the same token returns the first issue instead of a duplicate.') }) }, plain))]);

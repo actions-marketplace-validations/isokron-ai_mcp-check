@@ -1133,8 +1133,8 @@
 
   // Argument names are read in words (norm): expectedHeadSha is expected_head_sha, ifMatch is if_match.
   // A retry key: idempotency or dedup keys, client tokens, a request id of the caller's own. merge_request_id and
-  // pull_request_id name objects, so request_id counts only as the whole name.
-  const isRetryKey = (n) => /idempot|dedup/.test(n) || /^(client_token|client_request_token|client_request_id|client_reference|client_reference_id|client_operation_id|request_id|request_token|operation_id|event_key|unique_key|nonce)$/.test(n);
+  // pull_request_id name objects, so request_id counts only as the whole name; operation_id names the operation to run.
+  const isRetryKey = (n) => /idempot|dedup/.test(n) || /^(client_token|client_request_token|client_request_id|client_reference|client_reference_id|client_operation_id|request_id|request_token|event_key|unique_key|nonce)$/.test(n);
   // A precondition: an expected value of the object as read (expected_*, expect_*, base_sha, if_match, an etag, the
   // version or revision itself, a confirm token). new_version and version_id set or select a version; they are not one.
   const isPrecondition = (n) => /^(expect|expected)_/.test(n) || /^base_(sha|revision|rev|version|etag)$/.test(n) ||
