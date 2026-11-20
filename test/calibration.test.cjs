@@ -472,7 +472,7 @@ test('surface 2.2.0 review: an HTTP client says http, request or client; a resou
 // ---------------- rubric 2.2.0 confirm review
 test('anthropic-hint-platforms-differ 2.2.0 confirm: an additive lead verb does not exempt a money, send or ship object', () => {
   const f = { readOnlyHint: false, destructiveHint: false, openWorldHint: false };
-  for (const n of ['create_refund', 'stripe_create_refund', 'create_charge', 'create_transfer', 'create_payout', 'create_payment', 'add_payment', 'insert_payment', 'create_and_send_invoice', 'create_message', 'create_deployment', 'create_release', 'create_invoices', 'add_notification'])
+  for (const n of ['create_refund', 'stripe_create_refund', 'create_charge', 'create_transfer', 'create_payout', 'create_payment', 'add_payment', 'insert_payment', 'create_and_send_invoice', 'create_message', 'create_deployment', 'create_release', 'create_invoices', 'add_notification', 'create_subscription'])
     fires('anthropic-hint-platforms-differ', [wr({ name: n, annotations: f })], 'attention');
   for (const n of ['create_issue', 'append_row', 'add_comment', 'create_entities', 'add_observations', 'idp_create_application_grant', 'slack_add_reaction'])
     silent('anthropic-hint-platforms-differ', [wr({ name: n, annotations: f })]);
@@ -480,7 +480,7 @@ test('anthropic-hint-platforms-differ 2.2.0 confirm: an additive lead verb does 
 
 test('openai-precise-location 2.2.0 confirm: a negation counts only when it governs an asking verb; clauses split on ; and ,', () => {
   const sev = (d) => ids([tool({ name: 'find_places', description: d, inputSchema: props({ latitude: N, longitude: N }) })], 'openai-precise-location').map((f) => f.severity);
-  for (const d of ['When latitude is not set, uses your current location.', 'If coordinates are not given, searches near the user.', 'Never stores data; finds shops near me.', 'Without a radius, finds shops near me.'])
+  for (const d of ['When latitude is not set, uses your current location.', 'If coordinates are not given, searches near the user.', 'Never stores data; finds shops near me.', 'Without a radius, finds shops near me.', 'Finds coffee shops. We do not store your current location.', 'Finds coffee shops. We never track your exact position.', 'Finds coffee shops. Never send the user\'s location anywhere else.', 'Finds coffee shops. Do not use the user\'s location without consent.', 'Finds coffee shops. Do not pass your current location unless the user agrees.'])
     assert.deepEqual(sev(d), ['blocking'], d);
   for (const d of ['Do not ask for the user\'s location.', 'Search for places. Do not ask for the user\'s location.', 'Never request your current location; pass a city instead.', 'No need to send your GPS position.'])
     assert.deepEqual(sev(d), ['attention'], d);
