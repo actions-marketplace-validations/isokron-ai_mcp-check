@@ -2,9 +2,9 @@
 
 All notable changes to `@isokron/mcp-check` and the `isokron-ai/mcp-check` Action. The package follows [semantic versioning](https://semver.org/); the grading rubric has its own version (`rubric_version`), noted with each release.
 
-## Unreleased
+## 1.1.0 (2026-11-20)
 
-To be released as 1.1.0 (new inputs and a new option, so a minor version; it also carries the changes first planned for 1.0.1, further down). The rubric stays 2.1.0. The engine changes in two heuristics (below); both can only remove advice-level findings. The web checker needs the same two edits to stay in step.
+New inputs and a new option, so a minor version; it also carries the changes first planned for 1.0.1, further down. The rubric stays 2.1.0. The engine changes in two heuristics (below); both can only remove advice-level findings. The web checker needs the same two edits to stay in step.
 
 - **Zero-config Action.** With neither `tools-file` nor `command`, the Action reads the tool definitions from the source in `working-directory` and runs nothing. The job summary says so ("Source: repository code; nothing was run"), names how exact the list is, and says how to switch to the live list with `command` or `tools-file`. SARIF results point at the line that registers each tool. When no tool definition is found the job fails with that advice. New output `source` (`repo-static`, `command` or `tools-file`). The smallest workflow is now `actions/checkout` followed by `uses: isokron-ai/mcp-check@v1`.
 - **`--repo-dir <path>`**: the `--repo` reading from a local checkout, with no network access. It does not enter `node_modules`, `.git`, virtual environments or caches, does not follow symlinks, keeps `--repo`'s limits (60 source files, 1.5 MiB per file), and reads build output (`dist`, `build`, `out`) and `vendor` only when no source file defines a tool. Exit code 3, with a message naming `--command` and a saved list (`command` and `tools-file` in the Action), when it finds no tool definition. Library: `RepoSource.fromDirectory(path)` beside `fromGitHub`, sharing one scan.
