@@ -540,7 +540,7 @@
       if (m[2]) names.add(m[2]); if (m[3]) names.add(m[3]);
     }
     if (/require\(['"]zod['"]\)/.test(src) || /\bz\.object\s*\(/.test(src)) names.add('z');
-    // zod re-exported by a module of the repository (import { zod } from '../third_party/index.js'): a binding named
+    // zod re-exported by a module of the repository (import { zod } from '../lib/schema.js'): a binding named
     // z or zod that is used as zod.
     const re2 = /import\s+(?:\{([^}]*)\}|\*\s+as\s+(\w+)|(\w+))\s+from\s+['"][^'"]+['"]/g;
     while ((m = re2.exec(src))) {
@@ -569,7 +569,7 @@
         if (!isP(t[j], '=')) continue;
         let v = parseValue(t, j + 1, Object.assign({}, ctx, { consts }));
         if (v.value === SKIP && t[j + 1] && t[j + 1].type === 'id') {
-          // const toolId = toolName || "web_search_exa": the literal default
+          // const toolId = toolName || "web_search": the literal default
           const ch = idChain(t, j + 1);
           if ((isP(t[ch.end], '||') || isP(t[ch.end], '??')) && t[ch.end + 1] && t[ch.end + 1].type === 'str' && (isP(t[ch.end + 2], ';') || isP(t[ch.end + 2], ',') || (t[ch.end + 2] && t[ch.end + 2].nl) || !t[ch.end + 2])) v = { value: t[ch.end + 1].value, exact: false, fallback: true };
         }
@@ -630,7 +630,7 @@
     const sameKind = !sdk.kind || sdk.kind === kind;
     return { kind, zod, dialect: kind === 'v2' ? '2020-12' : 'draft-07', closed: zod < 4, intBounds: zod >= 4, execution: kind === 'v1' && sameKind && !!v && v[0] === 1 && (v[1] >= 24) };
   }
-  // Calls that take a tool: the SDK's (registerTool, tool, addTool) and project helpers named like one (accountTool,
+  // Calls that take a tool: the SDK's (registerTool, tool, addTool) and project helpers named like one (scopedTool,
   // defineTool, createTool, tool). A helper counts only when what it is given looks like a tool (a name and a config
   // with a description, schema, title or annotations).
   const TOOLISH = /^(?:tool|[a-z][\w$]*Tool)$/;
@@ -644,7 +644,7 @@
     });
     return out;
   }
-  // A tool name at token j: a string, a constant or a property of one (TOOLS.SEARCH, getDataTool.name), a template or
+  // A tool name at token j: a string, a constant or a property of one (TOOLS.SEARCH, dataTool.name), a template or
   // "+" of those, or `x || 'name'` / `x ?? 'name'` (the literal default). null when it cannot be known statically;
   // `param` when it is a parameter of the surrounding function (a helper, not a registration).
   function resolveName(t, j, ctx, params) {
@@ -789,7 +789,7 @@
           const fast = fn === 'addTool';
           const actx = fast ? Object.assign({}, ctx, { fl: Object.assign({}, ctx.fl, { dialect: 'draft-07', closed: true, execution: false }) }) : ctx;
           const o = parseObjectWithZod(t, objAt, actx); o.start = objAt;
-          // keyed: { search_docs: tool({ ... }) } names the tool by its key
+          // keyed: { lookup_docs: tool({ ... }) } names the tool by its key
           const keyTok = !member && isP(t[i - 1], ':') && t[i - 2] && (t[i - 2].type === 'id' || t[i - 2].type === 'str') ? t[i - 2] : null;
           let nm = null;
           if (o.value && o.value !== SKIP && typeof o.value.name === 'string') nm = o.value.name;
@@ -866,8 +866,8 @@
     return tools;
   }
   // Tools written as classes whose base class registers them (server.registerTool(this.name, …)):
-  //   class AreaTool extends BaseTool { readonly name = 'area_tool'; description = '…'; annotations = {…}; constructor() { super({ inputSchema: S }) } }
-  //   class FindTool extends MongoDBToolBase { static toolName = "find"; … }
+  //   class MeasureTool extends BaseTool { readonly name = 'measure_tool'; description = '…'; annotations = {…}; constructor() { super({ inputSchema: S }) } }
+  //   class LookupTool extends RecordToolBase { static toolName = "lookup"; … }
   // Read only when the repository registers tools through `this` (opts.classTools).
   function classTools(t, ctx, bases) {
     const out = [];
@@ -1282,7 +1282,7 @@
   //   @registry.<method>(...)                         methods of the repository that register a tool (opts.pyRegistrars)
   //   x.tool(fn, name=…), x.add_tool(fn, …), Tool.from_function(fn, …), *ToolDefinition(fn=…)   a function made a tool
   //   Tool(name=…, description=…, inputSchema={…}) / types.Tool(...)                            the low-level server's tools
-  // Names come from literals, constants, Enum members (GitTools.STATUS.value) and f-strings of constants.
+  // Names come from literals, constants, Enum members (Tools.STATUS.value) and f-strings of constants.
   function extractPy(src, opts) {
     opts = opts || {};
     const flavour = pyFlavour(src, opts); const fmcp = flavour === 'fastmcp';
@@ -1498,7 +1498,7 @@
   }
   function tokText(text, t, a, b) { return a < b && t[a] && t[b - 1] ? text.slice(t[a].s, t[b - 1].e) : ''; }
   // Methods and functions of the repository that register a tool (their body calls .tool(, add_tool(, Tool.from_function(
-  // or another of them): used as decorators, @tools.reader("…") makes the function under it a tool.
+  // or another of them): used as decorators, @registry.reader("…") makes the function under it a tool.
   function pyRegistrars(files) {
     const bodies = new Map();
     files.forEach(([p, text]) => {
@@ -1530,8 +1530,8 @@
     dup.forEach((k) => { delete table[k]; });
     return table;
   }
-  // FastMCP composition: parent.mount(child, namespace="jira" | prefix="jira"), parent.mount("jira", child),
-  // parent.import_server(child, prefix="jira") / import_server("jira", child). Returns Map(child variable -> prefix).
+  // FastMCP composition: parent.mount(child, namespace="ns" | prefix="ns"), parent.mount("ns", child),
+  // parent.import_server(child, prefix="ns") / import_server("ns", child). Returns Map(child variable -> prefix).
   function pyMounts(files) {
     const out = new Map();
     files.forEach(([p, text]) => {
@@ -1560,7 +1560,7 @@
 
   // ------------------------------------------------------------ Go and Rust: names and descriptions only
   // Not graded (names fidelity): the refusal can then say which tools were found. Go: mcp-go mcp.NewTool("x",
-  // mcp.WithDescription("…")), the go-sdk's &mcp.Tool{Name: "x", Description: "…"}, grafana's MustTool("x", "…", …).
+  // mcp.WithDescription("…")), the go-sdk's &mcp.Tool{Name: "x", Description: "…"}, MustTool("x", "…", …) helpers.
   // Rust: rmcp #[tool(description = "…")] on fn x (name = "…" when given).
   function goString(s, i, consts) { // a Go string expression at i: "…", `…`, constants, joined by +
     let out = ''; let any = false;

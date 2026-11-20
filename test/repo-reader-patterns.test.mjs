@@ -19,14 +19,14 @@ const repo = (files) => R.analyseRepo(new Map(Object.entries(files)));
 // ------------------------------------------------------------ TypeScript names (D1)
 test('TS names: a constant of the file, an imported and a re-exported constant, X.name, an enum member, x || "default"', () => {
   const r = repo({
-    'src/names.ts': 'export const SEARCH = "search_docs" as const;\nexport enum Tools { Fetch = "fetch_page" }\n',
+    'src/names.ts': 'export const SEARCH = "lookup_docs" as const;\nexport enum Tools { Fetch = "fetch_page" }\n',
     'src/index.ts': 'export * from "./names.js";\n',
     'src/a.ts': 'import { SEARCH } from "./index.js";\nexport function reg(server) { server.registerTool(SEARCH, { description: "Search the docs.", inputSchema: {} }, h); }\n',
     'src/b.ts': 'import { Tools } from "./names.js";\nconst name = "echo";\nconst config = { description: "Echo it.", inputSchema: {} };\nexport function reg(server) { server.registerTool(name, config, h); server.registerTool(Tools.Fetch, { description: "Fetch." }, h); }\n',
     'src/c.ts': 'export const dataTool = { name: "get_data", description: "Get data.", parametersSchema: {} };\nexport function reg(server) { server.registerTool(dataTool.name, { description: dataTool.description, inputSchema: {} }, h); }\n',
     'src/d.ts': 'export function reg(server, toolName) { const id = toolName || "web_search"; server.registerTool(id, { description: "Web." }, h); server.registerTool(toolName || "web_fetch", { description: "Fetch." }, h); }\n',
   });
-  assert.deepEqual(names(r), ['echo', 'fetch_page', 'get_data', 'search_docs', 'web_fetch', 'web_search']);
+  assert.deepEqual(names(r), ['echo', 'fetch_page', 'get_data', 'lookup_docs', 'web_fetch', 'web_search']);
   assert.equal(tool(r, 'get_data').description, 'Get data.');
   assert.deepEqual(tool(r, 'echo').inputSchema.type, 'object');
 });
@@ -44,30 +44,30 @@ test('TS names that cannot be read are counted, not guessed; a parameter of a he
 // ------------------------------------------------------------ factories, keyed tables, helpers, classes (D7)
 test('TS factories: defineTool(() => ({ … })) with a template description keeps the tool; the description is partial and marked', () => {
   const r = repo({
-    'src/tools/pages.ts': 'import { zod } from "../third_party/index.js";\nexport const newPage = defineTool((args) => {\n  return {\n    name: "new_page",\n    description: `Open a page.${args.bg ? " In the background." : ""}`,\n    annotations: { readOnlyHint: false },\n    schema: { url: zod.string().describe("URL") },\n    handler: async () => {},\n  };\n});\n',
+    'src/tools/pages.ts': 'import { zod } from "../lib/schema.js";\nexport const openItem = defineTool((args) => {\n  return {\n    name: "open_item",\n    description: `Open an item.${args.bg ? " In the background." : ""}`,\n    annotations: { readOnlyHint: false },\n    schema: { url: zod.string().describe("URL") },\n    handler: async () => {},\n  };\n});\n',
   });
-  const t = tool(r, 'new_page');
+  const t = tool(r, 'open_item');
   assert.ok(t, 'found');
-  assert.equal(t.description, 'Open a page.…');
+  assert.equal(t.description, 'Open an item.…');
   assert.deepEqual(t._unreadable, ['description']);
   assert.equal(t.inputSchema.properties.url.type, 'string', 'zod found by its import binding (zod re-exported by the repository)');
 });
 
 test('TS keyed tables: { name: tool({ ...defs.name, description: async () => … }) } names the tool by its key', () => {
   const r = repo({
-    'src/tools/docs.ts': 'import { z } from "zod";\nexport const defs = { search_docs: { parameters: z.object({ q: z.string() }), annotations: { readOnlyHint: true } } };\n'
-      + 'export function getDocsTools() { return { search_docs: tool({ ...defs.search_docs, description: async () => load(), execute: async () => 1 }) }; }\n',
+    'src/tools/docs.ts': 'import { z } from "zod";\nexport const defs = { lookup_docs: { parameters: z.object({ q: z.string() }), annotations: { readOnlyHint: true } } };\n'
+      + 'export function getDocsTools() { return { lookup_docs: tool({ ...defs.lookup_docs, description: async () => load(), execute: async () => 1 }) }; }\n',
   });
-  const t = tool(r, 'search_docs');
+  const t = tool(r, 'lookup_docs');
   assert.ok(t);
   assert.equal(t.inputSchema.properties.q.type, 'string');
   assert.deepEqual(t.annotations, { readOnlyHint: true });
   assert.deepEqual(t._unreadable, ['description']);
 });
 
-test('TS helpers named like a tool call: context.accountTool("name", { description, inputSchema }) is a registration', () => {
-  const r = repo({ 'src/tools/browser.tools.ts': 'import { z } from "zod";\nexport function reg(context) {\n\tcontext.accountTool(\n\t\t"get_html",\n\t\t{\n\t\t\tdescription: "Get page HTML",\n\t\t\tinputSchema: z.object({ url: z.string() }),\n\t\t},\n\t\tasync () => {}\n\t)\n}\n' });
-  assert.deepEqual(names(r), ['get_html']);
+test('TS helpers named like a tool call: context.scopedTool("name", { description, inputSchema }) is a registration', () => {
+  const r = repo({ 'src/tools/fetch.tools.ts': 'import { z } from "zod";\nexport function reg(context) {\n\tcontext.scopedTool(\n\t\t"fetch_text",\n\t\t{\n\t\t\tdescription: "Fetch the text of a page",\n\t\t\tinputSchema: z.object({ url: z.string() }),\n\t\t},\n\t\tasync () => {}\n\t)\n}\n' });
+  assert.deepEqual(names(r), ['fetch_text']);
   // a call that only looks like one (no config with a description or schema) is not
   assert.deepEqual(names(repo({ 'src/x.ts': 'logger.trackTool("x", { count: 1 });\n' })), []);
 });
@@ -76,14 +76,14 @@ test('TS classes: subclasses of a base that registers this.name are tools; Error
   const r = repo({
     'package.json': '{"name":"srv"}',
     'src/BaseTool.ts': 'export abstract class BaseTool { installTo(server) { return server.registerTool(this.name, { description: this.description, inputSchema: this.inputSchema, annotations: this.annotations }, h); } }\n',
-    'src/tools/AreaTool.ts': 'import { z } from "zod";\nimport { BaseTool } from "../BaseTool.js";\nexport class AreaTool extends BaseTool<typeof S> {\n  readonly name = "area_tool";\n  readonly description = "Area of a polygon.";\n  readonly annotations = { readOnlyHint: true };\n  constructor() { super({ inputSchema: z.object({ geometry: z.array(z.number()) }) }); }\n}\n',
-    'src/tools/FindTool.ts': 'import { BaseTool } from "../BaseTool.js";\nexport class FindTool extends BaseTool {\n  static toolName = "find";\n  public description = "Find documents.";\n  public argsShape() { return shape(); }\n}\n',
+    'src/tools/MeasureTool.ts': 'import { z } from "zod";\nimport { BaseTool } from "../BaseTool.js";\nexport class MeasureTool extends BaseTool<typeof S> {\n  readonly name = "measure_tool";\n  readonly description = "Measure a shape.";\n  readonly annotations = { readOnlyHint: true };\n  constructor() { super({ inputSchema: z.object({ geometry: z.array(z.number()) }) }); }\n}\n',
+    'src/tools/LookupTool.ts': 'import { BaseTool } from "../BaseTool.js";\nexport class LookupTool extends BaseTool {\n  static toolName = "lookup";\n  public description = "Look up records.";\n  public argsShape() { return shape(); }\n}\n',
     'src/errors.ts': 'export class NotFound extends Error { name = "NotFound"; }\n',
     'src/mocks/mockTools.ts': 'import { BaseTool } from "../BaseTool.js";\nexport class TestTool extends BaseTool { name = "test-tool"; description = "t"; }\n',
   });
-  assert.deepEqual(names(r), ['area_tool', 'find']);
-  assert.equal(tool(r, 'area_tool').inputSchema.properties.geometry.type, 'array');
-  assert.deepEqual(tool(r, 'find')._unreadable, ['inputSchema', 'annotations']);
+  assert.deepEqual(names(r), ['lookup', 'measure_tool']);
+  assert.equal(tool(r, 'measure_tool').inputSchema.properties.geometry.type, 'array');
+  assert.deepEqual(tool(r, 'lookup')._unreadable, ['inputSchema', 'annotations']);
 });
 
 test('TS schemas: a raw shape held in a constant is wrapped; a shape with a property named "type" is a shape, not a schema', () => {
@@ -114,8 +114,8 @@ test('TS: a literal tool object only counts where code hands it on (argument, el
 
 test('conditions: a flag declared with default: true does not leave the tool out; a deprecated flag in the definition does', () => {
   const r = repo({
-    'src/config.ts': 'export const options = { jsEval: { type: "boolean", default: true }, slim: { type: "boolean", default: false } };\n',
-    'src/tools.ts': 'defineTool({ name: "evaluate", description: "Evaluate a script.", annotations: { conditions: ["jsEval"] }, schema: {} });\n'
+    'src/config.ts': 'export const options = { evalEnabled: { type: "boolean", default: true }, slim: { type: "boolean", default: false } };\n',
+    'src/tools.ts': 'defineTool({ name: "evaluate", description: "Evaluate a script.", annotations: { conditions: ["evalEnabled"] }, schema: {} });\n'
       + 'defineTool({ name: "slim_eval", description: "Slim.", annotations: { conditions: ["slim"] }, schema: {} });\n'
       + 'defineTool({ name: "old_search", description: "Old.", deprecated: { replacement: "search" }, inputSchema: {} });\n'
       + 'defineTool({ name: "search", description: "Search.", inputSchema: {} });\n',
@@ -126,57 +126,57 @@ test('conditions: a flag declared with default: true does not leave the tool out
 
 // ------------------------------------------------------------ Python (D8, D9 and FastMCP decorators)
 test('Python: comments inside a decorator and a signature, Enum member names, constants for descriptions', () => {
-  const src = 'from enum import Enum\nfrom mcp.server.fastmcp import FastMCP\nmcp = FastMCP("x")\nclass GitTools(str, Enum):\n    STATUS = "git_status"\n\nDESC = (\n    "Shows the "\n    "working tree."\n)\n\n'
-    + '@mcp.tool(\n    name=GitTools.STATUS.value,  # the wire name (see #12)\n    description=DESC,\n)\n# strict: no coercion\nasync def status(\n    repo_path: str,  # path (absolute)\n    verbose: bool = False,\n) -> str:\n    return ""\n';
+  const src = 'from enum import Enum\nfrom mcp.server.fastmcp import FastMCP\nmcp = FastMCP("x")\nclass Tools(str, Enum):\n    STATUS = "repo_status"\n\nDESC = (\n    "Shows the "\n    "working tree."\n)\n\n'
+    + '@mcp.tool(\n    name=Tools.STATUS.value,  # the wire name (see #12)\n    description=DESC,\n)\n# strict: no coercion\nasync def status(\n    repo_path: str,  # path (absolute)\n    verbose: bool = False,\n) -> str:\n    return ""\n';
   const t = R.extractPy(src).map((x) => x.tool);
   assert.equal(t.length, 1);
-  assert.equal(t[0].name, 'git_status');
+  assert.equal(t[0].name, 'repo_status');
   assert.equal(t[0].description, 'Shows the working tree.');
   assert.deepEqual(t[0].inputSchema.required, ['repo_path']);
 });
 
 test('Python low-level Tool(...): names, descriptions, literal inputSchema and annotations; self.name from the handler class', () => {
-  const src = 'from mcp import types\nfrom mcp.types import Tool, ToolAnnotations\nTOOL_LIST = "vault_list"\n'
-    + 'search_tool = types.Tool(\n    name="search_papers",\n    annotations=ToolAnnotations(readOnlyHint=True),\n    description=(\n        "Search papers. "\n        "Returns a page."\n    ),\n    inputSchema={"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},\n)\n'
+  const src = 'from mcp import types\nfrom mcp.types import Tool, ToolAnnotations\nTOOL_LIST = "list_files"\n'
+    + 'search_tool = types.Tool(\n    name="find_articles",\n    annotations=ToolAnnotations(readOnlyHint=True),\n    description=(\n        "Find articles. "\n        "Returns a page."\n    ),\n    inputSchema={"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},\n)\n'
     + 'class ListHandler(ToolHandler):\n    def __init__(self):\n        super().__init__(TOOL_LIST)\n    def get_tool_description(self):\n        return Tool(\n            name=self.name,\n            description="List files.",\n            inputSchema={"type": "object", "properties": {}},\n        )\n';
   const t = Object.fromEntries(R.extractPy(src).map((x) => [x.tool.name, x.tool]));
-  assert.deepEqual(Object.keys(t).sort(), ['search_papers', 'vault_list']);
-  assert.equal(t.search_papers.description, 'Search papers. Returns a page.');
-  assert.deepEqual(t.search_papers.inputSchema.required, ['query']);
-  assert.deepEqual(t.search_papers.annotations, { readOnlyHint: true });
-  assert.equal(t.vault_list.description, 'List files.');
+  assert.deepEqual(Object.keys(t).sort(), ['find_articles', 'list_files']);
+  assert.equal(t.find_articles.description, 'Find articles. Returns a page.');
+  assert.deepEqual(t.find_articles.inputSchema.required, ['query']);
+  assert.deepEqual(t.find_articles.annotations, { readOnlyHint: true });
+  assert.equal(t.list_files.description, 'List files.');
 });
 
 test('Python registries: @tools.reader("…") methods that register a tool, @x_tool(...) decorators, x.tool(fn, name=), ToolDefinition(fn=)', () => {
   const r = repo({
     'pkg/registry.py': 'class ToolRegistry:\n    def reader(self, title):\n        return self._register(title)\n    def _register(self, title):\n        def decorate(fn):\n            self.server.tool(fn)\n            return fn\n        return decorate\n',
-    'pkg/data_tools.py': 'def register(tools, ws):\n    @tools.reader("Read range")\n    def read_range(path: str, sheet: str) -> str:\n        """Read cell values."""\n        return ""\n',
-    'pkg/discovery.py': 'from mcp.server.fastmcp import FastMCP\n@dbt_mcp_tool(description="Get models.", title="Models")\nasync def get_all_models(limit: int = 10) -> list[str]:\n    return []\n',
-    'pkg/server.py': 'from mcp.server.fastmcp import FastMCP\nclass S:\n    def setup_tools(self):\n        async def find(query: str) -> str:\n            return ""\n        self.tool(find, name="store-find", description=self.settings.find_description)\n'
+    'pkg/note_tools.py': 'def register(tools, ws):\n    @tools.reader("Read notes")\n    def read_notes(folder: str, tag: str) -> str:\n        """Read the notes of a folder."""\n        return ""\n',
+    'pkg/discovery.py': 'from mcp.server.fastmcp import FastMCP\n@acme_tool(description="List the models.", title="Models")\nasync def list_models(limit: int = 10) -> list[str]:\n    return []\n',
+    'pkg/server.py': 'from mcp.server.fastmcp import FastMCP\nclass S:\n    def setup_tools(self):\n        async def find(query: str) -> str:\n            return ""\n        self.tool(find, name="notes-find", description=self.settings.find_description)\n'
       + '        self.tool(other_fn)\n',
-    'pkg/cli_tools.py': 'def build(select: str | None = None) -> str:\n    """Run build."""\n    return ""\ndef tools():\n    return [ToolDefinition(fn=wrap(build), title="dbt build")]\n',
+    'pkg/cli_tools.py': 'def build(select: str | None = None) -> str:\n    """Run build."""\n    return ""\ndef tools():\n    return [ToolDefinition(fn=wrap(build), title="Build")]\n',
   });
-  assert.deepEqual(names(r), ['build', 'get_all_models', 'read_range', 'store-find']);
-  assert.deepEqual(tool(r, 'read_range')._unreadable, ['annotations']);
-  assert.ok(tool(r, 'store-find')._unreadable.includes('description'));
-  assert.equal(tool(r, 'get_all_models').title, 'Models');
+  assert.deepEqual(names(r), ['build', 'list_models', 'notes-find', 'read_notes']);
+  assert.deepEqual(tool(r, 'read_notes')._unreadable, ['annotations']);
+  assert.ok(tool(r, 'notes-find')._unreadable.includes('description'));
+  assert.equal(tool(r, 'list_models').title, 'Models');
 });
 
 test('Python: FastMCP mount(namespace=) and import_server(prefix, …) prefix the names; shared function names are not alternatives', () => {
   const r = repo({
-    'src/app/servers/jira.py': 'from fastmcp import FastMCP\njira_mcp = FastMCP("jira")\n@jira_mcp.tool(tags={"jira"})\nasync def get_issue(key: str) -> str:\n    return ""\n@jira_mcp.tool()\nasync def search(q: str) -> str:\n    return ""\n',
-    'src/app/servers/wiki.py': 'from fastmcp import FastMCP\nwiki_mcp = FastMCP("wiki")\n@wiki_mcp.tool()\nasync def search(q: str) -> str:\n    return ""\n@wiki_mcp.tool()\nasync def get_page(id: str) -> str:\n    return ""\n',
-    'src/app/servers/main.py': 'from fastmcp import FastMCP\nfrom .jira import jira_mcp\nfrom .wiki import wiki_mcp\nmain = FastMCP("main")\nmain.mount(jira_mcp, namespace="jira")\nmain.import_server("wiki", wiki_mcp)\n',
+    'src/app/servers/issues.py': 'from fastmcp import FastMCP\nissues_mcp = FastMCP("issues")\n@issues_mcp.tool(tags={"issues"})\nasync def get_issue(key: str) -> str:\n    return ""\n@issues_mcp.tool()\nasync def search(q: str) -> str:\n    return ""\n',
+    'src/app/servers/pages.py': 'from fastmcp import FastMCP\npages_mcp = FastMCP("pages")\n@pages_mcp.tool()\nasync def search(q: str) -> str:\n    return ""\n@pages_mcp.tool()\nasync def get_page(id: str) -> str:\n    return ""\n',
+    'src/app/servers/main.py': 'from fastmcp import FastMCP\nfrom .issues import issues_mcp\nfrom .pages import pages_mcp\nmain = FastMCP("main")\nmain.mount(issues_mcp, namespace="issues")\nmain.import_server("pages", pages_mcp)\n',
   });
-  assert.deepEqual(names(r), ['jira_get_issue', 'jira_search', 'wiki_get_page', 'wiki_search']);
+  assert.deepEqual(names(r), ['issues_get_issue', 'issues_search', 'pages_get_page', 'pages_search']);
   assert.equal(r.excluded.length, 0);
 });
 
 test('Python: SDK 2 lists snake_case ToolAnnotations fields in camelCase; a namespace prefix variable is left off the name', () => {
   const src = 'from mcp.server.mcpserver import MCPServer\nfrom mcp.types import ToolAnnotations\nRO = ToolAnnotations(read_only_hint=True, open_world_hint=False)\n'
-    + '@server.tool(name=namespace_prefix + "read_cypher", annotations=RO)\nasync def read(query: str) -> str:\n    """Read."""\n    return ""\n';
+    + '@server.tool(name=namespace_prefix + "read_query", annotations=RO)\nasync def read(query: str) -> str:\n    """Read."""\n    return ""\n';
   const [t] = R.extractPy(src, { sdk: { pyMajor: 2 } }).map((x) => x.tool);
-  assert.equal(t.name, 'read_cypher');
+  assert.equal(t.name, 'read_query');
   assert.deepEqual(t.annotations, { readOnlyHint: true, openWorldHint: false });
   assert.deepEqual(R.extractPy(src, { sdk: { pyMajor: 1 } })[0].tool.annotations, { read_only_hint: true, open_world_hint: false });
   assert.equal(R.detectSdk(new Map([['uv.lock', '[[package]]\nname = "mcp"\nversion = "2.3.0"\n']])).pyMajor, 2);
@@ -243,23 +243,23 @@ test('snapshots: the same files in any listing order give one list, so one catal
 });
 
 test('fromGitHub with a subfolder lists that folder\'s own tree (a truncated repository listing does not hide it)', async () => {
-  const files = { 'package.json': '{"dependencies":{"@modelcontextprotocol/sdk":"1.20.0"}}', 'services/mcp/src/index.ts': 'server.registerTool("exec", { description: "Run one command." }, h);\n' };
+  const files = { 'package.json': '{"dependencies":{"@modelcontextprotocol/sdk":"1.20.0"}}', 'servers/notes/src/index.ts': 'server.registerTool("run_query", { description: "Run one query." }, h);\n' };
   const seen = [];
-  const got = await R.fromGitHub('github.com/o/r/tree/main/services/mcp', { fetch: fakeGithub(files, null, seen) });
-  assert.deepEqual(got.best.tools.map((t) => t.name), ['exec']);
-  assert.ok(seen.some((u) => /git\/trees\/t-services\/mcp\?recursive=1$/.test(u)), seen.join('\n'));
+  const got = await R.fromGitHub('github.com/o/r/tree/main/servers/notes', { fetch: fakeGithub(files, null, seen) });
+  assert.deepEqual(got.best.tools.map((t) => t.name), ['run_query']);
+  assert.ok(seen.some((u) => /git\/trees\/t-servers\/notes\?recursive=1$/.test(u)), seen.join('\n'));
   assert.ok(!seen.some((u) => /git\/trees\/main\?recursive=1$/.test(u)), 'the whole repository is not listed');
   assert.match(scannedText({ scanned: { read: 0, sourceTotal: 0, source: 0 }, truncated: true, via: 'github' }), /GitHub cut the repository listing short/);
 });
 
 // ------------------------------------------------------------ Go and Rust: names only, never graded (D11)
 test('Go and Rust: tool names and descriptions are read for the refusal; schemas are not', () => {
-  const go = 'package tools\nconst SearchName = "search_notes"\nvar T = mcp.NewTool(SearchName, mcp.WithDescription("Search notes."))\nvar L = mcpgrafana.MustTool(\n\t"list_teams",\n\t"List teams.",\n\tlistTeams,\n)\nvar S = &mcp.Tool{Name: "get_pod", Description: `Get a pod.`}\n';
+  const go = 'package tools\nconst SearchName = "search_notes"\nvar T = mcp.NewTool(SearchName, mcp.WithDescription("Search notes."))\nvar L = toolkit.MustTool(\n\t"list_groups",\n\t"List groups.",\n\tlistGroups,\n)\nvar S = &mcp.Tool{Name: "get_item", Description: `Get an item.`}\n';
   const c = R.namesFromOtherLanguage([['pkg/tools/notes.go', go]], 'Go');
   assert.equal(c.fidelity, 'names');
-  assert.deepEqual(c.tools, [{ name: 'search_notes', description: 'Search notes.' }, { name: 'list_teams', description: 'List teams.' }, { name: 'get_pod', description: 'Get a pod.' }]);
-  const rs = 'impl S {\n    #[tool(\n        description = "List all indices",\n        annotations(title = "List", read_only_hint = true)\n    )]\n    async fn list_indices(&self) -> R { }\n    #[tool(name = "es_search", description = r#"Search "docs"."#)]\n    pub async fn search(&self) -> R { }\n}\n';
-  assert.deepEqual(R.namesFromOtherLanguage([['src/s.rs', rs]], 'Rust').tools, [{ name: 'list_indices', description: 'List all indices' }, { name: 'es_search', description: 'Search "docs".' }]);
+  assert.deepEqual(c.tools, [{ name: 'search_notes', description: 'Search notes.' }, { name: 'list_groups', description: 'List groups.' }, { name: 'get_item', description: 'Get an item.' }]);
+  const rs = 'impl S {\n    #[tool(\n        description = "List all collections",\n        annotations(title = "List", read_only_hint = true)\n    )]\n    async fn list_collections(&self) -> R { }\n    #[tool(name = "doc_search", description = r#"Search "docs"."#)]\n    pub async fn search(&self) -> R { }\n}\n';
+  assert.deepEqual(R.namesFromOtherLanguage([['src/s.rs', rs]], 'Rust').tools, [{ name: 'list_collections', description: 'List all collections' }, { name: 'doc_search', description: 'Search "docs".' }]);
 });
 
 // A fake GitHub API: the recursive listing in `order`, folder trees by "t-<path>" ids, raw files by path. `seen` collects URLs.
