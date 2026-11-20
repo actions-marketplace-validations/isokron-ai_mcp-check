@@ -908,7 +908,7 @@
   const USER_LOCATION = /\b(user['’]?s|your|my|caller['’]?s)\b[^.\n]{0,40}\b(location|position|coordinates|whereabouts|latitude|longitude|gps|geolocation)\b|\b(current|precise|exact|real[- ]time|live) (location|position|coordinates|geolocation)\b|\bwhere (the user|you) (is|are)\b|\bwhere i am\b|\bnear (me|you|the user)\b|\baround (me|you)\b|\bnearby(?! (the|a|an|this|that|these|those|given|specified|chosen|selected)\b)/i;
   // A clause that says not to ask ("Do not ask for the user's location") does not ask. The negation must govern an asking
   // verb; "When latitude is not set, uses your current location" still asks. Clauses split on . ! ? ; , and new lines.
-  const NEGATED = /\b(?:(?:do not|don['’]t|never)\s+(?:ask|request|collect|need)|no need to\s+\w+)\b[^,;]*$/i;
+  const NEGATED = /\b(?:(?:do not|don['’]t|never)\s+(?:ask|request|collect|need)|no need to\s+\w+)\b(?:\s+[\w'’]+){0,4}\s*$/i;
   const saysUserLocation = (text) => text.split(/[.!?;,\n]+/).some((clause) => { const m = clause.match(USER_LOCATION); return !!m && !NEGATED.test(clause.slice(0, m.index)); });
   const asksUserLocation = (t, keys) => saysUserLocation(desc(t)) || keys.some((k) => isObj(props(t)[k]) && typeof props(t)[k].description === 'string' && saysUserLocation(props(t)[k].description));
 
