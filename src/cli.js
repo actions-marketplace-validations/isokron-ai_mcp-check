@@ -5,7 +5,7 @@ import { VERSION } from './version.js';
 import { capture, CaptureError } from './capture.js';
 import { parseList } from './tools.js';
 import { InputError, MAX_BYTES, MAX_DEPTH, MAX_TOOLS } from './limits.js';
-import { ALL_SECTIONS, DEFAULT_SECTIONS, GRADES, belowMinGrade, sarifWithLocations } from './report.js';
+import { ALL_SECTIONS, DEFAULT_SECTIONS, GRADED_SECTIONS, GRADES, belowMinGrade, sarifWithLocations, surfaceLine } from './report.js';
 import { approximateLine, collect, InputFailure, line, sourceLine, savedList } from './inputs/collect.js';
 import { tagged } from './links.js';
 
@@ -35,7 +35,8 @@ Options:
   --format text|md|json|sarif   output format (default text)
   --min-grade A-F               exit 1 when a selected section grades below this
   --sections a,b,...            sections to report and gate: ${ALL_SECTIONS.join(', ')}
-                                (default ${DEFAULT_SECTIONS.join(',')})
+                                (default ${DEFAULT_SECTIONS.join(',')}); surface has no grade and is
+                                never gated: selecting it adds its guard-coverage line
   --fix <out.json>              write the list with safe fixes applied
   --compare <old.json>          diff against an earlier list; exit 1 on a high-risk annotation change
   --save <file>                 write the tool list that was fetched (for --compare or the web checker)
@@ -136,10 +137,12 @@ function textReport(r, opt, below, diff, source) {
   if (sl) out.push(sl);
   const al = approximateLine(source);
   if (al) out.push(al);
-  ALL_SECTIONS.forEach((k) => {
+  GRADED_SECTIONS.forEach((k) => {
     const s = r.sections[k];
     out.push('  ' + s.name.padEnd(32) + (s.grade || 'n/a').padEnd(3) + (s.score == null ? '' : String(s.score).padStart(3) + '/100') + (s.ready === false ? '  not ready' : '') + (s.caps && s.caps.length ? '  ' + s.caps.join(' ') : '') + (opt.sections.includes(k) ? '' : '  (not gated)'));
   });
+  // The write surface has no letter (rubric 2.2.0); its coverage line shows only when the section is selected.
+  if (opt.sections.includes('surface')) out.push('  ' + line(surfaceLine(r), 2000));
   const fs = M.allFindings(r).filter((f) => f.severity !== 'advice' && f.section !== 'surface');
   if (fs.length) out.push('', 'Blocking and attention items:');
   fs.forEach((f) => out.push('  [' + f.severity + '] ' + (f.tool ? line(f.tool, 200) : '(list)') + ': ' + f.id + ': ' + line(f.message, 2000)));
@@ -213,6 +216,7 @@ export async function main(argv, { stdout = process.stdout, stderr = process.std
   }
 
   const note = (s) => stderr.write('mcp-check: ' + s + '\n');
+  if (opt.minGrade && opt.sections.includes('surface')) note('surface has no grade since rubric 2.2.0 (it reports guard coverage), so --min-grade does not gate it.');
   let items;
   try { items = await collect(opt, note); } catch (e) {
     if (e instanceof InputFailure) {

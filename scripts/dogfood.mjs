@@ -25,7 +25,8 @@ if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.me
   const { report } = checkToolsList({ tools_list: list });
   console.log('| Section | Grade | Score | Blocking | Attention | Advice | Note |\n|---|---|---|---|---|---|---|');
   for (const s of report.sections) {
-    if (s.grade == null) console.log('| ' + s.name + ' | not graded | | | | | ' + (s.note || '') + ' |');
+    if (s.id === 'surface') console.log('| ' + s.name + ' | no grade | | | | | ' + (s.note || '') + ' |');
+    else if (s.grade == null) console.log('| ' + s.name + ' | not graded | | | | | ' + (s.note || '') + ' |');
     else console.log('| ' + s.name + ' | ' + s.grade + ' | ' + s.score + ' | ' + s.counts.blocking + ' | ' + s.counts.attention + ' | ' + s.counts.advice + ' | |');
   }
   console.log('\nRubric ' + report.rubric_version + ', ' + report.input.tools + ' tools, catalog hash `' + report.input.catalog_hash + '`.');

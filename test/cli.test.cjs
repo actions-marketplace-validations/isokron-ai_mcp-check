@@ -11,10 +11,27 @@ const ex = path.join(__dirname, 'fixtures', 'example.json');
 
 test('cli: text report, exit 0 without a threshold', () => { const r = run([ex]); assert.equal(r.status, 0); assert.match(r.stdout, /Anthropic directory\s+C/); });
 test('cli: --min-grade fails below the threshold', () => { const r = run([ex, '--min-grade', 'B']); assert.equal(r.status, 1); assert.match(r.stdout, /Below --min-grade B: anthropic C, openai C/); });
+test('cli: the write surface has no grade line; selecting it adds its coverage line, and --min-grade never gates it (rubric 2.2.0)', () => {
+  const plain = run([ex]);
+  assert.doesNotMatch(plain.stdout, /Write-surface|Write surface/);
+  assert.match(plain.stdout, /Schema and description quality\s+B/);
+  const sel = run([ex, '--sections', 'spec,anthropic,openai,security,surface']);
+  assert.match(sel.stdout, /\n  Write surface \(advice, not graded\): Guards offered: retry keys 0\/1, preconditions 1\/3, delete guards 0\/1\.\n/);
+  assert.doesNotMatch(sel.stdout, /Write-surface design\s+[A-F]\b/);
+  const gate = run([ex, '--sections', 'surface', '--min-grade', 'A']);
+  assert.equal(gate.status, 0);
+  assert.match(gate.stderr, /surface has no grade since rubric 2\.2\.0/);
+  const j = JSON.parse(run([ex, '--format', 'json']).stdout);
+  assert.equal(j.sections.surface.grade, null);
+  assert.equal(j.sections.surface.score, null);
+  assert.equal(j.sections.surface.state, 'coverage');
+  assert.deepEqual(j.sections.surface.coverage.version, { have: 1, of: 3 });
+  assert.ok(j.tools.flatMap((t) => t.findings).filter((f) => f.section === 'surface').every((f) => f.severity === 'advice'));
+});
 test('cli: --min-grade passes a well-designed list on every section', () => { assert.equal(run([path.join(__dirname, 'catalogs/well-designed.json'), '--min-grade', 'A', '--sections', 'spec,anthropic,openai,security,quality,surface']).status, 0); });
 test('cli: stdin, JSON and SARIF formats', () => {
   const j = JSON.parse(run(['-', '--format', 'json'], fs.readFileSync(ex, 'utf8')).stdout);
-  assert.equal(j.rubric_version, '2.1.1');
+  assert.equal(j.rubric_version, '2.2.0');
   assert.equal(JSON.parse(run([ex, '--format', 'sarif']).stdout).version, '2.1.0');
   assert.match(run([ex, '--format', 'md']).stdout, /^# MCP tool list check/);
 });

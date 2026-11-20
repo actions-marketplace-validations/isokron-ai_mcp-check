@@ -18,6 +18,7 @@ const toolsListArg = (what) => z.union([z.string(), z.array(z.unknown()), z.reco
 const counts = z.object({ blocking: z.number().int(), attention: z.number().int(), advice: z.number().int() });
 const nstr = z.string().nullable();
 
+const haveOf = z.object({ have: z.number().int(), of: z.number().int() });
 const checkOutput = z.object({
   rubric_version: z.string().describe('Version of the grading rubric.'),
   report_schema: z.string(),
@@ -27,6 +28,8 @@ const checkOutput = z.object({
   sections: z.array(z.object({
     id: z.enum(SECTIONS), name: z.string(), grade: z.enum(GRADES).nullable(), score: z.number().nullable(),
     ready: z.boolean().nullable(), counts: counts.nullable(), caps: z.array(z.string()), note: nstr,
+    state: z.enum(['coverage', 'not-enough', 'no-opportunities', 'no-writes']).optional().describe('surface only: what the guard coverage says (it has no grade).'),
+    coverage: z.object({ opportunities: z.number().int(), offered: z.number().int(), retry: haveOf, version: haveOf, guard: haveOf }).optional().describe('surface only: guards offered out of the opportunities, in total and per guard (retry keys, preconditions, delete guards).'),
   })),
   min_grade: z.enum(GRADES).nullable(),
   passed: z.boolean().describe('False when a reported section is below min_grade.'),
@@ -107,10 +110,10 @@ export function createServer() {
 
   register(server, 'check_tools_list', {
     title: 'Check an MCP tool list',
-    description: 'Grades an MCP server\'s tools/list answer and returns a report: a letter grade per section (MCP specification, Anthropic directory, OpenAI directory, hidden-instruction scan, schema quality, write-surface design), each finding with its check id and docs link, and the list with safe fixes applied. Use this before submitting a server to the Claude or ChatGPT directories, or in review of a tool list change. Do not use it to compare two versions of a list; use compare_tools_lists for that. It reads only the JSON passed in; it does not connect to the server.',
+    description: 'Grades an MCP server\'s tools/list answer and returns a report: a letter grade per section (MCP specification, Anthropic directory, OpenAI directory, hidden-instruction scan, schema quality) and the write-surface guard coverage (advice, no grade), each finding with its check id and docs link, and the list with safe fixes applied. Use this before submitting a server to the Claude or ChatGPT directories, or in review of a tool list change. Do not use it to compare two versions of a list; use compare_tools_lists for that. It reads only the JSON passed in; it does not connect to the server.',
     inputSchema: z.strictObject({
       tools_list: toolsListArg('The tool list to grade'),
-      sections: z.array(z.enum(SECTIONS)).min(1).max(SECTIONS.length).optional().describe('Sections to report and to test against min_grade. Default: all six.'),
+      sections: z.array(z.enum(SECTIONS)).min(1).max(SECTIONS.length).optional().describe('Sections to report and to test against min_grade (surface has no grade and is never below it). Default: all six.'),
       min_grade: z.enum(GRADES).optional().describe('Lowest acceptable grade. When set, passed is false if any reported section grades below it.'),
       limit: z.number().int().min(1).max(MAX_FINDINGS).default(DEFAULT_LIMIT).describe('Most findings to return, blocking first. Grades and counts always cover every finding.'),
       include_fixed_list: z.boolean().default(true).describe('Include the whole list with safe fixes applied. Set false for large lists to keep the answer short; the change list is always included.'),

@@ -53,7 +53,8 @@ inputs:
   sections:
     description: >-
       Sections to gate with min-grade, comma-separated: spec, anthropic, openai, security, quality,
-      surface. Every section is reported either way.
+      surface. Every graded section is reported either way. surface has no grade (rubric 2.2.0) and is
+      never gated; selecting it adds its guard-coverage line to the job summary.
     required: false
     default: spec,anthropic,openai,security
   baseline:
@@ -145,7 +146,7 @@ outputs:
     description: Grade of schema and description quality.
     value: ${{ steps.run.outputs.grade-quality }}
   grade-surface:
-    description: Grade of write-surface design (empty when the server has no write tools).
+    description: Always empty since rubric 2.2.0, which reports the write surface as guard coverage (in the job summary when sections include surface, and in report.md), not as a grade. Kept so existing workflows do not break.
     value: ${{ steps.run.outputs.grade-surface }}
   catalog-hash:
     description: SHA-256 of the canonical tool list.

@@ -154,7 +154,7 @@ test('sha256 and canonical JSON: known vectors, key order does not matter', () =
 
 test('private permalink: compressed input round-trips through the fragment with the rubric version', async () => {
   const frag = await M.encodeFragment(example);
-  assert.match(frag, /^r=2\.1\.1&z=[A-Za-z0-9_-]+$/);
+  assert.match(frag, /^r=2\.2\.0&z=[A-Za-z0-9_-]+$/);
   assert.ok(frag.length < example.length, 'compressed');
   const back = await M.decodeFragment('#' + frag);
   assert.equal(back.text, example);
@@ -169,8 +169,10 @@ test('private permalink: compressed input round-trips through the fragment with 
 test('exports: Markdown, JSON (schema-versioned), SARIF and badge JSON', () => {
   const r = M.check(example);
   const md = M.toMarkdown(r);
-  assert.match(md, /Rubric 2\.1\.1/);
-  assert.match(md, /\[anthropic-hint-platforms-differ\]\(https:\/\/isokron\.ai\/mcp-check\/checks\/anthropic-hint-platforms-differ\)/);
+  assert.match(md, /Rubric 2\.2\.0/);
+  assert.match(md, /\[annot-delete-marked-safe\]\(https:\/\/isokron\.ai\/mcp-check\/checks\/annot-delete-marked-safe\)/);
+  assert.match(md, /## Write-surface design[^\n]*\n\nGuard coverage and advice, not a grade\. Guards offered: retry keys 0\/1, preconditions 1\/3, delete guards 0\/1\./);
+  assert.ok(!/\| Write-surface design \|/.test(md), 'no grade row for the write surface');
   assert.match(md, /MWS 0\.9 section 5\.2 forbids totals/);
   const j = JSON.parse(M.toJSON(r));
   assert.equal(j.report_schema, 'isokron-mcp-check-report/2');
