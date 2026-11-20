@@ -1,0 +1,73 @@
+{
+  "capturedAt": "2026-11-09T02:39:18.307Z",
+  "capturedWith": "mcp-catalog-snap/0.1.0",
+  "catalog": {
+    "prompts": [],
+    "resourceTemplates": [
+      {
+        "description": "A ticket as JSON.",
+        "mimeType": "application/json",
+        "name": "ticket",
+        "title": "Ticket",
+        "uriTemplate": "tickets://{id}"
+      }
+    ],
+    "tools": [
+      {
+        "annotations": {
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false,
+          "readOnlyHint": true
+        },
+        "description": "Reads one ticket by id. Use this before changing a ticket.",
+        "inputSchema": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "description": "Ticket id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "type": "object"
+        },
+        "name": "ticket_get",
+        "title": "Get a ticket"
+      },
+      {
+        "annotations": {
+          "destructiveHint": false,
+          "idempotentHint": false,
+          "openWorldHint": false,
+          "readOnlyHint": false
+        },
+        "description": "Creates one ticket and returns its id.",
+        "inputSchema": {
+          "additionalProperties": false,
+          "properties": {
+            "title": {
+              "description": "Short title",
+              "type": "string"
+            }
+          },
+          "required": [
+            "title"
+          ],
+          "type": "object"
+        },
+        "name": "ticket_create",
+        "title": "Create a ticket"
+      }
+    ]
+  },
+  "format": "mcp-catalog-snap/1",
+  "protocolVersion": "2025-11-25",
+  "server": {
+    "name": "tickets",
+    "version": "0.1.0"
+  },
+  "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+}

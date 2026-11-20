@@ -5,14 +5,15 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import M from '../src/engine.js';
 import { LINK_TAGS } from '../src/links.js';
-import { publishHint } from '../action/main.mjs';
-import { MARKER, commentAction, explainFailure, prContext, renderComment, upsertComment } from '../action/pr-comment.mjs';
+import { publishHint, uriPath } from '../action/main.mjs';
+import { serverEnv } from '../src/capture.js';
+import { MARKER, commentAction, commentText, explainFailure, isOwnComment, prContext, renderComment, stepPlan, tokenIdentity, upsertComment } from '../action/pr-comment.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const main = join(root, 'action', 'main.mjs');
@@ -88,8 +89,8 @@ test('zero-config: no tool definitions fails the job, in the log and the summary
   const r = act(ws, {});
   assert.equal(r.status, 1);
   assert.equal(r.outputs['exit-status'], '1');
-  assert.match(r.stdout, /::error::mcp-check: no tool definitions found in the source in \. \(scanned 1 of 1 source files, .*\)\. Set command \(the command that starts the server, for example node dist\/index\.js\) or tools-file \(a saved tools\/list answer\)\./);
-  assert.match(r.summary, /No tool definitions found in the repository code in `\.` \(1 source files read; nothing was run\)\. Set `command` .* or `tools-file`/);
+  assert.match(r.stdout, /::error::mcp-check: No tool definitions found in the source in \. \(scanned 1 of 1 source files, .*\)\. Set command \(the command that starts the server, for example node dist\/index\.js\) or tools-file \(a saved tools\/list answer\)\./);
+  assert.match(r.summary, /No tool definitions found in the source in \. \(scanned 1 of 1 source files.*\)\. Nothing was run\. Set `command` .* or `tools-file`/);
   assert.match(act(ws, { 'working-directory': 'README.md' }).stdout, /working-directory is not a folder/);
   assert.match(act(ws, { 'working-directory': '../x' }).stdout, /working-directory must be a path inside the workspace/);
 });
@@ -135,8 +136,7 @@ test('pr-comment: off by default; always on a same-repository pull request rende
   const on = act(ws, { 'pr-comment': 'always', 'min-grade': 'B' }, { event: pr(), GITHUB_EVENT_NAME: 'pull_request', GITHUB_REF: 'refs/pull/7/merge' });
   assert.equal(on.status, 0, on.stdout + on.stderr);
   assert.equal(on.outputs['pr-comment-action'], 'upsert');
-  assert.equal(on.outputs['pr-number'], '7');
-  assert.equal(on.outputs['pr-comment-file'], 'mcp-check-results/pr-comment.md');
+  assert.equal(on.outputs['pr-number'], undefined, 'the comment step reads the pull request from the event itself');
   const body = readFileSync(join(ws, 'mcp-check-results', 'pr-comment.md'), 'utf8');
   assert.ok(body.startsWith(MARKER + '\n### MCP check: passes min-grade B\n'));
   assert.match(body, /Source: repository code, nothing was run \(derived\)\./);
@@ -200,46 +200,68 @@ test('renderComment: marker first, grades, gate, high-risk change, at most five 
 });
 
 // ------------------------------------------------------------ upsert, with a mocked fetch
-function fakeGitHub(initial = []) {
+function fakeGitHub(initial = [], { me = null } = {}) {
   const comments = initial.map((c, i) => ({ id: 100 + i, ...c }));
   const calls = [];
+  const bot = { login: me || 'github-actions[bot]', type: me ? 'User' : 'Bot' };
   const fetch = async (url, init = {}) => {
     const u = new URL(url); const method = init.method || 'GET';
     calls.push({ method, path: u.pathname + u.search, auth: init.headers.Authorization, body: init.body ? JSON.parse(init.body) : null });
     const json = (status, data) => ({ ok: status < 300, status, json: async () => data });
     if (fake.status) return json(fake.status, { message: 'no' });
     let m;
+    if (method === 'GET' && u.pathname === '/user') return me ? json(200, { login: me }) : json(403, { message: 'Resource not accessible by integration' });
     if (method === 'GET' && (m = /\/repos\/o\/r\/issues\/7\/comments$/.exec(u.pathname))) {
       const page = Number(u.searchParams.get('page')); const per = Number(u.searchParams.get('per_page'));
       return json(200, comments.slice((page - 1) * per, page * per));
     }
-    if (method === 'POST' && /\/repos\/o\/r\/issues\/7\/comments$/.test(u.pathname)) { const c = { id: 900, body: JSON.parse(init.body).body, user: { login: 'github-actions[bot]' } }; comments.push(c); return json(201, c); }
-    if (method === 'PATCH' && (m = /\/repos\/o\/r\/issues\/comments\/(\d+)$/.exec(u.pathname))) { const c = comments.find((x) => x.id === Number(m[1])); c.body = JSON.parse(init.body).body; return json(200, c); }
+    if (method === 'POST' && /\/repos\/o\/r\/issues\/7\/comments$/.test(u.pathname)) { const c = { id: 900 + comments.length, body: JSON.parse(init.body).body, user: bot }; comments.push(c); return json(201, c); }
+    if (method === 'PATCH' && (m = /\/repos\/o\/r\/issues\/comments\/(\d+)$/.exec(u.pathname))) { const c = comments.find((x) => x.id === Number(m[1])); if (c.user.login !== bot.login) return json(403, {}); c.body = JSON.parse(init.body).body; return json(200, c); }
     return json(404, {});
   };
   const fake = { comments, calls, fetch, status: 0 };
   return fake;
 }
 const args = (gh, extra = {}) => ({ apiUrl: 'https://api.example.test', repo: 'o/r', number: 7, token: 't0ken', body: MARKER + '\nnew\n', fetch: gh.fetch, ...extra });
+const ACTIONS_BOT = { login: 'github-actions[bot]', type: 'Bot' };
 
-test('upsertComment: creates one comment, then updates the same one; update-only creates nothing; others\' comments are left alone', async () => {
-  const gh = fakeGitHub([{ body: 'unrelated', user: { login: 'someone' } }, { body: 'quoting ' + MARKER, user: { login: 'someone' } }]);
+test('upsertComment: creates one comment, then updates the same one; update-only creates nothing', async () => {
+  const gh = fakeGitHub([{ body: 'unrelated', user: { login: 'someone', type: 'User' } }, { body: 'quoting ' + MARKER, user: { login: 'someone', type: 'User' } }]);
   assert.deepEqual(await upsertComment(args(gh, { action: 'update' })), { done: 'none', id: null });
   assert.ok(!gh.calls.some((c) => c.method !== 'GET'));
-  assert.deepEqual(await upsertComment(args(gh)), { done: 'created', id: 900 });
-  assert.deepEqual(await upsertComment(args(gh, { body: MARKER + '\nnewer\n' })), { done: 'updated', id: 900 });
-  assert.deepEqual(await upsertComment(args(gh, { body: MARKER + '\nnewer\n' })), { done: 'unchanged', id: 900 });
+  const made = await upsertComment(args(gh));
+  assert.equal(made.done, 'created');
+  assert.deepEqual(await upsertComment(args(gh, { body: MARKER + '\nnewer\n' })), { done: 'updated', id: made.id });
+  assert.deepEqual(await upsertComment(args(gh, { body: MARKER + '\nnewer\n' })), { done: 'unchanged', id: made.id });
   assert.equal(gh.comments.filter((c) => c.body.startsWith(MARKER)).length, 1);
-  assert.equal(gh.comments[1].body, 'quoting ' + MARKER, 'a comment that only mentions the marker is not ours');
-  assert.ok(gh.calls.every((c) => c.auth === 'Bearer t0ken' && c.path.startsWith('/repos/o/r/issues/')));
+  assert.ok(gh.calls.every((c) => c.auth === 'Bearer t0ken' && (c.path.startsWith('/repos/o/r/issues/') || c.path === '/user')));
 });
 
-test('upsertComment: finds the marker past the first page, prefers github-actions[bot]; errors keep the status', async () => {
-  const many = Array.from({ length: 150 }, (_, i) => ({ body: 'c' + i, user: { login: 'u' } }));
-  many.push({ body: MARKER + '\nby a person', user: { login: 'person' } }, { body: MARKER + '\nold', user: { login: 'github-actions[bot]' } });
+test('upsertComment: a marker comment by someone else, there before the first run, is never edited; ours is made beside it', async () => {
+  const planted = { body: MARKER + '\nMCP check: all A, merge away', user: { login: 'drive-by-user', type: 'User' } };
+  for (const action of ['upsert', 'update']) {
+    const gh = fakeGitHub([planted]);
+    const got = await upsertComment(args(gh, { action }));
+    assert.ok(!gh.calls.some((c) => c.method === 'PATCH'), action + ': no edit of the planted comment');
+    assert.equal(gh.comments[0].body, planted.body);
+    if (action === 'upsert') { assert.equal(got.done, 'created'); assert.equal(gh.comments.length, 2); } else assert.deepEqual(got, { done: 'none', id: null });
+  }
+  // A personal token: its own login, from GET /user; a bot's marker comment is not ours then.
+  const gh = fakeGitHub([{ body: MARKER + '\nold', user: ACTIONS_BOT }, { body: MARKER + '\nmine', user: { login: 'maintainer', type: 'User' } }], { me: 'maintainer' });
+  assert.deepEqual(await upsertComment(args(gh)), { done: 'updated', id: 101 });
+  assert.equal(gh.comments[0].body, MARKER + '\nold');
+  assert.deepEqual(await tokenIdentity(gh.fetch, 'https://api.example.test', 't'), { login: 'maintainer' });
+  assert.deepEqual(await tokenIdentity(fakeGitHub().fetch, 'https://api.example.test', 't'), { bot: true });
+  assert.equal(isOwnComment({ body: MARKER, user: { login: 'other-app[bot]', type: 'Bot' } }, { bot: true }), true, 'an App token writes as its own bot');
+  assert.equal(isOwnComment({ body: MARKER, user: { login: 'x', type: 'User' } }, { bot: true }), false);
+});
+
+test('upsertComment: finds its comment past the first page, github-actions[bot] first; errors keep the status', async () => {
+  const many = Array.from({ length: 150 }, (_, i) => ({ body: 'c' + i, user: { login: 'u', type: 'User' } }));
+  many.push({ body: MARKER + '\nby a person', user: { login: 'person', type: 'User' } }, { body: MARKER + '\nold', user: ACTIONS_BOT });
   const gh = fakeGitHub(many);
   assert.deepEqual(await upsertComment(args(gh)), { done: 'updated', id: 251 });
-  assert.deepEqual(gh.calls.filter((c) => c.method === 'GET').map((c) => c.path), ['/repos/o/r/issues/7/comments?per_page=100&page=1', '/repos/o/r/issues/7/comments?per_page=100&page=2']);
+  assert.deepEqual(gh.calls.filter((c) => c.method === 'GET').map((c) => c.path), ['/repos/o/r/issues/7/comments?per_page=100&page=1', '/repos/o/r/issues/7/comments?per_page=100&page=2', '/user']);
   gh.status = 403;
   await assert.rejects(upsertComment(args(gh)), (e) => e.status === 403 && !/t0ken/.test(e.message));
   assert.match(explainFailure({ status: 403, message: 'HTTP 403' }), /add permissions: pull-requests: write/);
@@ -250,10 +272,18 @@ test('upsertComment: finds the marker past the first page, prefers github-action
 // ------------------------------------------------------------ the comment step as a process, against a local API
 function runStep(env) {
   return new Promise((resolveRun) => {
-    const p = spawn(process.execPath, [commentScript], { env: { PATH: process.env.PATH, ...env } });
+    const p = spawn(process.execPath, [commentScript], { env });
     let stdout = ''; p.stdout.on('data', (c) => { stdout += c; });
     p.on('close', (code) => resolveRun({ code, stdout }));
   });
+}
+function stepWorkspace(body = MARKER + '\nhello\n', event = pr()) {
+  const ws = realpathSync(mkdtempSync(join(tmpdir(), 'mcpcheck-step-')));
+  mkdirSync(join(ws, 'mcp-check-results'));
+  if (body !== null) writeFileSync(join(ws, 'mcp-check-results', 'pr-comment.md'), body);
+  writeFileSync(join(ws, 'event.json'), JSON.stringify(event));
+  const sum = join(ws, 'sum.md'); writeFileSync(sum, '');
+  return { ws, sum, env: { GITHUB_WORKSPACE: ws, GITHUB_EVENT_NAME: 'pull_request', GITHUB_EVENT_PATH: join(ws, 'event.json'), INPUT_PR_COMMENT: 'always', INPUT_RESULTS_DIR: 'mcp-check-results', COMMENT_ACTION: 'upsert', GITHUB_TOKEN: 'secret-token', GITHUB_REPOSITORY: 'o/r', GITHUB_STEP_SUMMARY: sum } };
 }
 test('the comment step posts through GITHUB_API_URL, and a refusal is a warning with exit 0', async (t) => {
   const seen = [];
@@ -268,14 +298,12 @@ test('the comment step posts through GITHUB_API_URL, and a refusal is a warning 
   });
   await new Promise((r) => srv.listen(0, '127.0.0.1', r));
   t.after(() => srv.close());
-  const dir = mkdtempSync(join(tmpdir(), 'mcpcheck-step-'));
-  writeFileSync(join(dir, 'c.md'), MARKER + '\nhello\n');
-  const sum = join(dir, 'sum.md'); writeFileSync(sum, '');
-  const env = { COMMENT_FILE: join(dir, 'c.md'), COMMENT_ACTION: 'upsert', PR_NUMBER: '7', GITHUB_TOKEN: 'secret-token', GITHUB_REPOSITORY: 'o/r', GITHUB_API_URL: 'http://127.0.0.1:' + srv.address().port, GITHUB_STEP_SUMMARY: sum };
+  const { sum, env: base } = stepWorkspace();
+  const env = { ...base, GITHUB_API_URL: 'http://127.0.0.1:' + srv.address().port };
   const ok = await runStep(env);
   assert.equal(ok.code, 0);
   assert.match(ok.stdout, /mcp-check: PR comment created \(5\)/);
-  assert.deepEqual(seen.map((x) => x.method), ['GET', 'POST']);
+  assert.deepEqual(seen.map((x) => x.method + ' ' + x.url), ['GET /repos/o/r/issues/7/comments?per_page=100&page=1', 'POST /repos/o/r/issues/7/comments'], 'the number comes from the event payload');
   assert.equal(JSON.parse(seen[1].body).body, MARKER + '\nhello\n');
   assert.equal(seen[1].auth, 'Bearer secret-token');
   refuse = true;
@@ -284,9 +312,29 @@ test('the comment step posts through GITHUB_API_URL, and a refusal is a warning 
   assert.match(bad.stdout, /::warning::mcp-check: PR comment not posted: the token may not write to pull requests: add permissions: pull-requests: write/);
   assert.match(readFileSync(sum, 'utf8'), /PR comment not posted: /);
   assert.ok(!/secret-token/.test(bad.stdout + readFileSync(sum, 'utf8')));
-  const missing = await runStep({ ...env, COMMENT_FILE: join(dir, 'nope.md') });
-  assert.equal(missing.code, 0);
-  assert.match(missing.stdout, /::warning::/);
+});
+
+test('the comment step trusts the event and the results folder, not the run step: forks, missing or foreign bodies, odd paths', () => {
+  const s1 = stepWorkspace();
+  assert.deepEqual(stepPlan({ ...s1.env, COMMENT_FILE: '/etc/passwd', PR_NUMBER: '999' }), { number: 7, file: join(s1.ws, 'mcp-check-results', 'pr-comment.md'), action: 'upsert' });
+  assert.equal(stepPlan({ ...s1.env, INPUT_PR_COMMENT: 'auto', COMMENT_ACTION: 'update' }).action, 'update');
+  assert.equal(stepPlan({ ...s1.env, INPUT_PR_COMMENT: 'auto', COMMENT_ACTION: 'whatever' }).action, 'update');
+  assert.match(stepPlan({ ...s1.env, INPUT_PR_COMMENT: 'off' }).skip, /off/);
+  assert.match(stepPlan(stepWorkspace(undefined, pr('fork/Notes')).env).skip, /fork/);
+  assert.match(stepPlan({ ...s1.env, GITHUB_EVENT_NAME: 'push' }).skip, /not a pull_request event/);
+  assert.match(stepPlan(stepWorkspace(null).env).skip, /no comment for this run/);
+  assert.match(stepPlan({ ...s1.env, INPUT_RESULTS_DIR: '../elsewhere' }).skip, /not inside the workspace/);
+  assert.match(stepPlan({ ...s1.env, INPUT_RESULTS_DIR: '.' }).skip, /not inside the workspace/);
+  const s2 = stepWorkspace(null);
+  symlinkSync('/etc/hosts', join(s2.ws, 'mcp-check-results', 'pr-comment.md'));
+  assert.throws(() => stepPlan(s2.env), /not a regular file/);
+});
+
+test('the comment step refuses a body that does not start with the marker', async () => {
+  const s = stepWorkspace('just some file\n');
+  const r = await runStep({ ...s.env, GITHUB_API_URL: 'http://127.0.0.1:9' });
+  assert.equal(r.code, 0);
+  assert.match(r.stdout, /::warning::mcp-check: PR comment not posted: the comment file was not written by this action/);
 });
 
 test('action.yml: the token reaches the comment step only; that step cannot fail the job', () => {
@@ -295,10 +343,114 @@ test('action.yml: the token reaches the comment step only; that step cannot fail
   const step = y.slice(y.indexOf('- name: Comment on the pull request'), y.indexOf('- name: Set the job status'));
   assert.match(step, /GITHUB_TOKEN: \$\{\{ inputs\.github-token \}\}/);
   assert.match(step, /continue-on-error: true/);
-  assert.match(step, /if: \$\{\{ always\(\) && steps\.run\.outputs\.pr-comment-action != '' \}\}/);
+  assert.match(step, /if: \$\{\{ always\(\) && inputs\.pr-comment != 'off' && github\.event_name == 'pull_request' \}\}/);
+  assert.match(step, /NODE_BIN: \$\{\{ steps\.node\.outputs\.path \}\}/);
+  assert.match(step, /exec \/usr\/bin\/env -i \\\n/, 'a clean environment: no NODE_OPTIONS or anything else a server may have set');
+  assert.match(step, /"\$NODE_BIN" "\$GITHUB_ACTION_PATH\/action\/pr-comment\.mjs"/);
+  assert.ok(!/PR_NUMBER|COMMENT_FILE|pr-comment-file|pr-number/.test(step), 'no pull request number or file path from the run step');
+  assert.ok(y.indexOf('- name: Locate Node.js') < y.indexOf('- name: Grade the tool list'), 'node is located before any repository code runs');
   const run = y.slice(y.indexOf('- name: Grade the tool list'), y.indexOf('- name: Upload SARIF'));
   assert.ok(!/TOKEN/.test(run), 'the step that may start the server has no token');
   assert.match(y, /\n  github-token:\n[\s\S]*?default: \$\{\{ github\.token \}\}\n/);
   assert.match(y, /\n  pr-comment:\n[\s\S]*?default: 'off'\n/);
   assert.match(y, /\n  publish-hint:\n[\s\S]*?default: 'true'\n/);
+});
+
+// ------------------------------------------------------------ second review: baseline, committed lists, names, limits
+const LOOSENED = `import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+const server = new McpServer({ name: 'n', version: '1' });
+server.registerTool('delete_note', { title: 'Delete note', description: 'Delete a note by id.', inputSchema: {}, annotations: { readOnlyHint: true, destructiveHint: false } }, async () => ({ content: [] }));
+`;
+const RELEASED = { tools: [{ name: 'delete_note', title: 'Delete note', description: 'Delete a note by id.', inputSchema: { type: 'object', properties: {} }, annotations: { readOnlyHint: false, destructiveHint: true } }] };
+
+test('zero-config + baseline: the code is compared with the baseline, never the baseline with itself', () => {
+  const ws = workspace(null);
+  mkdirSync(join(ws, 'src')); mkdirSync(join(ws, 'release'));
+  writeFileSync(join(ws, 'package.json'), JSON.stringify({ name: 'x', dependencies: { '@modelcontextprotocol/sdk': '1.20.0', zod: '3.25.0' } }));
+  writeFileSync(join(ws, 'src', 'server.ts'), LOOSENED);
+  writeFileSync(join(ws, 'release', 'tools.json'), JSON.stringify(RELEASED));
+  const r = act(ws, { baseline: 'release/tools.json' });
+  assert.equal(r.outputs.passed, 'false', r.summary);
+  assert.equal(r.outputs['exit-status'], '1');
+  assert.match(r.summary, /from the repository code in `\.`/);
+  assert.match(r.summary, /\*\*High risk\*\*.*`delete_note`/);
+  assert.match(r.stdout, /::error::mcp-check: high-risk annotation change against release\/tools\.json: delete_note/);
+
+  // The same with the baseline at the root as tools.json, and as one snapshot of a __toolsnaps__ folder (refused).
+  const ws2 = workspace(null);
+  mkdirSync(join(ws2, 'src'));
+  writeFileSync(join(ws2, 'src', 'server.ts'), LOOSENED);
+  writeFileSync(join(ws2, 'tools.json'), JSON.stringify(RELEASED));
+  assert.match(act(ws2, { baseline: 'tools.json' }).summary, /\*\*High risk\*\*/);
+  mkdirSync(join(ws2, '__toolsnaps__'));
+  writeFileSync(join(ws2, '__toolsnaps__', 'delete_note.snap'), JSON.stringify(RELEASED.tools[0]));
+  writeFileSync(join(ws2, '__toolsnaps__', 'other.snap'), JSON.stringify({ ...RELEASED.tools[0], name: 'other' }));
+  const snap = act(ws2, { baseline: '__toolsnaps__/delete_note.snap' });
+  assert.match(snap.stdout, /::error::mcp-check: the tool list found in the source is the baseline __toolsnaps__\/delete_note\.snap itself; set command or tools-file/);
+});
+
+test('zero-config: a committed list is graded only with a clear label, and SARIF points into it', () => {
+  const ws = workspace('ts-zod');
+  writeFileSync(join(ws, 'tools.json'), JSON.stringify({ tools: [{ name: 'old_tool', description: 'From an old release.', inputSchema: { type: 'object' } }] }, null, 2));
+  const r = act(ws, {});
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.summary, /1 tools from the committed list `tools\.json`\./);
+  assert.match(r.summary, /\*\*Graded the committed list `tools\.json`, not the code; it may be stale\.\*\* Nothing was run\./);
+  const sarif = JSON.parse(readFileSync(join(ws, 'mcp-check-results', 'report.sarif'), 'utf8'));
+  for (const x of sarif.runs[0].results.filter((x) => x.locations[0].logicalLocations[0].name === 'old_tool')) assert.deepEqual(x.locations[0].physicalLocation, { artifactLocation: { uri: 'tools.json' }, region: { startLine: 4 } });
+
+  const cat = workspace('catalog-snap');
+  const c = act(cat, { 'pr-comment': 'always' }, { event: pr(), GITHUB_EVENT_NAME: 'pull_request' });
+  assert.match(c.summary, /\*\*Graded the committed list `\.mcp-catalog\/tickets\.json`, not the code; it may be stale\.\*\*/);
+  assert.match(readFileSync(join(cat, 'mcp-check-results', 'pr-comment.md'), 'utf8'), /Source: the committed list `\.mcp-catalog\/tickets\.json`, not the code; it may be stale\./);
+  const asBaseline = act(cat, { baseline: '.mcp-catalog/tickets.json' });
+  assert.match(asBaseline.summary, /from the repository code in `\.`/, 'the snapshot used as the baseline is not also the list');
+});
+
+test('zero-config: names without schemas (an MCPB manifest) are not graded, even under min-grade; the advice is the same', () => {
+  const ws = workspace(null);
+  writeFileSync(join(ws, 'manifest.json'), JSON.stringify({ manifest_version: '0.2', name: 'x', server: { type: 'node', entry_point: 'server/index.js' }, tools: [{ name: 'search', description: 'Searches.' }, { name: 'delete_all' }] }));
+  const r = act(ws, { 'min-grade': 'B' });
+  assert.equal(r.status, 1);
+  assert.match(r.stdout, /::error::mcp-check: Only tool names were found in the source in \. \(manifest\.json lists names and descriptions without schemas\), which cannot be graded\. Set command .* or tools-file/);
+  assert.match(r.summary, /Only tool names were found .* Set `command` .* or `tools-file`/);
+  assert.ok(!existsSync(join(ws, 'mcp-check-results', 'report.json')));
+});
+
+test('zero-config: a folder over the listing limit says so in the summary', () => {
+  const ws = workspace('ts-zod');
+  mkdirSync(join(ws, 'zz-data'));
+  for (let i = 0; i <= 20000; i++) writeFileSync(join(ws, 'zz-data', i + '.txt'), '');
+  const r = act(ws, {});
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.summary, /\*\*The folder holds more files than the listing limit \(20,000\); the deepest were not read\.\*\* Set `working-directory` to the server's folder\./);
+  assert.match(r.summary, /2 tools from the repository code/, 'src/ was still read');
+});
+
+test('command: the server does not get the runner\'s file-command paths', () => {
+  const ws = workspace(null);
+  const srv = join(ws, 'srv.cjs');
+  writeFileSync(srv, `
+const leaked = ['GITHUB_ENV', 'GITHUB_PATH', 'GITHUB_OUTPUT', 'GITHUB_STATE', 'GITHUB_STEP_SUMMARY'].filter((k) => process.env[k]);
+process.stdin.on('data', (c) => { for (const l of String(c).split('\\n').filter(Boolean)) { const m = JSON.parse(l);
+  if (m.method === 'initialize') process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: m.id, result: { protocolVersion: '2025-11-25', capabilities: {}, serverInfo: { name: 's', version: '1' } } }) + '\\n');
+  if (m.method === 'tools/list') process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: m.id, result: { tools: [{ name: leaked.length ? 'leaked_' + leaked.join('_') : 'clean', inputSchema: { type: 'object' } }] } }) + '\\n'); } });`);
+  const r = act(ws, { command: process.execPath + ' srv.cjs', timeout: '20' }, { GITHUB_ENV: join(ws, 'env-file'), GITHUB_PATH: join(ws, 'path-file'), GITHUB_STATE: join(ws, 'state-file') });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  const list = JSON.parse(readFileSync(join(ws, 'mcp-check-results', 'tools-list.json'), 'utf8'));
+  assert.deepEqual(list.tools.map((t) => t.name), ['clean']);
+  assert.deepEqual(serverEnv({ A: '1', GITHUB_ENV: 'x', GITHUB_OUTPUT: 'y' }, { B: '2', GITHUB_PATH: 'z' }), { A: '1', B: '2' });
+});
+
+test('PR comment: text from the tool list cannot @mention; SARIF paths are percent-encoded', () => {
+  const r = M.analyse(M.parseInput(JSON.stringify({ tools: [{ name: 'x', description: 'Ping @octocat and @org/team now', inputSchema: { type: 'object' } }] })));
+  const body = renderComment(r, { sections: ['spec', 'anthropic', 'openai', 'security', 'quality'], minGrade: null });
+  assert.ok(!/@octocat|@org/.test(body.replace(/@&#8203;/g, '')) || !/(^|[^;])@(octocat|org)/.test(body));
+  assert.equal(commentText('hi @octocat'), 'hi @&#8203;octocat');
+  assert.equal(uriPath('my tools/a b#1.ts'), 'my%20tools/a%20b%231.ts');
+  const ws = workspace(null);
+  cpSync(join(repos, 'ts-zod'), join(ws, 'my server'), { recursive: true });
+  const a = act(ws, { 'working-directory': 'my server' });
+  const sarif = JSON.parse(readFileSync(join(ws, 'mcp-check-results', 'report.sarif'), 'utf8'));
+  assert.ok(sarif.runs[0].results.some((x) => x.locations[0].physicalLocation.artifactLocation.uri === 'my%20server/src/tools/notes.ts'), a.stdout);
 });

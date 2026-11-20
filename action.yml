@@ -141,6 +141,14 @@ outputs:
 runs:
   using: composite
   steps:
+    # Before anything from the repository runs: where node is, for the comment step (a server started later could
+    # change PATH for later steps, but not this step's output, which is already recorded).
+    - name: Locate Node.js
+      id: node
+      shell: bash
+      run: |
+        echo "path=$(command -v node || true)" >> "$GITHUB_OUTPUT"
+
     # Inputs reach the script as environment variables, never by interpolation into a command.
     - name: Grade the tool list
       id: run
@@ -206,19 +214,28 @@ runs:
         echo "::error::could not push the badge to $BRANCH (branch protection, or permissions contents: write missing)"
         exit 1
 
-    # Only on pull requests from this repository, when pr-comment is auto or always. The token reaches this step
-    # alone; a failure is a warning (the script exits 0, and the step may not fail the job either way).
+    # Only on pull_request runs with pr-comment auto or always. The token reaches this step alone. The script re-reads
+    # the pull request from the event payload and the body from the results folder (not from the run step's outputs),
+    # and runs with a clean environment and the node found before the run step. A failure is a warning: the script
+    # exits 0, and the step may not fail the job either way.
     - name: Comment on the pull request
-      if: ${{ always() && steps.run.outputs.pr-comment-action != '' }}
+      if: ${{ always() && inputs.pr-comment != 'off' && github.event_name == 'pull_request' }}
       continue-on-error: true
       shell: bash
       env:
-        COMMENT_FILE: ${{ steps.run.outputs.pr-comment-file }}
+        NODE_BIN: ${{ steps.node.outputs.path }}
         COMMENT_ACTION: ${{ steps.run.outputs.pr-comment-action }}
-        PR_NUMBER: ${{ steps.run.outputs.pr-number }}
+        INPUT_PR_COMMENT: ${{ inputs.pr-comment }}
+        INPUT_RESULTS_DIR: ${{ inputs.results-dir }}
         GITHUB_TOKEN: ${{ inputs.github-token }}
       run: |
-        exec node "$GITHUB_ACTION_PATH/action/pr-comment.mjs"
+        case "$NODE_BIN" in /*) ;; *) echo "::warning::mcp-check: PR comment not posted: node was not found"; exit 0 ;; esac
+        exec /usr/bin/env -i \
+          GITHUB_TOKEN="$GITHUB_TOKEN" GITHUB_REPOSITORY="$GITHUB_REPOSITORY" GITHUB_API_URL="$GITHUB_API_URL" \
+          GITHUB_EVENT_NAME="$GITHUB_EVENT_NAME" GITHUB_EVENT_PATH="$GITHUB_EVENT_PATH" GITHUB_WORKSPACE="$GITHUB_WORKSPACE" \
+          GITHUB_STEP_SUMMARY="$GITHUB_STEP_SUMMARY" INPUT_PR_COMMENT="$INPUT_PR_COMMENT" INPUT_RESULTS_DIR="$INPUT_RESULTS_DIR" \
+          COMMENT_ACTION="$COMMENT_ACTION" \
+          "$NODE_BIN" "$GITHUB_ACTION_PATH/action/pr-comment.mjs"
 
     - name: Set the job status
       if: ${{ always() }}

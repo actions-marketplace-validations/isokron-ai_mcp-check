@@ -114,6 +114,9 @@ export function publishHint(e, ev, surface) {
   return '**[List this server in the IsoKron MCP registry](' + url + ')** (free): a public page with its CI-verified grade, and a README badge.';
 }
 
+/** A repository path as a SARIF artifactLocation.uri: each segment percent-encoded. */
+export const uriPath = (p) => String(p).split('/').map(encodeURIComponent).join('/');
+
 const ZERO_CONFIG_DOCS = 'https://github.com/isokron-ai/mcp-check/blob/main/docs/github-action.md#where-the-tool-list-comes-from';
 
 export async function run() {
@@ -137,6 +140,9 @@ export async function run() {
   const baseline = input('baseline') ? inWorkspace(input('baseline'), 'baseline') : null;
   ownFolder(results, 'results-dir');
   const out = (f, data) => safeWrite(join(results.abs, f), data, results.rel + '/' + f);
+  // A comment body left by an earlier run in this workspace must not be posted for this one.
+  const staleComment = lstatOrNull(join(results.abs, 'pr-comment.md'));
+  if (staleComment && staleComment.isFile()) unlinkSync(join(results.abs, 'pr-comment.md'));
   // Size, depth and tool-count limits (2 MiB of JSON, 64 levels, 2,000 tools), with a clear error.
   const parse = (t, label) => {
     try { return parseList(t, label); } catch (e) {
@@ -147,7 +153,7 @@ export async function run() {
 
   // 1. The tool list: a file in the repository, tools/list from the server the command starts, or (neither set) the
   //    tool definitions read from the repository code, without running anything.
-  let text, listRel, source, sourceKind, note = null, where = null, commentSource = '';
+  let text, listRel, source, sourceKind, note = null, where = null, commentSource = '', sarifText = null, sarifUri = null;
   if (toolsFile) {
     sourceKind = 'tools-file';
     const f = inWorkspace(toolsFile, 'tools-file');
@@ -161,25 +167,42 @@ export async function run() {
     if (!st || !st.isDirectory()) throw new InputError('working-directory is not a folder: ' + input('working-directory', '.'));
     const ws = realpathSync(env.GITHUB_WORKSPACE || process.cwd());
     process.stdout.write('Reading the tool definitions from the source in ' + dir.rel + ' (nothing is run).\n');
-    // The results folder, and any folder an earlier run of this action made, hold a tools-list.json: not the repository's.
-    const scan = await Repo.fromDirectory(dir.abs, { rootDir: ws, exclude: [relative(dir.abs, results.abs).split(sep).join('/')], skipIfContains: MARKER });
-    if (!scan.best) {
-      const msg = 'no tool definitions found in the source in ' + dir.rel + ' (scanned ' + scan.scanned.source + ' of ' + scan.scanned.sourceTotal + ' source files, and the committed tool lists and MCPB manifests). Set command (the command that starts the server, for example node dist/index.js) or tools-file (a saved tools/list answer).';
-      summary('## MCP check\n\nNo tool definitions found in the repository code in ' + mdCode(dir.rel) + ' (' + scan.scanned.sourceTotal + ' source files read; nothing was run). Set `command` to the command that starts your server, or `tools-file` to a saved `tools/list` answer: [how](' + ZERO_CONFIG_DOCS + ').\n');
-      throw new InputError(msg);
-    }
+    // Not read: the results folder and any folder an earlier run of this action made (they hold a tools-list.json that
+    // is not the repository's), and the baseline, which is what the list is compared with, never the list itself.
+    const toDir = (abs) => relative(dir.abs, abs).split(sep).join('/');
+    const scan = await Repo.fromDirectory(dir.abs, { rootDir: ws, exclude: [toDir(results.abs)].concat(baseline ? [toDir(baseline.abs)] : []), skipIfContains: MARKER });
+    const noUsable = (what) => {
+      const msg = what + ' Set command (the command that starts the server, for example node dist/index.js) or tools-file (a saved tools/list answer).';
+      summary('## MCP check\n\n' + mdText(what) + ' Nothing was run. Set `command` to the command that starts your server, or `tools-file` to a saved `tools/list` answer: [how](' + ZERO_CONFIG_DOCS + ').\n');
+      return new InputError(msg);
+    };
+    if (!scan.best) throw noUsable('No tool definitions found in the source in ' + dir.rel + ' (scanned ' + scan.scanned.source + ' of ' + scan.scanned.sourceTotal + ' source files, and the committed tool lists and MCPB manifests' + (scan.truncated ? '; the folder holds more files than the listing limit, and the deepest were not listed' : '') + ').');
     const c = scan.best;
+    // Names without schemas (an MCPB manifest's tools array) would be graded on schemas that do not exist.
+    if (c.fidelity === 'names') throw noUsable('Only tool names were found in the source in ' + dir.rel + ' (' + c.path + ' lists names and descriptions without schemas), which cannot be graded.');
+    const candidateAbs = c.path ? join(dir.abs, c.path) : null;
+    if (baseline && candidateAbs && (candidateAbs === baseline.abs || (c.path.endsWith('/') && baseline.abs.startsWith(candidateAbs)))) throw new InputError('the tool list found in the source is the baseline ' + baseline.rel + ' itself; set command or tools-file');
     text = JSON.stringify({ tools: c.tools }, null, 2) + '\n';
     out('tools-list.json', text);
     listRel = results.rel + '/tools-list.json';
     const prefix = dir.rel === '.' ? '' : dir.rel + '/';
     if (Array.isArray(c.where)) where = new Map(c.where.map((w) => [w.name, { uri: prefix + w.path, line: w.line }]));
+    else if (c.path && !c.path.endsWith('/') && c.kind !== 'mcpb') {
+      // A committed list (or an mcp-catalog-snap snapshot): SARIF points at the tool's "name" line in that file.
+      const st2 = lstatOrNull(candidateAbs);
+      if (st2 && st2.isFile()) { sarifText = readFileSync(candidateAbs, 'utf8'); sarifUri = prefix + c.path; }
+    }
     const { provenance } = repoProvenance(c);
-    source = 'the repository code in ' + mdCode(dir.rel);
-    note = '**Source: repository code; nothing was run.** ' + mdText(provenance.charAt(0).toUpperCase() + provenance.slice(1)) + '.'
-      + (c.built ? ' Read from build output, since no source file defines a tool.' : '')
-      + ' For the exact list your server sends, set `command` (the command that starts it, for example `node dist/index.js`) or `tools-file` (a saved `tools/list` answer): [how](' + ZERO_CONFIG_DOCS + ').';
-    commentSource = 'Source: repository code, nothing was run (' + c.fidelity + ').';
+    const committed = c.kind !== 'source';
+    source = committed ? 'the committed list ' + mdCode(prefix + (c.path || '')) : 'the repository code in ' + mdCode(dir.rel);
+    const how = ' For the exact list your server sends, set `command` (the command that starts it, for example `node dist/index.js`) or `tools-file` (a saved `tools/list` answer): [how](' + ZERO_CONFIG_DOCS + ').';
+    note = (committed
+      ? '**Graded the committed list ' + mdCode(prefix + (c.path || '')) + ', not the code; it may be stale.** Nothing was run. It was found in the repository and ranks above tool definitions read from code (' + mdText(provenance) + ').'
+      : '**Source: repository code; nothing was run.** ' + mdText(provenance.charAt(0).toUpperCase() + provenance.slice(1)) + '.'
+        + (c.built ? ' Read from build output, since no source file defines a tool.' : ''))
+      + (scan.truncated ? ' **The folder holds more files than the listing limit (' + (20000).toLocaleString('en-US') + '); the deepest were not read.** Set `working-directory` to the server\'s folder.' : '')
+      + how;
+    commentSource = committed ? 'Source: the committed list ' + mdCode(prefix + (c.path || '')) + ', not the code; it may be stale.' : 'Source: repository code, nothing was run (' + c.fidelity + ').';
   } else {
     sourceKind = 'command';
     const cwd = inWorkspace(input('working-directory', '.'), 'working-directory', true);
@@ -208,7 +231,10 @@ export async function run() {
   const below = belowMinGrade(r, sections, minGrade);
   let diff = null;
   if (baseline) {
-    const prev = parse(safeRead(baseline.abs, 'baseline ' + baseline.rel), 'baseline');
+    const btext = safeRead(baseline.abs, 'baseline ' + baseline.rel);
+    // An mcp-catalog-snap snapshot (.mcp-catalog/<server>.json) works as a baseline too: its catalog.tools.
+    const snap = /(^|\/)\.mcp-catalog\//.test(baseline.rel) ? Repo.fromCatalogSnap(btext) : null;
+    const prev = parse(snap ? JSON.stringify({ tools: snap.tools }) : btext, 'baseline');
     diff = M.diffCatalogs(prev.tools, parsed.tools);
   }
 
@@ -217,12 +243,12 @@ export async function run() {
   out('report.json', M.toJSON(Object.assign({}, r, { engine_version: VERSION }, diff ? { compare: diff } : {})) + '\n');
   let sarifRel = '';
   if (wantSarif) {
-    const s = sarifWithLocations(r, text, listRel);
+    const s = sarifWithLocations(r, sarifText || text, uriPath(sarifUri || listRel));
     s.runs[0].tool.driver.semanticVersion = VERSION;
     // Read from source: each result points at the line that registers its tool.
     if (where) for (const res of s.runs[0].results) {
       const w = where.get(res.locations?.[0]?.logicalLocations?.[0]?.name);
-      if (w) res.locations[0].physicalLocation = { artifactLocation: { uri: w.uri }, region: { startLine: w.line || 1 } };
+      if (w) res.locations[0].physicalLocation = { artifactLocation: { uri: uriPath(w.uri) }, region: { startLine: w.line || 1 } };
     }
     out('report.sarif', JSON.stringify(s, null, 2) + '\n');
     sarifRel = results.rel + '/report.sarif';
@@ -268,13 +294,12 @@ export async function run() {
   const event = eventPayload();
   const hint = wantHint ? publishHint(env, event, 'action') : null;
   const failed = below.length > 0 || !!(diff && diff.highRisk.length);
-  let commentNote = null, commentDo = null, prNumber = '';
+  let commentNote = null, commentDo = null;
   if (commentMode !== 'off') {
     const pr = prContext(env.GITHUB_EVENT_NAME || '', event);
     if (pr && pr.skip) commentNote = 'PR comment skipped: ' + pr.skip + '.';
     else if (pr) {
       commentDo = commentAction(commentMode, failed);
-      prNumber = String(pr.number);
       const body = renderComment(r, { sections, minGrade, diff, sourceNote: commentSource, runUrl, hint: wantHint ? publishHint(env, event, 'comment') : null });
       out('pr-comment.md', body);
     }
@@ -288,8 +313,6 @@ export async function run() {
   output('passed', failed ? 'false' : 'true');
   output('source', sourceKind);
   output('pr-comment-action', commentDo || '');
-  output('pr-number', prNumber);
-  output('pr-comment-file', commentDo ? results.rel + '/pr-comment.md' : '');
   output('catalog-hash', r.input.catalogHash);
   output('results-dir', results.rel);
   output('sarif-file', sarifRel);

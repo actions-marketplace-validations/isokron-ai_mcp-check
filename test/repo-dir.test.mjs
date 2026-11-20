@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { cpSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -167,4 +167,59 @@ test('cli: --repo-dir exit codes: 3 with advice when nothing is found, 2 for a m
   assert.throws(() => parseArgs(['--repo-dir', '.', '--repo', 'github.com/a/b']), /give one input/);
   assert.throws(() => parseArgs(['--repo-dir', '.', '--github-token-env', 'T']), /--github-token-env goes with --repo or --registry/);
   assert.equal(parseArgs(['--repo-dir', 'x']).repoDir, 'x');
+});
+
+test('mcp-catalog-snap: a .mcp-catalog snapshot is an exact committed list, ahead of the code; shapes that are not one are ignored', async () => {
+  const r = await R.fromDirectory(join(repos, 'catalog-snap'));
+  assert.equal(r.best.kind, 'catalog');
+  assert.equal(r.best.fidelity, 'exact');
+  assert.equal(r.best.path, '.mcp-catalog/tickets.json');
+  assert.equal(r.best.server, 'tickets');
+  assert.deepEqual(r.best.tools.map((t) => t.name), ['ticket_get', 'ticket_create']);
+  assert.ok(r.candidates.some((c) => c.kind === 'source'), 'the code is read too, ranked below');
+  const withoutSnap = await R.fromDirectory(join(repos, 'catalog-snap'), { exclude: ['.mcp-catalog/tickets.json'] });
+  assert.equal(withoutSnap.best.kind, 'source', 'an excluded file (a baseline) is not read');
+  const text = readFileSync(join(repos, 'catalog-snap', '.mcp-catalog', 'tickets.json'), 'utf8');
+  assert.equal(R.fromCatalogSnap(text).tools.length, 2);
+  const j = JSON.parse(text);
+  assert.equal(R.fromCatalogSnap(JSON.stringify({ ...j, capturedWith: 'other-tool/1', format: 'x' })), null, 'not written by mcp-catalog-snap');
+  assert.equal(R.fromCatalogSnap(JSON.stringify({ ...j, capturedWith: undefined, format: 'mcp-catalog-snap/2' })).tools.length, 2, 'format alone identifies it');
+  assert.equal(R.fromCatalogSnap(JSON.stringify({ ...j, catalog: { tools: [] } })), null);
+  assert.deepEqual(R.planFiles(['.mcp-catalog/a.json', 'test/.mcp-catalog/b.json', 'x/.mcp-catalog/c.json', '.mcp-catalog/sub/d.json']).exact, ['.mcp-catalog/a.json', 'x/.mcp-catalog/c.json']);
+  const j2 = JSON.parse(cli(['--repo-dir', join(repos, 'catalog-snap'), '--format', 'json']).stdout);
+  assert.match(j2.source.provenance, /^exact: committed mcp-catalog-snap snapshot \.mcp-catalog\/tickets\.json/);
+});
+
+test('fromGitHub reads an .mcp-catalog snapshot too (sea-lite\'s layout)', async () => {
+  const snap = readFileSync(join(repos, 'catalog-snap', '.mcp-catalog', 'tickets.json'), 'utf8');
+  const fetch = async (url) => {
+    const ok = (body) => ({ ok: true, status: 200, headers: { get: () => null }, text: async () => body });
+    if (url === 'https://api.github.com/repos/o/r') return ok(JSON.stringify({ default_branch: 'main' }));
+    if (url.startsWith('https://api.github.com/repos/o/r/git/trees/')) return ok(JSON.stringify({ sha: 'abc', truncated: false, tree: [{ type: 'blob', path: '.mcp-catalog/sea-lite.json', size: snap.length }, { type: 'blob', path: 'README.md', size: 10 }] }));
+    if (url.endsWith('/.mcp-catalog/sea-lite.json')) return ok(snap);
+    return { ok: false, status: 404, headers: { get: () => null }, text: async () => '' };
+  };
+  const r = await R.fromGitHub('github.com/o/r', { fetch });
+  assert.equal(r.best.kind, 'catalog');
+  assert.equal(r.best.tools.length, 2);
+});
+
+test('fromDirectory: tools.json under test/ or tests/ is a fixture, not the server\'s list', async () => {
+  const dir = copy('ts-zod');
+  for (const d of ['test', 'tests', 'pkg/__tests__']) { mkdirSync(join(dir, d), { recursive: true }); writeFileSync(join(dir, d, 'tools.json'), JSON.stringify({ tools: [{ name: 'fixture', inputSchema: { type: 'object' } }] })); }
+  const r = await R.fromDirectory(dir);
+  assert.equal(r.best.kind, 'source');
+  assert.ok(!r.candidates.some((c) => c.kind === 'committed'));
+});
+
+test('fromDirectory: over the listing limit it says truncated, and lists likely source folders and shallow files first', async () => {
+  const dir = copy('ts-zod');
+  mkdirSync(join(dir, 'aaa', 'deep'), { recursive: true });
+  for (let i = 0; i < 30; i++) writeFileSync(join(dir, 'aaa', 'deep', 'f' + i + '.txt'), 'x');
+  const r = await R.fromDirectory(dir, { maxList: 10 });
+  assert.equal(r.truncated, true);
+  assert.deepEqual(r.best.tools.map((t) => t.name), ['search_notes', 'delete_note'], 'src/ was listed before aaa/deep');
+  assert.equal((await R.fromDirectory(dir)).truncated, false);
+  const { sourceLine } = await import('../src/inputs/collect.js');
+  assert.match(sourceLine({ kind: 'dir', dir: '.', provenance: 'derived: x', truncated: true }), /the folder holds more files than the listing limit, so the deepest were not read$/);
 });

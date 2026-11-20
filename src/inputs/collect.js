@@ -28,7 +28,7 @@ export function expandEnv(v, env = process.env) {
 }
 
 export const FIDELITY = {
-  exact: (c) => 'exact: ' + (c.kind === 'snapshots' ? 'committed tool snapshots' : c.kind === 'mcpb' ? 'MCPB manifest static tools/list' : 'committed tool list ' + c.path),
+  exact: (c) => 'exact: ' + (c.kind === 'snapshots' ? 'committed tool snapshots' : c.kind === 'mcpb' ? 'MCPB manifest static tools/list' : c.kind === 'catalog' ? 'committed mcp-catalog-snap snapshot ' + c.path : 'committed tool list ' + c.path),
   literal: () => 'literal: tool definitions written as literals in the source',
   derived: () => 'derived: reproduced from SDK registrations in the source; schemas follow the SDK\'s output and may differ in detail',
   names: () => 'names only: an MCPB manifest lists names and descriptions; schema checks do not apply',
@@ -214,7 +214,7 @@ export function sourceLine(s) {
   const reg = s.registry ? ' via MCP Registry ' + line(s.registry.name, 120) + (s.registry.version ? ' ' + line(s.registry.version, 40) : '') : '';
   if (s.kind === 'http') return 'Source: live server ' + line(s.url) + ' (' + s.era + (s.protocolVersion ? ', protocol ' + line(s.protocolVersion, 20) : '') + si + ')' + reg;
   if (s.kind === 'stdio') return 'Source: local server ' + line(s.command || s.server) + ' (' + s.era + ', protocol ' + line(s.protocolVersion, 20) + si + ')';
-  if (s.kind === 'dir') return 'Source: local folder ' + line(s.dir) + ' (read statically, nothing was run), ' + s.provenance + (s.built ? '; read from build output, since no source file defines a tool' : '');
+  if (s.kind === 'dir') return 'Source: local folder ' + line(s.dir) + ' (read statically, nothing was run), ' + s.provenance + (s.built ? '; read from build output, since no source file defines a tool' : '') + (s.truncated ? '; the folder holds more files than the listing limit, so the deepest were not read' : '');
   if (s.kind === 'repo') return 'Source: ' + s.repo + '@' + String(s.sha).slice(0, 12) + ' (' + s.via + '), ' + s.provenance + reg;
   return null;
 }

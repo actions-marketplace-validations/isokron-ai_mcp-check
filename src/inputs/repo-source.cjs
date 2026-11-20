@@ -7,7 +7,7 @@
 //   RepoSource.extractFromFile(path, text)                            -> tools found statically in one file
 //
 // Nothing is executed. Sources, best first:
-//   exact    a committed tool list (tools.json, __toolsnaps__/*.snap), or an MCPB manifest.json with
+//   exact    a committed tool list (tools.json, __toolsnaps__/*.snap, an mcp-catalog-snap .mcp-catalog/*.json), or an MCPB manifest.json with
 //            _meta[*].static_responses["tools/list"]
 //   literal  JS/TS object literals { name, description, inputSchema: {JSON Schema literal} }
 //   derived  SDK registrations converted the way the SDK would: TS registerTool / server.tool with zod shapes,
@@ -719,6 +719,15 @@
   }
 
   // ------------------------------------------------------------ committed lists and manifests
+  // A snapshot written by mcp-catalog-snap (.mcp-catalog/<server>.json): { capturedWith | format: "mcp-catalog-snap/…",
+  // catalog: { tools, prompts, resourceTemplates }, server, sha256 }. The tools are the server's tools/list, canonical JSON.
+  function fromCatalogSnap(text) {
+    let d; try { d = JSON.parse(text); } catch (e) { return null; }
+    if (!d || typeof d !== 'object' || !d.catalog || !Array.isArray(d.catalog.tools)) return null;
+    if (!/^mcp-catalog-snap\//.test(String(d.capturedWith || '')) && !/^mcp-catalog-snap\//.test(String(d.format || ''))) return null;
+    const tools = d.catalog.tools.filter((x) => x && typeof x.name === 'string');
+    return tools.length ? { tools, server: d.server && typeof d.server.name === 'string' ? d.server.name : null, capturedAt: typeof d.capturedAt === 'string' ? d.capturedAt : null } : null;
+  }
   function toolsFromJson(text) {
     let d; try { d = JSON.parse(text); } catch (e) { return null; }
     if (Array.isArray(d) && d.length && d.every((x) => x && typeof x.name === 'string' && (x.inputSchema || x.input_schema))) return d;
@@ -737,8 +746,8 @@
   }
 
   // Classify every file of a repo listing; returns the paths worth fetching, best first.
-  const SKIP_DIR = /(^|\/)(node_modules|dist|build|out|\.next|vendor|coverage|__pycache__|\.venv|venv|site-packages|examples?|docs?|fixtures?)\//i;
-  const SKIP_DIR_SRC_ONLY = /(^|\/)(node_modules|\.next|coverage|__pycache__|\.venv|venv|site-packages|examples?|docs?|fixtures?)\//i; // build output and vendor allowed
+  const SKIP_DIR = /(^|\/)(node_modules|dist|build|out|\.next|vendor|coverage|__pycache__|\.venv|venv|site-packages|examples?|docs?|fixtures?|tests?|__tests__)\//i;
+  const SKIP_DIR_SRC_ONLY = /(^|\/)(node_modules|\.next|coverage|__pycache__|\.venv|venv|site-packages|examples?|docs?|fixtures?|tests?|__tests__)\//i; // build output and vendor allowed
   const TEST_FILE = /(^|\/)(tests?|__tests__|spec)\/|\.(test|spec)\.[jt]sx?$|(^|\/)test_[^/]*\.py$|_test\.py$/i;
   function planFiles(paths, popts) {
     const exact = []; const manifests = []; const serverJson = []; const src = [];
@@ -746,6 +755,7 @@
     paths.forEach((p) => {
       const q = p.replace(/^\//, '');
       if (/(^|\/)__toolsnaps__\/[^/]+\.snap$/.test(q)) exact.push(q);
+      else if (!SKIP_DIR.test(q) && /(^|\/)\.mcp-catalog\/[^/]+\.json$/.test(q)) exact.push(q); // mcp-catalog-snap snapshots
       else if (!SKIP_DIR.test(q) && /(^|\/)(tools(-list|_list)?|mcp-tools|tool-list)\.json$/i.test(q)) exact.push(q);
       else if (!SKIP_DIR.test(q) && /(^|\/)manifest\.json$/.test(q)) manifests.push(q);
       else if (/(^|\/)server\.json$/.test(q) && !SKIP_DIR.test(q)) serverJson.push(q);
@@ -1091,7 +1101,10 @@
       snaps.sort((a, b) => a[0].length - b[0].length).forEach(([p, t]) => { const ts = toolsFromJson(t); (ts || []).forEach((x) => { if (!seen.has(x.name)) { seen.add(x.name); tools.push(x); } }); });
       if (tools.length) candidates.push({ kind: 'snapshots', fidelity: 'exact', path: snaps[0][0].replace(/[^/]+$/, ''), tools });
     }
-    exactFiles.filter(([p, t]) => t && !/__toolsnaps__/.test(p)).forEach(([p, t]) => { const ts = toolsFromJson(t); if (ts && ts.length) candidates.push({ kind: 'committed', fidelity: 'exact', path: p, tools: ts }); });
+    exactFiles.filter(([p, t]) => t && !/__toolsnaps__/.test(p)).forEach(([p, t]) => {
+      if (/(^|\/)\.mcp-catalog\//.test(p)) { const c = fromCatalogSnap(t); if (c) candidates.push({ kind: 'catalog', fidelity: 'exact', path: p, tools: c.tools, server: c.server, capturedAt: c.capturedAt }); return; }
+      const ts = toolsFromJson(t); if (ts && ts.length) candidates.push({ kind: 'committed', fidelity: 'exact', path: p, tools: ts });
+    });
     for (const [p, t] of await readMany(plan.manifests.slice(0, 10), 4)) { const m = t && fromMcpbManifest(t); if (m) candidates.push({ kind: 'mcpb', fidelity: m.fidelity, path: p, tools: m.tools, generated: m.generated }); }
     for (const [p, t] of await readMany(plan.serverJson.slice(0, 5), 4)) { try { const d = JSON.parse(t); if (d && d.name) hints.serverJson.push({ path: p, name: d.name, remotes: d.remotes || [], packages: d.packages || [] }); } catch (e) { /* ignore */ } }
     // source extraction: the manifests (SDK and zod versions), then the sources, then one analysis over all of them
@@ -1127,12 +1140,15 @@
   const WALK_SKIP = /^(node_modules|\.git|\.hg|\.svn|\.venv|venv|__pycache__|site-packages|\.next|\.nuxt|\.turbo|\.cache|\.tox|\.mypy_cache|\.pytest_cache|coverage|bower_components|jspm_packages)$/;
   const MAX_LIST = 20000; // paths listed from a directory (GitHub's recursive tree answer stops near 100,000 entries)
   const MAX_WALK_DEPTH = 16;
+  const LIKELY_SRC = /^(src|lib|server|servers|app|packages|mcp|\.mcp-catalog)$/i;
   /**
    * The same reading as fromGitHub, over a folder on this machine: no network, nothing executed. Symlinks are not
    * followed (a link could lead outside the folder); files over MAX_FILE are not read, as on GitHub.
    * opts: { rootDir } a parent folder whose package.json / package-lock.json / pyproject.toml also count (a monorepo
    * package read from its own folder); { maxSourceFiles } as fromGitHub (default 60, so a local read and --repo agree);
-   * { exclude } folders (relative paths) not to read; { skipIfContains } a file name that marks a folder not to read.
+   * { exclude } folders and files (relative paths) not to read, such as a baseline list; { skipIfContains } a file name
+   * that marks a folder not to read; { maxList } the listing limit (default MAX_LIST). The answer's `truncated` says
+   * the folder held more files than the limit (the deepest and least likely ones were not listed).
    */
   async function fromDirectory(dir, opts) {
     opts = opts || {};
@@ -1141,25 +1157,32 @@
     let st; try { st = fs.statSync(base); } catch (e) { const err = new Error('Folder not found: ' + dir); err.code = 'not_found'; throw err; }
     if (!st.isDirectory()) { const err = new Error('Not a folder: ' + dir); err.code = 'not_found'; throw err; }
     const all = []; let truncated = false;
+    const maxList = opts.maxList || MAX_LIST;
     const exclude = new Set((opts.exclude || []).map((x) => String(x).replace(/\\/g, '/').replace(/^\.\/|\/+$/g, '')));
-    const walk = (abs, rel, depth) => {
-      if (truncated) return;
-      let ents; try { ents = fs.readdirSync(abs, { withFileTypes: true }); } catch (e) { return; }
-      ents.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    // Breadth first, and the folders that usually hold a server's source (and everything in them) first, so a folder
+    // over the listing limit loses its deepest and least likely files, not src/.
+    // Two queues: folders inside a likely source folder (src, lib, ...) are listed before every other folder.
+    const rank = (n) => (LIKELY_SRC.test(n) ? 0 : 1);
+    const likely = []; const other = [[base, '', 0, false]];
+    while ((likely.length || other.length) && !truncated) {
+      const [abs, rel, depth, inLikely] = likely.length ? likely.shift() : other.shift();
+      let ents; try { ents = fs.readdirSync(abs, { withFileTypes: true }); } catch (e) { continue; }
+      ents.sort((a, b) => rank(a.name) - rank(b.name) || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
       for (const e of ents) {
-        if (all.length >= MAX_LIST) { truncated = true; return; }
         const r = rel ? rel + '/' + e.name : e.name;
-        if (e.isSymbolicLink()) continue;
+        if (e.isSymbolicLink() || exclude.has(r)) continue;
         if (e.isDirectory()) {
-          if (WALK_SKIP.test(e.name) || depth >= MAX_WALK_DEPTH || exclude.has(r)) continue;
+          if (WALK_SKIP.test(e.name) || depth >= MAX_WALK_DEPTH) continue;
           const sub = pathMod.join(abs, e.name);
           if (opts.skipIfContains) { let marked = false; try { marked = fs.lstatSync(pathMod.join(sub, opts.skipIfContains)).isFile(); } catch (x) { marked = false; } if (marked) continue; }
-          walk(sub, r, depth + 1); continue;
+          const l = inLikely || LIKELY_SRC.test(e.name);
+          (l ? likely : other).push([sub, r, depth + 1, l]); continue;
         }
-        if (e.isFile()) all.push(r);
+        if (!e.isFile()) continue;
+        if (all.length >= maxList) { truncated = true; break; }
+        all.push(r);
       }
-    };
-    walk(base, '', 0);
+    }
     const extra = new Map(); // root manifests of the parent folder, under a name that cannot clash with a file of the folder
     if (opts.rootDir && pathMod.resolve(String(opts.rootDir)) !== base) {
       const root = pathMod.resolve(String(opts.rootDir));
@@ -1200,5 +1223,5 @@
     return null;
   }
 
-  return { fromGitHub, fromDirectory, fromRegistry, extractFromFile, extractJs, extractPy, planFiles, detectSdk, collectGlobalConsts, analyseRepo, markConditionals, parseRepoRef, toolsFromJson, fromMcpbManifest, tokenize, commandFor };
+  return { fromGitHub, fromDirectory, fromCatalogSnap, fromRegistry, extractFromFile, extractJs, extractPy, planFiles, detectSdk, collectGlobalConsts, analyseRepo, markConditionals, parseRepoRef, toolsFromJson, fromMcpbManifest, tokenize, commandFor };
 });

@@ -4,6 +4,7 @@
 //   - this file, run as its own step with the token, creates or updates the one comment that carries MARKER.
 // A failure here is a warning, never a failed job. Only node: built-ins and files of this repository.
 import { appendFileSync, lstatSync, readFileSync, realpathSync } from 'node:fs';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import M from '../src/engine.js';
 import { tagged } from '../src/links.js';
@@ -15,6 +16,8 @@ export const MODES = ['off', 'auto', 'always'];
 /** Findings shown in the comment; the job summary and the report artifact have the rest. */
 export const MAX_COMMENT_FINDINGS = 5;
 const MAX_BODY = 60000; // GitHub refuses comments over 65,536 characters
+/** Text from the tool list, inert: mdText, and no @mention (a zero-width space after every @), so it notifies no one. */
+export const commentText = (s) => mdText(s).replace(/@/g, '@&#8203;');
 
 /**
  * Where a comment could go, from the event payload: { number } for a pull request from a branch of the same
@@ -68,7 +71,7 @@ export function renderComment(r, { sections, minGrade = null, diff = null, sourc
     out.push('', 'Top findings:', '');
     for (const f of fs.slice(0, MAX_COMMENT_FINDINGS)) {
       const msg = String(f.message);
-      out.push('- ' + f.severity + ' ' + (f.tool ? mdCode(String(f.tool).slice(0, 128)) : '(list)') + ': [' + f.id + '](' + tagged(M.CHECK[f.id].docs, 'comment') + ') ' + mdText(msg.length > 300 ? msg.slice(0, 297) + '...' : msg));
+      out.push('- ' + f.severity + ' ' + (f.tool ? mdCode(String(f.tool).slice(0, 128)) : '(list)') + ': [' + f.id + '](' + tagged(M.CHECK[f.id].docs, 'comment') + ') ' + commentText(msg.length > 300 ? msg.slice(0, 297) + '...' : msg));
     }
     if (fs.length > MAX_COMMENT_FINDINGS) out.push('', (fs.length - MAX_COMMENT_FINDINGS) + ' more in the job summary' + (runUrl ? ' of [this run](' + runUrl + ')' : '') + '.');
   } else out.push('', 'No blocking or attention findings in the gated sections.');
@@ -100,9 +103,28 @@ async function gh(fetchImpl, url, token, method = 'GET', body = undefined) {
 }
 
 /**
- * Creates or updates the comment that starts with MARKER. Finds it among the pull request's comments (up to 1,000),
- * preferring one by github-actions[bot]. action 'update' changes an existing comment and creates none.
- * Returns { done: 'created' | 'updated' | 'none', id }.
+ * Who the token writes as: { login } when GET /user answers (a personal token), else { bot: true } (the default
+ * GITHUB_TOKEN and GitHub App tokens cannot read /user; their comments are authored by a bot account).
+ */
+export async function tokenIdentity(fetchImpl, apiUrl, token) {
+  try {
+    const u = await gh(fetchImpl, apiUrl.replace(/\/+$/, '') + '/user', token);
+    if (u && typeof u.login === 'string' && u.login) return { login: u.login };
+  } catch { /* 401/403 for installation tokens */ }
+  return { bot: true };
+}
+/** A comment this Action wrote with this token: it starts with MARKER and its author is the token's identity. */
+export function isOwnComment(c, id) {
+  if (!c || typeof c.body !== 'string' || !c.body.startsWith(MARKER) || !c.user) return false;
+  if (id.login) return c.user.login === id.login;
+  return c.user.type === 'Bot';
+}
+
+/**
+ * Creates or updates this Action's comment. Among the pull request's comments (up to 1,000) it takes one that starts
+ * with MARKER and was written by the token's own identity (tokenIdentity; for a bot token, github-actions[bot] first).
+ * A marker comment by anyone else is never edited: a new comment is made instead. action 'update' changes an existing
+ * comment and creates none. Returns { done: 'created' | 'updated' | 'unchanged' | 'none', id }.
  */
 export async function upsertComment({ apiUrl = 'https://api.github.com', repo, number, token, body, action = 'upsert', fetch: fetchImpl = globalThis.fetch }) {
   if (!/^[\w.-]+\/[\w.-]+$/.test(repo || '')) throw new Error('GITHUB_REPOSITORY is not owner/repo');
@@ -116,7 +138,10 @@ export async function upsertComment({ apiUrl = 'https://api.github.com', repo, n
     for (const c of list) if (c && typeof c.body === 'string' && c.body.startsWith(MARKER)) mine.push(c);
     if (list.length < 100) break;
   }
-  const existing = mine.find((c) => c.user && c.user.login === 'github-actions[bot]') || mine[0];
+  // Only when some comment carries the marker is the token's identity needed (one more request).
+  const id = mine.length ? await tokenIdentity(fetchImpl, apiUrl, token) : null;
+  const own = id ? mine.filter((c) => isOwnComment(c, id)) : [];
+  const existing = own.find((c) => c.user.login === 'github-actions[bot]') || own[0];
   const commentsUrl = apiUrl.replace(/\/+$/, '') + '/repos/' + repo + '/issues/comments/';
   if (existing) {
     if (existing.body === body) return { done: 'unchanged', id: existing.id };
@@ -136,18 +161,46 @@ export function explainFailure(e) {
   return String(e && e.message || e).slice(0, 300);
 }
 
-// The step of action.yml. Inputs: COMMENT_FILE (written by main.mjs), PR_NUMBER, COMMENT_ACTION, GITHUB_TOKEN.
+/**
+ * The comment step's own reading of the run, from what GitHub provides and not from the run step's outputs (code that
+ * runs on the runner, such as the server `command` starts, could write those): the pull request from the event payload,
+ * the body from <results-dir>/pr-comment.md inside the workspace. Returns { skip } or { number, file, action }.
+ */
+export function stepPlan(env) {
+  const mode = String(env.INPUT_PR_COMMENT || 'off').trim().toLowerCase();
+  if (mode !== 'auto' && mode !== 'always') return { skip: 'pr-comment is off' };
+  let event = {};
+  try { event = JSON.parse(readFileSync(env.GITHUB_EVENT_PATH || '', 'utf8')); } catch { event = {}; }
+  const pr = prContext(env.GITHUB_EVENT_NAME || '', event);
+  if (!pr) return { skip: 'not a pull_request event' };
+  if (pr.skip) return { skip: pr.skip };
+  const ws = realpathSync(env.GITHUB_WORKSPACE || process.cwd());
+  const dir = resolve(ws, String(env.INPUT_RESULTS_DIR || 'mcp-check-results').trim() || 'mcp-check-results');
+  const rel = relative(ws, dir);
+  if (!rel || rel === '..' || rel.startsWith('..' + sep) || isAbsolute(rel)) return { skip: 'results-dir is not inside the workspace' };
+  const dst = lstatOrNull(dir);
+  if (!dst || !dst.isDirectory()) return { skip: 'no results folder (the grading step did not finish)' };
+  if (realpathSync(dir) !== dir && !realpathSync(dir).startsWith(ws + sep)) return { skip: 'results-dir resolves outside the workspace' };
+  const file = join(dir, 'pr-comment.md');
+  const st = lstatOrNull(file);
+  if (!st) return { skip: 'no comment for this run' };
+  if (!st.isFile() || st.size > 256 * 1024) throw new Error('the comment file is not a regular file of at most 256 KiB');
+  return { number: pr.number, file, action: mode === 'always' || env.COMMENT_ACTION === 'upsert' ? 'upsert' : 'update' };
+}
+const lstatOrNull = (p) => { try { return lstatSync(p); } catch { return null; } };
+
+// The step of action.yml, run with a clean environment (env -i) holding only what it needs.
 async function step(env) {
   const warn = (msg) => {
     process.stdout.write('::warning::mcp-check: PR comment not posted: ' + msg.replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A') + '\n');
     if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, '\nPR comment not posted: ' + mdText(msg) + '\n');
   };
   try {
-    const file = env.COMMENT_FILE || '';
-    const st = lstatSync(file);
-    if (!st.isFile() || st.size > 256 * 1024) throw new Error('the comment file is not a regular file');
-    const body = readFileSync(file, 'utf8');
-    const got = await upsertComment({ apiUrl: env.GITHUB_API_URL || 'https://api.github.com', repo: env.GITHUB_REPOSITORY, number: Number(env.PR_NUMBER), token: env.GITHUB_TOKEN, body, action: env.COMMENT_ACTION === 'update' ? 'update' : 'upsert' });
+    const plan = stepPlan(env);
+    if (plan.skip) { process.stdout.write('mcp-check: no PR comment: ' + plan.skip + '\n'); return; }
+    const body = readFileSync(plan.file, 'utf8');
+    if (!body.startsWith(MARKER)) throw new Error('the comment file was not written by this action');
+    const got = await upsertComment({ apiUrl: env.GITHUB_API_URL || 'https://api.github.com', repo: env.GITHUB_REPOSITORY, number: plan.number, token: env.GITHUB_TOKEN, body, action: plan.action });
     process.stdout.write('mcp-check: PR comment ' + got.done + (got.id ? ' (' + got.id + ')' : '') + '\n');
   } catch (e) {
     warn(explainFailure(e));
