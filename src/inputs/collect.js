@@ -101,7 +101,17 @@ export const LIVE_ADVICE = 'Grade the live list instead: start the server with -
 
 /** No tool definitions in a folder: the message names the live alternatives (the CLI's and the Action's). */
 export function noToolsMessage(where, r) {
-  return 'no tool definitions found in ' + where + ' (scanned ' + r.scanned.source + ' of ' + r.scanned.sourceTotal + ' source files, and the committed tool lists and MCPB manifests). ' + LIVE_ADVICE;
+  return 'no tool definitions found in ' + where + ' (' + scannedText(r) + '). ' + LIVE_ADVICE;
+}
+
+/** What a scan read: "scanned 120 of 130 source files, and the committed tool lists and MCPB manifests", with the limits it hit. */
+export function scannedText(r) {
+  const s = r.scanned || {};
+  const read = s.read !== undefined ? s.read : s.source;
+  let out = 'scanned ' + read + ' of ' + s.sourceTotal + ' source files, and the committed tool lists and MCPB manifests';
+  if (s.candidates !== undefined && s.candidates > s.source) out += '; ' + s.candidates + ' files may define a tool and the first ' + s.source + ' were read for tools';
+  if (r.truncated && r.via !== 'directory') out += '; GitHub cut the repository listing short (truncated), so files were missed: point --repo at the server\'s folder (…/tree/<ref>/<folder>)';
+  return out;
 }
 
 /** Snapshots of other servers that were found and not used (several, and no tool defined in the source). */
@@ -155,6 +165,7 @@ export function whyNothing(r) {
   const ign = (h.ignoredFolders || []).filter((x) => x.tools);
   if (ign.length) s += ' Tool definitions were found only in folders that look like admin, console, docs, examples, evaluation or test code, which are not graded from a parent folder: ' + ign.map((x) => line(x.path, 200) + ' (' + plural(x.tools, 'tool') + ')').join(', ') + '; if one of them is the server, point the check at that folder.';
   if (h.serverWithoutTools) s += ' A server is constructed in ' + line(h.serverWithoutTools || '.', 200) + ', but none of its tools could be read.';
+  if (h.unresolvedNames) s += ' ' + plural(h.unresolvedNames, 'tool registration') + ' had a name the reader could not resolve (computed at run time).';
   if (h.lists) s += ' Not used: ' + plural(h.lists.length, 'committed tool list') + ' in different places (' + h.lists.map((x) => line(x.path, 200)).join(', ') + '); grade one by giving the file itself.';
   return s + foreignNote(r);
 }

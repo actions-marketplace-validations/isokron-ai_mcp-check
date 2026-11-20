@@ -10,7 +10,7 @@ import { capture, CaptureError, splitCommand as split } from '../src/capture.js'
 import { parseList } from '../src/tools.js';
 import { InputError as LimitError } from '../src/limits.js';
 import { registryUrl, tagDocsLinks } from '../src/links.js';
-import { isApproximate, repoProvenance, serverChoices, serverFolders, usableList, whyNothing } from '../src/inputs/collect.js';
+import { isApproximate, repoProvenance, scannedText, serverChoices, serverFolders, usableList, whyNothing } from '../src/inputs/collect.js';
 import { commentAction, markerFor, MODES as COMMENT_MODES, prContext, renderComment, renderNotGraded, runStamp, validKey } from './pr-comment.mjs';
 import { ALL_SECTIONS, DEFAULT_SECTIONS, GRADED_SECTIONS, GRADES, badgeFile, badgeSnippet, belowMinGrade, mdCode, mdText, sarifWithLocations, summaryMarkdown, webLink } from '../src/report.js';
 
@@ -217,7 +217,7 @@ export async function run() {
     const LIVE = { text: 'Set command (the command that starts the server, for example node dist/index.js) or tools-file (a saved tools/list answer).', md: 'Set `command` to the command that starts your server, or `tools-file` to a saved `tools/list` answer: [how](' + ZERO_CONFIG_DOCS + ').' };
     const u = usableList(scan);
     let stop;
-    if (u.problem === 'none') stop = notGraded('No tool definitions found in the source in ' + dir.rel + ' (scanned ' + scan.scanned.source + ' of ' + scan.scanned.sourceTotal + ' source files, and the committed tool lists and MCPB manifests' + (scan.truncated ? '; the folder holds more files than the listing limit, and the deepest were not listed' : '') + ').' + whyNothing(scan), LIVE);
+    if (u.problem === 'none') stop = notGraded('No tool definitions found in the source in ' + dir.rel + ' (' + scannedText(scan) + (scan.truncated ? '; the folder holds more files than the listing limit, and the deepest were not listed' : '') + ').' + whyNothing(scan), LIVE);
     // Names without schemas (an MCPB manifest's tools array) would be graded on schemas that do not exist.
     else if (u.problem === 'names') stop = notGraded('Only tool names were found in the source in ' + dir.rel + ' (' + u.candidate.path + ' lists names and descriptions without schemas), which cannot be graded.', LIVE);
     else if (u.problem === 'multiple') {
