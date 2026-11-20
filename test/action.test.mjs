@@ -39,10 +39,11 @@ test('action: tools-file, grades as outputs, job summary, reports and SARIF with
   assert.equal(r.outputs.passed, 'false');
   assert.equal(r.outputs['exit-status'], '1');
   assert.match(r.stdout, /::error::mcp-check: below min-grade B: anthropic C, openai C/);
-  assert.match(r.summary, /\| Anthropic directory \| C \| 70 \|/);
+  assert.match(r.summary, /\| Anthropic directory \| C \| 71 \|/);
+  assert.ok(!/Write-surface/.test(r.summary), 'the write surface is not in the grade table and is not selected');
   assert.match(r.summary, /\*\*Below the minimum grade B:\*\* anthropic C, openai C/);
   assert.match(r.summary, /\[anthropic-title\]\(https:\/\/isokron\.ai\/mcp-check\/checks\/anthropic-title\?utm_source=mcp-check-action&utm_medium=action\)/);
-  assert.match(r.summary, /\[Open this report in the web checker\]\(https:\/\/isokron\.ai\/mcp-check#r=2\.1\.1&z=/);
+  assert.match(r.summary, /\[Open this report in the web checker\]\(https:\/\/isokron\.ai\/mcp-check#r=2\.2\.0&z=/);
   for (const f of ['report.md', 'report.json', 'report.sarif']) assert.ok(existsSync(join(ws, 'mcp-check-results', f)), f);
   const sarif = JSON.parse(readFileSync(join(ws, 'mcp-check-results', 'report.sarif'), 'utf8'));
   assert.ok(sarif.runs[0].results.every((x) => x.locations[0].physicalLocation.artifactLocation.uri === 'mcp/tools.json'));
@@ -56,6 +57,11 @@ test('action: a well-designed list passes min-grade A on every section', () => {
   assert.equal(r.outputs.passed, 'true');
   assert.equal(r.outputs['exit-status'], '0');
   assert.match(r.summary, /Every gated section meets the minimum grade A/);
+  // surface is selected: its coverage line follows the table, it has no grade row, and the log says it is not gated.
+  assert.match(r.summary, /\n\nWrite surface \(advice, not graded\): Guards offered: retry keys 1\/1, preconditions 2\/2, delete guards 1\/1\.\n/);
+  assert.doesNotMatch(r.summary, /\| Write-surface design \|/);
+  assert.equal(r.outputs['grade-surface'], '');
+  assert.match(r.stdout, /::notice::mcp-check: surface has no grade since rubric 2\.2\.0/);
 });
 
 test('action: command starts a stdio server and reads tools/list only', () => {
@@ -85,7 +91,8 @@ test('action: badge written on the default branch only, and not rewritten when n
   assert.equal(badge.label, 'MCP check');
   assert.equal(badge.message, 'Claude C · ChatGPT C · spec A');
   assert.equal(badge.color, 'yellow');
-  assert.equal(badge.rubric_version, '2.1.1');
+  assert.equal(badge.rubric_version, '2.2.0');
+  assert.deepEqual(Object.keys(badge.grades), ['spec', 'anthropic', 'openai', 'security', 'quality'], 'no write-surface grade in the badge');
   assert.match(badge.date, /^\d{4}-\d{2}-\d{2}$/);
   assert.equal(badge.grades.anthropic, 'C');
   assert.equal(badge.report, 'https://github.com/example/server/blob/main/.github/mcp-check/report.md');

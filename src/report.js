@@ -5,7 +5,15 @@ import { tagged } from './links.js';
 
 export const GRADES = ['A', 'B', 'C', 'D', 'F'];
 export const ALL_SECTIONS = ['spec', 'anthropic', 'openai', 'security', 'quality', 'surface'];
+/** Sections with a letter. Write surface (rubric 2.2.0) reports guard coverage only and is never gated. */
+export const GRADED_SECTIONS = ['spec', 'anthropic', 'openai', 'security', 'quality'];
 export const DEFAULT_SECTIONS = ['spec', 'anthropic', 'openai', 'security'];
+
+/** One line on the write surface: guard coverage, advice only (shown when the surface section is selected). */
+export function surfaceLine(r) {
+  const s = r.sections.surface;
+  return 'Write surface (advice, not graded): ' + (s.why || s.summary || 'no write tools.');
+}
 export const WEB_BASE = 'https://isokron.ai/mcp-check';
 /** Longest web-checker link written into a report; longer lists are left out rather than truncated. */
 export const MAX_LINK = 64 * 1024;
@@ -85,13 +93,13 @@ export function summaryMarkdown(r, { sections = DEFAULT_SECTIONS, minGrade = nul
   out.push('Rubric ' + r.rubric_version + ', MCP specification ' + r.spec_version + ', directory rules as read on ' + r.sources_read + '. ' + r.input.tools + ' tools' + (source ? ' from ' + source : '') + '.', '');
   if (note) out.push(note, '');
   out.push('| Section | Grade | Score | Blocking | Attention | Advice | Gate |', '|---|---|---|---|---|---|---|');
-  for (const k of ALL_SECTIONS) {
+  for (const k of GRADED_SECTIONS) {
     const s = r.sections[k];
     const gated = sections.includes(k);
     const gate = !gated ? 'not gated' : !minGrade ? '' : below(s.grade, minGrade) ? 'below ' + minGrade : 'meets ' + minGrade;
-    if (k === 'surface') out.push('| ' + s.name + ' | ' + (s.grade || 'not graded') + ' | ' + (s.score == null ? '' : s.score) + ' | | | | ' + gate + ' |');
-    else out.push('| ' + s.name + ' | ' + s.grade + ' | ' + s.score + ' | ' + s.counts.blocking + ' | ' + s.counts.attention + ' | ' + s.counts.advice + ' | ' + gate + ' |');
+    out.push('| ' + s.name + ' | ' + s.grade + ' | ' + s.score + ' | ' + s.counts.blocking + ' | ' + s.counts.attention + ' | ' + s.counts.advice + ' | ' + gate + ' |');
   }
+  if (sections.includes('surface')) out.push('', esc(surfaceLine(r)));
   const failing = belowMinGrade(r, sections, minGrade);
   if (minGrade) out.push('', failing.length ? '**Below the minimum grade ' + minGrade + ':** ' + failing.join(', ') + '.' : 'Every gated section meets the minimum grade ' + minGrade + '.');
   const fs = M.allFindings(r).filter((f) => f.severity !== 'advice' && f.section !== 'surface' && f.affects.some((a) => sections.includes(a)));
@@ -122,7 +130,7 @@ const COLOR = { A: 'brightgreen', B: 'green', C: 'yellow', D: 'orange', F: 'red'
  */
 export function badgeFile(r, { date, commit = null, report = null, run = null, previous = null } = {}) {
   const base = M.badgeJson(r);
-  const grades = Object.fromEntries(ALL_SECTIONS.map((k) => [k, r.sections[k].grade || null]));
+  const grades = Object.fromEntries(GRADED_SECTIONS.map((k) => [k, r.sections[k].grade || null]));
   const key = (b) => b && JSON.stringify([b.message, b.color, b.rubric_version, b.grades, b.catalog_hash]);
   const json = {
     schemaVersion: 1,

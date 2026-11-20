@@ -12,7 +12,7 @@ import { InputError as LimitError } from '../src/limits.js';
 import { registryUrl, tagDocsLinks } from '../src/links.js';
 import { isApproximate, repoProvenance, serverChoices, serverFolders, usableList, whyNothing } from '../src/inputs/collect.js';
 import { commentAction, markerFor, MODES as COMMENT_MODES, prContext, renderComment, renderNotGraded, runStamp, validKey } from './pr-comment.mjs';
-import { ALL_SECTIONS, DEFAULT_SECTIONS, GRADES, badgeFile, badgeSnippet, belowMinGrade, mdCode, mdText, sarifWithLocations, summaryMarkdown, webLink } from '../src/report.js';
+import { ALL_SECTIONS, DEFAULT_SECTIONS, GRADED_SECTIONS, GRADES, badgeFile, badgeSnippet, belowMinGrade, mdCode, mdText, sarifWithLocations, summaryMarkdown, webLink } from '../src/report.js';
 
 const Repo = createRequire(import.meta.url)('../src/inputs/repo-source.cjs');
 const env = process.env;
@@ -143,6 +143,7 @@ export async function run() {
   if (minGrade && !GRADES.includes(minGrade)) throw new InputError('min-grade must be one of A, B, C, D, F, or empty');
   const sections = input('sections', DEFAULT_SECTIONS.join(',')).split(',').map((s) => s.trim()).filter(Boolean);
   sections.forEach((s) => { if (!ALL_SECTIONS.includes(s)) throw new InputError('unknown section ' + s + ' (use ' + ALL_SECTIONS.join(', ') + ')'); });
+  if (minGrade && sections.includes('surface')) annotate('notice', 'mcp-check: surface has no grade since rubric 2.2.0 (it reports guard coverage), so min-grade does not gate it.');
   const timeout = Number(input('timeout', '60'));
   if (!(timeout > 0 && timeout <= 600)) throw new InputError('timeout must be 1 to 600 seconds');
   const wantSarif = bool('sarif', true);
@@ -379,7 +380,7 @@ export async function run() {
   if (riskNote) annotate('warning', 'mcp-check: ' + riskNote);
   if (below.length) annotate('error', 'mcp-check: below min-grade ' + minGrade + ': ' + below.join(', ') + (approximate ? ' (approximate grades read from source)' : ''));
   if (diff && diff.highRisk.length) annotate('error', 'mcp-check: high-risk annotation change against ' + baseline.rel + ': ' + diff.highRisk.join(', '));
-  process.stdout.write(ALL_SECTIONS.map((k) => k + ' ' + (r.sections[k].grade || 'n/a')).join(', ') + '\n');
+  process.stdout.write(GRADED_SECTIONS.map((k) => k + ' ' + (r.sections[k].grade || 'n/a')).join(', ') + '\n');
   return failed ? 1 : 0;
 }
 

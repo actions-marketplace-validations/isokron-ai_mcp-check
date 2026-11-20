@@ -56,7 +56,7 @@ Set one of these, or neither:
 | `timeout` | `60` | One overall time limit, in seconds, for starting the server and reading `initialize` and every `tools/list` page (1 to 600). |
 | `min-grade` | | `A` to `F`. The job fails when a section in `sections` grades below it. Empty: report only. With neither `command` nor `tools-file` the grades are approximate, and a gate on them is at your own risk. |
 | `fail-on-no-tools` | `false` | With neither `command` nor `tools-file`: fail the job when the source gives nothing to grade (no tool definitions, names only, or more than one server). Default: a warning, an empty `passed`, and the job is not failed. |
-| `sections` | `spec,anthropic,openai,security` | Sections the gate applies to: `spec`, `anthropic`, `openai`, `security`, `quality`, `surface`. All six are always reported. |
+| `sections` | `spec,anthropic,openai,security` | Sections the gate applies to: `spec`, `anthropic`, `openai`, `security`, `quality`, `surface`. The five graded sections are always reported. `surface` has no grade (rubric 2.2.0) and is never gated; selecting it adds its guard-coverage line under the grade table. |
 | `baseline` | | Path of an earlier `tools/list` answer. The job fails on a high-risk annotation change: one that lets a client run a tool with less confirmation, such as `readOnlyHint` turning `true` or `destructiveHint` turning `false`. |
 | `sarif` | `true` | Write `report.sarif`. Each result points at the tool's `"name"` line in the tool-list file. |
 | `upload-sarif` | `false` | Upload `report.sarif` to code scanning (category `mcp-check`). Needs `security-events: write`. |
@@ -73,7 +73,7 @@ Every path must be inside the workspace; a path that leads outside it, directly 
 
 ## Outputs
 
-`passed` (`true` or `false`; empty when nothing was graded), `source`, `approximate`, `grade-spec`, `grade-anthropic`, `grade-openai`, `grade-security`, `grade-quality`, `grade-surface` (empty when there is no write tool), `catalog-hash`, `sarif-file`, `results-dir`.
+`passed` (`true` or `false`; empty when nothing was graded), `source`, `approximate`, `grade-spec`, `grade-anthropic`, `grade-openai`, `grade-security`, `grade-quality`, `grade-surface` (always empty since rubric 2.2.0: the write surface is reported as guard coverage, not a grade), `catalog-hash`, `sarif-file`, `results-dir`.
 
 `source` says where the list came from: `repo-static` (read from the source, nothing run), `command` or `tools-file`. `approximate` is `true` when the list was read from source code (`literal` or `derived`), `false` for a server, a saved list or an exact committed list.
 
@@ -175,9 +175,9 @@ With `badge: true`, on `push`, `schedule` and `workflow_dispatch` runs of the de
     "message": "Claude A · ChatGPT A · spec A",
     "color": "brightgreen",
     "cacheSeconds": 3600,
-    "rubric_version": "2.1.1",
+    "rubric_version": "2.2.0",
     "date": "2026-11-18",
-    "grades": { "spec": "A", "anthropic": "A", "openai": "A", "security": "A", "quality": "B", "surface": null },
+    "grades": { "spec": "A", "anthropic": "A", "openai": "A", "security": "A", "quality": "B" },
     "catalog_hash": "…",
     "commit": "…",
     "report": "https://github.com/OWNER/REPO/blob/main/.github/mcp-check/report.md",
@@ -187,7 +187,7 @@ With `badge: true`, on `push`, `schedule` and `workflow_dispatch` runs of the de
 
   `date` is the day these grades were recorded; a run with the same grades and tool list leaves the file, and its date, unchanged. The badge colour follows the lower of the two directory grades.
 
-- `report.md`: the full report (grades, every finding with its docs link, write-surface rows, definition hashes), headed by the commit and the workflow run, with a link that opens the same list in the web checker. The list travels in that link's fragment, which browsers do not send to any server.
+- `report.md`: the full report (grades, every finding with its docs link, write-surface guard coverage and rows, definition hashes), headed by the commit and the workflow run, with a link that opens the same list in the web checker. The list travels in that link's fragment, which browsers do not send to any server.
 
 Add the badge to your README (the job summary prints this with your names filled in):
 

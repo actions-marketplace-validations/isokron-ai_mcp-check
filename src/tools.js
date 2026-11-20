@@ -26,7 +26,8 @@ export function checkToolsList({ tools_list, sections, min_grade, limit = DEFAUL
 
   const secOut = want.map((id) => {
     const s = r.sections[id];
-    return { id, name: s.name, grade: s.grade ?? null, score: s.score ?? null, ready: id === 'surface' ? null : s.ready, counts: s.counts || null, caps: s.caps || [], note: s.why || null };
+    // surface has no grade (rubric 2.2.0): grade and score are null and note carries its guard coverage.
+    return { id, name: s.name, grade: s.grade ?? null, score: s.score ?? null, ready: id === 'surface' ? null : s.ready, counts: s.counts || null, caps: s.caps || [], note: id === 'surface' ? 'Advice only, not graded. ' + (s.why || '') : s.why || null };
   });
 
   const all = M.allFindings(r).filter((f) => f.affects.some((a) => want.includes(a)));
@@ -64,7 +65,7 @@ export function checkToolsList({ tools_list, sections, min_grade, limit = DEFAUL
   };
 
   const lines = [
-    'MCP check (rubric ' + r.rubric_version + ', ' + r.input.tools + ' tools): ' + secOut.map((s) => s.id + ' ' + (s.grade || 'n/a')).join(', ') + '.',
+    'MCP check (rubric ' + r.rubric_version + ', ' + r.input.tools + ' tools): ' + [secOut.filter((s) => s.id !== 'surface').map((s) => s.id + ' ' + (s.grade || 'n/a')).join(', ')].filter(Boolean).concat(want.includes('surface') ? ['write surface (advice, not graded): ' + (r.sections.surface.why || '')] : []).join('; ') + (/[.]$/.test(r.sections.surface.why || '') && want.includes('surface') ? '' : '.'),
     counts.blocking + ' blocking, ' + counts.attention + ' attention, ' + counts.advice + ' advice findings' + (findings.length ? '; check docs at ' + M.DOCS_BASE + '<id>.' : '.') + (all.length > findings.length ? ' Showing ' + findings.length + ' of ' + all.length + ' (raise limit for more).' : ''),
   ];
   findings.filter((f) => f.severity === 'blocking').slice(0, 5).forEach((f) => lines.push('- ' + (f.tool || '(list)') + ': ' + f.id + ': ' + f.message));

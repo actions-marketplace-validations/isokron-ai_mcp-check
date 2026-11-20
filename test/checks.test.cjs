@@ -116,10 +116,11 @@ test('spec-execution-legacy', () => { triggers('spec-execution-legacy', [clean({
 // ---------------- Anthropic
 test('anthropic-title', () => { const t = clean(); delete t.title; triggers('anthropic-title', [t], 'blocking'); silent('anthropic-title', [Object.assign(clean(), { title: undefined, annotations: { title: 'Get issue', readOnlyHint: true, destructiveHint: false, openWorldHint: false } })]); });
 test('anthropic-hint', () => { triggers('anthropic-hint', [write({ annotations: { readOnlyHint: false, openWorldHint: false } })], 'blocking'); triggers('anthropic-hint', [write({ annotations: {} })], 'blocking'); });
-test('anthropic-hint-platforms-differ (the v1 A-hint false positive is no longer blocking)', () => {
-  const r = triggers('anthropic-hint-platforms-differ', [write({ name: 'issues_create', annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false } })], 'attention');
+test('anthropic-hint-platforms-differ (the v1 A-hint false positive is no longer blocking; creates are not raised)', () => {
+  const r = triggers('anthropic-hint-platforms-differ', [write({ name: 'issues_update', annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false } })], 'attention');
   assert.equal(find(r, 'anthropic-hint').length, 0);
   assert.equal(r.sections.anthropic.ready, true);
+  silent('anthropic-hint-platforms-differ', [write({ name: 'issues_create', annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false } })]);
 });
 test('anthropic-name-length', () => { triggers('anthropic-name-length', [clean({ name: 'issues_get_' + 'x'.repeat(60) })], 'blocking', '71'); silent('anthropic-name-length', [clean({ name: 'x'.repeat(64) })]); });
 test('anthropic-read-write-split', () => {
@@ -147,7 +148,12 @@ test('openai-description', () => { const t = clean(); delete t.description; trig
 test('openai-name-unique', () => { triggers('openai-name-unique', [clean(), clean()], 'blocking'); });
 test('openai-name-promotional', () => { triggers('openai-name-promotional', [clean({ name: 'best_search' })], 'attention'); silent('openai-name-promotional', [clean({ name: 'search_bestsellers' })]); });
 test('openai-name-opaque', () => { triggers('openai-name-opaque', [clean({ name: 'op_17' })], 'advice'); silent('openai-name-opaque', [clean({ name: 'get_invoice' })]); });
-test('openai-retry', () => { triggers('openai-retry', [write({ description: 'Archives one issue. Use this when the user asks to archive an issue.' })], 'attention'); silent('openai-retry', [write()]); });
+test('openai-retry', () => {
+  triggers('openai-retry', [write({ description: 'Archives one issue. Use this when the user asks to archive an issue.' })], 'attention');
+  silent('openai-retry', [write()]);
+  // An argument's description counts too.
+  silent('openai-retry', [write({ description: 'Archives one issue. Use this when the user asks to archive an issue.', inputSchema: props({ issue_id: S('Issue id. Archiving twice is safe to repeat: the second call returns the first result.') }) })]);
+});
 test('openai-conversation-input', () => {
   triggers('openai-conversation-input', [clean({ inputSchema: props({ transcript: S() }) })], 'blocking');
   triggers('openai-conversation-input', [clean({ inputSchema: props({ context: S() }) })], 'attention');
@@ -159,7 +165,8 @@ test('openai-restricted-input', () => {
   silent('openai-restricted-input', [clean({ inputSchema: props({ page_token: S(), max_tokens: { type: 'integer', description: 'x' }, secret_name: S(), key: S() }) })]);
 });
 test('openai-precise-location', () => {
-  triggers('openai-precise-location', [clean({ inputSchema: props({ latitude: { type: 'number', description: 'x' } }) })], 'blocking');
+  triggers('openai-precise-location', [clean({ description: 'Finds stores near your current location. Use this when the user asks what is nearby.', inputSchema: props({ latitude: { type: 'number', description: 'x' } }) })], 'blocking');
+  triggers('openai-precise-location', [clean({ inputSchema: props({ latitude: { type: 'number', description: 'Latitude of the place to search around.' } }) })], 'attention');
   triggers('openai-precise-location', [clean({ inputSchema: props({ street_address: S() }) })], 'attention');
   silent('openai-precise-location', [clean({ inputSchema: props({ email_address: S(), ip_address: S() }) })]);
 });
@@ -242,18 +249,19 @@ test('design-handle-lifetime', () => {
 });
 
 // ---------------- write surface
-test('surface-retry-key', () => { triggers('surface-retry-key', [write({ name: 'create_issue', annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false } })], 'attention'); silent('surface-retry-key', [write({ name: 'create_issue', inputSchema: props({ title: S(), idempotency_key: S() }) })]); });
+test('surface-retry-key', () => { triggers('surface-retry-key', [write({ name: 'create_issue', annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false } })], 'advice'); silent('surface-retry-key', [write({ name: 'create_issue', inputSchema: props({ title: S(), idempotency_key: S() }) })]); });
 test('surface-version-guard (argument or If-Match header)', () => {
-  triggers('surface-version-guard', [write({ name: 'update_issue', inputSchema: props({ issue_id: S(), title: S() }) })], 'attention');
+  triggers('surface-version-guard', [write({ name: 'update_issue', inputSchema: props({ issue_id: S(), title: S() }) })], 'advice');
   silent('surface-version-guard', [write({ name: 'update_issue', inputSchema: props({ issue_id: S(), title: S(), etag: { type: 'string', description: 'x', 'x-mcp-header': 'If-Match' } }) })]);
 });
 test('surface-delete-guard', () => { triggers('surface-delete-guard', [write({ name: 'delete_issue' })], 'advice'); silent('surface-delete-guard', [write({ name: 'delete_issue', inputSchema: props({ issue_id: S(), expected_version: S(), dry_run: { type: 'boolean', description: 'x' } }) })]); });
 test('surface-full-replace (by verb, or every field required)', () => {
-  triggers('surface-full-replace', [write({ name: 'replace_issue' })], 'advice', 'replace');
+  triggers('surface-full-replace', [write({ name: 'replace_issue', inputSchema: props({ issue_id: S(), title: S() }, { required: ['issue_id', 'title'] }) })], 'advice', 'replace');
+  silent('surface-full-replace', [write({ name: 'replace_issue', inputSchema: props({ issue_id: S(), title: S() }, { required: ['issue_id'] }) })]);
   triggers('surface-full-replace', [write({ name: 'update_card', inputSchema: props({ card_id: S(), holder: S(), exp_month: S(), exp_year: S() }, { required: ['card_id', 'holder', 'exp_month', 'exp_year'] }) })], 'advice', 'required');
   silent('surface-full-replace', [write({ name: 'update_issue', inputSchema: props({ issue_id: S(), title: S(), body: S(), state: S(), labels: S(), assignee: S(), milestone: S() }, { required: ['issue_id'] }) })]);
 });
-test('surface-bulk-delete', () => { triggers('surface-bulk-delete', [write({ name: 'delete_issues', inputSchema: props({ issue_ids: { type: 'array', items: { type: 'string' }, description: 'x' } }) })], 'attention'); });
+test('surface-bulk-delete', () => { triggers('surface-bulk-delete', [write({ name: 'delete_issues', inputSchema: props({ issue_ids: { type: 'array', items: { type: 'string' }, description: 'x' } }) })], 'advice'); });
 
 test('every check in the registry has a trigger test', () => {
   const missing = M.CHECKS.map((c) => c.id).filter((id) => !tested.has(id));

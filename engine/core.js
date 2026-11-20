@@ -7,7 +7,7 @@
 //   openai    OpenAI plugin guidelines (MCP tool rules)
 //   security  hidden characters and poisoning patterns, over every string in each tool
 //   quality   schema and description quality (design advice, not directory rules)
-//   surface   write-surface design (what the list offers a caller for safe writes)
+//   surface   write-surface design: guard coverage and advice, never a letter (what the list offers a caller for safe writes)
 //   mws       MWS-ANN-4 records only, with no total and no grade (MWS 0.9, section 5.2)
 // The rubric is in RUBRIC.md; RUBRIC_VERSION below must match it.
 
@@ -18,7 +18,7 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function (root) {
   'use strict';
 
-  const RUBRIC_VERSION = '2.1.1';
+  const RUBRIC_VERSION = '2.2.0';
   const REPORT_SCHEMA = 'isokron-mcp-check-report/2';
   const SPEC_VERSION = '2026-07-28';
   const SOURCES_READ = '2026-11-18';
@@ -153,7 +153,7 @@
     fix: 'Set "readOnlyHint": true on tools that only read. On tools that change data set "readOnlyHint": false and an explicit "destructiveHint".',
     example: { bad: '"annotations": { "openWorldHint": false }', good: '"annotations": { "readOnlyHint": false, "destructiveHint": true, "openWorldHint": false }' } });
   def({ id: 'anthropic-hint-platforms-differ', section: 'anthropic', affects: ['anthropic'], severity: 'attention', title: 'destructiveHint: false on a write: the platforms word this differently', src: 'anthropic', anchor: '#provide-tool-annotations', quote: A_HINT_QUOTE,
-    explain: 'This write tool sets destructiveHint: false. OpenAI says false is right for "additive writes without destructive or irreversible effects". Anthropic\'s checklist asks for destructiveHint: true on "tools that modify or delete data", and does not say whether a pure create counts as modifying. Neither text settles it, so this is not graded as blocking. If the tool can overwrite, cancel, revoke or send something irreversible, it is destructive on both platforms.',
+    explain: 'This write tool sets destructiveHint: false and its name does not read as a create. OpenAI says false is right for "additive writes without destructive or irreversible effects". Anthropic\'s checklist asks for destructiveHint: true on "tools that modify or delete data". Neither text settles it for a tool that changes something it did not create, so this is not graded as blocking. Tools named as creates (create, add, insert, append, record) purely add and are not flagged. If the tool can overwrite, cancel, revoke or send something irreversible, it is destructive on both platforms.',
     fix: 'Keep destructiveHint: false only if the tool purely adds (a new record, a new comment) and cannot overwrite or delete. Otherwise set it to true. If a reviewer asks, the OpenAI wording supports false for additive writes.' });
   def({ id: 'anthropic-name-length', section: 'anthropic', affects: ['anthropic'], severity: 'blocking', title: 'Tool name is 64 characters or fewer', src: 'anthropic', anchor: '#keep-tool-names-short',
     quote: 'Tool names must be 64 characters or fewer.',
@@ -205,7 +205,7 @@
     fix: 'Use a plain verb and object, for example list_invoices.' });
   def({ id: 'openai-retry', section: 'openai', affects: ['openai'], severity: 'attention', title: 'Write tools say whether a retry repeats the effect', src: 'openai', anchor: '',
     quote: 'Tools should be safe to retry where possible, or explicitly indicate when retries may cause repeated effects.',
-    explain: 'The write tool neither declares idempotentHint: true nor mentions retries, duplicates or idempotency in its description. A model that loses the answer will often call again.',
+    explain: 'The tool reads as a write (its name reads as a create, update or delete, or it declares destructiveHint: true), and it neither declares idempotentHint: true nor mentions retries, duplicates or idempotency in its description or in an argument\'s description, nor takes a retry-key argument. A model that loses the answer will often call again.',
     fix: 'Make the tool safe to repeat (for example with an idempotency key) and say so, or state in the description that a repeated call repeats the effect.' });
   def({ id: 'openai-conversation-input', section: 'openai', affects: ['openai'], severity: 'blocking', severities: ['attention'], title: 'No conversation history or "just in case" context inputs', src: 'openai', anchor: '',
     quote: 'Do not request or reconstruct full conversation histories or collect broad context “just in case.”',
@@ -213,11 +213,11 @@
     fix: 'Remove the field. Use only chat context the client or model supplies explicitly, and keep any free-text input specific to the task.' });
   def({ id: 'openai-restricted-input', section: 'openai', affects: ['openai', 'security'], severity: 'blocking', severities: ['attention'], title: 'No credential, payment card or government ID inputs', src: 'openai', anchor: '',
     quote: 'Access credentials and authentication secrets (such as API keys, MFA/OTP codes, or passwords).',
-    explain: 'OpenAI lists these under Restricted Data that plugins must not collect, solicit or process, next to payment card data and government identifiers. An argument named password, api_key, otp, card_number or ssn asks the model to pass one through the chat. Boolean flags such as hide_secret or withCredentials are not inputs of this kind. A bare "token" argument is marked for attention, since it may be a pagination token.',
+    explain: 'OpenAI lists these under Restricted Data that plugins must not collect, solicit or process, next to payment card data and government identifiers. An argument named password, api_key, otp, card_number or ssn asks the model to pass one through the chat. Boolean flags such as hide_secret or withCredentials are not inputs of this kind, and an object or array argument that declares its fields (a refresh_token settings object) is read by those fields, not by its own name. A bare "token" argument is marked for attention, since it may be a pagination token.',
     fix: 'Take credentials through the server\'s own authorization (OAuth) instead of tool arguments, and remove the field.' });
   def({ id: 'openai-precise-location', section: 'openai', affects: ['openai'], severity: 'blocking', severities: ['attention'], title: 'No precise location inputs', src: 'openai', anchor: '',
     quote: 'When location is needed, rely on system-shared coarse location. Do not request precise user location.',
-    explain: 'Coordinate fields (latitude, longitude, gps) carry a precise location and are blocking. Street address, postal code and location fields are marked for attention: a user\'s own address is a precise location, but a field that is not the user\'s location (a shipping destination, a store) may be fine if the description says so. City-level fields are coarse and are not flagged.',
+    explain: 'Coordinate fields (latitude, longitude, gps) are blocking when the tool or the field description asks for the user\'s own position ("your current location"); otherwise they may be task data (a place to search, an emulated position) and are marked for attention. Street address, postal code and location fields are marked for attention: a user\'s own address is a precise location, but a field that is not the user\'s location (a shipping destination, a store) may be fine if the description says so. City-level fields are coarse and are not flagged.',
     fix: 'Use the coarse location the platform shares. If an address is task data, not the user\'s location, say that in the field\'s description.' });
   def({ id: 'openai-generic-executor', section: 'openai', affects: ['openai'], severity: 'blocking', title: 'No generic executor or operation dispatcher', src: 'openai', anchor: '',
     quote: 'Do not use discovery, operation selection, or schema fetching with a generic executor to enable operations not individually exposed for review.',
@@ -351,25 +351,25 @@
     explain: 'The tool creates a session, cart, context or similar handle, but its description does not say when it expires.',
     fix: 'Add the lifetime, for example "Sessions expire after 30 minutes without a call."' });
 
-  // --- Write-surface design (findings feed the surface table; the surface grade comes from the tallies)
-  def({ id: 'surface-retry-key', section: 'surface', affects: ['surface'], severity: 'attention', title: 'Create and send tools take a retry key', src: 'mws', anchor: '#mws-retry-1',
+  // --- Write-surface design: advice only. The section reports guard coverage (rubric 2.2.0) and has no letter.
+  def({ id: 'surface-retry-key', section: 'surface', affects: ['surface'], severity: 'advice', title: 'Create and send tools take a retry key', src: 'mws', anchor: '#mws-retry-1',
     quote: 'A create tool whose repeated call would create a second object SHOULD accept an idempotency key from the caller.',
-    explain: 'If the answer to a create is lost, the model retries and creates a duplicate. An idempotency key lets the server recognise the repeat. idempotentHint: true is counted as declared, not shown: only a test (MWS-RETRY) can confirm it.',
+    explain: 'If the answer to a create is lost, the model retries and creates a duplicate. An idempotency key (idempotency_key, client_token, client_request_id, a dedup key) lets the server recognise the repeat; it counts at the root or one level down (events[].idempotency_key). idempotentHint: true is counted as declared, not shown: only a test (MWS-RETRY) can confirm it.',
     fix: 'Add an "idempotency_key" string argument and have the server return the first result for a repeated key.',
     example: { bad: '"properties": { "project": {...}, "title": {...} }', good: '"properties": { "project": {...}, "title": {...}, "idempotency_key": { "type": "string", "description": "Client-chosen key; a repeat call with the same key returns the first result instead of creating a duplicate." } }' } });
-  def({ id: 'surface-version-guard', section: 'surface', affects: ['surface'], severity: 'attention', title: 'Update and delete tools take a version or precondition', src: 'mws', anchor: '#mws-conc-2',
+  def({ id: 'surface-version-guard', section: 'surface', affects: ['surface'], severity: 'advice', title: 'Update and delete tools take a version or precondition', src: 'mws', anchor: '#mws-conc-2',
     quote: 'A tool that replaces a whole object, deletes an object or accepts a version MUST refuse the write with a conflict when the object has changed since the state the caller read, wherever the backend can detect the change.',
-    explain: 'Without an expected version (an ETag, revision or updated_at), a write based on stale data replaces another writer\'s change. An x-mcp-header named If-Match counts as a version argument.',
+    explain: 'Without an expected version (an ETag, revision or updated_at), a write based on stale data replaces another writer\'s change. Arguments named expected_* or expect_*, base_sha, if_match, etag, last_modified, version, revision, sha or confirm_token count, at the root or one level down (ops[].expect_version), and so does an x-mcp-header named If-Match. new_version and version_id set or select a version and do not count.',
     fix: 'Add an "expected_version" argument (or if_match), refuse with a conflict when it no longer matches, and return the version from read tools.' });
   def({ id: 'surface-delete-guard', section: 'surface', affects: ['surface'], severity: 'advice', title: 'Delete tools take a confirm or dry-run argument', src: 'openai', anchor: '',
     quote: 'Annotations inform client safeguards; they do not grant permission or replace authentication, authorization and scope checks, input validation, or human confirmation for irreversible operations.',
-    explain: 'A dry_run or confirm argument lets the model preview what a delete will remove before it is irreversible. This is a design prompt from the tool list, not a test.',
+    explain: 'A dry_run, validate_only, preview or confirm argument lets the model see what a delete will remove before it is irreversible. force is not a guard: it skips one. This is a design prompt from the tool list, not a test.',
     fix: 'Add "dry_run": { "type": "boolean", "default": true } and return what would be deleted.' });
   def({ id: 'surface-full-replace', section: 'surface', affects: ['surface'], severity: 'advice', title: 'Updates send the change, not the whole object', src: 'mws', anchor: '#mws-conc-2',
     quote: 'A tool that replaces a whole object, deletes an object or accepts a version MUST refuse the write with a conflict when the object has changed since the state the caller read, wherever the backend can detect the change.',
-    explain: 'The tool reads as a full replacement (replace, overwrite or put) and takes no field mask, so every field the caller sends overwrites what is stored, including fields it did not mean to change.',
+    explain: 'The update requires every one of its fields and takes no field mask, so every call sends the whole object and overwrites what is stored, including fields the caller did not mean to change. Identifiers and scope (ids, names, keys, channel, ts) are not fields. A name such as replace, overwrite or put is a hint only. Not raised when the tool takes a version or precondition (the replacement is then refused when stale), when another tool for the same object takes optional fields or a mask, for find-and-replace tools, or for HTTP clients that send a request to a URL.',
     fix: 'Offer a field-patch update that changes only the fields named, or take an update_mask, and require a version on full replacements.' });
-  def({ id: 'surface-bulk-delete', section: 'surface', affects: ['surface'], severity: 'attention', title: 'Bulk deletes have a guard', src: 'mws', anchor: '#mws-tgt-2',
+  def({ id: 'surface-bulk-delete', section: 'surface', affects: ['surface'], severity: 'advice', title: 'Bulk deletes have a guard', src: 'mws', anchor: '#mws-tgt-2',
     quote: 'A tool that deletes or bulk-updates MUST NOT treat an empty, missing or match-all selector, or the path of a container, as selecting every object in the container or collection unless the caller sets an explicit argument that opts in.',
     explain: 'The delete tool takes an array or filter of targets and has no dry-run or confirm argument, so one wrong selector removes many objects.',
     fix: 'Add a dry-run argument, refuse an empty or match-all selector unless an explicit opt-in is set, and cap the number of items per call.' });
@@ -437,10 +437,19 @@
   const norm = (k) => tokens(k).join('_');
   const set = (s) => new Set(s.split(' '));
   const READ_V = set('get list search find read fetch query describe show view count lookup look check validate preview browse retrieve download export inspect explain summarize summarise suggest recommend analyze analyse compare calculate compute estimate whoami ping status diff render convert parse translate info stat stats peek poll head lint verify test can has is');
-  const DELETE_V = set('delete remove drop purge destroy clear truncate wipe revoke cancel reset erase unlink uninstall unpublish deactivate disable ban kick terminate kill abort void overwrite replace rollback detach unregister unsubscribe empty prune evict');
+  // disable is an update (enable is one too): it switches something off and keeps it. tombstone and retire delete.
+  const DELETE_V = set('delete remove drop purge destroy clear truncate wipe revoke cancel reset erase unlink uninstall unpublish deactivate ban kick terminate kill abort void overwrite replace rollback detach unregister unsubscribe empty prune evict tombstone retire');
   // execute, run and call are left out on purpose: they name read queries as often as writes.
-  const CREATE_V = set('create add send post insert upload comment reply publish invite submit order pay charge book schedule transfer refund new make register enqueue queue start trigger launch fork clone copy duplicate import share notify email message tweet attach subscribe generate dispatch deploy provision spawn open draft compose');
-  const UPDATE_V = set('update edit set patch put rename move assign unassign merge close reopen archive unarchive write upsert modify change toggle approve reject label tag untag lock unlock pin unpin star unstar mark restore transition sync save configure enable rotate grant resolve apply commit push link unlink scale restart stop pause resume promote demote');
+  const CREATE_V = set('create add send post insert upload comment reply publish invite submit order pay charge book schedule transfer refund new make register enqueue queue start trigger launch fork clone copy duplicate import share notify email message tweet attach subscribe generate dispatch deploy provision spawn open draft compose append');
+  const UPDATE_V = set('update edit set patch put rename move assign unassign merge close reopen archive unarchive write upsert modify change toggle approve reject label tag untag lock unlock pin unpin star unstar mark restore transition sync save configure enable disable rotate grant resolve apply commit push link unlink scale restart stop pause resume promote demote hide unhide supersede');
+  // Words that are also common nouns (a record, a checkpoint): a create only as the leading verb (record_feedback, checkpoint_state).
+  const LEAD_CREATE_V = set('record checkpoint');
+  // Verbs that are never nouns: after a namespace prefix (idp_create_application_grant, acme_get_issue_comment) they win
+  // over a last word that is also a noun (grant, comment).
+  const PURE_V = set('get list create update delete remove add insert upsert set fetch search find read write edit patch query describe show view retrieve modify destroy purge erase append');
+  // Read commands of key-value and data-structure stores, as whole tool names (hget, lrange, smembers, type, dbsize).
+  const STORE_READ = set('get mget getrange strlen exists hget hmget hgetall hkeys hvals hlen hexists hstrlen hscan lrange llen lindex lpos smembers scard sismember smismember srandmember sscan zrange zrangebyscore zrevrange zrevrangebyscore zscore zmscore zcard zcount zrank zrevrank zscan xrange xrevrange xlen xinfo xpending type ttl pttl dbsize keys scan randomkey');
+  const UPSERT_NAME = /(^|_)(create_or_update|update_or_create|create_or_replace|insert_or_update|add_or_update)(_|$)/;
   const JOB_V = set('start trigger launch queue enqueue schedule dispatch kick spawn deploy provision');
   // "open" reads (open_nodes, open_file) when its object is something that exists already; open_issue and open_pull_request create.
   const OPEN_READ = set('node nodes file files page pages url urls link links document documents doc docs tab tabs entity entities graph resource resources path paths directory folder');
@@ -455,17 +464,21 @@
     return null;
   }
   // Verb-first names (create_issue) are read from the first word, resource-first names (issues.create) from the last.
+  const NOUNISH = /^(names|values|keys|ids|list|lists|config|configs|configuration|schema|schemas|stats|info|details|types|sets)$/;
   function kindOf(name) {
     const tk = tokens(name);
     if (!tk.length) return null;
+    if (tk.length === 1 && STORE_READ.has(tk[0])) return 'read';
+    // create_or_update_file is an upsert: an update that may create, judged by its precondition.
+    if (UPSERT_NAME.test(tk.join('_'))) return 'update';
     if (tk[0] === 'open' && tk.length > 1 && OPEN_READ.has(tk[1])) return 'read';
-    const first = verbClass(tk[0]);
+    const first = verbClass(tk[0]) || (LEAD_CREATE_V.has(tk[0]) && tk.length > 1 ? 'create' : null);
     if (first) return first;
+    if (tk.length >= 3 && PURE_V.has(tk[1]) && !PURE_V.has(tk[tk.length - 1]) && !NOUNISH.test(tk[2])) return verbClass(tk[1]);
     const last = verbClass(tk[tk.length - 1]);
     if (last) return last;
     // Middle words: a read verb before any write word wins (tempo_search_tag_values), and a write word followed by a
     // plural or config noun is itself a noun (loki_label_names, alloy_label_config).
-    const NOUNISH = /^(names|values|keys|ids|list|lists|config|configs|configuration|schema|schemas|stats|info|details|types|sets)$/;
     const writes = [];
     for (let i = 1; i < tk.length - 1; i++) {
       const c = verbClass(tk[i]);
@@ -734,11 +747,17 @@
       // and invisible characters as spaces, and a run of words joined by - _ or / ("ignore-all-previous-instructions") as
       // words. A short identifier (an enum value or event name such as "post-update-password") is still read for instructions,
       // hard steering and outside instructions, but not as asking for secrets or as soft steering.
+      // In prose (text with spaces), a run of three or more words joined by - or _ ("always-call-this-tool-first") is also
+      // read as words, for instructions, hard steering and outside instructions only: identifiers in prose ("the
+      // post-change-password trigger") are not read as asking for secrets or as soft steering.
       const spaced = value.replace(RE_BLANKS, ' ');
       const shortId = SHORT_ID.test(value.trim());
-      const texts = /\s/.test(spaced.trim()) ? [spaced] : [spaced, spaced.replace(/[-_\/]+/g, ' ')];
-      const findAll = (re) => { for (const x of texts) { const m = x.match(re); if (m) return m; } return null; };
-      const find = (re) => (shortId ? null : findAll(re));
+      const prose = /\s/.test(spaced.trim());
+      const unjoined = prose ? spaced.replace(/[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+){2,}/g, (m) => m.replace(/[-_]+/g, ' ')) : null;
+      const texts = prose ? [spaced] : [spaced, spaced.replace(/[-_\/]+/g, ' ')];
+      const textsAll = unjoined && unjoined !== spaced ? texts.concat([unjoined]) : texts;
+      const findAll = (re) => { for (const x of textsAll) { const m = x.match(re); if (m) return m; } return null; };
+      const find = (re) => { if (shortId) return null; for (const x of texts) { const m = x.match(re); if (m) return m; } return null; };
       if (HTML_COMMENT.test(value)) once('sec-html-comment', 'blocking', 'An HTML comment hides text from rendered views.', path);
       const mk = value.match(RE_MARKUP);
       if (mk) once('sec-instruction-markup', 'blocking', 'Prompt markup "' + clip(mk[0].trim(), 40) + '".', path);
@@ -778,13 +797,45 @@
 
   function argNames(t) { return Object.keys(props(t)); }
 
+  const typesOf = (s) => (!isObj(s) ? [] : Array.isArray(s.type) ? s.type : typeof s.type === 'string' ? [s.type] : []);
+  const isType = (s, ty) => typesOf(s).includes(ty);
+  // An argument that holds fields (an object, or an array of objects): its own name says what it groups, not what it carries.
+  const isContainer = (s) => isObj(s) && (isType(s, 'object') || isType(s, 'array') || (!typesOf(s).length && (isObj(s.properties) || s.items !== undefined)));
+  // The properties of an object argument, or of the objects an array argument holds.
+  const innerProps = (s) => {
+    if (!isObj(s)) return null;
+    if (isObj(s.properties) && !isType(s, 'array')) return { props: s.properties, sep: '.' };
+    if (isObj(s.items) && isObj(s.items.properties)) return { props: s.items.properties, sep: '[].' };
+    return null;
+  };
+  // Arguments at the root and one level down (ops[].expect_version, options.dry_run), with names in words (expectedHeadSha
+  // reads as expected_head_sha).
+  function argEntries(t) {
+    const out = [];
+    const pp = props(t);
+    Object.keys(pp).forEach((k) => {
+      out.push({ label: k, norm: norm(k), schema: pp[k], depth: 0 });
+      const inner = innerProps(pp[k]);
+      if (inner) Object.keys(inner.props).forEach((c) => out.push({ label: k + inner.sep + c, norm: norm(c), schema: inner.props[c], depth: 1 }));
+    });
+    return out;
+  }
+
   function credentialArgs(t) {
     const hard = [], soft = [];
     const pp = props(t);
-    argNames(t).forEach((k) => {
+    const test1 = (k, s, label) => {
       const tk = tokens(k), n = tk.join('_');
       // A boolean flag (hide_secret, withCredentials) cannot carry a credential.
-      if (isObj(pp[k]) && (pp[k].type === 'boolean' || (Array.isArray(pp[k].type) && pp[k].type.every((x) => x === 'boolean' || x === 'null')))) return;
+      if (isObj(s) && (s.type === 'boolean' || (Array.isArray(s.type) && s.type.every((x) => x === 'boolean' || x === 'null')))) return;
+      // An object or array argument that declares its fields (refresh_token: { rotation_type, expiration_type }) is read by
+      // those fields, not by its own name. One without declared fields (cookies: string[], an open credentials object) is
+      // still read by its name.
+      const inner = isContainer(s) ? innerProps(s) : null;
+      if (inner) {
+        if (label === k) Object.keys(inner.props).forEach((c) => test1(c, inner.props[c], k + inner.sep + c));
+        return;
+      }
       const last = tk[tk.length - 1];
       if (['name', 'names', 'id', 'ids', 'count', 'length', 'policy', 'hint', 'expiry', 'expires', 'type', 'ref', 'label', 'path', 'arn', 'version', 'field', 'header', 'required', 'reset', 'set'].includes(last)) return;
       if (/^(page|next|prev|previous|continuation|cursor|sync|resume|pagination|max|min|num|output|input|completion|prompt)_/.test(n) && /token/.test(n)) return;
@@ -792,9 +843,10 @@
       if (/(^|_)(password|passwd|passphrase|pwd|secret|apikey|otp|totp|hotp|mfa|2fa|passcode|pin_code|cvv|cvc|ssn|cookie|cookies|credential|credentials)(_|$)/.test(n) ||
           /(^|_)api_key(_|$)/.test(n) || /(^|_)(access|refresh|auth|bearer|session|id|oauth|personal_access|client|private|secret)_(token|key|secret)(_|$)/.test(n) ||
           /(^|_)private_key(_|$)/.test(n) || /(^|_)(card|cc|credit_card)_(number|num|no)(_|$)/.test(n) || /^(card|credit_card|pan)$/.test(n) ||
-          /(^|_)(social_security|national_id|passport_number|tax_id)(_|$)/.test(n)) hard.push(k);
-      else if (/^(token|auth|authorization|api_token)$/.test(n)) soft.push(k);
-    });
+          /(^|_)(social_security|national_id|passport_number|tax_id)(_|$)/.test(n)) hard.push(label);
+      else if (/^(token|auth|authorization|api_token)$/.test(n)) soft.push(label);
+    };
+    Object.keys(pp).forEach((k) => test1(k, pp[k], k));
     return { hard, soft };
   }
 
@@ -818,6 +870,10 @@
     });
     return { hard, soft };
   }
+  // Text that asks for the user's own position ("your current location", "the user's coordinates"), as opposed to a place
+  // the task is about (a search centre, an emulated position).
+  const USER_LOCATION = /\b(user['’]?s|your|my|caller['’]?s|device['’]?s?)\b[^.\n]{0,40}\b(location|position|coordinates|whereabouts|latitude|longitude|gps|geolocation)\b|\b(current|precise|exact|real[- ]time|live) (location|position|coordinates|geolocation)\b|\bwhere (the user|you) (is|are)\b/i;
+  const asksUserLocation = (t, keys) => USER_LOCATION.test(desc(t)) || keys.some((k) => isObj(props(t)[k]) && typeof props(t)[k].description === 'string' && USER_LOCATION.test(props(t)[k].description));
 
   const SAFE_M = ['GET', 'HEAD', 'OPTIONS'];
   const UNSAFE_M = ['POST', 'PUT', 'PATCH', 'DELETE'];
@@ -962,7 +1018,8 @@
     if (!titleOf(t)) push('anthropic-title', null, 'No title, and no annotations.title.', 'title');
     if (!readOnly) {
       if (typeof a.destructiveHint !== 'boolean') push('anthropic-hint', null, 'Neither readOnlyHint: true nor destructiveHint is set' + (has.call(a, 'readOnlyHint') ? '' : ' (no annotations hint at all)') + '. A client treats a missing destructiveHint as true.', 'annotations');
-      else if (a.destructiveHint === false && kind !== 'delete') push('anthropic-hint-platforms-differ', null, 'destructiveHint: false on a write tool. OpenAI accepts false for purely additive writes; Anthropic\'s wording asks for true on tools that modify data.', 'annotations.destructiveHint');
+      // A create (append, add, insert, record) purely adds, which both platforms' wording allows as non-destructive.
+      else if (a.destructiveHint === false && kind !== 'delete' && kind !== 'create') push('anthropic-hint-platforms-differ', null, 'destructiveHint: false on a write tool. OpenAI accepts false for purely additive writes; Anthropic\'s wording asks for true on tools that modify data.', 'annotations.destructiveHint');
     }
     if (name.length > 64) push('anthropic-name-length', null, 'The name is ' + name.length + ' characters.', 'name');
     const mixed = mixedMethodTool(t);
@@ -984,14 +1041,21 @@
     const ntk = norm(name);
     if (PROMO.test(ntk)) push('openai-name-promotional', null, 'The name "' + name + '" contains promotional wording.', 'name');
     if (/^(tool|func|fn|function|op|operation|action|cmd|command|endpoint|method|api|call|x|t)_?\d+$/.test(ntk) || /[0-9a-f]{8,}/.test(ntk) || tokens(name).every((x) => x.length <= 2)) push('openai-name-opaque', null, 'The name "' + name + '" does not say what the tool does.', 'name');
-    if (!readOnly && a.idempotentHint !== true && !RETRY_WORDS.test(d) && kind !== 'read') push('openai-retry', null, 'Neither idempotentHint: true nor any word on retries in the description.', 'description');
+    // Only tools read as writes: the name reads as a create, update or delete, or the tool declares destructiveHint: true.
+    // A word on retries counts in the description or in an argument's description, and so does a retry-key argument.
+    const writeKind = kind === 'create' || kind === 'update' || kind === 'delete' || (kind === null && a.destructiveHint === true);
+    if (!readOnly && writeKind && a.idempotentHint !== true && !RETRY_WORDS.test(d) && !argEntries(t).some((e) => isRetryKey(e.norm) || (isObj(e.schema) && typeof e.schema.description === 'string' && RETRY_WORDS.test(e.schema.description))))
+      push('openai-retry', null, 'Neither idempotentHint: true nor any word on retries in the description or the argument descriptions.', 'description');
     if (conv.hard.length) push('openai-conversation-input', 'blocking', 'Asks for ' + conv.hard.map((k) => '"' + k + '"').join(', ') + '.', 'inputSchema.properties');
     else if (conv.soft.length) push('openai-conversation-input', 'attention', 'Takes ' + conv.soft.map((k) => '"' + k + '"').join(', ') + '; make sure it is task data, not conversation context.', 'inputSchema.properties');
     const cred = credentialArgs(t);
     if (cred.hard.length) push('openai-restricted-input', 'blocking', 'Asks for ' + cred.hard.map((k) => '"' + k + '"').join(', ') + '.', 'inputSchema.properties');
     else if (cred.soft.length) push('openai-restricted-input', 'attention', 'Takes ' + cred.soft.map((k) => '"' + k + '"').join(', ') + '; if this is an access credential, take it through authorization instead.', 'inputSchema.properties');
     const loc = locationArgs(t);
-    if (loc.hard.length) push('openai-precise-location', 'blocking', 'Asks for coordinates: ' + loc.hard.map((k) => '"' + k + '"').join(', ') + '.', 'inputSchema.properties');
+    if (loc.hard.length) {
+      if (asksUserLocation(t, loc.hard)) push('openai-precise-location', 'blocking', 'Asks for the user\'s own coordinates: ' + loc.hard.map((k) => '"' + k + '"').join(', ') + '.', 'inputSchema.properties');
+      else push('openai-precise-location', 'attention', 'Takes coordinates ' + loc.hard.map((k) => '"' + k + '"').join(', ') + ', but nothing says they are the user\'s own location; say in the description that they are task data (a place to search, an emulated position).', 'inputSchema.properties');
+    }
     else if (loc.soft.length) push('openai-precise-location', 'attention', 'Takes location fields ' + loc.soft.map((k) => '"' + k + '"').join(', ') + '.', 'inputSchema.properties');
     const execName = /(^|_)(execute|invoke|run|call|dispatch|perform|do)(_|$)/.test(ntk) || ['execute', 'invoke', 'dispatch', 'call', 'run'].includes(ntk);
     const opArg = pk.find((k) => /^(tool|tool_name|action|operation|operation_id|operationid|command|cmd|op|function|function_name|endpoint_name|method_name)$/.test(norm(k)) || /^[a-z]+_(command|cmd)$/.test(norm(k)) || (norm(k) === 'method' && !(isObj(p[k]) && Array.isArray(p[k].enum))));
@@ -1040,63 +1104,141 @@
 
   // ---------------------------------------------------------------- write surface
 
-  const RETRY_ARG = /(idempot|request_?id|client_?token|dedup|client_?reference|client_?request|operation_?id)/i;
-  const VERSION_ARG = /(version|etag|if_?match|revision|expected_|updated_?at|^sha$|precondition|if_?unmodified|generation|resource_?version|lock_?token)/i;
+  // Argument names are read in words (norm): expectedHeadSha is expected_head_sha, ifMatch is if_match.
+  // A retry key: idempotency or dedup keys, client tokens, a request id of the caller's own. merge_request_id and
+  // pull_request_id name objects, so request_id counts only as the whole name.
+  const isRetryKey = (n) => /idempot|dedup/.test(n) || /^(client_token|client_request_token|client_request_id|client_reference|client_reference_id|client_operation_id|request_id|request_token|operation_id|event_key|unique_key|nonce)$/.test(n);
+  // A precondition: an expected value of the object as read (expected_*, expect_*, base_sha, if_match, an etag, the
+  // version or revision itself, a confirm token). new_version and version_id set or select a version; they are not one.
+  const isPrecondition = (n) => /^(expect|expected)_/.test(n) || /^base_(sha|revision|rev|version|etag)$/.test(n) ||
+    /^(if_match|if_unmodified_since|if_generation_match|if_metageneration_match|etag|e_tag|last_modified|confirm_token|version|revision|rev|generation|resource_version|current_version|object_version|lock_token|sha|precondition|preconditions|updated_at)$/.test(n) ||
+    /_(etag|e_tag|if_match)$/.test(n);
   const VERSION_HEADER = /^(if-match|etag|if-unmodified-since|version|revision|if_match)$/i;
-  const GUARD_ARG = /(confirm|dry_?run|preview|allow_|force|acknowledge|plan_?only|what_?if)/i;
-  const MASK_ARG = /^(update_?mask|field_?mask|fields|mask|patch|changes|set_fields|paths)$/i;
+  // A delete guard previews or asks for confirmation. force is the opposite of a guard, and allow_* opts in.
+  const isGuard = (n) => /^(confirm|confirmed|confirmation|dry_run|dryrun|preview|preview_only|acknowledge|acknowledged|plan_only|what_if|whatif|validate_only|simulate|check_only)$/.test(n) || /^confirm_/.test(n);
+  const isMask = (n) => /^(update_mask|field_mask|fields|mask|patch|changes|set_fields|paths|update_fields)$/.test(n);
+  // Identifiers and scope select the object; they are not fields of it (owner, repo, issue_number, channel, ts, message_id).
+  const isIdentifier = (n) => /(^|_)(id|ids|key|keys|name|path|slug|uid|uuid|number|num|ts)$/.test(n) ||
+    /^(owner|repo|repository|org|organization|organisation|workspace|namespace|project|team|account|tenant|branch|index|collection|database|db|schema|table|bucket|channel|thread|sheet|worksheet|range)$/.test(n);
+  // Arguments of a find-and-replace (replace_cells with search and replace text): a substitution, not a whole object.
+  const isSubstitution = (n) => /^(find|search|search_text|find_text|pattern|regex|old|old_text|old_string|old_value|match|from)$/.test(n);
+  // Operations that add a change (commit, push) rather than send the whole object.
+  const NO_REPLACE_V = set('push commit append');
+  // Browser automation: these servers act on a live browser session, not on stored objects with versions.
+  const BROWSER_ACTION = set('click dblclick hover navigate goto screenshot snapshot scroll fill press drag type_text evaluate');
+  const BROWSER_PREFIX = set('browser playwright puppeteer selenium webdriver devtools');
+  const SESSION_NOUN = set('session sessions tab tabs browser browsers codegen window windows connection connections');
+  function isBrowserCatalog(tools) {
+    const seen = new Set();
+    let prefixed = 0;
+    tools.forEach((t) => {
+      const tk = tokens(t.name);
+      if (BROWSER_PREFIX.has(tk[0])) prefixed += 1;
+      tk.forEach((x, i) => { if (BROWSER_ACTION.has(x)) seen.add(x); if (x === 'type' && tk[i + 1] === 'text') seen.add('type_text'); });
+    });
+    return seen.size >= 3 || prefixed >= 2;
+  }
+  // An HTTP client (http_post, client_put, send_request with a url): it writes whatever the URL names, not an object of this server.
+  const HTTP_METHOD = set('get post put patch delete head options');
+  function isHttpClient(t) {
+    const keys = argNames(t).map(norm);
+    if (!keys.some((k) => /^(url|uri|endpoint|request_url)$/.test(k))) return false;
+    const tk = tokens(apiName(t.name));
+    return HTTP_METHOD.has(tk[tk.length - 1]) || tk.includes('http') || tk.includes('request');
+  }
+  const resourceOf = (name) => tokens(name).filter((x) => !verbClass(x) && !LEAD_CREATE_V.has(x) && x !== 'or').join('_');
 
+  const SURFACE_PARTS = [
+    { key: 'retry', short: 'retry keys', label: 'Create and send tools that take a retry key or declare themselves idempotent' },
+    { key: 'version', short: 'preconditions', label: 'Update and delete tools that take a version or precondition' },
+    { key: 'guard', short: 'delete guards', label: 'Delete tools that take a confirm or dry-run argument' },
+  ];
+  const SURFACE_MIN = 3;
+
+  // Write surface (rubric 2.2.0): guard coverage, never a letter. Each guard a write tool could offer is one opportunity.
   function surface(tools, perTool) {
     const rows = [];
     const tally = { retry: [0, 0], version: [0, 0], guard: [0, 0] };
+    const browser = isBrowserCatalog(tools);
+    const info = tools.map((t) => ({ t, kind: kindOf(t.name), entries: argEntries(t) }));
     tools.forEach((t, idx) => {
       const a = ann(t);
       if (a.readOnlyHint === true) return;
-      const kind0 = kindOf(t.name);
+      const kind0 = info[idx].kind;
       if (kind0 === 'read') return; // named as a read; annotation gaps are reported elsewhere
+      const tk = tokens(t.name);
+      if (isHttpClient(t)) { rows.push({ name: t.name, kind: 'http client', found: [], missing: [], notes: ['sends a request to the URL it is given, not a write to an object of this server; not counted'] }); return; }
+      if (browser || tk.some((x) => SESSION_NOUN.has(x))) { rows.push({ name: t.name, kind: 'session', found: [], missing: [], notes: ['acts on a live ' + (browser ? 'browser' : 'session') + ', not a stored object; not counted'] }); return; }
       const p = props(t);
       const keys = Object.keys(p);
+      const entries = info[idx].entries;
       const kind = kind0 || 'other write';
       const headerVersion = schemaFacts(schemaOf(t) || {}).headers.some((h) => typeof h.value === 'string' && VERSION_HEADER.test(h.value));
-      const retryArg = keys.find((k) => RETRY_ARG.test(k));
-      const versionArg = keys.find((k) => VERSION_ARG.test(k));
-      const guardArg = keys.find((k) => GUARD_ARG.test(k));
+      const pick = (pred) => { const e = entries.find((x) => pred(x.norm)); return e ? e.label : null; };
+      const retryArg = pick(isRetryKey);
+      const versionArg = pick(isPrecondition);
+      const guardArg = pick(isGuard);
       const found = [], missing = [], notes = [];
-      const push = (id, sev, msg) => perTool[idx].findings.push({ id, section: 'surface', affects: ['surface'], severity: sev || CHECK[id].severity, message: msg, path: 'inputSchema.properties' });
-      const want = (key, ok, label, foundLabel, id) => { tally[key][1] += 1; if (ok) { tally[key][0] += 1; found.push(foundLabel); } else { missing.push(label); push(id, null, 'Missing ' + label + '.'); } };
+      const push = (id, msg) => perTool[idx].findings.push({ id, section: 'surface', affects: ['surface'], severity: CHECK[id].severity, message: msg, path: 'inputSchema.properties' });
+      const want = (key, ok, label, foundLabel, id) => { tally[key][1] += 1; if (ok) { tally[key][0] += 1; found.push(foundLabel); } else { missing.push(label); push(id, 'Missing ' + label + '.'); } };
       if (kind === 'create') want('retry', !!retryArg || a.idempotentHint === true, 'a retry key or an idempotent declaration', retryArg ? 'retry key "' + retryArg + '"' : 'idempotentHint: true (declared, not shown)', 'surface-retry-key');
-      if (kind === 'update' || kind === 'delete') want('version', !!versionArg || headerVersion, 'a version or precondition argument', versionArg ? 'version argument "' + versionArg + '"' : 'If-Match-style x-mcp-header', 'surface-version-guard');
+      if (kind === 'update' || kind === 'delete') want('version', !!versionArg || headerVersion, 'a version or precondition argument', versionArg ? 'precondition "' + versionArg + '"' : 'If-Match-style x-mcp-header', 'surface-version-guard');
       if (kind === 'delete') want('guard', !!guardArg, 'a confirm or dry-run argument', 'guard argument "' + guardArg + '"', 'surface-delete-guard');
       const lv = leadVerb(t.name);
-      // Identifiers and scope (owner, repo, issue_number, namespace...) select the object; they are not fields of it.
-      const nonId = keys.filter((k) => !/(^|_)(id|ids|key|name|path|slug|uid|uuid|number|num)$/i.test(norm(k)) &&
-        !/^(owner|repo|repository|org|organization|organisation|workspace|namespace|project|team|account|tenant|branch|index|collection|database|db|schema|table|bucket)$/.test(norm(k)) &&
-        !VERSION_ARG.test(k) && !RETRY_ARG.test(k));
-      // MWS section 4: a tool whose schema requires every field is in full-replace mode.
-      const sc = schemaOf(t);
-      const req = isObj(sc) && Array.isArray(sc.required) ? sc.required : [];
-      const allRequired = kind === 'update' && !REWIRE_V.has(lv) && nonId.length >= 2 && nonId.every((k) => req.includes(k)) && !keys.some((k) => isObj(p[k]) && p[k].type === 'object');
-      if ((['replace', 'overwrite', 'put'].includes(lv) || allRequired) && !keys.some((k) => MASK_ARG.test(norm(k)))) {
-        notes.push('full replacement without a field mask');
-        push('surface-full-replace', null, (['replace', 'overwrite', 'put'].includes(lv) ? 'The name reads as "' + lv + '"' : 'Every one of its ' + nonId.length + ' field arguments is required') + ', and it takes no field mask.');
+      // MWS section 4: an update whose schema requires every field is in full-replace mode. The name (replace, overwrite,
+      // put) is a hint only; every field must be required, and a sibling for the same object that takes optional fields
+      // or a mask is the partial update.
+      const replaceVerb = ['replace', 'overwrite', 'put'].includes(lv);
+      if ((kind === 'update' || replaceVerb) && !REWIRE_V.has(lv) && !NO_REPLACE_V.has(lv)) {
+        const sc = schemaOf(t);
+        const req = isObj(sc) && Array.isArray(sc.required) ? sc.required : [];
+        const fields = keys.filter((k) => { const n = norm(k); return !isIdentifier(n) && !isPrecondition(n) && !isRetryKey(n) && !isGuard(n) && !isMask(n); });
+        const optionalOrMask = (o) => {
+          const pk = Object.keys(props(o));
+          const r = isObj(schemaOf(o)) && Array.isArray(schemaOf(o).required) ? schemaOf(o).required : [];
+          return pk.some((k) => isMask(norm(k))) || pk.some((k) => { const n = norm(k); return !isIdentifier(n) && !isPrecondition(n) && !r.includes(k); });
+        };
+        const res = resourceOf(t.name);
+        const sibling = res && info.find((o, j) => j !== idx && (o.kind === 'update' || o.kind === null) && ann(o.t).readOnlyHint !== true && resourceOf(o.t.name) === res && optionalOrMask(o.t));
+        const full = fields.length >= (replaceVerb ? 1 : 2) && fields.every((k) => req.includes(k)) &&
+          !keys.some((k) => isType(p[k], 'object')) && !keys.some((k) => isMask(norm(k)) || isSubstitution(norm(k)));
+        if (full && sibling) notes.push('every field required, but ' + sibling.t.name + ' updates the same object field by field');
+        else if (full && (versionArg || headerVersion)) notes.push('full replacement, guarded by ' + (versionArg ? 'precondition "' + versionArg + '"' : 'an If-Match-style header'));
+        else if (full) {
+          notes.push('full replacement without a field mask');
+          push('surface-full-replace', 'Every one of its ' + fields.length + ' field argument' + (fields.length === 1 ? '' : 's') + ' is required' + (replaceVerb ? ' and the name reads as "' + lv + '"' : '') + ', and it takes no field mask.');
+        }
       }
-      if (kind === 'delete' && !guardArg && keys.some((k) => isObj(p[k]) && (p[k].type === 'array' || /^(filter|query|where|selector|match|ids)$/.test(norm(k))))) {
+      if (kind === 'delete' && !guardArg && keys.some((k) => isObj(p[k]) && (isType(p[k], 'array') || /^(filter|query|where|selector|match|ids)$/.test(norm(k))))) {
         notes.push('bulk targets with no dry-run or confirm');
-        push('surface-bulk-delete', null, 'Takes a list or filter of targets and no dry-run or confirm argument.');
+        push('surface-bulk-delete', 'Takes a list or filter of targets and no dry-run or confirm argument.');
       }
       if (kind === 'delete' && a.destructiveHint === false) notes.push('marked destructiveHint: false');
       rows.push({ name: t.name, kind, found, missing, notes });
     });
-    const parts = [
-      { key: 'retry', label: 'Create and send tools that take a retry key or declare themselves idempotent', have: tally.retry[0], of: tally.retry[1] },
-      { key: 'version', label: 'Update and delete tools that take a version or precondition', have: tally.version[0], of: tally.version[1] },
-      { key: 'guard', label: 'Delete tools that take a confirm or dry-run argument', have: tally.guard[0], of: tally.guard[1] },
-    ];
-    const used = parts.filter((x) => x.of > 0);
-    if (!rows.length) return { writeTools: 0, score: null, grade: null, why: 'Every tool declares readOnlyHint: true or is named as a read, so there is no write surface to grade.', parts, rows };
-    if (!used.length) return { writeTools: rows.length, score: null, grade: null, why: 'No tool name could be read as a create, update or delete, so this is not graded.', parts, rows };
-    const score = Math.round((used.reduce((sum, x) => sum + x.have / x.of, 0) / used.length) * 100);
-    return { writeTools: rows.length, score, grade: letter(score), why: null, parts, rows };
+    const parts = SURFACE_PARTS.map((x) => ({ key: x.key, short: x.short, label: x.label, have: tally[x.key][0], of: tally[x.key][1] }));
+    const opportunities = parts.reduce((s, x) => s + x.of, 0);
+    const offered = parts.reduce((s, x) => s + x.have, 0);
+    const coverage = { opportunities, offered };
+    parts.forEach((x) => { coverage[x.key] = { have: x.have, of: x.of }; });
+    const writeTools = rows.filter((w) => w.kind !== 'session' && w.kind !== 'http client').length;
+    const skipped = rows.length - writeTools;
+    const line = 'Guards offered: ' + parts.filter((x) => x.of > 0).map((x) => x.short + ' ' + x.have + '/' + x.of).join(', ') + '.';
+    let state, why;
+    if (!writeTools) {
+      state = 'no-writes';
+      why = rows.length ? 'Every write tool acts on a live browser or session, or sends a request to a URL it is given, so there are no stored-object writes to look at.' : 'Every tool declares readOnlyHint: true or is named as a read, so there is no write surface.';
+    } else if (!opportunities) {
+      state = 'no-opportunities';
+      why = 'No write tool\'s name reads as a create, update or delete, so no guard applies.';
+    } else if (opportunities < SURFACE_MIN) {
+      state = 'not-enough';
+      why = 'Not enough to judge: ' + opportunities + ' guard opportunit' + (opportunities === 1 ? 'y' : 'ies') + ' (fewer than ' + SURFACE_MIN + '). ' + line;
+    } else {
+      state = 'coverage';
+      why = line;
+    }
+    return { writeTools, skipped, score: null, grade: null, graded: false, state, coverage, summary: why, why, parts, rows };
   }
 
   // ---------------------------------------------------------------- server-level checks
@@ -1260,7 +1402,8 @@
     const srv = serverChecks(parsed, tools, perTool);
     perTool.forEach((t) => t.findings.forEach((f) => { f.tool = t.name; }));
     const sections = grade(perTool, srv.findings);
-    sections.surface = { name: SECTION_NAMES.surface, score: sur.score, grade: sur.grade, why: sur.why, writeTools: sur.writeTools, parts: sur.parts, rows: sur.rows, caps: [] };
+    // Write surface: guard coverage and advice, never a letter (rubric 2.2.0). grade and score stay in the shape, always null.
+    sections.surface = { name: SECTION_NAMES.surface, score: null, grade: null, graded: false, state: sur.state, coverage: sur.coverage, summary: sur.summary, why: sur.why, writeTools: sur.writeTools, skipped: sur.skipped, parts: sur.parts, rows: sur.rows, caps: [] };
     const totalBytes = perTool.reduce((s, r) => s + r.bytes, 0);
     const engines = Array.from(ctx.engines).filter(Boolean);
     return {
@@ -1505,11 +1648,10 @@
     out.push('| Section | Grade | Score | Blocking | Attention | Advice | Notes |', '|---|---|---|---|---|---|---|');
     GRADED.forEach((k) => { const s = r.sections[k]; out.push('| ' + s.name + ' | ' + s.grade + ' | ' + s.score + ' | ' + s.counts.blocking + ' | ' + s.counts.attention + ' | ' + s.counts.advice + ' | ' + mdEsc((k === 'anthropic' || k === 'openai' ? (s.ready ? 'No blocking items. ' : 'Not ready: ' + s.blockedTools + ' of ' + s.total + ' tools blocked. ') : '') + s.caps.join(' ')) + ' |'); });
     const su = r.sections.surface;
-    out.push('| ' + su.name + ' | ' + (su.grade || 'n/a') + ' | ' + (su.score === null ? 'n/a' : su.score) + ' | | | | ' + mdEsc(su.why || su.writeTools + ' write tools') + ' |');
     out.push('', '## Findings', '', '| Tool | Severity | Check | Finding | Source |', '|---|---|---|---|---|');
     allFindings(r).filter((f) => f.section !== 'surface').forEach((f) => out.push('| ' + (f.tool ? mdCode(f.tool) : '(server)') + ' | ' + SEV_LABEL[f.severity] + ' | [' + f.id + '](' + CHECK[f.id].docs + ') | ' + mdEsc(f.message) + ' | [' + mdEsc(CHECK[f.id].sourceTitle) + '](' + CHECK[f.id].source + ') |'));
     out.push('', '## Write-surface design (static, by tool name and arguments; not a test)', '');
-    out.push(su.grade ? '- Grade ' + su.grade + ' (' + su.score + ') across ' + su.writeTools + ' write tools' : '- Not graded. ' + su.why);
+    out.push('Guard coverage and advice, not a grade. ' + mdEsc(su.why || ''), '');
     su.parts.filter((p) => p.of > 0).forEach((p) => out.push('- ' + p.label + ': ' + p.have + ' of ' + p.of));
     if (su.rows.length) { out.push('', '| Tool | Read as | Found | Missing | Notes |', '|---|---|---|---|---|'); su.rows.forEach((w) => out.push('| ' + mdCode(w.name) + ' | ' + w.kind + ' | ' + mdEsc(w.found.join('; ') || 'none') + ' | ' + mdEsc(w.missing.join('; ') || 'nothing') + ' | ' + mdEsc(w.notes.join('; ')) + ' |')); }
     out.push('', '## MWS 0.9 records (catalog only)', '', '| Requirement | Tool | Verdict | Detail |', '|---|---|---|---|');

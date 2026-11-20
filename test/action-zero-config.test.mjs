@@ -265,6 +265,8 @@ test('renderComment: marker first, grades, gate, high-risk change, at most five 
   const r = M.analyse(M.parseInput(JSON.stringify(list)));
   const body = renderComment(r, { sections: ['spec', 'anthropic', 'openai', 'security'], minGrade: 'A', diff: { highRisk: ['tool_3'] }, sourceNote: 'Source: x.', runUrl: 'https://github.com/a/b/actions/runs/1', hint: '**hint**' });
   assert.ok(body.startsWith(MARKER + '\n### MCP check: needs attention\n'));
+  assert.doesNotMatch(body, /Write-surface|Write surface/, 'the write surface has no grade and is not in the comment (rubric 2.2.0)');
+  assert.match(body, /\n\| MCP spec 2026-07-28 \| Anthropic directory \| OpenAI directory \| Poisoning and hidden text \| Schema and description quality \|\n/);
   assert.match(body, /\*\*Below min-grade A:\*\* /);
   assert.match(body, /\*\*High-risk annotation change\*\* against the baseline .*`tool_3`/);
   const items = body.split('\n').filter((l) => l.startsWith('- '));

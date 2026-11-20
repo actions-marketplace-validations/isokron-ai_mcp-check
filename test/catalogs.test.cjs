@@ -12,16 +12,19 @@ const load = (f) => {
   assert.ok(!r.error, r.error);
   return r;
 };
-const grades = (r) => Object.fromEntries(['spec', 'anthropic', 'openai', 'security', 'quality', 'surface'].map((k) => [k, r.sections[k].grade]));
+const grades = (r) => Object.fromEntries(['spec', 'anthropic', 'openai', 'security', 'quality'].map((k) => [k, r.sections[k].grade]));
+// The write surface has no letter (rubric 2.2.0): state and guard coverage only.
+const cover = (r) => { const s = r.sections.surface; assert.equal(s.grade, null); assert.equal(s.score, null); return s.state + ': ' + s.parts.filter((p) => p.of).map((p) => p.short + ' ' + p.have + '/' + p.of).join(', '); };
 const ids = (r, tool) => M.allFindings(r).filter((f) => tool === undefined || f.tool === tool).map((f) => f.id);
 const has = (r, tool, id, sev) => M.allFindings(r).some((f) => f.tool === tool && f.id === id && (!sev || f.severity === sev));
 
 test('example: the v1 A-hint false positive is gone and grades follow rubric 2', () => {
   const r = load('fixtures/example.json');
-  assert.deepEqual(grades(r), { spec: 'A', anthropic: 'C', openai: 'C', security: 'A', quality: 'B', surface: 'F' });
-  assert.equal(r.sections.anthropic.score, 70);
+  assert.deepEqual(grades(r), { spec: 'A', anthropic: 'C', openai: 'C', security: 'A', quality: 'B' });
+  assert.equal(cover(r), 'coverage: retry keys 0/1, preconditions 1/3, delete guards 0/1');
+  assert.equal(r.sections.anthropic.score, 71);
   assert.equal(r.sections.openai.score, 74);
-  assert.ok(has(r, 'create_issue', 'anthropic-hint-platforms-differ', 'attention'));
+  assert.ok(!has(r, 'create_issue', 'anthropic-hint-platforms-differ'), 'a create purely adds (rubric 2.2.0)');
   assert.ok(!ids(r, 'create_issue').includes('anthropic-hint'));
   assert.ok(has(r, 'delete_issue', 'annot-delete-marked-safe', 'blocking'));
   assert.ok(has(r, 'add_comment', 'annot-write-marked-readonly', 'attention'));
@@ -36,10 +39,11 @@ test('example: the v1 A-hint false positive is gone and grades follow rubric 2',
 
 test('well-designed notes server: A in every section, ready for both directories', () => {
   const r = load('catalogs/well-designed.json');
-  assert.deepEqual(grades(r), { spec: 'A', anthropic: 'A', openai: 'A', security: 'A', quality: 'A', surface: 'A' });
+  assert.deepEqual(grades(r), { spec: 'A', anthropic: 'A', openai: 'A', security: 'A', quality: 'A' });
+  assert.equal(cover(r), 'coverage: retry keys 1/1, preconditions 2/2, delete guards 1/1');
   assert.equal(r.sections.anthropic.ready, true);
   assert.equal(r.sections.openai.ready, true);
-  assert.deepEqual(ids(r), ['anthropic-hint-platforms-differ']);
+  assert.deepEqual(ids(r), []);
 });
 
 test('GitHub-shaped server: hints missing on writes, delete_file has no version, field-patch update is not full-replace', () => {
@@ -122,10 +126,11 @@ test('2026-07-28 server: valid x-mcp-header passes, number header blocks, envelo
   assert.ok(!has(r, 'spanner.update_row', 'surface-full-replace'), 'a columns object is a patch');
 });
 
-test('maps server: coordinates block, addresses ask for attention', () => {
+test('maps server: coordinates that are not said to be the user\'s own, and addresses, ask for attention', () => {
   const r = load('catalogs/maps.json');
-  assert.ok(has(r, 'maps_reverse_geocode', 'openai-precise-location', 'blocking'));
-  assert.ok(has(r, 'maps_search_places', 'openai-precise-location', 'blocking'));
+  assert.ok(has(r, 'maps_reverse_geocode', 'openai-precise-location', 'attention'));
+  assert.ok(has(r, 'maps_search_places', 'openai-precise-location', 'attention'));
+  assert.ok(!M.allFindings(r).some((f) => f.id === 'openai-precise-location' && f.severity === 'blocking'));
   assert.ok(has(r, 'maps_geocode', 'openai-precise-location', 'attention'));
   assert.ok(!has(r, 'maps_directions', 'openai-precise-location'));
   assert.equal(r.sections.anthropic.grade, 'A');

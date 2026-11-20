@@ -1,11 +1,11 @@
 {
   "from": "the isokron.ai/mcp-check web checker",
-  "rubric_version": "2.1.1",
+  "rubric_version": "2.2.0",
   "files": [
     {
       "path": "core.js",
       "source": "core.js",
-      "sha256": "58740082150b8cb157c4bc413ea9e2a8425af14d203985078fdfab5e00f4ef9e"
+      "sha256": "f9b80144b3f96bb2adb87f48e42a12dae4b8ed7858112c9ec1c151cef8553489"
     },
     {
       "path": "vendor/ajv2020.min.js",

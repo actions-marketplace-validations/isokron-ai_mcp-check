@@ -8,7 +8,7 @@ import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import M from '../src/engine.js';
 import { tagged } from '../src/links.js';
-import { ALL_SECTIONS, belowMinGrade, mdCode, mdText } from '../src/report.js';
+import { GRADED_SECTIONS, belowMinGrade, mdCode, mdText } from '../src/report.js';
 
 /** The hidden line that marks the comment this Action owns on a pull request. */
 export const MARKER = '<!-- isokron-mcp-check -->';
@@ -69,13 +69,13 @@ export function renderComment(r, { sections, minGrade = null, diff = null, sourc
   const out = [marker];
   if (stamp) out.push(stamp);
   out.push('### MCP check' + (approximate ? ' (approximate)' : '') + (failed ? ': needs attention' : minGrade ? ': passes min-grade ' + minGrade : ''), '');
-  out.push('| ' + ALL_SECTIONS.map((k) => r.sections[k].name).join(' | ') + ' |');
-  out.push('|' + ALL_SECTIONS.map(() => '---').join('|') + '|');
-  out.push('| ' + ALL_SECTIONS.map((k) => {
+  out.push('| ' + GRADED_SECTIONS.map((k) => r.sections[k].name).join(' | ') + ' |');
+  out.push('|' + GRADED_SECTIONS.map(() => '---').join('|') + '|');
+  out.push('| ' + GRADED_SECTIONS.map((k) => {
     const g = r.sections[k].grade || 'n/a';
     return sections.includes(k) && minGrade && below.some((x) => x.startsWith(k + ' ')) ? '**' + g + '**' : g;
   }).join(' | ') + ' |', '');
-  if (minGrade) out.push(below.length ? '**Below min-grade ' + minGrade + ':** ' + below.join(', ') + '.' : 'Every gated section (' + sections.join(', ') + ') meets min-grade ' + minGrade + '.');
+  if (minGrade) out.push(below.length ? '**Below min-grade ' + minGrade + ':** ' + below.join(', ') + '.' : 'Every gated section (' + sections.filter((k) => k !== 'surface').join(', ') + ') meets min-grade ' + minGrade + '.');
   else out.push('No min-grade gate is set.');
   if (highRisk.length) out.push('', '**High-risk annotation change** against the baseline (a client may now run these with less confirmation): ' + highRisk.map((t) => mdCode(String(t).slice(0, 128))).join(', ') + '.');
   const order = { blocking: 0, attention: 1 };

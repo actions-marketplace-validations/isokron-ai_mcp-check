@@ -107,10 +107,10 @@ export function createServer() {
 
   register(server, 'check_tools_list', {
     title: 'Check an MCP tool list',
-    description: 'Grades an MCP server\'s tools/list answer and returns a report: a letter grade per section (MCP specification, Anthropic directory, OpenAI directory, hidden-instruction scan, schema quality, write-surface design), each finding with its check id and docs link, and the list with safe fixes applied. Use this before submitting a server to the Claude or ChatGPT directories, or in review of a tool list change. Do not use it to compare two versions of a list; use compare_tools_lists for that. It reads only the JSON passed in; it does not connect to the server.',
+    description: 'Grades an MCP server\'s tools/list answer and returns a report: a letter grade per section (MCP specification, Anthropic directory, OpenAI directory, hidden-instruction scan, schema quality) and the write-surface guard coverage (advice, no grade), each finding with its check id and docs link, and the list with safe fixes applied. Use this before submitting a server to the Claude or ChatGPT directories, or in review of a tool list change. Do not use it to compare two versions of a list; use compare_tools_lists for that. It reads only the JSON passed in; it does not connect to the server.',
     inputSchema: z.strictObject({
       tools_list: toolsListArg('The tool list to grade'),
-      sections: z.array(z.enum(SECTIONS)).min(1).max(SECTIONS.length).optional().describe('Sections to report and to test against min_grade. Default: all six.'),
+      sections: z.array(z.enum(SECTIONS)).min(1).max(SECTIONS.length).optional().describe('Sections to report and to test against min_grade (surface has no grade and is never below it). Default: all six.'),
       min_grade: z.enum(GRADES).optional().describe('Lowest acceptable grade. When set, passed is false if any reported section grades below it.'),
       limit: z.number().int().min(1).max(MAX_FINDINGS).default(DEFAULT_LIMIT).describe('Most findings to return, blocking first. Grades and counts always cover every finding.'),
       include_fixed_list: z.boolean().default(true).describe('Include the whole list with safe fixes applied. Set false for large lists to keep the answer short; the change list is always included.'),

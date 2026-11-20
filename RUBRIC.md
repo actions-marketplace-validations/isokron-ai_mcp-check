@@ -1,7 +1,7 @@
 # IsoKron MCP check: grading rubric
 
-rubric_version: 2.1.1
-Applies from: 2026-11-18. Sources read: 2026-11-18. MCP specification revision: 2026-07-28.
+rubric_version: 2.2.0
+Applies from: 2026-11-20. Sources read: 2026-11-18. MCP specification revision: 2026-07-28.
 
 Every report, JSON export and private link carries `rubric_version`. When a link made under another version is opened, the page says so and grades with the current version. Any change to a weight, band, cap, severity or check bumps the version: patch for wording, minor for a new check, major for a change to weights, bands or caps.
 
@@ -14,7 +14,7 @@ Every report, JSON export and private link carries `rubric_version`. When a link
 | OpenAI directory | OpenAI plugin guidelines (MCP tool rules), plus the shared annotation and poisoning checks | Yes, plus a "ready" flag |
 | Poisoning and hidden text | Hidden characters and injection patterns in every string of every tool | Yes |
 | Schema and description quality | Design advice: argument docs, enums, strict schemas, pagination, naming | Yes |
-| Write-surface design | Guards the list offers for safe writes (retry key, version, delete guard) | Yes, by its own formula |
+| Write-surface design | Guards the list offers for safe writes (retry key, precondition, delete guard) | Never: guard coverage and advice, no letter (since 2.2.0) |
 | MWS 0.9 records | MWS-ANN-4 per tool | Never: no total, no grade (MWS 0.9 section 5.2) |
 
 A check can count toward more than one section. For example, a hidden instruction counts toward Poisoning, Anthropic and OpenAI, because both directories reject it.
@@ -66,13 +66,21 @@ A directory is "ready" when no finding that counts toward it is blocking. Ready 
 
 ## Write-surface design
 
-Tools that declare `readOnlyHint: true`, or whose name reads as a read, are left out. The others are read by the first or last word of the name as create, update, delete or other. Three guard shares are counted:
+Reported as guard coverage, never as a letter. It feeds no other grade, badge, PR comment or headline, and the CLI and Action never gate on it.
 
-- create and send tools that take a retry key or declare `idempotentHint: true` (counted, but shown as "declared, not shown");
-- update and delete tools that take a version or precondition argument, or an `If-Match`-style `x-mcp-header`;
-- delete tools that take a confirm or dry-run argument.
+Tools that declare `readOnlyHint: true`, or whose name reads as a read, are left out. So are tools that act on a live browser or session (a list with three or more browser actions such as click, hover, navigate or fill, or two tools prefixed by a browser-automation name such as `browser_`; tools named for a session, tab or connection) and HTTP clients (a `url` argument and a name that is an HTTP method or a request, such as `http_post`). The rest are read by the name as create, update, delete or other: the leading verb, else the verb after a namespace prefix (`idp_create_application_grant`), else the last word. `create_or_update_*` is an update. `hide`, `unhide` and `supersede` update; `disable` updates (it is not a delete); `tombstone` and `retire` delete; `append` creates, and `record` and `checkpoint` create when they lead the name. A whole name that is a read command of a data store (`hget`, `lrange`, `smembers`, `type`, `dbsize`) is a read.
 
-Score = the mean of the shares that apply, times 100. Letter bands as above. No caps. If no tool can be read as a create, update or delete, the section is not graded. Full-replacement updates without a field mask and bulk deletes without a guard are reported as findings in this section but do not change the score.
+Each write tool is one guard opportunity per guard that applies:
+
+- a create or send tool: a retry key (`idempotency_key`, `client_token`, `client_request_id`, a whole-name `request_id`, a dedup key) or `idempotentHint: true` (counted, but shown as "declared, not shown");
+- an update or delete tool: a precondition (`expected_*` or `expect_*`, `base_sha`/`base_revision`/`base_version`, `if_match`, `etag`, `last_modified`, `version`, `revision`, `sha`, `confirm_token`), or an `If-Match`-style `x-mcp-header`;
+- a delete tool: a guard (`dry_run`, `validate_only`, `preview`, `confirm` or `confirm_*`). `force` and `allow_*` are not guards.
+
+Argument names are read in words (`expectedHeadSha` is `expected_head_sha`), at the root and one level down (`ops[].expect_version`, `options.dry_run`). Substrings do not count: `merge_request_id` is not a retry key and `new_version` is not a precondition.
+
+The report gives the counts, "Guards offered: retry keys a/b, preconditions c/d, delete guards e/f", pooled over all opportunities. With fewer than 3 opportunities it says there is not enough to judge. Every finding in the section is advice: a missing guard per tool, a full replacement without a mask, and a bulk delete without a guard. A full replacement is an update (or a `replace`/`overwrite`/`put` name) whose every field argument is required, with no mask; identifiers and scope (`*_id`, names, keys, `channel`, `ts`) are not fields. It is not raised when the tool takes a precondition, when another tool for the same object takes optional fields or a mask, or for a find-and-replace tool.
+
+In JSON, `sections.surface` keeps `grade` and `score`, always `null`, and adds `graded: false`, `state` (`coverage`, `not-enough`, `no-opportunities` or `no-writes`), `coverage` (`opportunities`, `offered`, and `have`/`of` for `retry`, `version` and `guard`) and `summary`.
 
 ## Thresholds that are IsoKron's own
 
@@ -88,7 +96,20 @@ The specification and directories give no numbers for these, so the values are o
 
 The grades cover static rules read from the tool list. They do not test behavior: whether hints match what tools do, whether retries are safe, whether stale writes are refused. Those are MWS tests against a running server. Name-based checks are heuristics and say so in their findings.
 
-## Changes in rubric 2.1.1 (unreleased)
+## Changes in rubric 2.2.0 (unreleased)
+
+No weight, band or cap changes for the five graded sections. The write-surface letter, which fed nothing else, is gone; four checks read less into names and arguments; one poisoning reading gets wider.
+
+- **Write surface: guard coverage, no letter.** Almost every public server has no MWS-style guards yet, so the letter was an F for nearly all of them and told a maintainer nothing. The section now reports the pooled counts and the per-tool findings as advice, says "not enough to judge" below 3 opportunities, and is left out of the text report's grade lines, badges, PR comments and the job summary's grade table. Detection is fixed as described above (words and one nested level in argument names; `force` and `allow_*` no longer guards; no substring `version` or `request_id`; the new precondition and guard words; upserts; the new verbs; browser, session and HTTP-client tools; data-store reads). `surface-retry-key`, `surface-version-guard` and `surface-bulk-delete` are advice (they were attention, in a section that had no effect on other grades).
+- **`surface-full-replace`** reads the name only as a hint: every field must be required, `channel` and `ts` are identifiers, and it is not raised for a tool with a precondition, a tool whose object has a patching sibling, a find-and-replace tool, or an HTTP client.
+- **Verbs, for every check that reads them.** A verb after a namespace prefix wins over a last word that is also a noun (`acme_get_issue_comment` reads, `idp_create_application_grant` creates); `hide`/`unhide`/`supersede` update instead of falling through to "comment" as a create; `disable_*` is an update, so `annot-delete-marked-safe` no longer fires on it; `tombstone`/`retire` delete; `append`, and `record`/`checkpoint` as the leading word, create; whole-name data-store reads (`hget`, `lrange`) are reads.
+- **`anthropic-hint-platforms-differ`** is not raised for tools named as creates (append, add, insert, create, record): they purely add, which both platforms' wording allows as non-destructive. It stays for updates and other writes.
+- **`openai-retry`** is raised only for tools read as writes (named as a create, update or delete, or declaring `destructiveHint: true`), not for tools whose name says nothing (`hget`, `web_summarizer`). A word on retries in an argument's description counts, and so does a retry-key argument.
+- **`openai-restricted-input`**: an object or array argument that declares its fields is read by those fields, not by its own name (a `refresh_token` settings object no longer reads as a token; a `credentials` object with a `password` field still does).
+- **`openai-precise-location`**: coordinate fields are blocking only when the tool or field description asks for the user's own position ("your current location"); otherwise attention (a place to search, an emulated geolocation).
+- **Poisoning**: in prose, a run of three or more words joined by `-` or `_` ("always-call-this-tool-first") is also read as words for instructions, hard steering and outside instructions. Hyphenated identifiers in prose are not read as asking for secrets or as soft steering, as for short identifiers in 2.1.1.
+
+## Changes in rubric 2.1.1 (20 November 2026)
 
 Two poisoning heuristics read less into text that is not a request, and no more past text that is (no weight, band or cap changes):
 
