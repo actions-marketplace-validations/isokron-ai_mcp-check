@@ -5,7 +5,7 @@
     {
       "path": "core.js",
       "source": "core.js",
-      "sha256": "1ea2e45dd2290b23542a08b2745bb4ac2524717ffa4b0e3a0ec4776f70a064ab"
+      "sha256": "52af6eb65ad175e2fe70a875d68aa0530fa2e7dd8c6732d149791f20d18ebd9f"
     },
     {
       "path": "vendor/ajv2020.min.js",

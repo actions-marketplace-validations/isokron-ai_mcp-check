@@ -147,6 +147,22 @@ test('zero-config: tools of several servers are not merged or picked; the summar
   assert.deepEqual(JSON.parse(readFileSync(join(ws, 'out-tickets', 'tools-list.json'), 'utf8')).tools.map((t) => t.name), ['list_tickets']);
 });
 
+test('zero-config: a neutral run replaces an earlier PR verdict with "not graded on this run"', () => {
+  const ws = workspace(null);
+  writeFileSync(join(ws, 'main.go'), 'package main\n');
+  const ctx = { event: pr(), GITHUB_EVENT_NAME: 'pull_request', GITHUB_REF: 'refs/pull/7/merge' };
+  const auto = act(ws, { 'pr-comment': 'auto' }, ctx);
+  assert.equal(auto.status, 0);
+  assert.equal(auto.outputs['pr-comment-action'], 'update', 'auto only refreshes an existing comment');
+  const body = readFileSync(join(ws, 'mcp-check-results', 'pr-comment.md'), 'utf8');
+  assert.ok(body.startsWith(MARKER + '\n<!-- mcp-check-run: 42-1 -->\n### MCP check: not graded on this run\n'), body.slice(0, 120));
+  assert.match(body, /No tool definitions found in the source/);
+  assert.match(body, /Earlier grades on this pull request no longer apply\./);
+  assert.equal(act(ws, { 'pr-comment': 'always' }, ctx).outputs['pr-comment-action'], 'upsert');
+  assert.equal(act(ws, {}, ctx).outputs['pr-comment-action'], undefined, 'off: no comment');
+  assert.match(act(ws, { 'pr-comment': 'always' }, { ...ctx, event: pr('fork/Notes') }).summary, /PR comment skipped: the pull request comes from a fork/);
+});
+
 test('zero-config: tools only in an admin, docs or eval package are not graded from the root as the server', () => {
   const ws = workspace(null);
   writeFileSync(join(ws, 'package.json'), JSON.stringify({ name: 'mono', private: true }));

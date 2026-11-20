@@ -90,10 +90,10 @@ The grades cover static rules read from the tool list. They do not test behavior
 
 ## Changes in rubric 2.1.1 (unreleased)
 
-Two poisoning heuristics read less into text that is not a request (no weight, band or cap changes):
+Two poisoning heuristics read less into text that is not a request, and no more past text that is (no weight, band or cap changes):
 
-- `sec-secret-seeking` asks for the verb and the secret noun as separate words (an identifier such as the event name `post-update-password` no longer reads as "post … password"). A `.env` file named without the model being told to read or send it is now attention, not blocking; in a tool whose name says it writes files (`save_…`, `write_…`, `create_…`), only sending the file is blocking. SSH keys, cloud credential files and MCP client configuration stay blocking wherever they appear.
-- The phrase checks (`sec-instruction-phrases`, `sec-cross-tool-steering`, `sec-external-instructions`, and asking for secrets) apply to text with spaces only. A single token, such as an enum value, an event name or an id, is not read as an instruction; an enum value written as a sentence still is.
+- `sec-secret-seeking` needs a space after the verb, so a short identifier such as the event name `post-update-password` no longer reads as "post … password"; a secret noun inside a hyphenated name ("upload the db-credentials") still counts. A `.env` file named without the model being asked to read, copy or send it is attention, not blocking. Only a tool whose name says it saves or writes a file (`save_…_file`, `write_env`, `write_config`) may read the file it updates; reading `.env` and copying it into something, or sending it, is blocking for every tool. `.env` after `/` (`./.env`) and gcloud's `application_default_credentials.json` are recognised. SSH keys, cloud credential files and MCP client configuration stay blocking wherever they appear.
+- The phrase checks (`sec-instruction-phrases`, `sec-cross-tool-steering`, `sec-external-instructions`, and asking for secrets) skip short identifiers only: one token of at most four segments joined by `.`, `_` or `-`, such as an enum value, an event name or an id. Blank and invisible characters (U+2800, U+3164, U+FFA0, U+115F, U+1160, zero-width) are read as spaces, and a longer run of words joined by `-`, `_` or `/` is read as words, so "Ignore-all-previous-instructions" and enum values written as sentences are still caught.
 
 ## Changes in rubric 2.1.0 (18 November 2026)
 

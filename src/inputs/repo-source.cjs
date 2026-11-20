@@ -1111,9 +1111,7 @@
       if (/(^|\/)\.mcp-catalog\//.test(p)) { const c = fromCatalogSnap(t); if (c) catalogs.push({ kind: 'catalog', fidelity: 'exact', path: p, tools: c.tools, server: c.server, capturedAt: c.capturedAt }); return; }
       const ts = toolsFromJson(t); if (ts && ts.length) committed.push({ kind: 'committed', fidelity: 'exact', path: p, tools: ts });
     });
-    // Several committed lists (one per server of a monorepo, or a current and an old one): none is picked.
-    if (committed.length === 1) candidates.push(committed[0]);
-    else if (committed.length > 1) hints.lists = committed.map((c) => ({ path: c.path, tools: c.tools.length }));
+    // Several committed lists are placed after the source is read (see pickList below).
     for (const [p, t] of await readMany(plan.manifests.slice(0, 10), 4)) { const m = t && fromMcpbManifest(t); if (m) candidates.push({ kind: 'mcpb', fidelity: m.fidelity, path: p, tools: m.tools, generated: m.generated }); }
     for (const [p, t] of await readMany(plan.serverJson.slice(0, 5), 4)) { try { const d = JSON.parse(t); if (d && d.name) hints.serverJson.push({ path: p, name: d.name, remotes: d.remotes || [], packages: d.packages || [] }); } catch (e) { /* ignore */ } }
     // source extraction: the manifests (SDK and zod versions), then the sources, then one analysis over all of them
@@ -1134,21 +1132,37 @@
       const bp = planFiles(paths, { allowBuilt: true });
       if (bp.src.length > plan.src.length) { const b = await analyse(bp, true); if (b.tools.length) { an = b; plan = bp; built = true; } }
     }
-    // One server or several: the tools (and server constructors) grouped by package. With more than one package, nothing
-    // is merged or picked: hints.servers lists them and no source candidate is made.
+    // One server or several: the tools (and server constructors) grouped by package (serverPackages). With more than one
+    // server, nothing is merged or picked: hints.servers lists them and no source candidate is made.
     const servers = serverPackages(paths, o.subdir || '', an.tools, readFiles);
-    let found = an.tools;
+    let found = [];
     const setAside = [];
-    if (servers.kept.length > 1) { found = []; hints.servers = servers.kept; }
-    else if (servers.kept.length === 1 && servers.kept[0].tools) {
-      const keep = servers.kept[0].path;
-      found = an.tools.filter((x) => servers.rootOf(x.path) === keep);
-      an.tools.filter((x) => servers.rootOf(x.path) !== keep).forEach((x) => setAside.push({ name: x.tool.name, path: x.path, line: x.line, reasons: ['not-server-folder (' + servers.rootOf(x.path) + ')'] }));
-    } else {
-      found = [];
-      if (servers.kept.length === 1) hints.serverWithoutTools = servers.kept[0].path;
+    if (servers.multiple) hints.servers = servers.multiple.map((x) => ({ path: x.path, tools: x.tools, constructor: x.constructor }));
+    else if (servers.keep) {
+      found = an.tools.filter((x) => servers.keep.has(servers.rootOf(x.path)));
+      an.tools.filter((x) => !servers.keep.has(servers.rootOf(x.path))).forEach((x) => { const r = servers.rootOf(x.path); setAside.push({ name: x.tool.name, path: x.path, line: x.line, reasons: [(servers.reason.get(r) || 'not-server-package') + ' (' + r + ')'] }); });
     }
-    if (servers.ignored.length) hints.ignoredFolders = servers.ignored;
+    if (servers.serverWithoutTools !== null) hints.serverWithoutTools = servers.serverWithoutTools;
+    if (servers.ignored.length) hints.ignoredFolders = servers.ignored.map((x) => ({ path: x.path, tools: x.tools, constructor: x.constructor }));
+    // Committed lists: one is used as it is. Of several, the one nearest the root is used when it is the only one at that
+    // depth, else the only one inside the server's package; otherwise none is (hints.lists). Never picked silently: the
+    // others are named in the candidate (notUsed).
+    const depth = (p) => p.split('/').length;
+    const pickList = () => {
+      if (committed.length < 2) return committed[0] || null;
+      const min = Math.min(...committed.map((c) => depth(c.path)));
+      const top = committed.filter((c) => depth(c.path) === min);
+      if (top.length === 1) return top[0];
+      if (servers.keep && servers.keep.size === 1) {
+        const root = Array.from(servers.keep)[0];
+        const inside = committed.filter((c) => root === '' ? false : c.path.startsWith(root + '/'));
+        if (inside.length === 1) return inside[0];
+      }
+      return null;
+    };
+    const list = pickList();
+    if (list) { if (committed.length > 1) list.notUsed = committed.filter((c) => c !== list).map((c) => c.path); candidates.push(list); }
+    else if (committed.length > 1) hints.lists = committed.map((c) => ({ path: c.path, tools: c.tools.length }));
     if (found.length) {
       const allLiteral = found.every((x) => x.fidelity === 'literal');
       const marked = an.found.filter((x) => x.marks.length && found.some((f) => servers.rootOf(f.path) === servers.rootOf(x.path))).map((x) => ({ name: x.tool.name, reasons: x.marks.map((m) => m.reason), excluded: x.excluded }));
@@ -1179,31 +1193,65 @@
   // tests, bench, website, ...) are set aside (`ignored`) and never graded from a parent folder: point the reader at one
   // of them to grade it.
   const PKG_MANIFEST = /(^|\/)(package\.json|pyproject\.toml|setup\.py)$/;
-  const NOT_SERVER_WORD = /^(admin|console|docs?|evals?|examples?|fixtures?|tests?|bench|benches|benchmarks?|e2e|playground|demos?|samples?|mocks?|website)$/i;
-  function notServerFolder(rel) { return String(rel).split('/').some((seg) => seg.split(/[-_.]+/).some((w) => NOT_SERVER_WORD.test(w))); }
+  const NOT_SERVER_WORD = /^(admin|console|docs?|evals?|examples?|fixtures?|tests?|bench|benches|benchmarks?|e2e|playground|demos?|samples?|mocks?|website|site)$/i;
+  // A folder named exactly like one of the words (docs, examples, admin, site, ...) is never the server when read from a
+  // parent folder. With `words`, a folder with one of them inside its name (docs-mcp, admin-mcp) counts too.
+  function notServerFolder(rel, words) { return String(rel).split('/').some((seg) => NOT_SERVER_WORD.test(seg) || (!!words && seg.split(/[-_.]+/).some((w) => NOT_SERVER_WORD.test(w)))); }
   function constructsServer(p, text) {
     if (typeof text !== 'string') return false;
     if (/\.(ts|mts|cts|js|mjs|cjs)$/.test(p)) return /\bnew\s+(?:McpServer|FastMCP)\s*[(<]/.test(text) || (/\bnew\s+Server\s*\(/.test(text) && /@modelcontextprotocol\//.test(text));
     if (/\.py$/.test(p)) return /\b(?:FastMCP|MCPServer)\s*\(/.test(text) || (/\bServer\s*\(\s*['"]/.test(text) && /\b(?:from|import)\s+mcp\b/.test(text));
     return false;
   }
-  // paths: the listing (inside `base`); found: the tools read ({ path }); files: Map(path -> text) of the files read.
-  // Returns { rootOf(path), kept: [{ path, tools, constructor }], ignored: [...] }, kept sorted constructors first.
+  // Which package(s) a repository's tools belong to. paths: the listing (inside `base`); found: the tools read ({ path, literal });
+  // files: Map(path -> text) of the files read. Packages are the folders with a package.json, pyproject.toml or setup.py.
+  //   1. Folders that are not the server are set aside (`ignored`): a folder named docs, examples, admin, site, ...; and one
+  //      with such a word in its name (docs-mcp, admin-mcp) when another package constructs a server.
+  //   2. When some package has tools, packages with none (a constructor only, such as a test stub) are dropped.
+  //   3. Two or more packages that each construct a server and have tools: several servers (`multiple`), nothing is graded.
+  //   4. One package constructs a server: it is graded, with at most one package that only holds SDK registrations
+  //      (registerTool, server.tool, @mcp.tool), its tool library; with two or more such packages it is `multiple` (they
+  //      may be servers whose constructor was not read). Packages with only bare tool literals (a client's tool table)
+  //      are set aside.
+  //   5. No package constructs a server: one package is graded; of several, the only one with SDK registrations; else multiple.
+  // Returns { rootOf, keep: Set(root) | null, multiple: [group] | null, reason: Map(root -> why set aside), ignored: [group],
+  // serverWithoutTools: root | null }; a group is { path, tools, sdk, literal, constructor }.
   function serverPackages(paths, base, found, files) {
     const up = (d) => (d.includes('/') ? d.slice(0, d.lastIndexOf('/')) : '');
     const dirs = new Set();
     paths.forEach((p) => { if (PKG_MANIFEST.test(p) && !SKIP_DIR.test(p)) dirs.add(up(p)); });
     const rootOf = (p) => { for (let d = up(p); ; d = up(d)) { if (dirs.has(d)) return d; if (d === base || d === '' || (base && !d.startsWith(base + '/'))) return base; } };
     const groups = new Map();
-    const g = (r) => { if (!groups.has(r)) groups.set(r, { path: r, tools: 0, constructor: false }); return groups.get(r); };
-    found.forEach((x) => { g(rootOf(x.path)).tools++; });
+    const g = (r) => { if (!groups.has(r)) groups.set(r, { path: r, tools: 0, sdk: 0, literal: 0, constructor: false }); return groups.get(r); };
+    found.forEach((x) => { const y = g(rootOf(x.path)); y.tools++; if (x.literal) y.literal++; else y.sdk++; });
     (files instanceof Map ? files : new Map(files || [])).forEach((text, p) => { if (constructsServer(p, text)) g(rootOf(p)).constructor = true; });
     const rel = (r) => (base && r.startsWith(base + '/') ? r.slice(base.length + 1) : r === base ? '' : r);
-    const all = Array.from(groups.values());
-    const ignored = all.filter((x) => rel(x.path) !== '' && notServerFolder(rel(x.path)));
-    const kept = all.filter((x) => !ignored.includes(x));
     const order = (a, b) => (b.constructor ? 1 : 0) - (a.constructor ? 1 : 0) || b.tools - a.tools || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
-    return { rootOf, kept: kept.sort(order), ignored: ignored.sort(order) };
+    const all = Array.from(groups.values()).sort(order);
+    const whole = all.filter((x) => rel(x.path) !== '' && notServerFolder(rel(x.path), false));
+    const ctorOutside = (x) => all.some((y) => y !== x && y.constructor && !whole.includes(y) && !(rel(y.path) !== '' && notServerFolder(rel(y.path), true)));
+    const ignored = all.filter((x) => whole.includes(x) || (rel(x.path) !== '' && notServerFolder(rel(x.path), true) && ctorOutside(x)));
+    const reason = new Map(ignored.map((x) => [x.path, 'not-server-folder']));
+    let rest = all.filter((x) => !ignored.includes(x));
+    const out = { rootOf, keep: null, multiple: null, reason, ignored, serverWithoutTools: null };
+    const withTools = rest.filter((x) => x.tools > 0);
+    if (!withTools.length) { const c = rest.filter((x) => x.constructor); if (c.length === 1) out.serverWithoutTools = c[0].path; return out; }
+    rest = withTools;
+    const ctors = rest.filter((x) => x.constructor);
+    let keep;
+    if (ctors.length >= 2) { out.multiple = rest; return out; }
+    if (ctors.length === 1) {
+      // One package of registrations beside the server is its tool library; several may be other servers whose
+      // constructor was not read, so they are not attached.
+      const regs = rest.filter((x) => !x.constructor && x.sdk > 0);
+      if (regs.length > 1) { out.multiple = rest; return out; }
+      keep = [ctors[0]].concat(regs);
+    }
+    else if (rest.length === 1) keep = rest;
+    else { const sdk = rest.filter((x) => x.sdk > 0); if (sdk.length !== 1) { out.multiple = rest; return out; } keep = sdk; }
+    rest.filter((x) => !keep.includes(x)).forEach((x) => reason.set(x.path, 'not-server-package'));
+    out.keep = new Set(keep.map((x) => x.path));
+    return out;
   }
 
   // Server source in languages the reader does not read yet, by file count (only when there are some).

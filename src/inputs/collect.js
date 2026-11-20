@@ -7,6 +7,7 @@
 import { createRequire } from 'node:module';
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
+import { isAbsolute, relative, resolve, sep } from 'node:path';
 import { capture, CaptureError, splitCommand } from '../capture.js';
 
 const require = createRequire(import.meta.url);
@@ -28,7 +29,7 @@ export function expandEnv(v, env = process.env) {
 }
 
 export const FIDELITY = {
-  exact: (c) => 'exact: ' + (c.kind === 'snapshots' ? 'committed tool snapshots' : c.kind === 'mcpb' ? 'MCPB manifest static tools/list' : c.kind === 'catalog' ? 'committed mcp-catalog-snap snapshot ' + c.path + (c.foreign ? ' of ' + line(c.server || 'an unnamed server', 100) + ', which may not be this repository\'s server' : '') : 'committed tool list ' + c.path),
+  exact: (c) => 'exact: ' + (c.kind === 'snapshots' ? 'committed tool snapshots' : c.kind === 'mcpb' ? 'MCPB manifest static tools/list' : c.kind === 'catalog' ? 'committed mcp-catalog-snap snapshot ' + c.path + (c.foreign ? ' of ' + line(c.server || 'an unnamed server', 100) + ', which may not be this repository\'s server' : '') : 'committed tool list ' + c.path + (Array.isArray(c.notUsed) && c.notUsed.length ? ' (of ' + (c.notUsed.length + 1) + ' committed lists, the one nearest the server; not used: ' + c.notUsed.slice(0, 5).map((x) => line(x, 200)).join(', ') + (c.notUsed.length > 5 ? ' and ' + (c.notUsed.length - 5) + ' more' : '') + ')' : '')),
   literal: () => 'literal: tool definitions written as literals in the source',
   derived: () => 'derived: reproduced from SDK registrations in the source; schemas follow the SDK\'s output and may differ in detail',
   names: () => 'names only: an MCPB manifest lists names and descriptions; schema checks do not apply',
@@ -173,7 +174,10 @@ function cliUsable(r, where, pick) {
 /** A local checkout, read like --repo: no network, nothing run. */
 async function fromRepoDir(dir, opt) {
   let r;
-  try { r = await withDeadline(Repo.fromDirectory(dir), opt.timeout * 1000, 'Reading ' + dir); } catch (e) {
+  // The --compare file is what the list is compared with, never the list itself.
+  const cmp = opt.compare ? relative(resolve(String(dir)), resolve(String(opt.compare))).split(sep).join('/') : '';
+  const exclude = cmp && !cmp.startsWith('..') && !isAbsolute(cmp) ? [cmp] : [];
+  try { r = await withDeadline(Repo.fromDirectory(dir, { exclude }), opt.timeout * 1000, 'Reading ' + dir); } catch (e) {
     if (e && e.code === 'not_found') throw new InputFailure(line(e.message), 'usage');
     throw new InputFailure('could not read ' + line(dir) + ': ' + line(e && e.message), 'unreachable');
   }

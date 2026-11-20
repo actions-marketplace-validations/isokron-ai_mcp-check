@@ -683,16 +683,23 @@
   const RE_STEER_SOFT = /\b(prefer this (tool|plugin|server|connector)|use this (tool )?instead of|rather than (using|calling) (the )?[\w.-]+ (tool|plugin|server|connector)|(better|faster|more accurate) than (other|the [\w.-]+) (tools?|plugins?|servers?)|do not use (the )?(?!this\b)[\w.-]+ (tool|plugin|server|connector))\b/i;
   const RE_EXTERNAL = /\b(fetch|read|load|follow|get|download|retrieve|check|obey)\b[^.\n]{0,40}\b(instructions?|rules|guidelines|directives|prompts?|policies)\b[^.\n]{0,30}\b(from|at|in)\b[^.\n]{0,25}(https?:\/\/|www\.|\burl\b|remote|gist|pastebin)/i;
   // Secret and local-config files: blocking wherever they appear.
-  const RE_SECRET_FILES = /(~\/\.ssh|\bid_(rsa|ed25519|ecdsa)\b|\.ssh\/|\.aws\/credentials|\bmcp\.json\b|claude_desktop_config|\.npmrc|\.netrc|\.pgpass|~\/\.kube\/config)/i;
-  // Asking for secrets in prose: the verb and the secret noun are separate words (so an identifier such as the event name
-  // "post-update-password" does not read as "post ... password").
-  const RE_SECRET_ASK = /(?<!\bwhether (or not )?(to |\w+ (should|will|can) ))\b(send|forward|post|upload|include|pass|exfiltrate)\s[^.\n]{0,40}?(?<![\w-])(api keys?|credentials|secrets|passwords?|ssh keys?|private keys?|environment variables|conversation history|chat history|previous messages)(?![\w-])/i;
-  // A .env file: blocking when the text has the model send it somewhere, or read it (except in a tool that writes files,
-  // which may read the file it updates); a bare mention is attention.
-  const RE_DOTENV = /(^|[\s"'`(])\.env\b/i;
-  const dotenvVerb = (verbs) => new RegExp('\\b(' + verbs + ')(s|es|ed|ing)?\\b[^.\\n]{0,40}(^|[\\s"\'`(])\\.env\\b|(^|[\\s"\'`(])\\.env\\b[^.\\n]{0,40}\\b(' + verbs + ')(s|es|ed|ing)?\\b', 'i');
+  const RE_SECRET_FILES = /(~\/\.ssh|\bid_(rsa|ed25519|ecdsa)\b|\.ssh\/|\.aws\/credentials|\bmcp\.json\b|claude_desktop_config|\.npmrc|\.netrc|\.pgpass|~\/\.kube\/config|application_default_credentials\.json)/i;
+  // Asking for secrets: a space after the verb (so an identifier such as the event name "post-update-password" does not read
+  // as "post ... password"); the noun may be part of a hyphenated name ("the db-credentials").
+  const RE_SECRET_ASK = /(?<!\bwhether (or not )?(to |\w+ (should|will|can) ))\b(send|forward|post|upload|include|pass|exfiltrate)\s[^.\n]{0,40}?(?<!\w)(api keys?|credentials|secrets|passwords?|ssh keys?|private keys?|environment variables|conversation history|chat history|previous messages)(?![\w-])/i;
+  // A .env file: blocking when the text has the model send it somewhere, copy it into something, or read it (except in a
+  // tool that saves or writes a file, which may read the file it updates); a bare mention is attention.
+  const RE_DOTENV = /(^|[\s"'`(\/])\.env\b/i;
+  const ENV_AT = '(^|[\\s"\'`(\\/])\\.env\\b';
+  const GAP = '(?:[^.\\n]|\\.(?=[\\/.]))'; // within a sentence; the dots of ./ and ../ do not end one
+  const dotenvVerb = (verbs) => new RegExp('\\b(' + verbs + ')(s|es|ed|ing)?\\b' + GAP + '{0,40}' + ENV_AT + '|' + ENV_AT + GAP + '{0,40}\\b(' + verbs + ')(s|es|ed|ing)?\\b', 'i');
   const RE_DOTENV_SEND = dotenvVerb('send|forward|post|upload|paste|include|attach|share|exfiltrate|transmit');
-  const RE_DOTENV_READ = dotenvVerb('read|cat|open|load|print|copy|reveal');
+  const RE_DOTENV_READ = dotenvVerb('read|cat|open|load|print|copy|reveal|dump|echo');
+  const RE_DOTENV_INTO = new RegExp(ENV_AT + '[^\\n]{0,80}\\b(cop(y|ies|ied)|puts?|paste[sd]?|insert(s|ed)?|include[sd]?|echo(es|ed)?)\\b[^\\n]{0,60}\\b(into|in)\\b', 'i');
+  // Blank and invisible characters that can stand in for spaces between the words of an instruction.
+  const RE_BLANKS = /[\u2800\u3164\uFFA0\u115F\u1160\u200B-\u200F\u2060-\u2064\uFEFF\u180E\u00AD\u034F\u061C]/g;
+  // A short identifier (an enum value, an event name, an id): at most four segments joined by . _ or -.
+  const SHORT_ID = /^[A-Za-z0-9]+([._-][A-Za-z0-9]+){0,3}$/;
   const RE_B64 = /[A-Za-z0-9+/]{40,}={0,2}|[A-Za-z0-9_-]{48,}/g;
   const RE_HEX = /\b(?:[0-9a-fA-F]{2}){24,}\b/g;
 
@@ -705,8 +712,10 @@
   function scanTool(t, push, siblings) {
     siblings = siblings || [];
     const strings = collectStrings(t, '', []);
-    // A tool whose job is to write a file (save_settings_to_file, write_env, create_config) may name .env as its output.
-    const writesFiles = /^(save|write|create|generate|export|init|setup|configure|store|update|set)$/.test(tokens(String(t.name || ''))[0] || '') || tokens(String(t.name || '')).some((w) => w === 'save' || w === 'write');
+    // A tool whose name says it saves or writes a file (save_settings_to_file, write_env, write_config) may name .env as its
+    // output and read the file it updates.
+    const nameTokens = tokens(String(t.name || ''));
+    const writesFiles = nameTokens.some((w) => w === 'save' || w === 'write') && nameTokens.some((w) => /^(files?|env|dotenv|config|configuration)$/.test(w));
     const hits = {};
     const once = (id, sev, msg, path) => { const k = id + '|' + sev; if (hits[k]) { hits[k].paths.push(path); return; } hits[k] = { id, sev, msg, paths: [path] }; };
     strings.forEach(({ path, value, key }) => {
@@ -721,27 +730,30 @@
         if (mixed.length) once('sec-homoglyph', 'attention', 'Words mix Latin with look-alike letters from another script: ' + clip(mixed.slice(0, 3).join(', '), 60) + '.', path);
       }
       if (key) return;
-      // One token without spaces (an enum value, an event name, an id, a path) is not prose: the phrase checks below
-      // (instructions, steering, outside instructions, asking for secrets) do not apply to it.
-      const prose = /\s/.test(value.trim());
+      // The phrase checks below (instructions, steering, outside instructions, asking for secrets) read the text with blank
+      // and invisible characters as spaces, and a run of words joined by - _ or / ("ignore-all-previous-instructions") as
+      // words. A short identifier (an enum value or event name such as "post-update-password") is not read as a request.
+      const spaced = value.replace(RE_BLANKS, ' ');
+      const texts = SHORT_ID.test(value.trim()) ? [] : /\s/.test(spaced.trim()) ? [spaced] : [spaced, spaced.replace(/[-_\/]+/g, ' ')];
+      const find = (re) => { for (const x of texts) { const m = x.match(re); if (m) return m; } return null; };
       if (HTML_COMMENT.test(value)) once('sec-html-comment', 'blocking', 'An HTML comment hides text from rendered views.', path);
       const mk = value.match(RE_MARKUP);
       if (mk) once('sec-instruction-markup', 'blocking', 'Prompt markup "' + clip(mk[0].trim(), 40) + '".', path);
-      if (prose) for (const re of RE_PHRASES) { const m = value.match(re); if (m) { once('sec-instruction-phrases', 'blocking', 'Instruction to the model: "' + clip(m[0], 80) + '".', path); break; } }
-      const sh = prose && value.match(RE_STEER_HARD);
+      for (const re of RE_PHRASES) { const m = find(re); if (m) { once('sec-instruction-phrases', 'blocking', 'Instruction to the model: "' + clip(m[0], 80) + '".', path); break; } }
+      const sh = find(RE_STEER_HARD);
       if (sh) once('sec-cross-tool-steering', 'blocking', 'Steers the model away from other tools: "' + clip(sh[0], 80) + '".', path);
       else {
-        const ss = prose && value.match(RE_STEER_SOFT);
+        const ss = find(RE_STEER_SOFT);
         // Routing between tools of the same server ("prefer this tool over search_x") is not steering away from other servers.
         const sibling = ss && siblings.some((n) => new RegExp('(^|[^A-Za-z0-9_-])' + n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '($|[^A-Za-z0-9_-])').test(value));
         if (ss && !sibling) once('sec-cross-tool-steering', 'attention', 'Steers tool selection: "' + clip(ss[0], 80) + '".', path);
       }
-      const ex = prose && value.match(RE_EXTERNAL);
+      const ex = find(RE_EXTERNAL);
       if (ex) once('sec-external-instructions', 'blocking', 'Points the model at outside instructions: "' + clip(ex[0], 80) + '".', path);
-      const sc = value.match(RE_SECRET_FILES) || (prose && value.match(RE_SECRET_ASK));
+      const sc = value.match(RE_SECRET_FILES) || find(RE_SECRET_ASK);
       if (sc) once('sec-secret-seeking', 'blocking', 'Seeks secrets or local files: "' + clip(sc[0].trim(), 80) + '".', path);
       else if (RE_DOTENV.test(value)) {
-        const take = prose && (value.match(RE_DOTENV_SEND) || (!writesFiles && value.match(RE_DOTENV_READ)));
+        const take = find(RE_DOTENV_SEND) || find(RE_DOTENV_INTO) || (!writesFiles && find(RE_DOTENV_READ));
         if (take) once('sec-secret-seeking', 'blocking', 'Seeks secrets or local files: "' + clip(take[0].trim(), 80) + '".', path);
         else once('sec-secret-seeking', 'attention', 'Names a .env file' + (writesFiles ? ' (the tool writes files, so this may be its output)' : '') + '; check that the model is never asked to read or send one.', path);
       }

@@ -323,10 +323,9 @@ test('reader: tools of several packages are not merged; one package is graded; a
   const two = await R.fromDirectory(mono([['src/files', ['read_file', 'write_file']], ['src/memory', ['create_entities']]]));
   assert.equal(two.best, null, 'no merged list');
   assert.deepEqual(two.hints.servers, [{ path: 'src/files', tools: 2, constructor: true }, { path: 'src/memory', tools: 1, constructor: true }]);
-  // A constructor with no readable tools still counts as a server: the other package is not graded in its place.
+  // A package with a constructor and no tools (a stub) is dropped when another package has tools.
   const ctorOnly = await R.fromDirectory(mono([['packages/a', ['a_tool']], ['packages/b', []]]));
-  assert.equal(ctorOnly.best, null);
-  assert.deepEqual(ctorOnly.hints.servers.map((x) => x.path), ['packages/a', 'packages/b']);
+  assert.deepEqual(ctorOnly.best.tools.map((t) => t.name), ['a_tool']);
   // Admin, console, docs and eval packages are set aside when another package remains; their tools are listed as left out.
   const withDocs = await R.fromDirectory(mono([['apps/docs-server', ['search_docs']], ['packages/core', ['real_tool']]]));
   assert.deepEqual(withDocs.best.tools.map((t) => t.name), ['real_tool']);
@@ -339,10 +338,12 @@ test('reader: tools of several packages are not merged; one package is graded; a
   const single = await R.fromDirectory(mono([['.', ['one', 'two']]].map(([d, t]) => [d, t])));
   assert.deepEqual(single.best.tools.map((t) => t.name), ['one', 'two']);
   assert.equal(single.hints.servers, undefined);
-  assert.equal(R.notServerFolder('packages/admin-mcp'), true);
-  assert.equal(R.notServerFolder('mcp-evals'), true);
-  assert.equal(R.notServerFolder('packages/mcp-server'), false);
-  assert.equal(R.notServerFolder('packages/administrator'), false, 'whole words only');
+  assert.equal(R.notServerFolder('packages/admin-mcp'), false, 'whole folder names only, unless words is set');
+  assert.equal(R.notServerFolder('packages/admin-mcp', true), true);
+  assert.equal(R.notServerFolder('mcp-evals', true), true);
+  assert.equal(R.notServerFolder('apps/docs'), true);
+  assert.equal(R.notServerFolder('packages/mcp-server', true), false);
+  assert.equal(R.notServerFolder('packages/administrator', true), false, 'whole words only');
 });
 
 test('reader: evaluation harnesses, benchmarks, playgrounds and web sites are not read as the server', async () => {
@@ -402,4 +403,76 @@ test('cli: a Go repository exits 3 and says Go source is not read yet', () => {
   const r = cli(['--repo-dir', go]);
   assert.equal(r.status, 3);
   assert.match(r.stderr, /The source here is Go \(1 \.go file\): Go source is not read yet/);
+});
+
+/** A folder holding the given files (path -> text). */
+function tree(files) {
+  const d = mkdtempSync(join(tmpdir(), 'mcpcheck-tree-'));
+  for (const [p, t] of Object.entries(files)) { mkdirSync(join(d, p, '..'), { recursive: true }); writeFileSync(join(d, p), t); }
+  return d;
+}
+const PKG = (name) => JSON.stringify({ name, dependencies: { '@modelcontextprotocol/sdk': '1.20.0', zod: '3.25.0' } });
+const SERVER = (tools) => "import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';\nimport { z } from 'zod';\nexport const server = new McpServer({ name: 'notes', version: '1' });\n" + tools.map((t) => "server.registerTool('" + t + "', { title: '" + t + "', description: 'Does " + t + ".', inputSchema: { id: z.string() } }, async () => ({ content: [] }));\n").join('');
+const REG_ONLY = (tools) => "import { z } from 'zod';\nimport type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';\nexport function registerTools(server: McpServer) {\n" + tools.map((t) => "  server.registerTool('" + t + "', { title: '" + t + "', description: 'Does " + t + ".', inputSchema: { id: z.string() } }, async () => ({ content: [] }));\n").join('') + '}\n';
+const CLIENT_LIT = "import OpenAI from 'openai';\nconst tools = [{ name: 'lookup_order', description: 'Look up an order for the chat demo.', inputSchema: { type: 'object', properties: { id: { type: 'string' } } } }];\nexport async function ask(q) { return new OpenAI().responses.create({ input: q, tools }); }\n";
+const PY_SERVER = 'from mcp.server.fastmcp import FastMCP\nmcp = FastMCP("notes")\n\n@mcp.tool()\ndef add_note(text: str) -> str:\n    """Add a note."""\n    return text\n';
+const names = (r) => (r.best ? r.best.tools.map((t) => t.name).sort() : null);
+
+test('reader: a monorepo with one server is graded (S1 to S7 of the 1.1.1 review)', async () => {
+  // S1: a server package and a client package with a bare tool literal: the server is graded, the literal set aside.
+  const s1 = await R.fromDirectory(tree({ 'package.json': PKG('root'), 'packages/server/package.json': PKG('s'), 'packages/server/src/index.ts': SERVER(['add_note', 'get_note']), 'packages/client/package.json': PKG('c'), 'packages/client/src/tools.ts': CLIENT_LIT }));
+  assert.deepEqual(names(s1), ['add_note', 'get_note']);
+  assert.deepEqual(s1.best.excluded.map((x) => [x.name, x.reasons]), [['lookup_order', ['not-server-package (packages/client)']]]);
+  // S2: a root manifest and one server package.
+  const s2 = await R.fromDirectory(tree({ 'package.json': PKG('root'), 'packages/server/package.json': PKG('s'), 'packages/server/src/index.ts': SERVER(['add_note', 'get_note']) }));
+  assert.deepEqual(names(s2), ['add_note', 'get_note']);
+  // S3: the server package constructs, a tools package registers.
+  const s3 = await R.fromDirectory(tree({ 'package.json': PKG('root'), 'packages/server/package.json': PKG('s'), 'packages/server/src/index.ts': "import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';\nimport { registerTools } from '@notes/tools';\nconst server = new McpServer({ name: 'notes', version: '1' });\nregisterTools(server);\n", 'packages/tools/package.json': PKG('@notes/tools'), 'packages/tools/src/index.ts': REG_ONLY(['add_note', 'get_note']) }));
+  assert.deepEqual(names(s3), ['add_note', 'get_note']);
+  // S3b: the same with a tool in the server package too: the registrations package is graded with it.
+  const s3b = await R.fromDirectory(tree({ 'package.json': PKG('root'), 'packages/server/package.json': PKG('s'), 'packages/server/src/index.ts': SERVER(['ping']), 'packages/tools/package.json': PKG('@notes/tools'), 'packages/tools/src/index.ts': REG_ONLY(['add_note']) }));
+  assert.deepEqual(names(s3b), ['add_note', 'ping']);
+  // S4: a stub package that constructs a server with no tools.
+  const s4 = await R.fromDirectory(tree({ 'package.json': PKG('root'), 'packages/server/package.json': PKG('s'), 'packages/server/src/index.ts': SERVER(['add_note']), 'packages/inspector/package.json': PKG('i'), 'packages/inspector/src/main.ts': "import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';\nconst s = new McpServer({ name: 'stub', version: '1' });\n" }));
+  assert.deepEqual(names(s4), ['add_note']);
+  // S5: the only server lives in a folder named like admin-mcp: graded (nothing else constructs a server).
+  const s5 = await R.fromDirectory(tree({ 'package.json': PKG('root'), 'packages/admin-mcp/package.json': PKG('a'), 'packages/admin-mcp/src/index.ts': SERVER(['list_users']) }));
+  assert.deepEqual(names(s5), ['list_users']);
+  // S6: a Python server and a Python client package with tool dicts.
+  const s6 = await R.fromDirectory(tree({ 'pyproject.toml': '[project]\nname = "notes"\ndependencies = ["mcp>=1.9"]\n', 'src/notes/server.py': PY_SERVER, 'clients/py/pyproject.toml': '[project]\nname = "notes-client"\n', 'clients/py/notes_client/tools.py': 'TOOLS = [{"name": "lookup", "description": "d", "inputSchema": {"type": "object", "properties": {}}}]\n' }));
+  assert.deepEqual(names(s6), ['add_note']);
+  // S7: a docs site package (site/) with a demo server is set aside.
+  const s7 = await R.fromDirectory(tree({ 'package.json': PKG('notes'), 'src/index.ts': SERVER(['add_note']), 'site/package.json': PKG('site'), 'site/src/demo.ts': "import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';\nconst s = new McpServer({ name: 'demo', version: '1' });\ns.registerTool('demo_tool', { description: 'Demo.', inputSchema: {} }, async () => ({ content: [] }));\n" }));
+  assert.deepEqual(names(s7), ['add_note']);
+  // Two packages that each construct a server and have tools: refused.
+  const two = await R.fromDirectory(tree({ 'package.json': PKG('root'), 'packages/a/package.json': PKG('a'), 'packages/a/src/index.ts': SERVER(['a1']), 'packages/b/package.json': PKG('b'), 'packages/b/src/index.ts': SERVER(['b1']) }));
+  assert.equal(two.best, null);
+  assert.deepEqual(two.hints.servers.map((x) => x.path), ['packages/a', 'packages/b']);
+  // One constructor (say in a shared library) and two or more packages of registrations: they may be servers whose
+  // constructor was not read, so nothing is graded.
+  const shared = await R.fromDirectory(tree({ 'package.json': PKG('root'), 'packages/common/package.json': PKG('common'), 'packages/common/src/index.ts': SERVER(['whoami']), 'apps/a/package.json': PKG('a'), 'apps/a/src/index.ts': REG_ONLY(['a1']), 'apps/b/package.json': PKG('b'), 'apps/b/src/index.ts': REG_ONLY(['b1']) }));
+  assert.equal(shared.best, null);
+  assert.deepEqual(shared.hints.servers.map((x) => x.path), ['packages/common', 'apps/a', 'apps/b']);
+  // No constructor anywhere: two packages with SDK registrations are refused; registrations beat a bare literal.
+  const noCtor = await R.fromDirectory(tree({ 'packages/a/package.json': PKG('a'), 'packages/a/src/index.ts': REG_ONLY(['a1']), 'packages/b/package.json': PKG('b'), 'packages/b/src/index.ts': REG_ONLY(['b1']) }));
+  assert.equal(noCtor.best, null);
+  const regVsLit = await R.fromDirectory(tree({ 'packages/a/package.json': PKG('a'), 'packages/a/src/index.ts': REG_ONLY(['a1']), 'packages/b/package.json': PKG('b'), 'packages/b/src/tools.ts': CLIENT_LIT }));
+  assert.deepEqual(names(regVsLit), ['a1']);
+});
+
+test('reader: of several committed lists the root-most (or the one in the server package) is used and the others named; --compare is never the list', async () => {
+  const L = (n) => JSON.stringify({ tools: [{ name: n, inputSchema: { type: 'object' } }] });
+  const root = await R.fromDirectory(tree({ 'tools.json': L('current'), 'release/tools.json': L('old') }));
+  assert.equal(root.best.kind, 'committed');
+  assert.deepEqual(names(root), ['current']);
+  assert.deepEqual(root.best.notUsed, ['release/tools.json']);
+  const inPkg = await R.fromDirectory(tree({ 'package.json': PKG('root'), 'packages/server/package.json': PKG('s'), 'packages/server/src/index.ts': SERVER(['add_note']), 'packages/server/tools.json': L('add_note'), 'packages/other/tools.json': L('other') }));
+  assert.equal(inPkg.best.kind, 'committed');
+  assert.equal(inPkg.best.path, 'packages/server/tools.json');
+  const j = JSON.parse(cli(['--repo-dir', tree({ 'tools.json': L('current'), 'release/tools.json': L('old') }), '--format', 'json']).stdout);
+  assert.match(j.source.provenance, /committed tool list tools\.json \(of 2 committed lists, the one nearest the server; not used: release\/tools\.json\)/);
+  // --compare names a list inside the folder: it is left out of the reading, so the code is compared with it.
+  const d = tree({ 'package.json': PKG('notes'), 'src/index.ts': SERVER(['add_note']), 'release/tools.json': L('add_note') });
+  const cmp = cli(['--repo-dir', d, '--compare', join(d, 'release', 'tools.json'), '--format', 'json']);
+  assert.equal(JSON.parse(cmp.stdout).source.from, 'source', cmp.stderr);
 });

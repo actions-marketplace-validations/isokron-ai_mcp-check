@@ -11,7 +11,7 @@ import { parseList } from '../src/tools.js';
 import { InputError as LimitError } from '../src/limits.js';
 import { registryUrl, tagDocsLinks } from '../src/links.js';
 import { isApproximate, repoProvenance, serverChoices, serverFolders, usableList, whyNothing } from '../src/inputs/collect.js';
-import { commentAction, markerFor, MODES as COMMENT_MODES, prContext, renderComment, runStamp, validKey } from './pr-comment.mjs';
+import { commentAction, markerFor, MODES as COMMENT_MODES, prContext, renderComment, renderNotGraded, runStamp, validKey } from './pr-comment.mjs';
 import { ALL_SECTIONS, DEFAULT_SECTIONS, GRADES, badgeFile, badgeSnippet, belowMinGrade, mdCode, mdText, sarifWithLocations, summaryMarkdown, webLink } from '../src/report.js';
 
 const Repo = createRequire(import.meta.url)('../src/inputs/repo-source.cjs');
@@ -192,8 +192,20 @@ export async function run() {
     const prefix0 = dir.rel === '.' ? '' : dir.rel + '/';
     const notGraded = (what, fix) => {
       const msg = what + ' ' + fix.text;
+      // With pr-comment on, an earlier verdict on the pull request is replaced by "not graded on this run" (auto: only an
+      // existing comment is updated; always: one is made), so a stale grade does not stay up.
+      let commentLine = '';
+      if (commentMode !== 'off') {
+        const pr = prContext(env.GITHUB_EVENT_NAME || '', eventPayload());
+        if (pr && pr.skip) commentLine = '\n\nPR comment skipped: ' + mdText(pr.skip) + '.';
+        else if (pr) {
+          const runUrl = env.GITHUB_SERVER_URL && env.GITHUB_REPOSITORY && env.GITHUB_RUN_ID ? env.GITHUB_SERVER_URL + '/' + env.GITHUB_REPOSITORY + '/actions/runs/' + env.GITHUB_RUN_ID : null;
+          out('pr-comment.md', renderNotGraded(msg, { runUrl, marker: markerFor(commentKey, env.GITHUB_JOB), stamp: runStamp(env) }));
+          output('pr-comment-action', commentAction(commentMode, false));
+        }
+      }
       summary('## MCP check: not graded\n\n' + mdText(what) + ' Nothing was run. ' + fix.md + '\n\n'
-        + (failOnNoTools ? 'The job fails because `fail-on-no-tools` is `true`.' : 'The job is not failed for this; set `fail-on-no-tools: true` to fail it.') + '\n');
+        + (failOnNoTools ? 'The job fails because `fail-on-no-tools` is `true`.' : 'The job is not failed for this; set `fail-on-no-tools: true` to fail it.') + commentLine + '\n');
       if (failOnNoTools) return new InputError(msg);
       annotate('warning', 'mcp-check: not graded: ' + msg);
       output('source', sourceKind);

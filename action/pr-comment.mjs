@@ -100,6 +100,20 @@ export function renderComment(r, { sections, minGrade = null, diff = null, sourc
   return body;
 }
 
+/**
+ * The comment body for a run that graded nothing (the source gave no list): it replaces an earlier verdict, so a stale
+ * grade does not stay up on the pull request. `reason` is plain text, escaped here.
+ */
+export function renderNotGraded(reason, { runUrl = null, marker = MARKER, stamp = null } = {}) {
+  const out = [marker];
+  if (stamp) out.push(stamp);
+  out.push('### MCP check: not graded on this run', '', commentText(String(reason).slice(0, 1500)), '',
+    'Earlier grades on this pull request no longer apply. For exact grades, set `command` (the command that starts the server) or `tools-file` (a saved `tools/list` answer).');
+  if (runUrl) out.push('', '[Workflow run](' + runUrl + ')');
+  out.push('', '<sub>Updated on every run by isokron-ai/mcp-check. Set pr-comment: off to stop.</sub>');
+  return out.join('\n') + '\n';
+}
+
 /** The GitHub REST call, with the error text kept short and the token never in a message. */
 async function gh(fetchImpl, url, token, method = 'GET', body = undefined) {
   const res = await fetchImpl(url, {
