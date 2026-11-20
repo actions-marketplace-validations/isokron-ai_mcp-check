@@ -675,7 +675,8 @@
     ctx.consts = collectConsts(t, ctx);
     const blocks = jsBlocks(src, t);
     const tools = []; const seen = new Set(); const unresolved = [];
-    const lineOf = (at) => src.slice(0, at).split('\n').length;
+    let nls = null; // offsets of line breaks, for line numbers by binary search
+    const lineOf = (at) => { if (!nls) { nls = []; for (let k = 0; k < src.length; k++) if (src.charCodeAt(k) === 10) nls.push(k); } let lo = 0; let hi = nls.length; while (lo < hi) { const mid = (lo + hi) >> 1; if (nls[mid] < at) lo = mid + 1; else hi = mid; } return lo + 1; };
     const add = (tool, fidelity, at, extra) => {
       if (!tool || typeof tool.name !== 'string' || !tool.name || seen.has(tool.name)) return false;
       if (tool._unreadable && !tool._unreadable.length) delete tool._unreadable;
@@ -735,7 +736,7 @@
       if (typeof v.description === 'string') tool.description = v.description;
       const sk = SCHEMA_KEYS.find((k) => v[k] && typeof v[k] === 'object' && !Array.isArray(v[k]));
       let schema = sk ? v[sk] : null;
-      if (schema && !schema.type && !schema.$ref && !schema.anyOf && !schema.oneOf && !schema.allOf && !schema.properties) {
+      if (schema && !isSchemaObj(schema)) {
         const k2 = findKeyToken(t, o.start, o.end, sk);
         const sh = k2 >= 0 && isP(t[k2 + 2], '{') ? zodShapeAt(t, k2 + 2, ctx) : null;
         schema = sh && sh.schema && Object.keys(sh.schema.properties).length ? sh.schema : Object.keys(schema).length ? rootSchema(schema, o.childOptional && o.childOptional[sk], ctx.fl) : { type: 'object', properties: {} };
@@ -820,7 +821,7 @@
             else if (shape.schema && isAnnotations(shape.schema)) tool.annotations = shape.schema;
           } else if (j !== undefined && t[j] && t[j].type === 'id' && args.indexOf(j) < args.length - 1) {
             const v = parseValue(t, j, ctx);
-            if (v.value !== SKIP && v.value && typeof v.value === 'object' && !Array.isArray(v.value)) tool.inputSchema = v.rawShape || (!v.value.type && !v.zod) ? rootSchema(v.value, v.optionalKeys, ctx.fl) : v.value;
+            if (v.value !== SKIP && v.value && typeof v.value === 'object' && !Array.isArray(v.value)) tool.inputSchema = v.rawShape || (!isSchemaObj(v.value) && !v.zod) ? rootSchema(v.value, v.optionalKeys, ctx.fl) : v.value;
             else un.push('inputSchema');
           }
           if (!tool.inputSchema) tool.inputSchema = un.includes('inputSchema') ? { type: 'object' } : { type: 'object', properties: {} };
@@ -910,7 +911,7 @@
           }
         }
       }
-      if (sv && sv.value && typeof sv.value === 'object' && !Array.isArray(sv.value)) tool.inputSchema = sv.rawShape || (!sv.value.type && !sv.zod && !sv.value.$ref && !sv.value.anyOf) ? rootSchema(sv.value, sv.optionalKeys, ctx.fl) : sv.value;
+      if (sv && sv.value && typeof sv.value === 'object' && !Array.isArray(sv.value)) tool.inputSchema = sv.rawShape || (!isSchemaObj(sv.value) && !sv.zod) ? rootSchema(sv.value, sv.optionalKeys, ctx.fl) : sv.value;
       else { tool.inputSchema = { type: 'object' }; un.push('inputSchema'); }
       if (fields.annotations && fields.annotations.value && fields.annotations.value !== SKIP && typeof fields.annotations.value === 'object') tool.annotations = fields.annotations.value; else un.push('annotations');
       if (fields.outputSchema && fields.outputSchema.value && fields.outputSchema.value !== SKIP && typeof fields.outputSchema.value === 'object') tool.outputSchema = fields.outputSchema.value;
@@ -961,7 +962,15 @@
   }
   function findKeyToken(t, from, to, key) { for (let k = from + 1, d = 0; k < to; k++) { if (isP(t[k], '{') || isP(t[k], '[') || isP(t[k], '(')) d++; else if (isP(t[k], '}') || isP(t[k], ']') || isP(t[k], ')')) d--; else if (d === 0 && (t[k].type === 'id' || t[k].type === 'str') && t[k].value === key && isP(t[k + 1], ':')) return k; } return -1; }
   // A raw shape { a: <schema>, b: <schema> } rather than a schema (no type, $ref, composition or properties keyword).
-  function isRawShape(s) { return !!s && typeof s === 'object' && !Array.isArray(s) && !s.type && !s.$ref && !s.anyOf && !s.oneOf && !s.allOf && !s.properties && !s.enum && !s.const && Object.keys(s).length > 0 && Object.values(s).every((x) => x && typeof x === 'object' && !Array.isArray(x)); }
+  // A JSON Schema rather than a raw shape: a keyword with a schema value ("type": "string", "$ref", anyOf, …). A raw
+  // shape can have a property named "type" whose value is a schema ({ type: z.enum([...]) }).
+  function isSchemaObj(s) {
+    if (!s || typeof s !== 'object' || Array.isArray(s)) return false;
+    const typeKw = typeof s.type === 'string' || (Array.isArray(s.type) && s.type.every((x) => typeof x === 'string'));
+    return typeKw || typeof s.$ref === 'string' || Array.isArray(s.anyOf) || Array.isArray(s.oneOf) || Array.isArray(s.allOf) || Array.isArray(s.enum) || (!!s.properties && typeof s.properties === 'object' && Object.keys(s).every((k) => /^(properties|required|additionalProperties|\$schema|\$defs|definitions|title|description)$/.test(k)));
+  }
+  // A raw shape { a: <schema>, b: <schema> } (or {}, no arguments) rather than a schema.
+  function isRawShape(s) { return !!s && typeof s === 'object' && !Array.isArray(s) && !isSchemaObj(s) && Object.values(s).every((x) => x && typeof x === 'object' && !Array.isArray(x)); }
   function isZodShapeLike(s) { return s && s.type === 'object' && s.properties; }
   function isAnnotations(s) { return s && Object.keys(s).some((k) => /Hint$/.test(k) || k === 'title'); }
   function parseObjectWithZod(t, i, ctx) {
@@ -978,7 +987,7 @@
       const fl = ctx.fl || FL_DEFAULT;
       ['inputSchema', 'outputSchema'].forEach((key) => {
         const s = r.value[key];
-        if (sawZod && s && typeof s === 'object' && !s.type && !s.$ref && !s.anyOf && !s.oneOf) {
+        if (sawZod && s && typeof s === 'object' && !isSchemaObj(s)) {
           // find the key in tokens to recover optional flags
           for (let k = i + 1; k < r.end; k++) if ((t[k].type === 'id' || t[k].type === 'str') && t[k].value === key && isP(t[k + 1], ':')) { const sh = zodShapeAt(t, k + 2, ctx); if (sh.schema) r.value[key] = sh.schema; break; }
         } else if (sawZod && s && s.type === 'object' && !s.$schema) { r.value[key] = Object.assign({}, s, { $schema: DIALECT[fl.dialect] }, fl.closed && s.additionalProperties === undefined ? { additionalProperties: false } : {}); }
@@ -1026,7 +1035,8 @@
     }
     flush(n);
     // the line of each logical line: its first non-blank character
-    out.forEach((l) => { const k = l.text.search(/\S/); l.line = s.slice(0, l.start + k).split('\n').length; l.text = l.text.slice(k); });
+    let pos = 0; let ln = 1;
+    out.forEach((l) => { const k = l.text.search(/\S/); const at = l.start + k; for (; pos < at; pos++) if (s.charCodeAt(pos) === 10) ln++; l.line = ln; l.text = l.text.slice(k); });
     return out;
   }
   // Python expression tokens: str (value), tpl (an f-string with {…} parts), num, id, p.
@@ -1392,10 +1402,13 @@
       if (kw.tags !== undefined) g.fastmcpTags = null;
       return g;
     };
+    // keys as written under SDK 1.x, which keeps snake_case kwargs as extra fields; SDK 2.x lists them in camelCase
+    const camel = opts.sdk && opts.sdk.pyMajor >= 2;
     const pyAnnotationsValue = (text) => {
       const v = exprVal(text);
-      if (v && v.value && typeof v.value === 'object' && !Array.isArray(v.value)) return v.value; // keys as written: the v1 SDK keeps snake_case kwargs as extra fields
-      const a = pyAnnotations(text); return a || null;
+      let a = v && v.value && typeof v.value === 'object' && !Array.isArray(v.value) ? v.value : pyAnnotations(text);
+      if (a && camel) { const o = {}; Object.keys(a).forEach((k) => { o[/^(read_only|destructive|idempotent|open_world)_hint$/.test(k) ? k.replace(/_(\w)/g, (x, c) => c.toUpperCase()) : k] = a[k]; }); a = o; }
+      return a || null;
     };
     for (let k = 0; k < L.length; k++) {
       const l = L[k];
@@ -1723,6 +1736,14 @@
       if (/^\s*["']?mcp\b/im.test(text) || /["']mcp[\s>=<~!;\[]/i.test(text)) mcp = true;
     });
     out.py = fast && !mcp ? 'fastmcp' : fast || mcp ? 'sdk' : null;
+    // The Python SDK's major version (2.x serialises snake_case ToolAnnotations fields in camelCase): uv.lock, then requirements.
+    entries.forEach(([p, text]) => {
+      if (out.pyMajor || typeof text !== 'string' || /(^|\/)(node_modules|\.venv|venv)\//.test(p)) return;
+      let m = null;
+      if (/(^|\/)uv\.lock$/.test(p)) m = /\[\[package\]\]\s*\nname\s*=\s*"mcp"\s*\nversion\s*=\s*"(\d+)/.exec(text);
+      else if (/(^|\/)(pyproject\.toml|requirements[^/]*\.txt)$/.test(p)) m = /["'\s]mcp(?:\[[^\]]*\])?\s*(?:>=|==|~=|>)\s*(\d+)/.exec('\n' + text);
+      if (m) out.pyMajor = Number(m[1]);
+    });
     return out;
   }
 
@@ -1899,7 +1920,10 @@
       if (paths.length < 2) return;
       paths.sort((x, y) => namesIn.get(y).size - namesIn.get(x).size || x.length - y.length || (x < y ? -1 : 1));
       const keep = namesIn.get(paths[0]);
-      found.forEach((f) => { if (paths.includes(f.path) && !keep.has(f.tool.name)) add(f, 'alternate-server', f.path + ' is an alternative to ' + paths[0], true); });
+      // An alternative repeats most of the kept module's tools (at least half of its own names are there too); a module
+      // that shares a name or two is a second module of the same server (both registered or mounted), not an alternative.
+      const alt = new Set(paths.slice(1).filter((p) => { const ns = Array.from(namesIn.get(p)); return ns.filter((n) => keep.has(n)).length * 2 >= ns.length; }));
+      found.forEach((f) => { if (alt.has(f.path) && !keep.has(f.tool.name)) add(f, 'alternate-server', f.path + ' is an alternative to ' + paths[0], true); });
     });
 
     // a literal declaration that no other file or line mentions
