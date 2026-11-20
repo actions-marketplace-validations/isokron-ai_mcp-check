@@ -12,6 +12,19 @@ import { ALL_SECTIONS, belowMinGrade, mdCode, mdText } from '../src/report.js';
 
 /** The hidden line that marks the comment this Action owns on a pull request. */
 export const MARKER = '<!-- isokron-mcp-check -->';
+/**
+ * The marker line of one comment. Without pr-comment-key it is MARKER, one comment per pull request. With a key
+ * (one per matrix leg or per job that comments), the key and the job id are in it, so each keeps its own comment.
+ */
+export function markerFor(key = '', job = '') {
+  const k = String(key || '').trim();
+  if (!k) return MARKER;
+  return '<!-- isokron-mcp-check key=' + k + ' job=' + String(job || '').replace(/[^A-Za-z0-9_-]/g, '').replace(/-{2,}/g, '-').slice(0, 100) + ' -->';
+}
+export const validKey = (k) => /^[A-Za-z0-9._-]{0,64}$/.test(String(k || '').trim()) && !/--/.test(String(k || '')); // no "--" inside an HTML comment
+/** The second line of a body written by the run step: which run and attempt it belongs to. Removed before posting. */
+export const runStamp = (env) => '<!-- mcp-check-run: ' + String(env.GITHUB_RUN_ID || 'local').replace(/[^0-9A-Za-z-]/g, '') + '-' + String(env.GITHUB_RUN_ATTEMPT || '1').replace(/[^0-9]/g, '') + ' -->';
+const firstLine = (b) => String(b).split('\n', 1)[0];
 export const MODES = ['off', 'auto', 'always'];
 /** Findings shown in the comment; the job summary and the report artifact have the rest. */
 export const MAX_COMMENT_FINDINGS = 5;
@@ -49,11 +62,12 @@ export function commentAction(mode, problem) {
  * The comment body: the marker, a heading with the result, the grade table, the gate, up to five findings with
  * their check pages, and the registry line. Text from the tool list is escaped as in the job summary.
  */
-export function renderComment(r, { sections, minGrade = null, diff = null, sourceNote = '', runUrl = null, hint = null } = {}) {
+export function renderComment(r, { sections, minGrade = null, diff = null, sourceNote = '', runUrl = null, hint = null, marker = MARKER, stamp = null } = {}) {
   const below = belowMinGrade(r, sections, minGrade);
   const highRisk = diff ? diff.highRisk : [];
   const failed = below.length > 0 || highRisk.length > 0;
-  const out = [MARKER];
+  const out = [marker];
+  if (stamp) out.push(stamp);
   out.push('### MCP check' + (failed ? ': needs attention' : minGrade ? ': passes min-grade ' + minGrade : ''), '');
   out.push('| ' + ALL_SECTIONS.map((k) => r.sections[k].name).join(' | ') + ' |');
   out.push('|' + ALL_SECTIONS.map(() => '---').join('|') + '|');
@@ -113,9 +127,9 @@ export async function tokenIdentity(fetchImpl, apiUrl, token) {
   } catch { /* 401/403 for installation tokens */ }
   return { bot: true };
 }
-/** A comment this Action wrote with this token: it starts with MARKER and its author is the token's identity. */
-export function isOwnComment(c, id) {
-  if (!c || typeof c.body !== 'string' || !c.body.startsWith(MARKER) || !c.user) return false;
+/** A comment this Action wrote with this token: its first line is `marker` and its author is the token's identity. */
+export function isOwnComment(c, id, marker = MARKER) {
+  if (!c || typeof c.body !== 'string' || firstLine(c.body) !== marker || !c.user) return false;
   if (id.login) return c.user.login === id.login;
   return c.user.type === 'Bot';
 }
@@ -126,7 +140,7 @@ export function isOwnComment(c, id) {
  * A marker comment by anyone else is never edited: a new comment is made instead. action 'update' changes an existing
  * comment and creates none. Returns { done: 'created' | 'updated' | 'unchanged' | 'none', id }.
  */
-export async function upsertComment({ apiUrl = 'https://api.github.com', repo, number, token, body, action = 'upsert', fetch: fetchImpl = globalThis.fetch }) {
+export async function upsertComment({ apiUrl = 'https://api.github.com', repo, number, token, body, action = 'upsert', marker = MARKER, fetch: fetchImpl = globalThis.fetch }) {
   if (!/^[\w.-]+\/[\w.-]+$/.test(repo || '')) throw new Error('GITHUB_REPOSITORY is not owner/repo');
   if (!Number.isInteger(number)) throw new Error('no pull request number');
   if (!token) throw new Error('github-token is empty');
@@ -135,12 +149,12 @@ export async function upsertComment({ apiUrl = 'https://api.github.com', repo, n
   for (let page = 1; page <= 10; page++) {
     const list = await gh(fetchImpl, base + '?per_page=100&page=' + page, token);
     if (!Array.isArray(list)) break;
-    for (const c of list) if (c && typeof c.body === 'string' && c.body.startsWith(MARKER)) mine.push(c);
+    for (const c of list) if (c && typeof c.body === 'string' && firstLine(c.body) === marker) mine.push(c);
     if (list.length < 100) break;
   }
   // Only when some comment carries the marker is the token's identity needed (one more request).
   const id = mine.length ? await tokenIdentity(fetchImpl, apiUrl, token) : null;
-  const own = id ? mine.filter((c) => isOwnComment(c, id)) : [];
+  const own = id ? mine.filter((c) => isOwnComment(c, id, marker)) : [];
   const existing = own.find((c) => c.user.login === 'github-actions[bot]') || own[0];
   const commentsUrl = apiUrl.replace(/\/+$/, '') + '/repos/' + repo + '/issues/comments/';
   if (existing) {
@@ -185,7 +199,15 @@ export function stepPlan(env) {
   const st = lstatOrNull(file);
   if (!st) return { skip: 'no comment for this run' };
   if (!st.isFile() || st.size > 256 * 1024) throw new Error('the comment file is not a regular file of at most 256 KiB');
-  return { number: pr.number, file, action: mode === 'always' || env.COMMENT_ACTION === 'upsert' ? 'upsert' : 'update' };
+  if (!validKey(env.INPUT_PR_COMMENT_KEY)) return { skip: 'pr-comment-key is not valid' };
+  const marker = markerFor(env.INPUT_PR_COMMENT_KEY, env.GITHUB_JOB);
+  const lines = readFileSync(file, 'utf8').split('\n');
+  // Written by the run step of this run and attempt, for this marker: anything else (a body left by an earlier run,
+  // or one another job wrote) is not posted.
+  if (lines[0] !== marker) throw new Error('the comment file was not written by this action for this job');
+  if (lines[1] !== runStamp(env)) throw new Error('the comment file was written by another run (expected ' + runStamp(env).replace(/<!-- | -->/g, '') + ')');
+  const body = [lines[0]].concat(lines.slice(2)).join('\n');
+  return { number: pr.number, file, body, marker, action: mode === 'always' || env.COMMENT_ACTION === 'upsert' ? 'upsert' : 'update' };
 }
 const lstatOrNull = (p) => { try { return lstatSync(p); } catch { return null; } };
 
@@ -198,9 +220,7 @@ async function step(env) {
   try {
     const plan = stepPlan(env);
     if (plan.skip) { process.stdout.write('mcp-check: no PR comment: ' + plan.skip + '\n'); return; }
-    const body = readFileSync(plan.file, 'utf8');
-    if (!body.startsWith(MARKER)) throw new Error('the comment file was not written by this action');
-    const got = await upsertComment({ apiUrl: env.GITHUB_API_URL || 'https://api.github.com', repo: env.GITHUB_REPOSITORY, number: plan.number, token: env.GITHUB_TOKEN, body, action: plan.action });
+    const got = await upsertComment({ apiUrl: env.GITHUB_API_URL || 'https://api.github.com', repo: env.GITHUB_REPOSITORY, number: plan.number, token: env.GITHUB_TOKEN, body: plan.body, marker: plan.marker, action: plan.action });
     process.stdout.write('mcp-check: PR comment ' + got.done + (got.id ? ' (' + got.id + ')' : '') + '\n');
   } catch (e) {
     warn(explainFailure(e));

@@ -223,3 +223,81 @@ test('fromDirectory: over the listing limit it says truncated, and lists likely 
   const { sourceLine } = await import('../src/inputs/collect.js');
   assert.match(sourceLine({ kind: 'dir', dir: '.', provenance: 'derived: x', truncated: true }), /the folder holds more files than the listing limit, so the deepest were not read$/);
 });
+
+// ------------------------------------------------------------ snapshot ownership and file order
+const SNAP = (server, tools) => JSON.stringify({ capturedWith: 'mcp-catalog-snap/0.3.0', format: 'mcp-catalog-snap/2', server: { name: server, version: '1' }, catalog: { prompts: [], resourceTemplates: [], tools: tools.map((n) => ({ name: n, description: 'd', inputSchema: { type: 'object' } })) } });
+function snapRepo({ pkg = null, src = null, snaps = {} }) {
+  const dir = mkdtempSync(join(tmpdir(), 'mcpcheck-snap-'));
+  mkdirSync(join(dir, '.mcp-catalog'));
+  if (pkg) writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: pkg }));
+  if (src) { mkdirSync(join(dir, 'src')); writeFileSync(join(dir, 'src', 'server.ts'), src); }
+  for (const [f, body] of Object.entries(snaps)) writeFileSync(join(dir, '.mcp-catalog', f), body);
+  return dir;
+}
+const SRC = "import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';\nconst server = new McpServer({ name: 'notes', version: '1' });\nserver.registerTool('note_get', { description: 'd', inputSchema: {} }, async () => ({}));\n";
+
+test('snapshots: a matching server name wins over source; names compare without case, scope or mcp affix', async () => {
+  for (const [pkg, server] of [['@acme/notes-mcp', 'Notes'], ['mcp-notes', 'notes'], ['notes', 'NOTES-MCP']]) {
+    const r = await R.fromDirectory(snapRepo({ pkg, src: SRC.replace("name: 'notes'", "name: 'unrelated'"), snaps: { 'x.json': SNAP(server, ['a', 'b']) } }));
+    assert.equal(r.best.kind, 'catalog', pkg + ' / ' + server);
+    assert.ok(!r.best.foreign);
+  }
+  const fromCtor = await R.fromDirectory(snapRepo({ src: SRC, snaps: { 'notes.json': SNAP('notes', ['a']) } }));
+  assert.equal(fromCtor.best.kind, 'catalog', 'the McpServer({ name }) of the source counts without a package.json');
+  assert.deepEqual([...R.ownServerNames(new Map([['srv.py', 'mcp = FastMCP("Py Notes")'], ['pyproject.toml', '[project]\nname = "py-notes-mcp"\n']]))], ['py-notes']);
+  assert.equal(R.normName('@scope/MCP-Thing_Server-mcp'), 'thing-server');
+});
+
+test('snapshots: one of another server is never chosen over source; alone it is used and marked; several are not used', async () => {
+  const withSrc = await R.fromDirectory(snapRepo({ pkg: 'notes', src: SRC, snaps: { 'github.json': SNAP('github', ['u1', 'u2', 'u3']) } }));
+  assert.equal(withSrc.best.kind, 'source');
+  assert.ok(!withSrc.candidates.some((c) => c.kind === 'catalog'));
+  assert.deepEqual(withSrc.hints.foreignSnapshots, [{ path: '.mcp-catalog/github.json', server: 'github' }]);
+  const single = await R.fromDirectory(snapRepo({ pkg: 'notes', snaps: { 'github.json': SNAP('github', ['u1']) } }));
+  assert.equal(single.best.kind, 'catalog');
+  assert.equal(single.best.foreign, true);
+  const several = await R.fromDirectory(snapRepo({ pkg: 'notes', snaps: { 'github.json': SNAP('github', ['u1']), 'slack.json': SNAP('slack', ['s1']) } }));
+  assert.equal(several.best, null);
+  assert.equal(several.hints.foreignSnapshots.length, 2);
+  const none = cli(['--repo-dir', snapRepo({ pkg: 'notes', snaps: { 'github.json': SNAP('github', ['u1']), 'slack.json': SNAP('slack', ['s1']) } })]);
+  assert.equal(none.status, 3);
+  assert.match(none.stderr, /Not used: 2 mcp-catalog-snap snapshots of other servers/);
+  const one = JSON.parse(cli(['--repo-dir', snapRepo({ pkg: 'notes', snaps: { 'github.json': SNAP('github', ['u1']) } }), '--format', 'json']).stdout);
+  assert.match(one.source.provenance, /snapshot \.mcp-catalog\/github\.json of github, which may not be this repository's server/);
+});
+
+test('snapshots: sea-lite over GitHub: its snapshot names sea-lite, as its package.json does, so it is the exact list', async () => {
+  const snap = SNAP('sea-lite', ['sea_get', 'sea_claim']);
+  const files = { '.mcp-catalog/sea-lite.json': snap, 'package.json': JSON.stringify({ name: 'sea-lite', dependencies: { '@modelcontextprotocol/sdk': '1.29.0', zod: '4.1.0' } }), 'src/server.ts': SRC.replace(/notes/g, 'sea-lite').replace('note_get', 'sea_from_source') };
+  const fetch = async (url) => {
+    const ok = (body) => ({ ok: true, status: 200, headers: { get: () => null }, text: async () => body });
+    if (url === 'https://api.github.com/repos/isokron-ai/sea-lite') return ok(JSON.stringify({ default_branch: 'main' }));
+    if (url.startsWith('https://api.github.com/repos/isokron-ai/sea-lite/git/trees/')) return ok(JSON.stringify({ sha: 'abc', truncated: false, tree: Object.keys(files).map((path) => ({ type: 'blob', path, size: files[path].length })) }));
+    const hit = Object.keys(files).find((p) => url.endsWith('/abc/' + p.split('/').map(encodeURIComponent).join('/')));
+    return hit ? ok(files[hit]) : { ok: false, status: 404, headers: { get: () => null }, text: async () => '' };
+  };
+  const r = await R.fromGitHub('github.com/isokron-ai/sea-lite', { fetch });
+  assert.equal(r.best.kind, 'catalog');
+  assert.ok(!r.best.foreign);
+  assert.deepEqual(r.best.tools.map((t) => t.name), ['sea_get', 'sea_claim']);
+});
+
+test('--repo-dir and --repo read the same source files, whatever order the listing has', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'mcpcheck-order-'));
+  const files = {};
+  for (const d of ['b', 'a/z', 'c', 'a']) for (let i = 0; i < 3; i++) files[d + '/f' + i + '.ts'] = 'server.registerTool("t_' + d.replace('/', '_') + '_' + i + '", { description: "d", inputSchema: {} }, async () => ({}));\n';
+  for (const [p, t] of Object.entries(files)) { mkdirSync(join(dir, p, '..'), { recursive: true }); writeFileSync(join(dir, p), t); }
+  const local = await R.fromDirectory(dir, { maxSourceFiles: 4 });
+  const shuffled = Object.keys(files).sort(() => 0.5 - Math.random()).reverse();
+  const fetch = async (url) => {
+    const ok = (body) => ({ ok: true, status: 200, headers: { get: () => null }, text: async () => body });
+    if (url === 'https://api.github.com/repos/o/r') return ok(JSON.stringify({ default_branch: 'main' }));
+    if (url.includes('/git/trees/')) return ok(JSON.stringify({ sha: 's', tree: shuffled.map((path) => ({ type: 'blob', path, size: 10 })) }));
+    const hit = Object.keys(files).find((p) => url.endsWith('/s/' + p));
+    return hit ? ok(files[hit]) : { ok: false, status: 404, headers: { get: () => null }, text: async () => '' };
+  };
+  const remote = await R.fromGitHub('github.com/o/r', { fetch, maxSourceFiles: 4 });
+  assert.deepEqual(local.best.files.slice().sort(), remote.best.files.slice().sort());
+  assert.deepEqual(local.best.tools.map((t) => t.name), remote.best.tools.map((t) => t.name));
+  assert.equal(local.best.tools.length, 4);
+});

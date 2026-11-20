@@ -28,7 +28,7 @@ export function expandEnv(v, env = process.env) {
 }
 
 export const FIDELITY = {
-  exact: (c) => 'exact: ' + (c.kind === 'snapshots' ? 'committed tool snapshots' : c.kind === 'mcpb' ? 'MCPB manifest static tools/list' : c.kind === 'catalog' ? 'committed mcp-catalog-snap snapshot ' + c.path : 'committed tool list ' + c.path),
+  exact: (c) => 'exact: ' + (c.kind === 'snapshots' ? 'committed tool snapshots' : c.kind === 'mcpb' ? 'MCPB manifest static tools/list' : c.kind === 'catalog' ? 'committed mcp-catalog-snap snapshot ' + c.path + (c.foreign ? ' of ' + line(c.server || 'an unnamed server', 100) + ', which may not be this repository\'s server' : '') : 'committed tool list ' + c.path),
   literal: () => 'literal: tool definitions written as literals in the source',
   derived: () => 'derived: reproduced from SDK registrations in the source; schemas follow the SDK\'s output and may differ in detail',
   names: () => 'names only: an MCPB manifest lists names and descriptions; schema checks do not apply',
@@ -99,6 +99,12 @@ export function noToolsMessage(where, r) {
     + '(in the GitHub Action: set command or tools-file).';
 }
 
+/** Snapshots of other servers that were found and not used (several, and no tool defined in the source). */
+export function foreignNote(r) {
+  const f = (r.hints && r.hints.foreignSnapshots) || [];
+  return f.length ? ' Not used: ' + f.length + ' mcp-catalog-snap snapshots of other servers (' + f.map((x) => line(x.path, 200) + ': ' + line(x.server || 'unnamed', 100)).join(', ') + ').' : '';
+}
+
 /** A local checkout, read like --repo: no network, nothing run. */
 async function fromRepoDir(dir, opt) {
   let r;
@@ -106,7 +112,7 @@ async function fromRepoDir(dir, opt) {
     if (e && e.code === 'not_found') throw new InputFailure(line(e.message), 'usage');
     throw new InputFailure('could not read ' + line(dir) + ': ' + line(e && e.message), 'unreachable');
   }
-  if (!r.best) throw new InputFailure(noToolsMessage(line(dir), r), 'unreachable');
+  if (!r.best) throw new InputFailure(noToolsMessage(line(dir), r) + foreignNote(r), 'unreachable');
   const c = r.best;
   const { provenance, left, cond } = repoProvenance(c);
   return { data: c.tools, where: c.where || null, source: { kind: 'dir', dir: r.repo, fidelity: c.fidelity, provenance, from: c.kind, files: c.files || [c.path], ...(c.built ? { built: true } : {}), ...(r.truncated ? { truncated: true } : {}), ...(left.length ? { left_out: left.map((x) => ({ name: line(x.name, 128), reasons: x.reasons.map((y) => line(y, 160)) })) } : {}), ...(cond.length ? { conditional: cond.map((x) => line(x.name, 128)) } : {}) } };

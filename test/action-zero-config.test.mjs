@@ -13,7 +13,7 @@ import M from '../src/engine.js';
 import { LINK_TAGS } from '../src/links.js';
 import { publishHint, uriPath } from '../action/main.mjs';
 import { serverEnv } from '../src/capture.js';
-import { MARKER, commentAction, commentText, explainFailure, isOwnComment, prContext, renderComment, stepPlan, tokenIdentity, upsertComment } from '../action/pr-comment.mjs';
+import { MARKER, commentAction, commentText, markerFor, explainFailure, isOwnComment, prContext, renderComment, stepPlan, tokenIdentity, upsertComment } from '../action/pr-comment.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const main = join(root, 'action', 'main.mjs');
@@ -138,7 +138,7 @@ test('pr-comment: off by default; always on a same-repository pull request rende
   assert.equal(on.outputs['pr-comment-action'], 'upsert');
   assert.equal(on.outputs['pr-number'], undefined, 'the comment step reads the pull request from the event itself');
   const body = readFileSync(join(ws, 'mcp-check-results', 'pr-comment.md'), 'utf8');
-  assert.ok(body.startsWith(MARKER + '\n### MCP check: passes min-grade B\n'));
+  assert.ok(body.startsWith(MARKER + '\n<!-- mcp-check-run: 42-1 -->\n### MCP check: passes min-grade B\n'), body.slice(0, 120));
   assert.match(body, /Source: repository code, nothing was run \(derived\)\./);
   assert.match(body, /registry\/example\/notes\?utm_source=mcp-check-pr-comment&utm_medium=action/);
   assert.ok(!/GITHUB_TOKEN|ghp_|Bearer/.test(on.stdout + on.summary + body));
@@ -277,13 +277,14 @@ function runStep(env) {
     p.on('close', (code) => resolveRun({ code, stdout }));
   });
 }
-function stepWorkspace(body = MARKER + '\nhello\n', event = pr()) {
+const STAMP = '<!-- mcp-check-run: 42-1 -->';
+function stepWorkspace(body = MARKER + '\n' + STAMP + '\nhello\n', event = pr()) {
   const ws = realpathSync(mkdtempSync(join(tmpdir(), 'mcpcheck-step-')));
   mkdirSync(join(ws, 'mcp-check-results'));
   if (body !== null) writeFileSync(join(ws, 'mcp-check-results', 'pr-comment.md'), body);
   writeFileSync(join(ws, 'event.json'), JSON.stringify(event));
   const sum = join(ws, 'sum.md'); writeFileSync(sum, '');
-  return { ws, sum, env: { GITHUB_WORKSPACE: ws, GITHUB_EVENT_NAME: 'pull_request', GITHUB_EVENT_PATH: join(ws, 'event.json'), INPUT_PR_COMMENT: 'always', INPUT_RESULTS_DIR: 'mcp-check-results', COMMENT_ACTION: 'upsert', GITHUB_TOKEN: 'secret-token', GITHUB_REPOSITORY: 'o/r', GITHUB_STEP_SUMMARY: sum } };
+  return { ws, sum, env: { GITHUB_WORKSPACE: ws, GITHUB_EVENT_NAME: 'pull_request', GITHUB_EVENT_PATH: join(ws, 'event.json'), INPUT_PR_COMMENT: 'always', INPUT_RESULTS_DIR: 'mcp-check-results', COMMENT_ACTION: 'upsert', GITHUB_TOKEN: 'secret-token', GITHUB_REPOSITORY: 'o/r', GITHUB_STEP_SUMMARY: sum, GITHUB_RUN_ID: '42', GITHUB_RUN_ATTEMPT: '1', GITHUB_JOB: 'check' } };
 }
 test('the comment step posts through GITHUB_API_URL, and a refusal is a warning with exit 0', async (t) => {
   const seen = [];
@@ -316,7 +317,7 @@ test('the comment step posts through GITHUB_API_URL, and a refusal is a warning 
 
 test('the comment step trusts the event and the results folder, not the run step: forks, missing or foreign bodies, odd paths', () => {
   const s1 = stepWorkspace();
-  assert.deepEqual(stepPlan({ ...s1.env, COMMENT_FILE: '/etc/passwd', PR_NUMBER: '999' }), { number: 7, file: join(s1.ws, 'mcp-check-results', 'pr-comment.md'), action: 'upsert' });
+  assert.deepEqual(stepPlan({ ...s1.env, COMMENT_FILE: '/etc/passwd', PR_NUMBER: '999' }), { number: 7, file: join(s1.ws, 'mcp-check-results', 'pr-comment.md'), body: MARKER + '\nhello\n', marker: MARKER, action: 'upsert' });
   assert.equal(stepPlan({ ...s1.env, INPUT_PR_COMMENT: 'auto', COMMENT_ACTION: 'update' }).action, 'update');
   assert.equal(stepPlan({ ...s1.env, INPUT_PR_COMMENT: 'auto', COMMENT_ACTION: 'whatever' }).action, 'update');
   assert.match(stepPlan({ ...s1.env, INPUT_PR_COMMENT: 'off' }).skip, /off/);
@@ -330,11 +331,16 @@ test('the comment step trusts the event and the results folder, not the run step
   assert.throws(() => stepPlan(s2.env), /not a regular file/);
 });
 
-test('the comment step refuses a body that does not start with the marker', async () => {
+test('the comment step refuses a body that does not start with the marker, or that another run or job wrote', async () => {
   const s = stepWorkspace('just some file\n');
   const r = await runStep({ ...s.env, GITHUB_API_URL: 'http://127.0.0.1:9' });
   assert.equal(r.code, 0);
-  assert.match(r.stdout, /::warning::mcp-check: PR comment not posted: the comment file was not written by this action/);
+  assert.match(r.stdout, /::warning::mcp-check: PR comment not posted: the comment file was not written by this action for this job/);
+  const s2 = stepWorkspace();
+  assert.throws(() => stepPlan({ ...s2.env, GITHUB_RUN_ATTEMPT: '2' }), /written by another run \(expected mcp-check-run: 42-2\)/);
+  assert.throws(() => stepPlan({ ...s2.env, GITHUB_RUN_ID: '43' }), /written by another run/);
+  assert.throws(() => stepPlan({ ...s2.env, INPUT_PR_COMMENT_KEY: 'node22' }), /not written by this action for this job/, 'a keyed job does not post an unkeyed body');
+  assert.match(stepPlan({ ...s2.env, INPUT_PR_COMMENT_KEY: 'bad key!' }).skip, /pr-comment-key is not valid/);
 });
 
 test('action.yml: the token reaches the comment step only; that step cannot fail the job', () => {
@@ -453,4 +459,66 @@ test('PR comment: text from the tool list cannot @mention; SARIF paths are perce
   const a = act(ws, { 'working-directory': 'my server' });
   const sarif = JSON.parse(readFileSync(join(ws, 'mcp-check-results', 'report.sarif'), 'utf8'));
   assert.ok(sarif.runs[0].results.some((x) => x.locations[0].physicalLocation.artifactLocation.uri === 'my%20server/src/tools/notes.ts'), a.stdout);
+});
+
+// ------------------------------------------------------------ third review: stale bodies, keys, snapshot ownership
+test('a body left by an earlier run is deleted first thing, even when this run stops at input validation', () => {
+  const ws = workspace(null);
+  mkdirSync(join(ws, 'mcp-check-results'));
+  writeFileSync(join(ws, 'mcp-check-results', '.mcp-check-results'), 'x');
+  writeFileSync(join(ws, 'mcp-check-results', 'pr-comment.md'), MARKER + '\nSTALE from an earlier run: all A\n');
+  const r = act(ws, { 'min-grade': 'Z', 'pr-comment': 'always' }, { event: pr(), GITHUB_EVENT_NAME: 'pull_request' });
+  assert.match(r.stdout, /::error::mcp-check: min-grade must be one of/);
+  assert.ok(!existsSync(join(ws, 'mcp-check-results', 'pr-comment.md')));
+  // A folder this action did not make is left as it is.
+  const ws2 = workspace(null);
+  mkdirSync(join(ws2, 'mcp-check-results'));
+  writeFileSync(join(ws2, 'mcp-check-results', 'pr-comment.md'), 'someone else\'s file');
+  act(ws2, { 'min-grade': 'Z' });
+  assert.ok(existsSync(join(ws2, 'mcp-check-results', 'pr-comment.md')));
+});
+
+test('pr-comment-key: each key has its own marker with the job id; no key keeps the plain marker', async () => {
+  assert.equal(markerFor('', 'check'), MARKER);
+  assert.equal(markerFor('node22', 'check'), '<!-- isokron-mcp-check key=node22 job=check -->');
+  assert.equal(markerFor('a', 'x y<!--'), '<!-- isokron-mcp-check key=a job=xy- -->');
+  assert.equal(markerFor('a', 'zero-config'), '<!-- isokron-mcp-check key=a job=zero-config -->');
+  const ws = workspace('ts-zod');
+  const ctx = { event: pr(), GITHUB_EVENT_NAME: 'pull_request', GITHUB_JOB: 'check', GITHUB_RUN_ATTEMPT: '3' };
+  act(ws, { 'pr-comment': 'always', 'pr-comment-key': 'node22' }, ctx);
+  const body = readFileSync(join(ws, 'mcp-check-results', 'pr-comment.md'), 'utf8');
+  assert.ok(body.startsWith('<!-- isokron-mcp-check key=node22 job=check -->\n<!-- mcp-check-run: 42-3 -->\n'));
+  assert.match(act(ws, { 'pr-comment': 'always', 'pr-comment-key': 'no spaces' }, ctx).stdout, /::error::mcp-check: pr-comment-key may hold only/);
+  assert.match(act(ws, { 'pr-comment': 'always', 'pr-comment-key': 'a--b' }, ctx).stdout, /::error::mcp-check: pr-comment-key may hold only/);
+  // Two keys on one pull request: two comments; the unkeyed marker is not mistaken for a keyed one, nor the reverse.
+  const gh = fakeGitHub([{ body: MARKER + '\nsingle job', user: ACTIONS_BOT }]);
+  const k1 = markerFor('a', 'check'); const k2 = markerFor('b', 'check');
+  assert.equal((await upsertComment(args(gh, { marker: k1, body: k1 + '\none\n' }))).done, 'created');
+  assert.equal((await upsertComment(args(gh, { marker: k2, body: k2 + '\ntwo\n' }))).done, 'created');
+  assert.equal((await upsertComment(args(gh, { marker: k1, body: k1 + '\nonce more\n' }))).done, 'updated');
+  assert.equal((await upsertComment(args(gh, { body: MARKER + '\nsingle again\n' }))).id, 100);
+  assert.deepEqual(gh.comments.map((c) => c.body.split('\n')[1]), ['single again', 'once more', 'two']);
+});
+
+test('zero-config: a snapshot of another server is not graded instead of the code, and is labelled when it is the only list', () => {
+  const ws = workspace(null);
+  mkdirSync(join(ws, 'src')); mkdirSync(join(ws, '.mcp-catalog'));
+  writeFileSync(join(ws, 'package.json'), JSON.stringify({ name: 'my-server', dependencies: { '@modelcontextprotocol/sdk': '1.20.0', zod: '3.25.0' } }));
+  writeFileSync(join(ws, 'src', 'server.ts'), "import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';\nconst server = new McpServer({ name: 'my-server', version: '1' });\nserver.registerTool('my_tool', { title: 'Mine', description: 'My own tool.', inputSchema: {}, annotations: { readOnlyHint: true } }, async () => ({ content: [] }));\n");
+  const up = { capturedWith: 'mcp-catalog-snap/0.1.0', server: { name: 'github' }, catalog: { prompts: [], resourceTemplates: [], tools: [0, 1, 2].map((i) => ({ name: 'upstream_' + i, description: 'x', inputSchema: { type: 'object' } })) } };
+  writeFileSync(join(ws, '.mcp-catalog', 'github.json'), JSON.stringify(up));
+  const r = act(ws, { 'min-grade': 'B' });
+  assert.match(r.summary, /1 tools from the repository code in `\.`\./);
+  assert.deepEqual(JSON.parse(readFileSync(join(ws, 'mcp-check-results', 'tools-list.json'), 'utf8')).tools.map((t) => t.name), ['my_tool']);
+
+  const only = workspace(null);
+  mkdirSync(join(only, '.mcp-catalog'));
+  writeFileSync(join(only, '.mcp-catalog', 'github.json'), JSON.stringify(up));
+  const o = act(only, {});
+  assert.match(o.summary, /\*\*Graded a committed snapshot of `github` \(`\.mcp-catalog\/github\.json`\); it may not be this repository's server, and it may be stale\.\*\*/);
+
+  writeFileSync(join(only, '.mcp-catalog', 'slack.json'), JSON.stringify({ ...up, server: { name: 'slack' } }));
+  const two = act(only, {});
+  assert.equal(two.outputs['exit-status'], '1');
+  assert.match(two.stdout, /No tool definitions found .* Not used: 2 mcp-catalog-snap snapshots of other servers \(\.mcp-catalog\/github\.json: github, \.mcp-catalog\/slack\.json: slack\)\./);
 });

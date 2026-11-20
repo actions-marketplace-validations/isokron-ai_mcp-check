@@ -10,8 +10,8 @@ import { capture, CaptureError, splitCommand as split } from '../src/capture.js'
 import { parseList } from '../src/tools.js';
 import { InputError as LimitError } from '../src/limits.js';
 import { registryUrl, tagDocsLinks } from '../src/links.js';
-import { repoProvenance } from '../src/inputs/collect.js';
-import { commentAction, MODES as COMMENT_MODES, prContext, renderComment } from './pr-comment.mjs';
+import { foreignNote, repoProvenance } from '../src/inputs/collect.js';
+import { commentAction, markerFor, MODES as COMMENT_MODES, prContext, renderComment, runStamp, validKey } from './pr-comment.mjs';
 import { ALL_SECTIONS, DEFAULT_SECTIONS, GRADES, badgeFile, badgeSnippet, belowMinGrade, mdCode, mdText, sarifWithLocations, summaryMarkdown, webLink } from '../src/report.js';
 
 const Repo = createRequire(import.meta.url)('../src/inputs/repo-source.cjs');
@@ -119,7 +119,23 @@ export const uriPath = (p) => String(p).split('/').map(encodeURIComponent).join(
 
 const ZERO_CONFIG_DOCS = 'https://github.com/isokron-ai/mcp-check/blob/main/docs/github-action.md#where-the-tool-list-comes-from';
 
+/**
+ * Before anything else, even input checks: a comment body an earlier run left in the results folder is removed, so
+ * a run that stops early never leaves one for the comment step. Best effort; the folder is checked again later.
+ */
+function removeStaleComment() {
+  try {
+    const ws = realpathSync(env.GITHUB_WORKSPACE || process.cwd());
+    const dir = resolve(ws, input('results-dir', 'mcp-check-results'));
+    const rel = relative(ws, dir);
+    if (!rel || rel.startsWith('..') || isAbsolute(rel)) return;
+    const d = lstatOrNull(dir); const m = lstatOrNull(join(dir, MARKER)); const f = lstatOrNull(join(dir, 'pr-comment.md'));
+    if (d && d.isDirectory() && m && m.isFile() && f && f.isFile()) unlinkSync(join(dir, 'pr-comment.md'));
+  } catch { /* nothing to remove */ }
+}
+
 export async function run() {
+  removeStaleComment();
   const toolsFile = input('tools-file');
   const command = input('command');
   if (toolsFile && command) throw new InputError('set one of tools-file and command, not both (or neither, to read the tool definitions from the repository code)');
@@ -135,14 +151,13 @@ export async function run() {
   const wantHint = bool('publish-hint', true);
   const commentMode = input('pr-comment', 'off').toLowerCase();
   if (!COMMENT_MODES.includes(commentMode)) throw new InputError('pr-comment must be off, auto or always');
+  const commentKey = input('pr-comment-key');
+  if (!validKey(commentKey)) throw new InputError('pr-comment-key may hold only letters, digits, ".", "_" and "-" (at most 64, no "--")');
   const results = inWorkspace(input('results-dir', 'mcp-check-results'), 'results-dir');
   const badgeDir = inWorkspace(input('badge-dir', '.github/mcp-check'), 'badge-dir');
   const baseline = input('baseline') ? inWorkspace(input('baseline'), 'baseline') : null;
   ownFolder(results, 'results-dir');
   const out = (f, data) => safeWrite(join(results.abs, f), data, results.rel + '/' + f);
-  // A comment body left by an earlier run in this workspace must not be posted for this one.
-  const staleComment = lstatOrNull(join(results.abs, 'pr-comment.md'));
-  if (staleComment && staleComment.isFile()) unlinkSync(join(results.abs, 'pr-comment.md'));
   // Size, depth and tool-count limits (2 MiB of JSON, 64 levels, 2,000 tools), with a clear error.
   const parse = (t, label) => {
     try { return parseList(t, label); } catch (e) {
@@ -176,7 +191,7 @@ export async function run() {
       summary('## MCP check\n\n' + mdText(what) + ' Nothing was run. Set `command` to the command that starts your server, or `tools-file` to a saved `tools/list` answer: [how](' + ZERO_CONFIG_DOCS + ').\n');
       return new InputError(msg);
     };
-    if (!scan.best) throw noUsable('No tool definitions found in the source in ' + dir.rel + ' (scanned ' + scan.scanned.source + ' of ' + scan.scanned.sourceTotal + ' source files, and the committed tool lists and MCPB manifests' + (scan.truncated ? '; the folder holds more files than the listing limit, and the deepest were not listed' : '') + ').');
+    if (!scan.best) throw noUsable('No tool definitions found in the source in ' + dir.rel + ' (scanned ' + scan.scanned.source + ' of ' + scan.scanned.sourceTotal + ' source files, and the committed tool lists and MCPB manifests' + (scan.truncated ? '; the folder holds more files than the listing limit, and the deepest were not listed' : '') + ').' + foreignNote(scan));
     const c = scan.best;
     // Names without schemas (an MCPB manifest's tools array) would be graded on schemas that do not exist.
     if (c.fidelity === 'names') throw noUsable('Only tool names were found in the source in ' + dir.rel + ' (' + c.path + ' lists names and descriptions without schemas), which cannot be graded.');
@@ -196,13 +211,16 @@ export async function run() {
     const committed = c.kind !== 'source';
     source = committed ? 'the committed list ' + mdCode(prefix + (c.path || '')) : 'the repository code in ' + mdCode(dir.rel);
     const how = ' For the exact list your server sends, set `command` (the command that starts it, for example `node dist/index.js`) or `tools-file` (a saved `tools/list` answer): [how](' + ZERO_CONFIG_DOCS + ').';
-    note = (committed
+    const foreignSnap = c.kind === 'catalog' && c.foreign;
+    note = (foreignSnap
+      ? '**Graded a committed snapshot of ' + mdCode(String(c.server || 'an unnamed server').slice(0, 100)) + ' (' + mdCode(prefix + c.path) + '); it may not be this repository\'s server, and it may be stale.** Nothing was run. No tool is defined in the source, and its server name does not match this repository\'s.'
+      : committed
       ? '**Graded the committed list ' + mdCode(prefix + (c.path || '')) + ', not the code; it may be stale.** Nothing was run. It was found in the repository and ranks above tool definitions read from code (' + mdText(provenance) + ').'
       : '**Source: repository code; nothing was run.** ' + mdText(provenance.charAt(0).toUpperCase() + provenance.slice(1)) + '.'
         + (c.built ? ' Read from build output, since no source file defines a tool.' : ''))
       + (scan.truncated ? ' **The folder holds more files than the listing limit (' + (20000).toLocaleString('en-US') + '); the deepest were not read.** Set `working-directory` to the server\'s folder.' : '')
       + how;
-    commentSource = committed ? 'Source: the committed list ' + mdCode(prefix + (c.path || '')) + ', not the code; it may be stale.' : 'Source: repository code, nothing was run (' + c.fidelity + ').';
+    commentSource = foreignSnap ? 'Source: a committed snapshot of ' + mdCode(String(c.server || 'an unnamed server').slice(0, 100)) + ' (' + mdCode(prefix + c.path) + '); it may not be this repository\'s server.' : committed ? 'Source: the committed list ' + mdCode(prefix + (c.path || '')) + ', not the code; it may be stale.' : 'Source: repository code, nothing was run (' + c.fidelity + ').';
   } else {
     sourceKind = 'command';
     const cwd = inWorkspace(input('working-directory', '.'), 'working-directory', true);
@@ -300,7 +318,7 @@ export async function run() {
     if (pr && pr.skip) commentNote = 'PR comment skipped: ' + pr.skip + '.';
     else if (pr) {
       commentDo = commentAction(commentMode, failed);
-      const body = renderComment(r, { sections, minGrade, diff, sourceNote: commentSource, runUrl, hint: wantHint ? publishHint(env, event, 'comment') : null });
+      const body = renderComment(r, { sections, minGrade, diff, sourceNote: commentSource, runUrl, hint: wantHint ? publishHint(env, event, 'comment') : null, marker: markerFor(commentKey, env.GITHUB_JOB), stamp: runStamp(env) });
       out('pr-comment.md', body);
     }
   }

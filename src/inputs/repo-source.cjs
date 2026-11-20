@@ -763,7 +763,7 @@
     });
     // likely tool files first
     const score = (p) => (/(^|\/)(tools?|server|index|main|mcp|handlers?)[^/]*\.(ts|js|py|mjs)$/i.test(p) ? 0 : /tool/i.test(p) ? 1 : 2) + p.split('/').length * 0.01;
-    src.sort((a, b) => score(a) - score(b));
+    src.sort((a, b) => score(a) - score(b) || (a < b ? -1 : a > b ? 1 : 0)); // then by path, so every listing order reads the same files
     return { exact, manifests, serverJson, src };
   }
 
@@ -1101,8 +1101,9 @@
       snaps.sort((a, b) => a[0].length - b[0].length).forEach(([p, t]) => { const ts = toolsFromJson(t); (ts || []).forEach((x) => { if (!seen.has(x.name)) { seen.add(x.name); tools.push(x); } }); });
       if (tools.length) candidates.push({ kind: 'snapshots', fidelity: 'exact', path: snaps[0][0].replace(/[^/]+$/, ''), tools });
     }
+    const catalogs = []; // mcp-catalog-snap snapshots: placed after the source is read, once the repository's own server name is known
     exactFiles.filter(([p, t]) => t && !/__toolsnaps__/.test(p)).forEach(([p, t]) => {
-      if (/(^|\/)\.mcp-catalog\//.test(p)) { const c = fromCatalogSnap(t); if (c) candidates.push({ kind: 'catalog', fidelity: 'exact', path: p, tools: c.tools, server: c.server, capturedAt: c.capturedAt }); return; }
+      if (/(^|\/)\.mcp-catalog\//.test(p)) { const c = fromCatalogSnap(t); if (c) catalogs.push({ kind: 'catalog', fidelity: 'exact', path: p, tools: c.tools, server: c.server, capturedAt: c.capturedAt }); return; }
       const ts = toolsFromJson(t); if (ts && ts.length) candidates.push({ kind: 'committed', fidelity: 'exact', path: p, tools: ts });
     });
     for (const [p, t] of await readMany(plan.manifests.slice(0, 10), 4)) { const m = t && fromMcpbManifest(t); if (m) candidates.push({ kind: 'mcpb', fidelity: m.fidelity, path: p, tools: m.tools, generated: m.generated }); }
@@ -1111,9 +1112,11 @@
     const metaPaths = paths.filter((p) => META_FILE.test(p) && !SKIP_DIR.test(p) && p.split('/').length <= (o.subdir ? o.subdir.split('/').length : 0) + 2).slice(0, 8);
     const rootMeta = o.all.filter((p) => /^(package\.json|package-lock\.json|pyproject\.toml)$/.test(p) && !paths.includes(p));
     const metaFiles = await readMany(metaPaths.concat(rootMeta).slice(0, 10), 4);
+    let readFiles = new Map();
     const analyse = async (pl, allowBuilt) => {
       const srcFiles = await readMany(pl.src.slice(0, maxSrc), 8);
       const repoFiles = new Map(); metaFiles.concat(srcFiles).forEach(([p, t]) => { if (t) repoFiles.set(p, t); });
+      readFiles = repoFiles;
       return analyseRepo(repoFiles, { maxSourceFiles: maxSrc, allowBuilt });
     };
     let an = await analyse(plan);
@@ -1129,9 +1132,51 @@
       const marked = an.found.filter((x) => x.marks.length).map((x) => ({ name: x.tool.name, reasons: x.marks.map((m) => m.reason), excluded: x.excluded }));
       candidates.push({ kind: 'source', fidelity: allLiteral ? 'literal' : 'derived', path: null, built, files: Array.from(new Set(found.map((x) => x.path))), tools: found.map((x) => x.tool), where: found.map((x) => ({ name: x.tool.name, path: x.path, line: x.line, fidelity: x.fidelity })), excluded: an.excluded.map((x) => ({ name: x.tool.name, path: x.path, line: x.line, reasons: x.marks.filter((m) => m.exclude).map((m) => m.reason + (m.detail ? ' (' + m.detail + ')' : '')) })), marked, sdk: an.sdk });
     }
+    // A snapshot counts as this repository's exact list only when it names this repository's server. A snapshot of
+    // another server (one this repository uses or tests against) is never chosen over tools read from source; with
+    // no such tools, a single one is used and marked foreign; several are not used at all.
+    const own = ownServerNames(readFiles);
+    const mine = catalogs.filter((c) => c.server && own.has(normName(c.server)));
+    const foreign = catalogs.filter((c) => !mine.includes(c));
+    mine.forEach((c) => candidates.push(c));
+    if (foreign.length) hints.foreignSnapshots = foreign.map((c) => ({ path: c.path, server: c.server }));
+    if (!found.length && foreign.length === 1) candidates.push(Object.assign(foreign[0], { foreign: true }));
+    hints.ownNames = Array.from(own);
     const rank = { exact: 0, literal: 1, derived: 2, names: 3 };
-    candidates.sort((a, b) => rank[a.fidelity] - rank[b.fidelity] || b.tools.length - a.tools.length);
+    candidates.sort((a, b) => (a.foreign ? 1 : 0) - (b.foreign ? 1 : 0) || rank[a.fidelity] - rank[b.fidelity] || b.tools.length - a.tools.length);
     return { scanned: { exact: plan.exact.length, manifests: plan.manifests.length, source: Math.min(plan.src.length, maxSrc), sourceTotal: plan.src.length }, candidates, best: candidates[0] || null, hints };
+  }
+
+  // ------------------------------------------------------------ the repository's own server name
+  // Compared without case, an npm scope, or an "mcp-" / "-mcp" affix: "@acme/Notes-MCP" and "notes" are one name.
+  function normName(n) {
+    let s = String(n || '').trim().toLowerCase().replace(/^@[^/]+\//, '').replace(/[\s_.]+/g, '-');
+    for (let k = 0; k < 3; k++) s = s.replace(/^mcp-/, '').replace(/-mcp$/, '');
+    return s;
+  }
+  // The names this repository gives its own server: McpServer({ name }) / Server({ name }) / FastMCP({ name }) in
+  // TypeScript and JavaScript, FastMCP("name") / MCPServer("name") in Python, and the package.json or pyproject.toml name.
+  function ownServerNames(files) {
+    const out = new Set(); const add = (n) => { const x = normName(n); if (x) out.add(x); };
+    const entries = files instanceof Map ? Array.from(files.entries()) : files;
+    entries.forEach(([p, text]) => {
+      if (typeof text !== 'string') return;
+      let m;
+      if (/\.(ts|mts|cts|js|mjs|cjs)$/.test(p)) {
+        const re = /new\s+(?:McpServer|Server|FastMCP)\s*\(\s*\{[^{}]*?\bname\s*:\s*(['"`])([^'"`\n]{1,100})\1/g;
+        while ((m = re.exec(text))) add(m[2]);
+      } else if (/\.py$/.test(p)) {
+        const re = /\b(?:FastMCP|MCPServer)\s*\(\s*(?:name\s*=\s*)?(['"])([^'"\n]{1,100})\1/g;
+        while ((m = re.exec(text))) add(m[2]);
+      } else if (/(^|\/)package\.json$/.test(p)) {
+        try { const j = JSON.parse(text); if (j && typeof j.name === 'string') add(j.name); } catch (e) { /* ignore */ }
+      } else if (/(^|\/)pyproject\.toml$/.test(p)) {
+        const sec = /^\[(?:project|tool\.poetry)\]\s*$([\s\S]*?)(?=^\[|$(?![\s\S]))/m.exec(text);
+        const nm = sec && /^\s*name\s*=\s*["']([^"'\n]+)["']/m.exec(sec[1]);
+        if (nm) add(nm[1]);
+      }
+    });
+    return out;
   }
 
   // ------------------------------------------------------------ a local checkout (Node only)
@@ -1197,6 +1242,7 @@
       } catch (e) { return null; }
     };
     const readMany = async (ps) => ps.map((p) => [p, readOne(p)]);
+    all.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)); // the walk order only decides what a truncated listing keeps
     const scan = await scanFiles({ all: all.concat(Array.from(extra.keys())), subdir: null, readMany, maxSourceFiles: opts.maxSourceFiles, builtFallback: true });
     return Object.assign({ repo: String(dir), ref: null, sha: null, via: 'directory', truncated }, scan);
   }
@@ -1223,5 +1269,5 @@
     return null;
   }
 
-  return { fromGitHub, fromDirectory, fromCatalogSnap, fromRegistry, extractFromFile, extractJs, extractPy, planFiles, detectSdk, collectGlobalConsts, analyseRepo, markConditionals, parseRepoRef, toolsFromJson, fromMcpbManifest, tokenize, commandFor };
+  return { fromGitHub, fromDirectory, fromCatalogSnap, ownServerNames, normName, fromRegistry, extractFromFile, extractJs, extractPy, planFiles, detectSdk, collectGlobalConsts, analyseRepo, markConditionals, parseRepoRef, toolsFromJson, fromMcpbManifest, tokenize, commandFor };
 });
