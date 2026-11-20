@@ -170,7 +170,7 @@ Output of `npm run dogfood`, which lists this server's own tools over MCP and gr
 | Schema and description quality | A | 100 | 0 | 0 | 0 | |
 | Write-surface design | no grade | | | | | Advice only, not graded. Every tool declares readOnlyHint: true or is named as a read, so there is no write surface. |
 
-Rubric 2.2.0, 3 tools, catalog hash `246e198a1a99bffa29f0ce7485f5aed84a8b2ab9a5b5965c7cc54bc0ffce27b9`.
+Rubric 2.2.0, 3 tools, catalog hash `3b6986dcdac856b5a8baaf4836be4c726f8076da7bca547fe4e186931cf02919`.
 
 ## What it checks
 

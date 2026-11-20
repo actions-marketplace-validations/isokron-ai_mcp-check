@@ -18,6 +18,7 @@ const toolsListArg = (what) => z.union([z.string(), z.array(z.unknown()), z.reco
 const counts = z.object({ blocking: z.number().int(), attention: z.number().int(), advice: z.number().int() });
 const nstr = z.string().nullable();
 
+const haveOf = z.object({ have: z.number().int(), of: z.number().int() });
 const checkOutput = z.object({
   rubric_version: z.string().describe('Version of the grading rubric.'),
   report_schema: z.string(),
@@ -27,6 +28,8 @@ const checkOutput = z.object({
   sections: z.array(z.object({
     id: z.enum(SECTIONS), name: z.string(), grade: z.enum(GRADES).nullable(), score: z.number().nullable(),
     ready: z.boolean().nullable(), counts: counts.nullable(), caps: z.array(z.string()), note: nstr,
+    state: z.enum(['coverage', 'not-enough', 'no-opportunities', 'no-writes']).optional().describe('surface only: what the guard coverage says (it has no grade).'),
+    coverage: z.object({ opportunities: z.number().int(), offered: z.number().int(), retry: haveOf, version: haveOf, guard: haveOf }).optional().describe('surface only: guards offered out of the opportunities, in total and per guard (retry keys, preconditions, delete guards).'),
   })),
   min_grade: z.enum(GRADES).nullable(),
   passed: z.boolean().describe('False when a reported section is below min_grade.'),

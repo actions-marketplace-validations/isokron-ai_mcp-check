@@ -126,11 +126,10 @@ test('2026-07-28 server: valid x-mcp-header passes, number header blocks, envelo
   assert.ok(!has(r, 'spanner.update_row', 'surface-full-replace'), 'a columns object is a patch');
 });
 
-test('maps server: coordinates that are not said to be the user\'s own, and addresses, ask for attention', () => {
+test('maps server: coordinates block when the text points at the user ("what is nearby"); others and addresses ask for attention', () => {
   const r = load('catalogs/maps.json');
   assert.ok(has(r, 'maps_reverse_geocode', 'openai-precise-location', 'attention'));
-  assert.ok(has(r, 'maps_search_places', 'openai-precise-location', 'attention'));
-  assert.ok(!M.allFindings(r).some((f) => f.id === 'openai-precise-location' && f.severity === 'blocking'));
+  assert.ok(has(r, 'maps_search_places', 'openai-precise-location', 'blocking'));
   assert.ok(has(r, 'maps_geocode', 'openai-precise-location', 'attention'));
   assert.ok(!has(r, 'maps_directions', 'openai-precise-location'));
   assert.equal(r.sections.anthropic.grade, 'A');

@@ -153,7 +153,7 @@
     fix: 'Set "readOnlyHint": true on tools that only read. On tools that change data set "readOnlyHint": false and an explicit "destructiveHint".',
     example: { bad: '"annotations": { "openWorldHint": false }', good: '"annotations": { "readOnlyHint": false, "destructiveHint": true, "openWorldHint": false }' } });
   def({ id: 'anthropic-hint-platforms-differ', section: 'anthropic', affects: ['anthropic'], severity: 'attention', title: 'destructiveHint: false on a write: the platforms word this differently', src: 'anthropic', anchor: '#provide-tool-annotations', quote: A_HINT_QUOTE,
-    explain: 'This write tool sets destructiveHint: false and its name does not read as a create. OpenAI says false is right for "additive writes without destructive or irreversible effects". Anthropic\'s checklist asks for destructiveHint: true on "tools that modify or delete data". Neither text settles it for a tool that changes something it did not create, so this is not graded as blocking. Tools named as creates (create, add, insert, append, record) purely add and are not flagged. If the tool can overwrite, cancel, revoke or send something irreversible, it is destructive on both platforms.',
+    explain: 'This write tool sets destructiveHint: false and its name does not read as a create. OpenAI says false is right for "additive writes without destructive or irreversible effects". Anthropic\'s checklist asks for destructiveHint: true on "tools that modify or delete data". Neither text settles it for a tool that changes something it did not create, so this is not graded as blocking. Tools led by create, add, insert, append, record, new or comment purely add and are not flagged; other creates (send, pay, charge, transfer, publish, deploy, share, invite) still are. If the tool can overwrite, cancel, revoke or send something irreversible, it is destructive on both platforms.',
     fix: 'Keep destructiveHint: false only if the tool purely adds (a new record, a new comment) and cannot overwrite or delete. Otherwise set it to true. If a reviewer asks, the OpenAI wording supports false for additive writes.' });
   def({ id: 'anthropic-name-length', section: 'anthropic', affects: ['anthropic'], severity: 'blocking', title: 'Tool name is 64 characters or fewer', src: 'anthropic', anchor: '#keep-tool-names-short',
     quote: 'Tool names must be 64 characters or fewer.',
@@ -205,7 +205,7 @@
     fix: 'Use a plain verb and object, for example list_invoices.' });
   def({ id: 'openai-retry', section: 'openai', affects: ['openai'], severity: 'attention', title: 'Write tools say whether a retry repeats the effect', src: 'openai', anchor: '',
     quote: 'Tools should be safe to retry where possible, or explicitly indicate when retries may cause repeated effects.',
-    explain: 'The tool reads as a write (its name reads as a create, update or delete, or it declares destructiveHint: true), and it neither declares idempotentHint: true nor mentions retries, duplicates or idempotency in its description or in an argument\'s description, nor takes a retry-key argument. A model that loses the answer will often call again.',
+    explain: 'The tool reads as a write (its name reads as a create, update or delete, or its name says nothing and it does not declare destructiveHint: false), and it neither declares idempotentHint: true nor mentions retries, duplicates or idempotency in its description or in an argument\'s description, nor takes a retry-key argument. A model that loses the answer will often call again.',
     fix: 'Make the tool safe to repeat (for example with an idempotency key) and say so, or state in the description that a repeated call repeats the effect.' });
   def({ id: 'openai-conversation-input', section: 'openai', affects: ['openai'], severity: 'blocking', severities: ['attention'], title: 'No conversation history or "just in case" context inputs', src: 'openai', anchor: '',
     quote: 'Do not request or reconstruct full conversation histories or collect broad context “just in case.”',
@@ -213,11 +213,11 @@
     fix: 'Remove the field. Use only chat context the client or model supplies explicitly, and keep any free-text input specific to the task.' });
   def({ id: 'openai-restricted-input', section: 'openai', affects: ['openai', 'security'], severity: 'blocking', severities: ['attention'], title: 'No credential, payment card or government ID inputs', src: 'openai', anchor: '',
     quote: 'Access credentials and authentication secrets (such as API keys, MFA/OTP codes, or passwords).',
-    explain: 'OpenAI lists these under Restricted Data that plugins must not collect, solicit or process, next to payment card data and government identifiers. An argument named password, api_key, otp, card_number or ssn asks the model to pass one through the chat. Boolean flags such as hide_secret or withCredentials are not inputs of this kind, and an object or array argument that declares its fields (a refresh_token settings object) is read by those fields, not by its own name. A bare "token" argument is marked for attention, since it may be a pagination token.',
+    explain: 'OpenAI lists these under Restricted Data that plugins must not collect, solicit or process, next to payment card data and government identifiers. An argument named password, api_key, otp, card_number or ssn asks the model to pass one through the chat. Boolean flags such as hide_secret or withCredentials are not inputs of this kind, and an object or array argument is also read by the fields it declares; its own name counts unless every field is a setting (a refresh_token object of rotation and expiry settings). A bare "token" argument is marked for attention, since it may be a pagination token.',
     fix: 'Take credentials through the server\'s own authorization (OAuth) instead of tool arguments, and remove the field.' });
   def({ id: 'openai-precise-location', section: 'openai', affects: ['openai'], severity: 'blocking', severities: ['attention'], title: 'No precise location inputs', src: 'openai', anchor: '',
     quote: 'When location is needed, rely on system-shared coarse location. Do not request precise user location.',
-    explain: 'Coordinate fields (latitude, longitude, gps) are blocking when the tool or the field description asks for the user\'s own position ("your current location"); otherwise they may be task data (a place to search, an emulated position) and are marked for attention. Street address, postal code and location fields are marked for attention: a user\'s own address is a precise location, but a field that is not the user\'s location (a shipping destination, a store) may be fine if the description says so. City-level fields are coarse and are not flagged.',
+    explain: 'Coordinate fields (latitude, longitude, gps) are blocking when the tool or the field description points at the user\'s own position ("your current location", "near me", "nearby", "where I am"); otherwise they may be task data (a place to search, an emulated position) and are marked for attention. Street address, postal code and location fields are marked for attention: a user\'s own address is a precise location, but a field that is not the user\'s location (a shipping destination, a store) may be fine if the description says so. City-level fields are coarse and are not flagged.',
     fix: 'Use the coarse location the platform shares. If an address is task data, not the user\'s location, say that in the field\'s description.' });
   def({ id: 'openai-generic-executor', section: 'openai', affects: ['openai'], severity: 'blocking', title: 'No generic executor or operation dispatcher', src: 'openai', anchor: '',
     quote: 'Do not use discovery, operation selection, or schema fetching with a generic executor to enable operations not individually exposed for review.',
@@ -363,7 +363,7 @@
     fix: 'Add an "expected_version" argument (or if_match), refuse with a conflict when it no longer matches, and return the version from read tools.' });
   def({ id: 'surface-delete-guard', section: 'surface', affects: ['surface'], severity: 'advice', title: 'Delete tools take a confirm or dry-run argument', src: 'openai', anchor: '',
     quote: 'Annotations inform client safeguards; they do not grant permission or replace authentication, authorization and scope checks, input validation, or human confirmation for irreversible operations.',
-    explain: 'A dry_run, validate_only, preview or confirm argument lets the model see what a delete will remove before it is irreversible. force is not a guard: it skips one. This is a design prompt from the tool list, not a test.',
+    explain: 'A dry_run, validate_only, preview, confirm or confirmation_text argument lets the model see what a delete will remove before it is irreversible. force is not a guard: it skips one. This is a design prompt from the tool list, not a test.',
     fix: 'Add "dry_run": { "type": "boolean", "default": true } and return what would be deleted.' });
   def({ id: 'surface-full-replace', section: 'surface', affects: ['surface'], severity: 'advice', title: 'Updates send the change, not the whole object', src: 'mws', anchor: '#mws-conc-2',
     quote: 'A tool that replaces a whole object, deletes an object or accepts a version MUST refuse the write with a conflict when the object has changed since the state the caller read, wherever the backend can detect the change.',
@@ -444,11 +444,17 @@
   const UPDATE_V = set('update edit set patch put rename move assign unassign merge close reopen archive unarchive write upsert modify change toggle approve reject label tag untag lock unlock pin unpin star unstar mark restore transition sync save configure enable disable rotate grant resolve apply commit push link unlink scale restart stop pause resume promote demote hide unhide supersede');
   // Words that are also common nouns (a record, a checkpoint): a create only as the leading verb (record_feedback, checkpoint_state).
   const LEAD_CREATE_V = set('record checkpoint');
-  // Verbs that are never nouns: after a namespace prefix (idp_create_application_grant, acme_get_issue_comment) they win
-  // over a last word that is also a noun (grant, comment).
-  const PURE_V = set('get list create update delete remove add insert upsert set fetch search find read write edit patch query describe show view retrieve modify destroy purge erase append');
-  // Read commands of key-value and data-structure stores, as whole tool names (hget, lrange, smembers, type, dbsize).
-  const STORE_READ = set('get mget getrange strlen exists hget hmget hgetall hkeys hvals hlen hexists hstrlen hscan lrange llen lindex lpos smembers scard sismember smismember srandmember sscan zrange zrangebyscore zrevrange zrevrangebyscore zscore zmscore zcard zcount zrank zrevrank zscan xrange xrevrange xlen xinfo xpending type ttl pttl dbsize keys scan randomkey');
+  // After a namespace prefix (idp_create_application_grant, acme_get_issue_comment), a verb that is never a noun wins over a
+  // last word that is a write verb but usually a noun there (grant, comment, label, tag, draft, order). Only then: query,
+  // view, list, set, patch and show are nouns as often as verbs (pg_query_cancel, db_view_drop, redis_list_push).
+  const PURE_V = set('get create update delete remove add insert upsert fetch read write edit retrieve modify destroy purge erase append describe');
+  const NOUN_VERB = set('comment reply post message email tweet order draft share refund charge transfer invite schedule label tag link grant note record pin star');
+  // Read commands of key-value and data-structure stores, as whole tool names (hget, lrange, smembers, dbsize). type, keys,
+  // scan and exists are left out: as whole names they are as often a type-text tool or something else.
+  const STORE_READ = set('mget getrange strlen hget hmget hgetall hkeys hvals hlen hexists hstrlen hscan lrange llen lindex lpos smembers scard sismember smismember srandmember sscan zrange zrangebyscore zrevrange zrevrangebyscore zscore zmscore zcard zcount zrank zrevrank zscan xrange xrevrange xlen xinfo xpending ttl pttl dbsize randomkey');
+  // Lead verbs of creates that purely add a new object (anthropic-hint-platforms-differ is not raised for them).
+  const ADDITIVE_V = set('create add insert append record new comment');
+  const createLead = (name) => { const tk = tokens(name); return LEAD_CREATE_V.has(tk[0]) ? tk[0] : (tk.find((x) => verbClass(x)) || ''); };
   const UPSERT_NAME = /(^|_)(create_or_update|update_or_create|create_or_replace|insert_or_update|add_or_update)(_|$)/;
   const JOB_V = set('start trigger launch queue enqueue schedule dispatch kick spawn deploy provision');
   // "open" reads (open_nodes, open_file) when its object is something that exists already; open_issue and open_pull_request create.
@@ -474,7 +480,10 @@
     if (tk[0] === 'open' && tk.length > 1 && OPEN_READ.has(tk[1])) return 'read';
     const first = verbClass(tk[0]) || (LEAD_CREATE_V.has(tk[0]) && tk.length > 1 ? 'create' : null);
     if (first) return first;
-    if (tk.length >= 3 && PURE_V.has(tk[1]) && !PURE_V.has(tk[tk.length - 1]) && !NOUNISH.test(tk[2])) return verbClass(tk[1]);
+    // Not when a conjunction follows (cache_get_and_evict, x_get_or_create_user), in a find-and-replace, or over a delete.
+    const lastW = tk[tk.length - 1];
+    if (tk.length >= 3 && PURE_V.has(tk[1]) && NOUN_VERB.has(lastW) && verbClass(lastW) !== 'delete' && !NOUNISH.test(tk[2]) &&
+        !tk.slice(2).some((x) => x === 'and' || x === 'or' || x === 'then') && !tk.includes('replace')) return verbClass(tk[1]);
     const last = verbClass(tk[tk.length - 1]);
     if (last) return last;
     // Middle words: a read verb before any write word wins (tempo_search_tag_values), and a write word followed by a
@@ -821,30 +830,43 @@
     return out;
   }
 
+  const CRED_SKIP_LAST = ['name', 'names', 'id', 'ids', 'count', 'length', 'policy', 'hint', 'expiry', 'expires', 'type', 'ref', 'label', 'path', 'arn', 'version', 'field', 'header', 'required', 'reset', 'set'];
+  // 'hard', 'soft' or null for an argument name, by the name alone.
+  function credentialName(k) {
+    const tk = tokens(k), n = tk.join('_');
+    if (CRED_SKIP_LAST.includes(tk[tk.length - 1])) return null;
+    if (/^(page|next|prev|previous|continuation|cursor|sync|resume|pagination|max|min|num|output|input|completion|prompt)_/.test(n) && /token/.test(n)) return null;
+    if (/(^|_)tokens?$/.test(n) && /(max|count|limit|num|budget|usage)/.test(n)) return null;
+    if (/(^|_)(password|passwd|passphrase|pwd|secret|apikey|otp|totp|hotp|mfa|2fa|passcode|pin_code|cvv|cvc|ssn|cookie|cookies|credential|credentials)(_|$)/.test(n) ||
+        /(^|_)api_key(_|$)/.test(n) || /(^|_)(access|refresh|auth|bearer|session|id|oauth|personal_access|client|private|secret)_(token|key|secret)(_|$)/.test(n) ||
+        /(^|_)private_key(_|$)/.test(n) || /(^|_)(card|cc|credit_card)_(number|num|no)(_|$)/.test(n) || /^(card|credit_card|pan)$/.test(n) ||
+        /(^|_)(social_security|national_id|passport_number|tax_id)(_|$)/.test(n)) return 'hard';
+    if (/^(token|auth|authorization|api_token)$/.test(n)) return 'soft';
+    return null;
+  }
+  const isBoolish = (s) => isObj(s) && (s.type === 'boolean' || (Array.isArray(s.type) && s.type.every((x) => x === 'boolean' || x === 'null')));
+  // A settings field: its name ends in a skip word (rotation_type, expiry), or it is a flag, a number or a fixed choice.
+  const isSettingsField = (k, s) => CRED_SKIP_LAST.includes(tokens(k).slice(-1)[0]) || isBoolish(s) ||
+    (isObj(s) && (Array.isArray(s.enum) || has.call(s, 'const') || ['number', 'integer'].some((ty) => isType(s, ty))));
+
   function credentialArgs(t) {
     const hard = [], soft = [];
     const pp = props(t);
     const test1 = (k, s, label) => {
-      const tk = tokens(k), n = tk.join('_');
       // A boolean flag (hide_secret, withCredentials) cannot carry a credential.
-      if (isObj(s) && (s.type === 'boolean' || (Array.isArray(s.type) && s.type.every((x) => x === 'boolean' || x === 'null')))) return;
-      // An object or array argument that declares its fields (refresh_token: { rotation_type, expiration_type }) is read by
-      // those fields, not by its own name. One without declared fields (cookies: string[], an open credentials object) is
-      // still read by its name.
+      if (isBoolish(s)) return;
+      // An object or array argument that declares its fields is read by those fields. Its own name still counts unless
+      // every field is a setting (refresh_token: { rotation_type, expiration_type }); cookies: [{ name, value }] and
+      // password: { value } carry the credential. One without declared fields (cookies: string[]) is read by its name.
       const inner = isContainer(s) ? innerProps(s) : null;
+      const byName = credentialName(k);
       if (inner) {
-        if (label === k) Object.keys(inner.props).forEach((c) => test1(c, inner.props[c], k + inner.sep + c));
+        const keys = Object.keys(inner.props);
+        if (byName && !(keys.length && keys.every((c) => isSettingsField(c, inner.props[c])))) (byName === 'hard' ? hard : soft).push(label);
+        if (label === k) keys.forEach((c) => test1(c, inner.props[c], k + inner.sep + c));
         return;
       }
-      const last = tk[tk.length - 1];
-      if (['name', 'names', 'id', 'ids', 'count', 'length', 'policy', 'hint', 'expiry', 'expires', 'type', 'ref', 'label', 'path', 'arn', 'version', 'field', 'header', 'required', 'reset', 'set'].includes(last)) return;
-      if (/^(page|next|prev|previous|continuation|cursor|sync|resume|pagination|max|min|num|output|input|completion|prompt)_/.test(n) && /token/.test(n)) return;
-      if (/(^|_)tokens?$/.test(n) && /(max|count|limit|num|budget|usage)/.test(n)) return;
-      if (/(^|_)(password|passwd|passphrase|pwd|secret|apikey|otp|totp|hotp|mfa|2fa|passcode|pin_code|cvv|cvc|ssn|cookie|cookies|credential|credentials)(_|$)/.test(n) ||
-          /(^|_)api_key(_|$)/.test(n) || /(^|_)(access|refresh|auth|bearer|session|id|oauth|personal_access|client|private|secret)_(token|key|secret)(_|$)/.test(n) ||
-          /(^|_)private_key(_|$)/.test(n) || /(^|_)(card|cc|credit_card)_(number|num|no)(_|$)/.test(n) || /^(card|credit_card|pan)$/.test(n) ||
-          /(^|_)(social_security|national_id|passport_number|tax_id)(_|$)/.test(n)) hard.push(label);
-      else if (/^(token|auth|authorization|api_token)$/.test(n)) soft.push(label);
+      if (byName) (byName === 'hard' ? hard : soft).push(label);
     };
     Object.keys(pp).forEach((k) => test1(k, pp[k], k));
     return { hard, soft };
@@ -872,8 +894,11 @@
   }
   // Text that asks for the user's own position ("your current location", "the user's coordinates"), as opposed to a place
   // the task is about (a search centre, an emulated position).
-  const USER_LOCATION = /\b(user['’]?s|your|my|caller['’]?s|device['’]?s?)\b[^.\n]{0,40}\b(location|position|coordinates|whereabouts|latitude|longitude|gps|geolocation)\b|\b(current|precise|exact|real[- ]time|live) (location|position|coordinates|geolocation)\b|\bwhere (the user|you) (is|are)\b/i;
-  const asksUserLocation = (t, keys) => USER_LOCATION.test(desc(t)) || keys.some((k) => isObj(props(t)[k]) && typeof props(t)[k].description === 'string' && USER_LOCATION.test(props(t)[k].description));
+  const USER_LOCATION = /\b(user['’]?s|your|my|caller['’]?s)\b[^.\n]{0,40}\b(location|position|coordinates|whereabouts|latitude|longitude|gps|geolocation)\b|\b(current|precise|exact|real[- ]time|live) (location|position|coordinates|geolocation)\b|\bwhere (the user|you) (is|are)\b|\bwhere i am\b|\bnear (me|you|the user)\b|\baround (me|you)\b|\bnearby(?! (the|a|an|this|that|these|those|given|specified|chosen|selected)\b)/i;
+  // A sentence that says not to ask ("Do not ask for the user's location") does not ask.
+  const NEGATED = /\b(do not|don['’]t|never|not|without|no need to)\b/i;
+  const saysUserLocation = (text) => text.split(/[.!?\n]+/).some((sentence) => { const m = sentence.match(USER_LOCATION); return !!m && !NEGATED.test(sentence.slice(0, m.index)); });
+  const asksUserLocation = (t, keys) => saysUserLocation(desc(t)) || keys.some((k) => isObj(props(t)[k]) && typeof props(t)[k].description === 'string' && saysUserLocation(props(t)[k].description));
 
   const SAFE_M = ['GET', 'HEAD', 'OPTIONS'];
   const UNSAFE_M = ['POST', 'PUT', 'PATCH', 'DELETE'];
@@ -1018,8 +1043,9 @@
     if (!titleOf(t)) push('anthropic-title', null, 'No title, and no annotations.title.', 'title');
     if (!readOnly) {
       if (typeof a.destructiveHint !== 'boolean') push('anthropic-hint', null, 'Neither readOnlyHint: true nor destructiveHint is set' + (has.call(a, 'readOnlyHint') ? '' : ' (no annotations hint at all)') + '. A client treats a missing destructiveHint as true.', 'annotations');
-      // A create (append, add, insert, record) purely adds, which both platforms' wording allows as non-destructive.
-      else if (a.destructiveHint === false && kind !== 'delete' && kind !== 'create') push('anthropic-hint-platforms-differ', null, 'destructiveHint: false on a write tool. OpenAI accepts false for purely additive writes; Anthropic\'s wording asks for true on tools that modify data.', 'annotations.destructiveHint');
+      // A tool led by create, add, insert, append, record, new or comment purely adds, which both platforms' wording allows as
+      // non-destructive. Other creates (send, pay, charge, transfer, publish, deploy) keep the item.
+      else if (a.destructiveHint === false && kind !== 'delete' && !(kind === 'create' && ADDITIVE_V.has(createLead(name)))) push('anthropic-hint-platforms-differ', null, 'destructiveHint: false on a write tool. OpenAI accepts false for purely additive writes; Anthropic\'s wording asks for true on tools that modify data.', 'annotations.destructiveHint');
     }
     if (name.length > 64) push('anthropic-name-length', null, 'The name is ' + name.length + ' characters.', 'name');
     const mixed = mixedMethodTool(t);
@@ -1041,9 +1067,10 @@
     const ntk = norm(name);
     if (PROMO.test(ntk)) push('openai-name-promotional', null, 'The name "' + name + '" contains promotional wording.', 'name');
     if (/^(tool|func|fn|function|op|operation|action|cmd|command|endpoint|method|api|call|x|t)_?\d+$/.test(ntk) || /[0-9a-f]{8,}/.test(ntk) || tokens(name).every((x) => x.length <= 2)) push('openai-name-opaque', null, 'The name "' + name + '" does not say what the tool does.', 'name');
-    // Only tools read as writes: the name reads as a create, update or delete, or the tool declares destructiveHint: true.
+    // Only tools read as writes: the name reads as a create, update or delete, or it says nothing and the tool does not
+    // declare destructiveHint: false (with no hint, a client takes it as destructive).
     // A word on retries counts in the description or in an argument's description, and so does a retry-key argument.
-    const writeKind = kind === 'create' || kind === 'update' || kind === 'delete' || (kind === null && a.destructiveHint === true);
+    const writeKind = kind === 'create' || kind === 'update' || kind === 'delete' || (kind === null && a.destructiveHint !== false);
     if (!readOnly && writeKind && a.idempotentHint !== true && !RETRY_WORDS.test(d) && !argEntries(t).some((e) => isRetryKey(e.norm) || (isObj(e.schema) && typeof e.schema.description === 'string' && RETRY_WORDS.test(e.schema.description))))
       push('openai-retry', null, 'Neither idempotentHint: true nor any word on retries in the description or the argument descriptions.', 'description');
     if (conv.hard.length) push('openai-conversation-input', 'blocking', 'Asks for ' + conv.hard.map((k) => '"' + k + '"').join(', ') + '.', 'inputSchema.properties');
@@ -1118,7 +1145,7 @@
   const BARE_VERSION = /^(version|revision|rev|generation|sha|updated_at|current_version|object_version|resource_version)$/;
   const VERSION_HEADER = /^(if-match|etag|if-unmodified-since|version|revision|if_match)$/i;
   // A delete guard previews or asks for confirmation. force is the opposite of a guard, and allow_* opts in.
-  const isGuard = (n) => /^(confirm|confirmed|confirmation|dry_run|dryrun|preview|preview_only|acknowledge|acknowledged|plan_only|what_if|whatif|validate_only|simulate|check_only)$/.test(n) || /^confirm_/.test(n);
+  const isGuard = (n) => /^(confirm|confirmed|confirmation|dry_run|dryrun|preview|preview_only|acknowledge|acknowledged|plan_only|what_if|whatif|validate_only|simulate|check_only)$/.test(n) || /^(confirm|confirmation)_/.test(n);
   const isMask = (n) => /^(update_mask|field_mask|fields|mask|patch|changes|set_fields|paths|update_fields)$/.test(n);
   // Identifiers and scope select the object; they are not fields of it (owner, repo, issue_number, channel, ts, message_id).
   const isIdentifier = (n) => /(^|_)(id|ids|key|keys|name|path|slug|uid|uuid|number|num|ts)$/.test(n) ||
@@ -1127,10 +1154,16 @@
   const isSubstitution = (n) => /^(find|search|search_text|find_text|pattern|regex|old|old_text|old_string|old_value|match|from)$/.test(n);
   // Operations that add a change (commit, push) rather than send the whole object.
   const NO_REPLACE_V = set('push commit append');
-  // Browser automation: these servers act on a live browser session, not on stored objects with versions.
-  const BROWSER_ACTION = set('click dblclick hover navigate goto screenshot snapshot scroll fill press drag type_text evaluate');
+  // Browser automation acts on a live browser session, not on stored objects with versions. A list is a browser list when
+  // it has three or more distinct interaction actions (click, hover, navigate, fill...) or two tools with a browser prefix.
+  // Inside such a list, only tools whose own name has a browser prefix, action or noun are session tools; the list's other
+  // tools (delete_test_run beside two browser_ tools) are still counted. Screenshot, snapshot, scroll and evaluate alone do
+  // not make a browser list (create_snapshot, qdrant_scroll_points, evaluate_policy).
+  const BROWSER_ACTION = set('click dblclick hover navigate goto fill press drag type_text');
   const BROWSER_PREFIX = set('browser playwright puppeteer selenium webdriver devtools');
-  const SESSION_NOUN = set('session sessions tab tabs browser browsers codegen window windows connection connections');
+  const BROWSER_WORD = set('click dblclick hover navigate goto fill press drag screenshot snapshot heapsnapshot scroll evaluate select resize upload go back forward page pages tab tabs window windows frame iframe dialog extension extensions mock mocks webauthn pwa trace screencast emulate emulation viewport element elements cookie cookies console network codegen session sessions connection connections');
+  // Outside a browser list, only these mark a session tool (clear_codegen_session, close_session).
+  const SESSION_NOUN = set('session sessions codegen browser browsers');
   function isBrowserCatalog(tools) {
     const seen = new Set();
     let prefixed = 0;
@@ -1141,13 +1174,14 @@
     });
     return seen.size >= 3 || prefixed >= 2;
   }
-  // An HTTP client (http_post, client_put, send_request with a url): it writes whatever the URL names, not an object of this server.
-  const HTTP_METHOD = set('get post put patch delete head options');
+  const isSessionTool = (tk, browser) => tk.some((x) => SESSION_NOUN.has(x)) || (browser && (BROWSER_PREFIX.has(tk[0]) || tk.some((x, i) => BROWSER_WORD.has(x) || (x === 'type' && tk[i + 1] === 'text'))));
+  // An HTTP client (http_post, client_put, send_request with a url): it writes whatever the URL names, not an object of this
+  // server. The name must say http, request or client; webhook_delete(url) deletes a webhook.
   function isHttpClient(t) {
     const keys = argNames(t).map(norm);
     if (!keys.some((k) => /^(url|uri|endpoint|request_url)$/.test(k))) return false;
     const tk = tokens(apiName(t.name));
-    return HTTP_METHOD.has(tk[tk.length - 1]) || tk.includes('http') || tk.includes('request');
+    return tk.includes('http') || tk.includes('request') || tk.includes('client');
   }
   const resourceOf = (name) => tokens(name).filter((x) => !verbClass(x) && !LEAD_CREATE_V.has(x) && x !== 'or').join('_');
 
@@ -1171,7 +1205,7 @@
       if (kind0 === 'read') return; // named as a read; annotation gaps are reported elsewhere
       const tk = tokens(t.name);
       if (isHttpClient(t)) { rows.push({ name: t.name, kind: 'http client', found: [], missing: [], notes: ['sends a request to the URL it is given, not a write to an object of this server; not counted'] }); return; }
-      if (browser || tk.some((x) => SESSION_NOUN.has(x))) { rows.push({ name: t.name, kind: 'session', found: [], missing: [], notes: ['acts on a live ' + (browser ? 'browser' : 'session') + ', not a stored object; not counted'] }); return; }
+      if (isSessionTool(tk, browser)) { rows.push({ name: t.name, kind: 'session', found: [], missing: [], notes: ['acts on a live ' + (browser ? 'browser' : 'session') + ', not a stored object; not counted'] }); return; }
       const p = props(t);
       const keys = Object.keys(p);
       const entries = info[idx].entries;

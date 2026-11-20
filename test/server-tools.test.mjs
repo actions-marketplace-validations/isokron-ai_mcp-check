@@ -10,6 +10,11 @@ test('check_tools_list: grades, findings with docs URLs, fixes', () => {
   const { report, text } = checkToolsList({ tools_list: ex });
   assert.equal(report.rubric_version, '2.2.0');
   assert.deepEqual(report.sections.map((s) => s.id), ['spec', 'anthropic', 'openai', 'security', 'quality', 'surface']);
+  const sur = report.sections.find((s) => s.id === 'surface');
+  assert.equal(sur.grade, null);
+  assert.equal(sur.state, 'coverage');
+  assert.deepEqual(sur.coverage.version, { have: 1, of: 3 });
+  assert.ok(!('coverage' in report.sections[0]), 'only the surface carries coverage');
   const g = Object.fromEntries(report.sections.map((s) => [s.id, s.grade]));
   assert.equal(g.anthropic, 'C');
   assert.equal(g.openai, 'C');

@@ -27,7 +27,8 @@ export function checkToolsList({ tools_list, sections, min_grade, limit = DEFAUL
   const secOut = want.map((id) => {
     const s = r.sections[id];
     // surface has no grade (rubric 2.2.0): grade and score are null and note carries its guard coverage.
-    return { id, name: s.name, grade: s.grade ?? null, score: s.score ?? null, ready: id === 'surface' ? null : s.ready, counts: s.counts || null, caps: s.caps || [], note: id === 'surface' ? 'Advice only, not graded. ' + (s.why || '') : s.why || null };
+    const base = { id, name: s.name, grade: s.grade ?? null, score: s.score ?? null, ready: id === 'surface' ? null : s.ready, counts: s.counts || null, caps: s.caps || [], note: id === 'surface' ? 'Advice only, not graded. ' + (s.why || '') : s.why || null };
+    return id === 'surface' ? Object.assign(base, { state: s.state, coverage: s.coverage }) : base;
   });
 
   const all = M.allFindings(r).filter((f) => f.affects.some((a) => want.includes(a)));

@@ -267,10 +267,12 @@ test('surface 2.2.0: verbs (hide/unhide/supersede update, tombstone/retire delet
   fires('annot-delete-marked-safe', [W('tombstone_event', { event_id: S() }, null, { destructiveHint: false })], 'blocking');
 });
 
-test('surface 2.2.0: data-store read commands are reads (hget, lrange, smembers, type, dbsize); their write commands are not', () => {
-  for (const n of ['hget', 'hgetall', 'lrange', 'llen', 'smembers', 'zrange', 'xrange', 'type', 'dbsize', 'get', 'scan']) assert.equal(M.kindOf(n), 'read', n);
-  for (const n of ['hset', 'lpush', 'sadd', 'zadd', 'xadd', 'hdel']) assert.notEqual(M.kindOf(n), 'read', n);
-  const store = ['hget', 'lrange', 'smembers', 'type', 'dbsize'].map((n) => wr({ name: n, annotations: {}, inputSchema: props({ key: S() }) }));
+test('surface 2.2.0: data-store read commands are reads (hget, lrange, smembers, dbsize); their write commands, and type, keys, scan, exists, are not', () => {
+  for (const n of ['hget', 'hgetall', 'lrange', 'llen', 'smembers', 'zrange', 'xrange', 'dbsize', 'get']) assert.equal(M.kindOf(n), 'read', n);
+  for (const n of ['hset', 'lpush', 'sadd', 'zadd', 'xadd', 'hdel', 'type', 'keys', 'scan', 'exists']) assert.notEqual(M.kindOf(n), 'read', n);
+  // A type-text tool named "type" keeps readOnlyHint: false in the fixed list.
+  assert.equal(M.suggestAnnotations({ name: 'type', inputSchema: props({ text: S() }) }).readOnlyHint, false);
+  const store = ['hget', 'lrange', 'smembers', 'dbsize'].map((n) => wr({ name: n, annotations: {}, inputSchema: props({ key: S() }) }));
   silent('openai-retry', store);
   assert.equal(surf(store).state, 'no-writes');
   // A multi-word name is read as before (get_type_info reads, set_type writes).
@@ -298,7 +300,7 @@ test('surface 2.2.0: browser and session tools and HTTP clients are not stored-o
 });
 
 test('surface-full-replace 2.2.0: a hint only; every field required; ts/channel are ids; a patch sibling or a precondition clears it', () => {
-  // QA's doubtful findings, now silent.
+  // Find-and-replace, identifier-only updates, a create, and a push of files are not whole-object replacements.
   silent('surface-full-replace', [W('replace_cells', { sheet: S(), range: S(), search: S(), replace: S() }, ['sheet', 'range', 'search', 'replace'])]);
   silent('surface-full-replace', [W('pin-message', { channel: S(), ts: S() }, ['channel', 'ts'])]);
   silent('surface-full-replace', [W('idp_create_application_grant', { client_id: S(), audience: S(), scope: { type: 'array', items: { type: 'string' }, description: 'x' } }, ['client_id', 'audience', 'scope'])]);
@@ -318,8 +320,11 @@ test('surface-full-replace 2.2.0: a hint only; every field required; ts/channel 
 
 test('anthropic-hint-platforms-differ 2.2.0: not raised for creates (append, add, insert, create, record); kept for updates', () => {
   const f = { readOnlyHint: false, destructiveHint: false, openWorldHint: false };
-  for (const n of ['append_file', 'add_observations', 'insert_row', 'create_entities', 'record_feedback', 'slack_post_message']) silent('anthropic-hint-platforms-differ', [wr({ name: n, annotations: f })]);
+  for (const n of ['append_file', 'add_observations', 'insert_row', 'create_entities', 'record_feedback', 'new_note', 'comment_on_issue', 'idp_create_application_grant']) silent('anthropic-hint-platforms-differ', [wr({ name: n, annotations: f })]);
   for (const n of ['update_issue', 'edit_file', 'hide_issue_comment', 'disable_telemetry']) fires('anthropic-hint-platforms-differ', [wr({ name: n, annotations: f })], 'attention');
+  // Creates that send, pay or publish are not purely additive.
+  for (const n of ['transfer_funds', 'charge_card', 'refund_payment', 'pay_invoice', 'send_email', 'deploy_service', 'publish_release', 'slack_post_message', 'share_document', 'invite_user', 'import_data', 'schedule_meeting', 'copy_file', 'upload_file'])
+    fires('anthropic-hint-platforms-differ', [wr({ name: n, annotations: f })], 'attention');
   fires('anthropic-hint-platforms-differ', [wr({ name: 'execute_thing', annotations: f })], 'attention');
 });
 
@@ -328,6 +333,10 @@ test('openai-retry 2.2.0: raised only for tools read as writes; argument descrip
   fires('openai-retry', [wr(Object.assign({ name: 'create_issue' }, plain))], 'attention');
   fires('openai-retry', [wr(Object.assign({ name: 'run_migration' }, plain))], 'attention'); // declares destructiveHint: true
   silent('openai-retry', [wr({ name: 'run_query', description: 'Runs a query. Use this when asked.', annotations: { readOnlyHint: false, openWorldHint: false } })]);
+  // A name that says nothing, with no destructiveHint at all, counts as a write (a client takes it as destructive).
+  fires('openai-retry', [wr({ name: 'execute_sql', description: 'Runs SQL. Use this when asked.', annotations: {} })], 'attention');
+  fires('openai-retry', [wr({ name: 'op_17', description: 'Does it. Use this when asked.', annotations: { readOnlyHint: false } })], 'attention');
+  silent('openai-retry', [wr({ name: 'do_thing', description: 'Does it. Use this when asked.', annotations: { readOnlyHint: false, destructiveHint: false } })]);
   silent('openai-retry', [wr({ name: 'web_summarizer', description: 'Summarises. Use this when asked.', annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true } })]);
   silent('openai-retry', [wr(Object.assign({ name: 'create_issue', inputSchema: props({ title: S(), request_token: S('Unique token. A repeated call with the same token returns the first issue instead of a duplicate.') }) }, plain))]);
   silent('openai-retry', [wr(Object.assign({ name: 'create_issue', inputSchema: props({ title: S(), idempotency_key: S('Client key.') }) }, plain))]);
@@ -369,4 +378,91 @@ test('poisoning 2.2.0: a hyphen- or underscore-joined run inside prose is read a
     silent(id, [tool({ name: 'get_doc', description: 'Returns an up-to-date, end-to-end, read-only view of the state-of-the-art doc. Use this when asked.' })]);
     silent(id, [tool({ name: 'list_prs', description: 'Use list_pull_requests_for_repo first to get numbers, then call this. Use this when asked.' })]);
   }
+});
+
+// ---------------- rubric 2.2.0 review: repros that must keep their 2.1.1 reading
+test('kindOf 2.2.0 review: the namespace verb rule never turns a write into a read (query, view, list, and/or, find+replace)', () => {
+  const expect = {
+    delete: ['pg_query_cancel', 'pg_query_kill', 'trino_query_kill', 'x_query_terminate', 'db_query_rollback', 'db_view_drop', 'cache_get_and_evict', 'notif_read_and_clear', 'docs_find_and_replace', 'sheets_find_replace', 'fs_search_replace', 'kv_get_and_remove', 'x_read_and_delete'],
+    update: ['redis_list_push', 'mail_read_and_archive', 'x_list_archive', 'x_view_restore', 'x_fetch_and_merge', 'x_get_lock'],
+    // A read word after an update/delete/create word stays a read (2.1.1).
+    read: ['app_update_check', 'system_update_status', 'jobs_delete_status', 'x_delete_preview', 'x_create_preview', 'sentry_update_issue_status'],
+  };
+  for (const [k, names] of Object.entries(expect)) for (const n of names) assert.equal(M.kindOf(n), k, n);
+  // The fixes it exists for: a get of an object whose name is also a write verb.
+  for (const n of ['gitlab_get_label', 'stripe_get_refund', 'linear_get_comment', 'mail_get_draft', 'acme_get_issue_comment', 'x_get_order', 'stripe_get_payment_link']) assert.equal(M.kindOf(n), 'read', n);
+  assert.equal(M.kindOf('idp_create_application_grant'), 'create');
+});
+
+test('fixCatalog 2.2.0 review: no tool that 2.1.1 read as a write is given readOnlyHint: true', () => {
+  const names = `pg_query_cancel pg_query_kill trino_query_kill x_query_terminate db_query_rollback db_view_drop db_view_create cache_get_and_evict notif_read_and_clear
+docs_find_and_replace sheets_find_replace fs_search_replace redis_list_push redis_set_add redis_hash_set mail_read_and_archive mail_send_draft x_list_archive x_view_restore
+x_fetch_and_merge x_get_lock x_set_lock x_read_and_delete kv_get_and_remove queue_read_and_ack type keys scan exists
+jira_update_issue jira_add_comment jira_transition_issue jira_delete_issue confluence_update_page notion_update_block slack_post_message slack_add_reaction gitlab_merge_merge_request
+stripe_cancel_subscription stripe_update_subscription k8s_delete_pod k8s_apply_manifest k8s_scale_deployment k8s_rollout_restart gh_update_pull_request_branch gh_create_tag gh_delete_tag
+cal_delete_event grafana_update_dashboard docs_insert_text sheets_update_values sheets_append_values fs_write_file fs_edit_file fs_move_file x_create_order x_cancel_order x_set_tag
+hide_comment disable_user tombstone_item retire_key append_row supersede_doc delete_branch merge_pull_request create_or_update_file kubectl_apply send_email put_object set_config
+gitlab_get_label stripe_get_refund linear_get_comment mail_get_draft`.split(/\s+/);
+  // Every name here is a write or an unclassified write under rubric 2.1.1; the four gets below are the intended reads.
+  const intended = new Set(['gitlab_get_label', 'stripe_get_refund', 'linear_get_comment', 'mail_get_draft']);
+  const tools = names.map((n) => ({ name: n, description: 'Does ' + n + '. Use this when asked.', inputSchema: props({ id: S() }) }));
+  const fixed = M.fixCatalog(M.parseData({ tools }));
+  const ro = fixed.tools.filter((t) => t.annotations.readOnlyHint === true).map((t) => t.name);
+  assert.deepEqual(ro.sort(), [...intended].sort());
+  for (const n of ['db_view_drop', 'pg_query_cancel', 'docs_find_and_replace']) {
+    const t = { name: n, description: 'Does it. Use this when asked.', inputSchema: props({ id: S() }), annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false } };
+    fires('annot-write-marked-readonly', [t], 'attention');
+  }
+});
+
+test('openai-restricted-input 2.2.0 review: a credential-named container keeps its finding unless every field is a setting', () => {
+  const O = (p) => ({ type: 'object', description: 'x', properties: p });
+  const A = (p) => ({ type: 'array', description: 'x', items: { type: 'object', properties: p } });
+  const sev = (p) => ids([wr({ name: 'connect_service', inputSchema: props(p) })], 'openai-restricted-input').map((f) => f.severity + ' ' + f.message);
+  assert.deepEqual(sev({ cookies: A({ name: S(), value: S(), domain: S() }) }), ['blocking Asks for "cookies".']);
+  assert.deepEqual(sev({ password: O({ value: S() }) }), ['blocking Asks for "password".']);
+  assert.deepEqual(sev({ api_key: O({ value: S() }) }), ['blocking Asks for "api_key".']);
+  assert.deepEqual(sev({ credentials: O({ username: S(), key: S() }) }), ['blocking Asks for "credentials".']);
+  assert.deepEqual(sev({ session_token: O({ id: S(), value: S() }) }), ['blocking Asks for "session_token".']);
+  assert.match(sev({ auth: O({ type: S(), value: S() }) })[0], /^attention Takes "auth"/);
+  // Settings only: silent.
+  assert.deepEqual(sev({ refresh_token: O({ rotation_type: S(), expiration_type: S() }) }), []);
+  assert.deepEqual(sev({ refresh_token: O({ rotation_type: { type: 'string', enum: ['rotating'] }, leeway: N, infinite_lifetime: B }) }), []);
+  // Fields one level down still count.
+  assert.deepEqual(sev({ person: O({ ssn: S() }) }), ['blocking Asks for "person.ssn".']);
+  assert.match(sev({ headers: O({ Authorization: S() }) })[0], /^attention Takes "headers\.Authorization"/);
+});
+
+test('openai-precise-location 2.2.0 review: "near me" and "where I am" are the user\'s location; a negation or an emulated device is not', () => {
+  const sev = (d) => ids([tool({ name: 'find_places', description: d, inputSchema: props({ latitude: N, longitude: N }) })], 'openai-precise-location').map((f) => f.severity);
+  for (const d of ['Finds restaurants near me.', 'Finds restaurants near the user.', 'Finds stores nearby.', 'Shows bus stops around me.', 'Returns the weather where I am.', 'Returns weather for where you are right now.', 'Tracks the user’s location for delivery.'])
+    assert.deepEqual(sev(d), ['blocking'], d);
+  for (const d of ['Sets the device position for emulation.', 'Search for places. Do not ask for the user\'s location.', 'Searches places around a point.', 'Lists stations nearby the given point.'])
+    assert.deepEqual(sev(d), ['attention'], d);
+});
+
+test('surface 2.2.0 review: browser exemption per tool; stored objects in lists with screenshots, snapshots or previews still count', () => {
+  const kinds = (names) => Object.fromEntries(surf(names.map((n) => W(n, { id: S() }))).rows.map((w) => [w.name, w.kind]));
+  assert.deepEqual(kinds(['qdrant_scroll_points', 'qdrant_create_snapshot', 'qdrant_evaluate_query', 'qdrant_delete_collection', 'qdrant_upsert_points']),
+    { qdrant_scroll_points: 'other write', qdrant_create_snapshot: 'create', qdrant_delete_collection: 'delete', qdrant_upsert_points: 'update' });
+  assert.equal(kinds(['create_snapshot', 'get_instance_screenshot', 'evaluate_policy', 'delete_instance']).delete_instance, 'delete');
+  const cms = kinds(['navigate_to_page', 'take_screenshot', 'click_preview', 'create_page', 'update_page', 'delete_page']);
+  assert.deepEqual([cms.create_page, cms.update_page, cms.delete_page], ['create', 'update', 'delete']);
+  const tm = kinds(['browser_open_preview', 'browser_screenshot', 'delete_test_run', 'update_test_case', 'create_test_case']);
+  assert.deepEqual([tm.browser_screenshot, tm.delete_test_run, tm.update_test_case, tm.create_test_case], ['session', 'delete', 'update', 'create']);
+  // connection, window and tab are stored objects outside a browser list.
+  assert.deepEqual(kinds(['create_connection', 'delete_connection', 'create_maintenance_window', 'create_tab', 'delete_tab']),
+    { create_connection: 'create', delete_connection: 'delete', create_maintenance_window: 'create', create_tab: 'create', delete_tab: 'delete' });
+  // In a browser list, only the tool's own words count.
+  const br = kinds(['navigate_page', 'click', 'hover', 'fill', 'close_page', 'new_tab', 'delete_bookmark']);
+  assert.deepEqual([br.close_page, br.new_tab, br.delete_bookmark], ['session', 'session', 'delete']);
+  const s = surf(['navigate_page', 'click', 'hover', 'fill', 'delete_bookmark'].map((n) => W(n, { id: S() })));
+  assert.notEqual(s.state, 'no-writes');
+});
+
+test('surface 2.2.0 review: an HTTP client says http, request or client; a resource deleted by URL is a delete; confirmation_text is a guard', () => {
+  const kinds = (tools) => Object.fromEntries(surf(tools).rows.map((w) => [w.name, w.kind]));
+  assert.deepEqual(kinds([W('http_post', { url: S(), body: S() }), W('send_request', { url: S() }), W('client_put', { url: S() }), W('webhook_delete', { url: S() }), W('sitemap_delete', { url: S() }), W('pull_request_merge', { url: S() })]),
+    { http_post: 'http client', send_request: 'http client', client_put: 'http client', webhook_delete: 'delete', sitemap_delete: 'delete', pull_request_merge: 'update' });
+  assert.equal(cov([W('delete_repo', { repo: S(), confirmation_text: S(), expected_sha: S() })]), 'version 1/1, guard 1/1');
 });
