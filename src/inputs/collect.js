@@ -95,13 +95,24 @@ async function fromRepo(ref, opt, via = null) {
   const where = r.repo + (parsed.subdir ? '/' + parsed.subdir : '');
   const pick = (folder) => '--repo github.com/' + r.repo + '/tree/' + (parsed.ref || String(r.sha || 'HEAD')) + '/' + folder;
   const c = cliUsable(r, line(where), pick);
-  const { provenance, left, cond } = repoProvenance(c);
-  return { data: c.tools, source: { kind: 'repo', repo: r.repo, sha: r.sha, via: r.via, fidelity: c.fidelity, approximate: isApproximate(c), provenance, from: c.kind, files: c.files || [c.path], ...(c.unreadable && Object.keys(c.unreadable).length ? { unreadable: c.unreadable } : {}), ...(c.unresolvedNames ? { unresolved_names: c.unresolvedNames } : {}), ...(left.length ? { left_out: left.map((x) => ({ name: line(x.name, 128), reasons: x.reasons.map((y) => line(y, 160)) })) } : {}), ...(cond.length ? { conditional: cond.map((x) => line(x.name, 128)) } : {}), ...(via ? { registry: via } : {}) } };
+  const { provenance: prov, left, cond } = repoProvenance(c);
+  const provenance = prov + budgetNote(r);
+  return { data: c.tools, reader: readerNotes(c), source: { kind: 'repo', repo: r.repo, sha: r.sha, via: r.via, fidelity: c.fidelity, approximate: isApproximate(c), provenance, from: c.kind, files: c.files || [c.path], ...(c.unreadable && Object.keys(c.unreadable).length ? { unreadable: c.unreadable } : {}), ...(c.unresolvedNames ? { unresolved_names: c.unresolvedNames } : {}), ...(left.length ? { left_out: left.map((x) => ({ name: line(x.name, 128), reasons: x.reasons.map((y) => line(y, 160)) })) } : {}), ...(cond.length ? { conditional: cond.map((x) => line(x.name, 128)) } : {}), ...(via ? { registry: via } : {}) } };
 }
 
 /** The advice every "cannot grade this read" message ends with (the CLI's and the Action's names for the live inputs). */
 export const LIVE_ADVICE = 'Grade the live list instead: start the server with --command "<start command>", or give a saved tools/list file '
   + '(in the GitHub Action: set command or tools-file).';
+
+/** A scan that stopped at the byte limit says so wherever its provenance is shown. */
+export const budgetNote = (r) => (r && r.scanned && r.scanned.budgetHit ? '; reading stopped at the 64 MiB limit for one scan, so some files were not read' : '');
+
+/** What the reader itself knows about a list it read from source (never taken from the list): parts it could not read,
+ *  and registrations whose name it could not resolve, with their text for the poisoning scan. null for other lists. */
+export function readerNotes(c) {
+  if (!c || c.kind !== 'source') return null;
+  return { unreadable: c.unreadable || {}, unresolved: Array.isArray(c.unresolved) ? c.unresolved : [] };
+}
 
 /** No tool definitions in a folder: the message names the live alternatives (the CLI's and the Action's). */
 export function noToolsMessage(where, r) {
@@ -114,6 +125,7 @@ export function scannedText(r) {
   const read = s.read !== undefined ? s.read : s.source;
   let out = 'scanned ' + read + ' of ' + s.sourceTotal + ' source files, and the committed tool lists and MCPB manifests';
   if (s.candidates !== undefined && s.candidates > s.source) out += '; ' + s.candidates + ' files may define a tool and the first ' + s.source + ' were read for tools';
+  if (s.budgetHit) out += '; reading stopped at the 64 MiB limit for one scan, so some files were not read';
   if (r.truncated && r.via !== 'directory') out += '; GitHub cut the repository listing short (truncated), so files were missed: point --repo at the server\'s folder (…/tree/<ref>/<folder>)';
   return out;
 }
@@ -207,8 +219,9 @@ async function fromRepoDir(dir, opt) {
   }
   const base = String(dir).replace(/\/+$/, '') || '.';
   const c = cliUsable(r, line(dir), (folder) => '--repo-dir ' + (folder === '.' ? base : base + '/' + folder));
-  const { provenance, left, cond } = repoProvenance(c);
-  return { data: c.tools, where: c.where || null, source: { kind: 'dir', dir: r.repo, fidelity: c.fidelity, approximate: isApproximate(c), provenance, from: c.kind, files: c.files || [c.path], ...(c.unreadable && Object.keys(c.unreadable).length ? { unreadable: c.unreadable } : {}), ...(c.unresolvedNames ? { unresolved_names: c.unresolvedNames } : {}), ...(c.built ? { built: true } : {}), ...(r.truncated ? { truncated: true } : {}), ...(left.length ? { left_out: left.map((x) => ({ name: line(x.name, 128), reasons: x.reasons.map((y) => line(y, 160)) })) } : {}), ...(cond.length ? { conditional: cond.map((x) => line(x.name, 128)) } : {}) } };
+  const { provenance: prov, left, cond } = repoProvenance(c);
+  const provenance = prov + budgetNote(r);
+  return { data: c.tools, where: c.where || null, reader: readerNotes(c), source: { kind: 'dir', dir: r.repo, fidelity: c.fidelity, approximate: isApproximate(c), provenance, from: c.kind, files: c.files || [c.path], ...(c.unreadable && Object.keys(c.unreadable).length ? { unreadable: c.unreadable } : {}), ...(c.unresolvedNames ? { unresolved_names: c.unresolvedNames } : {}), ...(c.built ? { built: true } : {}), ...(r.truncated ? { truncated: true } : {}), ...(left.length ? { left_out: left.map((x) => ({ name: line(x.name, 128), reasons: x.reasons.map((y) => line(y, 160)) })) } : {}), ...(cond.length ? { conditional: cond.map((x) => line(x.name, 128)) } : {}) } };
 }
 
 async function fromRegistry(name, opt, note) {

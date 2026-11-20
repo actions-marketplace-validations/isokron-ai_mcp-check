@@ -124,6 +124,9 @@
     }
     return { value: v, c };
   }
+  // Strings read from source are capped (a constant doubled in a chain must not blow up): longer is partial.
+  const MAX_STR = 64 * 1024;
+  const capStr = (r) => { if (r && typeof r.value === 'string' && r.value.length > MAX_STR) { r.value = r.value.slice(0, MAX_STR) + '…'; r.exact = false; r.partial = true; } return r; };
   // A template literal: its ${CONST} parts filled in from constants; others shown as "…" and the value marked partial.
   function tplValue(tok, ctx) {
     let out = tok.parts[0]; let exact = true;
@@ -131,8 +134,9 @@
       const r = /^[A-Za-z_$][\w$]*(\s*\??\.\s*[A-Za-z_$][\w$]*)*$/.test(e) ? chainValue(ctx, e.split(/\s*\??\.\s*/)) : null;
       if (r && (typeof r.value === 'string' || typeof r.value === 'number')) out += String(r.value); else { out += '…'; exact = false; }
       out += tok.parts[k + 1];
+      if (out.length > MAX_STR) { out = out.slice(0, MAX_STR); exact = false; }
     });
-    return { value: out, exact, partial: !exact };
+    return capStr({ value: out, exact, partial: !exact });
   }
   // A string expression: string and template literals and string constants joined by "+" ('a' + NAME + `b${X}`).
   // Returns null unless at least one operand is a string; an operand that cannot be read makes the value partial.
@@ -151,11 +155,12 @@
         if (r && typeof r.value === 'string') { v = r.value; any = true; if (ch.ids.length === 1 && r.c.partial) exact = false; } else if (r && typeof r.value === 'number') v = String(r.value); else { v = '…'; exact = false; }
       } else return null;
       out += v; j = end;
+      if (out.length > MAX_STR) { out = out.slice(0, MAX_STR); exact = false; }
       if (isP(t[j], '+') && t[j + 1] && /^(str|tpl|id|num)$/.test(t[j + 1].type)) { j++; continue; }
       break;
     }
     if (!any) return null;
-    return { value: out, end: j, exact, partial: !exact };
+    return capStr({ value: out, end: j, exact, partial: !exact });
   }
   function parseValue(t, i, ctx) {
     const tok = t[i];
@@ -190,7 +195,7 @@
       } else if (!isP(t[ch.end], '(')) {
         if (ch.ids.length === 1) {
           const s = typeof c.value === 'string' ? stringExpr(t, i, ctx) : null;
-          r = s && s.end > i + 1 ? s : { value: c.value, end: i + 1, exact: c.exact, optional: c.optional, zod: c.zod, optionalKeys: c.optionalKeys };
+          r = s && (s.end > i + 1 || s.partial) ? s : { value: c.value, end: i + 1, exact: c.exact, optional: c.optional, zod: c.zod, optionalKeys: c.optionalKeys };
         } else {
           const v = chainValue(ctx, ch.ids);
           if (v && v.value !== undefined) r = typeof v.value === 'string' ? (stringExpr(t, i, ctx) || { value: v.value, end: ch.end, exact: c.exact }) : { value: v.value, end: ch.end, exact: c.exact };
@@ -221,7 +226,7 @@
   // An object literal. Besides the value: `unknownKeys` (keys whose value could not be read), `partialKeys` (strings read in part,
   // a template with an unresolved ${…}) and `spreadUnknown` (a ...spread that could not be read).
   function parseObject(t, i, ctx) {
-    const o = {}; let exact = true; const optionalKeys = new Set(); const unknown = new Set(); const partial = new Set(); let spreadUnknown = false; const childOptional = {}; i++;
+    const o = {}; let exact = true; const optionalKeys = new Set(); const unknown = new Set(); const partial = new Set(); let spreadUnknown = false; const childOptional = {}; const literals = {}; i++;
     while (i < t.length && !isP(t[i], '}')) {
       const k = t[i];
       if (isP(k, '...')) {
@@ -242,9 +247,10 @@
       // method shorthand: name(...) { } / async name() {} / get x() {}
       if (isP(t[i + 1], '(') || (k.type === 'id' && (key === 'async' || key === 'get' || key === 'set') && t[i + 1] && t[i + 1].type === 'id')) {
         const mk = isP(t[i + 1], '(') ? key : t[i + 1].value;
-        if (!HANDLER_KEYS.has(mk)) unknown.add(mk);
         let j = i + 1; while (t[j] && !isP(t[j], '{')) j++;
-        j = matchClose(t, j) + 1; exact = false; i = isP(t[j], ',') ? j + 1 : j; continue;
+        j = matchClose(t, j) + 1;
+        if (!HANDLER_KEYS.has(mk)) { unknown.add(mk); literals[mk] = literalsIn(t, i, j); }
+        exact = false; i = isP(t[j], ',') ? j + 1 : j; continue;
       }
       if (isP(t[i + 1], ',') || isP(t[i + 1], '}')) { // shorthand { name }
         if (ctx && ctx.consts && hasOwn(ctx.consts, key)) { const c = ctx.consts[key]; o[key] = c.value; exact = exact && c.exact; if (c.optional) optionalKeys.add(key); } else { exact = false; if (!HANDLER_KEYS.has(key)) unknown.add(key); }
@@ -257,12 +263,23 @@
       if (v.optional) optionalKeys.add(key);
       if (v.partial) partial.add(key);
       if (v.optionalKeys && v.optionalKeys.size) childOptional[key] = v.optionalKeys;
-      if (v.value !== SKIP) { o[key] = v.value; exact = exact && v.exact !== false; } else if (!HANDLER_KEYS.has(key)) { exact = false; unknown.add(key); if (ctx && ctx.placeholder) o[key] = {}; }
+      if (v.value !== SKIP) { o[key] = v.value; exact = exact && v.exact !== false; } else if (!HANDLER_KEYS.has(key)) { exact = false; unknown.add(key); literals[key] = literalsIn(t, j + 1, v.end); if (ctx && ctx.placeholder) o[key] = {}; }
       i = v.end;
       if (isP(t[i], ',')) i++;
       else if (!isP(t[i], '}')) return { value: SKIP, end: skipExpr(t, i), exact: false };
     }
-    return { value: o, end: i + 1, exact, optionalKeys, unknownKeys: unknown, partialKeys: partial, spreadUnknown, childOptional };
+    return { value: o, end: i + 1, exact, optionalKeys, unknownKeys: unknown, partialKeys: partial, spreadUnknown, childOptional, literals };
+  }
+  // The string literals between tokens a and b (the readable parts of an expression that cannot be read as a whole),
+  // joined by " … ", so poisoning checks still see them; null when there are none.
+  function literalsIn(t, a, b) {
+    const out = []; let n = 0;
+    for (let k = a; k < b && k < t.length && n < MAX_STR; k++) {
+      const x = t[k];
+      const parts = x.type === 'str' ? [x.value] : x.type === 'tpl' ? x.parts : [];
+      parts.forEach((p) => { const q = String(p).trim(); if (q && n < MAX_STR) { out.push(q); n += q.length; } });
+    }
+    return out.length ? out.join(' … ').slice(0, MAX_STR) : null;
   }
   function parseArray(t, i, ctx) {
     const a = []; let exact = true; i++;
@@ -567,7 +584,7 @@
         let j = i + 2;
         if (isP(t[j], ':')) j = skipType(t, j + 1);
         if (!isP(t[j], '=')) continue;
-        let v = parseValue(t, j + 1, Object.assign({}, ctx, { consts }));
+        let v; try { v = parseValue(t, j + 1, Object.assign({}, ctx, { consts })); } catch (e) { v = { value: SKIP }; }
         if (v.value === SKIP && t[j + 1] && t[j + 1].type === 'id') {
           // const toolId = toolName || "web_search": the literal default
           const ch = idChain(t, j + 1);
@@ -707,6 +724,7 @@
       if (ctx.fl.execution) tool.execution = { taskSupport: 'forbidden' };
       const un = unreadableOf(cfg, [['description', 'description'], ['annotations', 'annotations']].concat(sk ? [[sk, 'inputSchema']] : SCHEMA_KEYS.map((k) => [k, 'inputSchema'])));
       if (!sk && un.includes('inputSchema')) tool.inputSchema = { type: 'object' };
+      if (un.includes('description') && typeof tool.description !== 'string' && cfg.literals && cfg.literals.description) tool.description = cfg.literals.description;
       tool._unreadable = un;
       return tool;
     };
@@ -723,6 +741,14 @@
         const s = out[k];
         if (isRawShape(s)) out[k] = rootSchema(s, childOptional && childOptional[k], ctx.fl);
       });
+      return out;
+    };
+    // the text of an object that is not listed (a registration without a readable name), for the poisoning scan
+    const textOf = (o) => {
+      const out = {}; if (!o) return out;
+      const v = o.value && o.value !== SKIP ? o.value : {};
+      const d = typeof v.description === 'string' ? v.description : o.literals && o.literals.description; if (d) out.description = d;
+      const ti = typeof v.title === 'string' ? v.title : o.literals && o.literals.title; if (ti) out.title = ti;
       return out;
     };
     const hasConfigKey = (cfg) => !!cfg && ((cfg.value && cfg.value !== SKIP && CONFIG_KEYS.some((k) => cfg.value[k] !== undefined)) || (cfg.unknownKeys && CONFIG_KEYS.some((k) => cfg.unknownKeys.has(k))) || (cfg.partialKeys && cfg.partialKeys.size > 0));
@@ -746,6 +772,7 @@
       const un = unreadableOf(o, [['description', 'description'], ['annotations', 'annotations']].concat(sk ? [] : SCHEMA_KEYS.map((k) => [k, 'inputSchema'])));
       tool.inputSchema = schema || (un.includes('inputSchema') ? { type: 'object' } : { type: 'object', properties: {} });
       ['outputSchema', 'annotations', '_meta', 'icons', 'execution'].forEach((k) => { if (v[k] !== undefined && typeof v[k] === 'object') tool[k] = v[k]; });
+      if (un.includes('description') && typeof tool.description !== 'string' && o.literals && o.literals.description) tool.description = o.literals.description;
       if (v.deprecated === true || (v.deprecated && typeof v.deprecated === 'object')) tool._deprecated = true; // a definition that flags itself deprecated (the server leaves it out of the list)
       tool._unreadable = un;
       return tool;
@@ -765,6 +792,7 @@
     const wrappers = registerWrappers(t);
     for (let i = 0; i < t.length; i++) {
       const tok = t[i];
+      try { // one registration that cannot be read never drops the others: it is counted instead
       // 0. A function of this file that forwards two of its parameters to X.registerTool(name, config, ...):
       //    register(server, 'name', { description, inputSchema }, handler) is read as registerTool('name', {...}).
       if (tok.type === 'id' && wrappers.has(tok.value) && isP(t[i + 1], '(') && !(t[i - 1] && (isP(t[i - 1], '.') || isDecl(i)))) {
@@ -793,7 +821,7 @@
           const keyTok = !member && isP(t[i - 1], ':') && t[i - 2] && (t[i - 2].type === 'id' || t[i - 2].type === 'str') ? t[i - 2] : null;
           let nm = null;
           if (o.value && o.value !== SKIP && typeof o.value.name === 'string') nm = o.value.name;
-          else { const k2 = findKeyToken(t, objAt, o.end, 'name'); const r = k2 >= 0 ? resolveName(t, k2 + 2, actx, paramsAround(t, blocks, k2)) : null; if (r && r.name) nm = r.name; else if (!keyTok && (o.unknownKeys.has('name') || k2 >= 0)) { unresolved.push({ line: lineOf(at) }); } }
+          else { const k2 = findKeyToken(t, objAt, o.end, 'name'); const r = k2 >= 0 ? resolveName(t, k2 + 2, actx, paramsAround(t, blocks, k2)) : null; if (r && r.name) nm = r.name; else if (!keyTok && (o.unknownKeys.has('name') || k2 >= 0)) { unresolved.push(Object.assign({ line: lineOf(at) }, textOf(o))); } }
           if (!nm && keyTok && !(o.value && o.value !== SKIP && o.value.name !== undefined) && !o.unknownKeys.has('name')) nm = String(keyTok.value);
           if (nm && (sdk || hasConfigKey(o) || o.spreadUnknown)) {
             const tool = toolFromObject(o, nm, at, fast ? 'fastmcp' : null);
@@ -805,7 +833,11 @@
         if (!nm || nm.param) {
           // registerTool(name, …) inside a helper takes the name from its caller (see registerWrappers); other names
           // that cannot be read are counted, so the report can say so.
-          if (!nm && sdk && member && a1 !== undefined && (isP(t[a1], '{') || (t[a1] && /^(str|tpl)$/.test(t[a1].type)))) unresolved.push({ line: lineOf(at) });
+          if (!nm && sdk && member && a1 !== undefined && (isP(t[a1], '{') || (t[a1] && /^(str|tpl)$/.test(t[a1].type)))) {
+            let txt = {};
+            try { if (isP(t[a1], '{')) txt = textOf(configAt(a1)); else { const d = parseValue(t, a1, ctx); txt = { description: typeof d.value === 'string' ? d.value : literalsIn(t, a1, args[2] !== undefined ? args[2] : a1 + 1) }; } } catch (e) { txt = {}; }
+            unresolved.push(Object.assign({ line: lineOf(at) }, txt));
+          }
           continue;
         }
         if (a1 === undefined) { if (sdk && fn !== 'addTool') add(Object.assign({ name: nm.name, inputSchema: { type: 'object', properties: {} } }, ctx.fl.execution ? { execution: { taskSupport: 'forbidden' } } : {}), 'derived', at); continue; }
@@ -860,8 +892,9 @@
           if (add(tool, literalExact ? 'literal' : 'derived', tok.start, { binding: bound, literal: true })) i = o.end - 1;
         }
       }
+      } catch (e) { const f = isP(tok, '.') ? t[i + 1] : tok; if (f && f.type === 'id' && (SDK_CALLS.has(f.value) || TOOLISH.test(f.value)) && isP(t[isP(tok, '.') ? i + 2 : i + 1], '(')) unresolved.push({ line: lineOf(tok.start) }); }
     }
-    if (opts.classTools && opts.classTools.size) classTools(t, ctx, opts.classTools).forEach((x) => add(x.tool, 'derived', x.at, { classTool: true, groupPath: opts.classTools.root ? opts.classTools.root.get(x.base) : undefined }));
+    if (opts.classTools && opts.classTools.size) { let ct = []; try { ct = classTools(t, ctx, opts.classTools); } catch (e) { ct = []; } ct.forEach((x) => add(x.tool, 'derived', x.at, { classTool: true, groupPath: opts.classTools.root ? opts.classTools.root.get(x.base) : undefined })); }
     tools.unresolved = unresolved;
     return tools;
   }
@@ -1117,6 +1150,7 @@
           else { out += '…'; exact = false; if (!ctx.prefixOk || !/prefix|namespace|(^|_)ns$/i.test(ids[ids.length - 1])) ok = ok && true; r = r || { unresolvedIds: ids }; }
           j = m;
         } else break;
+        if (out.length > MAX_STR) { out = out.slice(0, MAX_STR) + '…'; exact = false; }
         // .strip() and friends on a string
         while (isP(t[j], '.') && t[j + 1] && /^(strip|lstrip|rstrip)$/.test(t[j + 1].value) && isP(t[j + 2], '(') && isP(t[j + 3], ')')) { out = t[j + 1].value === 'strip' ? out.trim() : t[j + 1].value === 'lstrip' ? out.replace(/^\s+/, '') : out.replace(/\s+$/, ''); j += 4; }
         if (isP(t[j], '.') && t[j + 1] && t[j + 1].value === 'format') { exact = false; j = pyMatch(t, j + 2) + 1; }
@@ -1170,12 +1204,12 @@
         cls = c ? { name: c[1], members: {} } : null;
         if (cls) { consts[cls.name] = cls.members; return; }
         const m = /^([A-Za-z_]\w*)\s*(?::\s*[^=]+?)?=(?!=)\s*([\s\S]+)$/.exec(l.text);
-        if (m) { const t = pyTokenize(m[2]); const v = pyValue(t, 0, ctx); if (v.value !== PY_SKIP && v.end >= t.length) { consts[m[1]] = v.value; if (v.partial) partialNames.add(m[1]); } }
+        if (m) { try { const t = pyTokenize(m[2]); const v = pyValue(t, 0, ctx); if (v.value !== PY_SKIP && v.end >= t.length) { consts[m[1]] = v.value; if (v.partial) partialNames.add(m[1]); } } catch (e) { /* not a constant the reader can use */ } }
         return;
       }
       if (cls && l.indent > 0) {
         const m = /^([A-Za-z_]\w*)\s*(?::\s*[^=]+?)?=(?!=)\s*([\s\S]+)$/.exec(l.text);
-        if (m && l.indent <= 8) { const t = pyTokenize(m[2]); const v = pyValue(t, 0, ctx); if (v.value !== PY_SKIP && v.end >= t.length && (typeof v.value === 'string' || typeof v.value === 'number')) cls.members[m[1]] = v.value; }
+        if (m && l.indent <= 8) { try { const t = pyTokenize(m[2]); const v = pyValue(t, 0, ctx); if (v.value !== PY_SKIP && v.end >= t.length && (typeof v.value === 'string' || typeof v.value === 'number')) cls.members[m[1]] = v.value; } catch (e) { /* skip */ } }
       }
     });
     return { consts, partialNames, imported };
@@ -1371,7 +1405,7 @@
       const tool = { name }; const un = [];
       if (typeof given.title === 'string') tool.title = given.title;
       const ds = fmcp && doc ? pyDocSections(doc) : null;
-      if (given.description !== undefined) { if (typeof given.description === 'string') tool.description = given.description; if (given.descriptionPartial || given.description === null) un.push('description'); }
+      if (given.description !== undefined) { if (typeof given.description === 'string') tool.description = given.description; else if (given.descriptionLiterals) tool.description = given.descriptionLiterals; if (given.descriptionPartial || given.description === null) un.push('description'); }
       else if (doc) tool.description = ds ? ds.description : doc;
       if (ds) Object.keys(props).forEach((pn) => { if (props[pn].description === undefined && ds.params[pn]) props[pn].description = ds.params[pn]; });
       tool.inputSchema = fmcp ? { properties: props, required: required.length ? required : undefined, type: 'object', additionalProperties: false } : { properties: props, required: required.length ? required : undefined, title: fname + 'Arguments', type: 'object' };
@@ -1396,7 +1430,7 @@
       const g = {};
       if (kw.name !== undefined) { const n = nameOf(kw.name); g.name = n; if (!n) g.nameUnknown = true; }
       if (kw.title !== undefined) { const v = exprVal(kw.title); if (v && typeof v.value === 'string') g.title = v.value; }
-      if (kw.description !== undefined) { const v = exprVal(kw.description); if (v && typeof v.value === 'string') { g.description = v.value; if (v.partial) g.descriptionPartial = true; } else g.description = null; }
+      if (kw.description !== undefined) { const v = exprVal(kw.description); if (v && typeof v.value === 'string') { g.description = v.value; if (v.partial) g.descriptionPartial = true; } else { g.description = null; g.descriptionLiterals = pyLiterals(kw.description); } }
       if (kw.annotations !== undefined) { const a = pyAnnotationsValue(kw.annotations); g.annotations = a; }
       else if (['read_only_hint', 'destructive_hint', 'idempotent_hint', 'open_world_hint'].some((k) => kw[k] !== undefined)) g.annotationsUnknown = true;
       if (kw.structured_output !== undefined && /^False$/.test(kw.structured_output.trim())) g.structured = false;
@@ -1405,6 +1439,7 @@
     };
     // keys as written under SDK 1.x, which keeps snake_case kwargs as extra fields; SDK 2.x lists them in camelCase
     const camel = opts.sdk && opts.sdk.pyMajor >= 2;
+    const unresolvedText = (line, g) => { const o = { line }; const d = typeof g.description === 'string' ? g.description : g.descriptionLiterals; if (d) o.description = d; if (typeof g.title === 'string') o.title = g.title; return o; };
     const pyAnnotationsValue = (text) => {
       const v = exprVal(text);
       let a = v && v.value && typeof v.value === 'object' && !Array.isArray(v.value) ? v.value : pyAnnotations(text);
@@ -1413,6 +1448,7 @@
     };
     for (let k = 0; k < L.length; k++) {
       const l = L[k];
+      try { // one registration that cannot be read never drops the others: it is counted instead
       // decorators, then the def they decorate
       if (l.text[0] === '@') {
         const decos = []; let e = k;
@@ -1431,7 +1467,7 @@
           const pos0 = m[3] !== undefined ? splitTop(m[3], ',')[0] : null;
           if (isSdk && pos0 && !/^\w+\s*=/.test(pos0) && kw.name === undefined) kw.name = pos0;
           const given = givenOf(kw);
-          if (given.nameUnknown) { unresolved.push({ line: d.line }); break; }
+          if (given.nameUnknown) { unresolved.push(unresolvedText(d.line, given)); break; }
           if (isReg || isNamed) { given.annotationsUnknown = given.annotations === undefined; if (isReg) given.fastmcpTags = false; }
           const r = fromDef(e, given);
           if (r) add(r.tool, d.line, { exactTypes: r.exactTypes, server: chain.length > 1 ? chain[0] : null, fn: r.fname });
@@ -1451,11 +1487,11 @@
         if (fn === 'Tool' && (!dotted || /^(types|mcp)$/.test(owner)) && a.kw.name !== undefined && (a.kw.inputSchema !== undefined || a.kw.description !== undefined || a.kw.input_schema !== undefined)) {
           // the low-level server: Tool(name=..., description=..., inputSchema={...}, annotations=...)
           let name = /^self\.(name|tool_name|_name)$/.test(kwAll.name.trim()) ? classNameOf(k) : nameOf(kwAll.name);
-          if (!name) { unresolved.push({ line: l.line }); continue; }
-          const tool = { name }; const un = [];
           const g = givenOf(Object.assign({}, kwAll, { name: undefined }));
+          if (!name) { unresolved.push(unresolvedText(l.line, g)); continue; }
+          const tool = { name }; const un = [];
           if (g.title) tool.title = g.title;
-          if (g.description !== undefined) { if (typeof g.description === 'string') tool.description = g.description; if (g.description === null || g.descriptionPartial) un.push('description'); }
+          if (g.description !== undefined) { if (typeof g.description === 'string') tool.description = g.description; else if (g.descriptionLiterals) tool.description = g.descriptionLiterals; if (g.description === null || g.descriptionPartial) un.push('description'); }
           const sk = a.kw.inputSchema !== undefined ? 'inputSchema' : 'input_schema';
           const sv = a.kw[sk] !== undefined ? pyValue(t, a.kw[sk], ctx) : null;
           if (sv && sv.value !== PY_SKIP && sv.value && typeof sv.value === 'object' && !Array.isArray(sv.value)) tool.inputSchema = sv.value;
@@ -1475,7 +1511,7 @@
         const isMake = (dotted && owner && (fn === 'tool' || fn === 'add_tool') && a.pos.length >= 1) || (fn === 'from_function' && owner && /Tool$/.test(owner)) || (/ToolDefinition$/.test(fn) && a.kw.fn !== undefined);
         if (!isMake || !fnRef) continue;
         const given = givenOf(kwAll);
-        if (given.nameUnknown) { unresolved.push({ line: l.line }); continue; }
+        if (given.nameUnknown) { unresolved.push(unresolvedText(l.line, given)); continue; }
         const dk = defs.get(fnRef);
         if (dk === undefined && given.name === undefined) continue; // a parameter or a function from elsewhere, named nowhere here
         if (dk !== undefined) {
@@ -1485,16 +1521,24 @@
         } else {
           const name = given.name || fnRef;
           const tool = { name, inputSchema: { type: 'object' } }; const un = ['inputSchema'];
-          if (typeof given.description === 'string') tool.description = given.description; else un.push('description');
+          if (typeof given.description === 'string') tool.description = given.description; else { if (given.descriptionLiterals) tool.description = given.descriptionLiterals; un.push('description'); }
           if (given.annotations) tool.annotations = given.annotations; else un.push('annotations');
           tool._unreadable = un;
           add(tool, l.line, { server: dotted && fn !== 'from_function' ? owner : null, fn: fnRef });
         }
         i = a.close;
       }
+      } catch (e) { if (/\btool\b|Tool\s*\(|_tool\b/.test(l.text)) unresolved.push({ line: l.line }); }
     }
     tools.unresolved = unresolved;
     return tools;
+  }
+  // The string literals of a Python expression (the readable parts of one that cannot be read as a whole), or null.
+  function pyLiterals(text) {
+    let t; try { t = pyTokenize(String(text)); } catch (e) { return null; }
+    const out = []; let n = 0;
+    t.forEach((x) => { (x.type === 'str' ? [x.value] : x.type === 'tpl' ? x.parts : []).forEach((p) => { const q = String(p).trim(); if (q && n < MAX_STR) { out.push(q); n += q.length; } }); });
+    return out.length ? out.join(' … ').slice(0, MAX_STR) : null;
   }
   function tokText(text, t, a, b) { return a < b && t[a] && t[b - 1] ? text.slice(t[a].s, t[b - 1].e) : ''; }
   // Methods and functions of the repository that register a tool (their body calls .tool(, add_tool(, Tool.from_function(
@@ -1977,14 +2021,14 @@
     const pyConsts = pyGlobalConsts(readable); const pyRegs = pyRegistrars(readable); const mounts = pyMounts(readable);
     const bases = toolBases(readable);
     const found = []; const byName = new Set();
-    const dupes = []; let unresolved = 0;
+    const dupes = []; const unresolved = [];
     srcList.forEach(([p, t]) => {
       let ts = [];
       try {
         const js = /\.(ts|mts|cts|js|mjs|cjs)$/.test(p);
         ts = extractFromFile(p, t, js ? { sdk, consts: mods.seedFor(p), tokens: mods.tokens(p), classTools: bases } : { sdk, pyConsts, pyRegistrars: pyRegs });
-      } catch (e) { ts = []; }
-      unresolved += (ts.unresolved || []).length;
+      } catch (e) { ts = []; ts.unresolved = [{ line: null }]; } // a file the reader fails on counts as one unread registration
+      (ts.unresolved || []).forEach((u) => unresolved.push(Object.assign({ path: p }, u)));
       ts.forEach((x) => {
         // a FastMCP server mounted under a prefix lists its tools as <prefix>_<name>
         if (x.server && mounts.has(x.server)) { x.tool = Object.assign({}, x.tool, { name: mounts.get(x.server) + '_' + x.tool.name }); x.prefix = mounts.get(x.server); }
@@ -1997,7 +2041,7 @@
     found.forEach((f) => { f.marks = marks.get(f); f.excluded = f.marks.some((m) => m.exclude); });
     // Never return an empty list because of exclusions: the marks stay, the exclusion does not apply.
     if (found.length && found.every((f) => f.excluded)) found.forEach((f) => { f.excluded = false; f.marks.forEach((m) => { m.exclude = false; }); });
-    return { found, tools: found.filter((f) => !f.excluded), excluded: found.filter((f) => f.excluded), sdk, plan, files: srcList.length, candidates: candidates.length, read: readable.length, unresolved };
+    return { found, tools: found.filter((f) => !f.excluded), excluded: found.filter((f) => f.excluded), sdk, plan, files: srcList.length, candidates: candidates.length, read: readable.length, unresolved: unresolved.length, unresolvedList: unresolved };
   }
 
   // ------------------------------------------------------------ network
@@ -2011,6 +2055,7 @@
 
   const MAX_FILE = 1536 * 1024;      // a source file or committed list
   const MAX_JSON = 16 * 1024 * 1024; // an API answer (a recursive tree listing of a large repository)
+  const MAX_TOTAL = 64 * 1024 * 1024; // all files of one scan
   // The body as text, at most `cap` bytes; a longer body is refused, not cut.
   async function readCapped(r, cap, url) {
     const len = Number(r.headers && typeof r.headers.get === 'function' ? r.headers.get('content-length') : 0);
@@ -2077,13 +2122,34 @@
     const ref = parseRepoRef(input);
     if (!ref) throw new Error('Not a GitHub repository URL.');
     const listing = await listRepo(f, ref, opts);
+    // Every file read counts: a refused or failed read (a rate limit, a server error) stops the reading, and the scan
+    // fails rather than grade a list with files missing. A file over the per-file cap is skipped (sizes come with the
+    // listing), and reading stops at MAX_TOTAL bytes in all (the scan says so).
+    const state = { bytes: 0, budgetHit: false, failed: [] };
     const fetchMany = async (ps, n) => {
       const out = []; let k = 0;
-      const worker = async () => { while (k < ps.length) { const p = ps[k++]; try { out.push([p, await getText(f, listing.raw(p))]); } catch (e) { out.push([p, null]); } } };
+      const worker = async () => {
+        while (k < ps.length) {
+          const p = ps[k++];
+          if (state.failed.length) { out.push([p, null]); continue; }
+          if (state.bytes >= MAX_TOTAL) { state.budgetHit = true; out.push([p, null]); continue; }
+          try { const x = await getText(f, listing.raw(p)); state.bytes += x.length; out.push([p, x]); } catch (e) {
+            if (e && e.code === 'too_large') { out.push([p, null]); continue; }
+            state.failed.push({ path: p, status: e && e.status, message: e && e.message }); out.push([p, null]);
+          }
+        }
+      };
       await Promise.all(Array.from({ length: Math.min(n, ps.length) }, worker));
       return out;
     };
-    const scan = await scanFiles({ all: listing.paths, subdir: ref.subdir, readMany: fetchMany, maxSourceFiles: opts.maxSourceFiles });
+    const scan = await scanFiles({ all: listing.paths, subdir: ref.subdir, readMany: fetchMany, maxSourceFiles: opts.maxSourceFiles, state });
+    if (state.failed.length) {
+      const st = state.failed.map((x) => x.status).filter(Boolean);
+      const limited = st.some((x) => x === 403 || x === 429);
+      const e = new Error((limited ? 'GitHub rate limit: ' : 'GitHub did not answer: ') + state.failed.length + ' file read' + (state.failed.length === 1 ? '' : 's') + ' failed (' + (st.length ? 'HTTP ' + Array.from(new Set(st)).join(', ') : 'network error') + ', first ' + state.failed[0].path + '), so the list would be incomplete and nothing was graded. Retry later, pass a token (--github-token-env), or read a checkout with --repo-dir.');
+      e.code = limited ? 'rate_limited' : 'incomplete'; e.status = st[0];
+      throw e;
+    }
     return Object.assign({ repo: ref.owner + '/' + ref.repo, ref: ref.ref, sha: listing.sha, via: listing.via, truncated: listing.truncated }, scan);
   }
 
@@ -2169,7 +2235,9 @@
       const allLiteral = found.every((x) => x.fidelity === 'literal');
       const marked = an.found.filter((x) => x.marks.length && found.some((f) => servers.rootOf(f.groupPath || f.path) === servers.rootOf(x.groupPath || x.path))).map((x) => ({ name: x.tool.name, reasons: x.marks.map((m) => m.reason), excluded: x.excluded }));
       const out = publicTools(found.map((x) => x.tool));
-      candidates.push({ kind: 'source', fidelity: allLiteral && !Object.keys(out.unreadable).length ? 'literal' : 'derived', path: null, built, files: Array.from(new Set(found.map((x) => x.path))), tools: out.tools, unreadable: out.unreadable, unresolvedNames: an.unresolved || 0, where: found.map((x) => ({ name: x.tool.name, path: x.path, line: x.line, fidelity: x.fidelity })), excluded: an.excluded.filter((x) => found.some((f) => servers.rootOf(f.groupPath || f.path) === servers.rootOf(x.groupPath || x.path))).map((x) => ({ name: x.tool.name, path: x.path, line: x.line, reasons: x.marks.filter((m) => m.exclude).map((m) => m.reason + (m.detail ? ' (' + m.detail + ')' : '')) })).concat(setAside), marked, sdk: an.sdk });
+      // registrations without a readable name in the graded package(s): not listed, but their text is scanned
+      const unres = (an.unresolvedList || []).filter((u) => servers.keep && servers.keep.has(servers.rootOf(u.path)));
+      candidates.push({ kind: 'source', fidelity: allLiteral && !Object.keys(out.unreadable).length ? 'literal' : 'derived', path: null, built, files: Array.from(new Set(found.map((x) => x.path))), tools: out.tools, unreadable: out.unreadable, unresolved: unres, unresolvedNames: unres.length, where: found.map((x) => ({ name: x.tool.name, path: x.path, line: x.line, fidelity: x.fidelity })), excluded: an.excluded.filter((x) => found.some((f) => servers.rootOf(f.groupPath || f.path) === servers.rootOf(x.groupPath || x.path))).map((x) => ({ name: x.tool.name, path: x.path, line: x.line, reasons: x.marks.filter((m) => m.exclude).map((m) => m.reason + (m.detail ? ' (' + m.detail + ')' : '')) })).concat(setAside), marked, sdk: an.sdk });
     }
     // A snapshot counts as this repository's exact list only when it names this repository's server. A snapshot of
     // another server (one this repository uses or tests against) is never chosen over tools read from source; with
@@ -2195,7 +2263,7 @@
       if (c) candidates.push(c);
     }
     if (an.unresolved) hints.unresolvedNames = an.unresolved;
-    return { scanned: { exact: plan.exact.length, manifests: plan.manifests.length, source: an.files, candidates: an.candidates, read: an.read, sourceTotal: plan.src.length, capped: plan.src.length > maxRead || an.candidates > an.files }, candidates, best: candidates[0] || null, hints };
+    return { scanned: { exact: plan.exact.length, manifests: plan.manifests.length, source: an.files, candidates: an.candidates, read: an.read, sourceTotal: plan.src.length, capped: plan.src.length > maxRead || an.candidates > an.files, budgetHit: !!(o.state && o.state.budgetHit) }, candidates, best: candidates[0] || null, hints };
   }
 
   // The tools as they are graded: what could not be read is taken out of each tool and listed per part
@@ -2379,17 +2447,19 @@
       const root = pathMod.resolve(String(opts.rootDir));
       ['package.json', 'package-lock.json', 'pyproject.toml'].forEach((n) => { if (!all.includes(n)) extra.set(n, pathMod.join(root, n)); });
     }
+    const state = { bytes: 0, budgetHit: false, failed: [] };
     const readOne = (p) => {
       const abs = extra.has(p) ? extra.get(p) : pathMod.join(base, p);
       try {
         const s = fs.lstatSync(abs);
         if (!s.isFile() || s.size > MAX_FILE) return null;
-        return fs.readFileSync(abs, 'utf8');
+        if (state.bytes + s.size > MAX_TOTAL) { state.budgetHit = true; return null; }
+        const x = fs.readFileSync(abs, 'utf8'); state.bytes += x.length; return x;
       } catch (e) { return null; }
     };
     const readMany = async (ps) => ps.map((p) => [p, readOne(p)]);
     all.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)); // the walk order only decides what a truncated listing keeps
-    const scan = await scanFiles({ all: all.concat(Array.from(extra.keys())), subdir: null, readMany, maxSourceFiles: opts.maxSourceFiles, builtFallback: true });
+    const scan = await scanFiles({ all: all.concat(Array.from(extra.keys())), subdir: null, readMany, maxSourceFiles: opts.maxSourceFiles, builtFallback: true, state });
     return Object.assign({ repo: String(dir), ref: null, sha: null, via: 'directory', truncated }, scan);
   }
 

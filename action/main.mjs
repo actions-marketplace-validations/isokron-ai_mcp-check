@@ -10,8 +10,8 @@ import { capture, CaptureError, splitCommand as split } from '../src/capture.js'
 import { parseList } from '../src/tools.js';
 import { InputError as LimitError } from '../src/limits.js';
 import { registryUrl, tagDocsLinks } from '../src/links.js';
-import { analyseList } from '../src/unreadable.js';
-import { isApproximate, namesOnlyText, repoProvenance, scannedText, serverChoices, serverFolders, usableList, whyNothing } from '../src/inputs/collect.js';
+import { analyseList, skippedLine } from '../src/unreadable.js';
+import { budgetNote, isApproximate, namesOnlyText, readerNotes, repoProvenance, scannedText, serverChoices, serverFolders, usableList, whyNothing } from '../src/inputs/collect.js';
 import { commentAction, markerFor, MODES as COMMENT_MODES, prContext, renderComment, renderNotGraded, runStamp, validKey } from './pr-comment.mjs';
 import { ALL_SECTIONS, DEFAULT_SECTIONS, GRADED_SECTIONS, GRADES, badgeFile, badgeSnippet, belowMinGrade, mdCode, mdText, sarifWithLocations, summaryMarkdown, webLink } from '../src/report.js';
 
@@ -231,7 +231,7 @@ export async function run() {
     if (u.problem) { if (stop) throw stop; return 0; }
     const c = u.candidate;
     approximate = isApproximate(c);
-    unreadable = c.unreadable || null;
+    unreadable = readerNotes(c);
     const candidateAbs = c.path ? join(dir.abs, c.path) : null;
     if (baseline && candidateAbs && (candidateAbs === baseline.abs || (c.path.endsWith('/') && baseline.abs.startsWith(candidateAbs)))) throw new InputError('the tool list found in the source is the baseline ' + baseline.rel + ' itself; set command or tools-file');
     text = JSON.stringify({ tools: c.tools }, null, 2) + '\n';
@@ -244,7 +244,7 @@ export async function run() {
       const st2 = lstatOrNull(candidateAbs);
       if (st2 && st2.isFile()) { sarifText = readFileSync(candidateAbs, 'utf8'); sarifUri = prefix + c.path; }
     }
-    const { provenance } = repoProvenance(c);
+    const provenance = repoProvenance(c).provenance + budgetNote(scan);
     const committed = c.kind !== 'source';
     source = committed ? 'the committed list ' + mdCode(prefix + (c.path || '')) : 'the repository code in ' + mdCode(dir.rel);
     const how = ' For exact grades of the list your server sends, set `command` (the command that starts it, for example `node dist/index.js`) or `tools-file` (a saved `tools/list` answer): [how](' + ZERO_CONFIG_DOCS + ').';
@@ -282,7 +282,9 @@ export async function run() {
 
   // 2. Grade it.
   const parsed = parse(text, 'the tool list');
-  const r = analyseList(parsed, unreadable); // checks of parts the reader could not read are skipped
+  const r = analyseList(parsed, unreadable); // a source read: checks of parts the reader could not read are skipped
+  const skipped = skippedLine(r);
+  if (skipped) { note = (note ? note + ' ' : '') + mdText(skipped); commentSource = (commentSource ? commentSource + ' ' : '') + mdText(skipped); }
   const below = belowMinGrade(r, sections, minGrade);
   let diff = null;
   if (baseline) {

@@ -1,7 +1,6 @@
 // Tool handlers as plain functions: no transport, no network, no file access. server.js registers them.
 import M from './engine.js';
 import { readList, InputError, MAX_TOOLS } from './limits.js';
-import { analyseList } from './unreadable.js';
 
 export const SECTIONS = ['spec', 'anthropic', 'openai', 'security', 'quality', 'surface'];
 export const GRADES = ['A', 'B', 'C', 'D', 'F'];
@@ -22,7 +21,7 @@ export function checkToolsList({ tools_list, sections, min_grade, limit = DEFAUL
   const cap = Math.max(1, Math.min(MAX_FINDINGS, limit));
   const want = sections && sections.length ? SECTIONS.filter((s) => sections.includes(s)) : SECTIONS.slice();
   const parsed = parseList(tools_list, 'tools_list');
-  const r = analyseList(parsed); // a list saved from a source read marks schemas it could not read; their checks are skipped
+  const r = M.analyse(parsed);
   const byName = new Map(parsed.tools.map((t) => [t.name, t]));
 
   const secOut = want.map((id) => {

@@ -616,3 +616,17 @@ test('zero-config: a snapshot of another server is not graded instead of the cod
   assert.equal(two.outputs['exit-status'], '0', 'nothing to grade is neutral');
   assert.match(two.stdout, /No tool definitions found .* Not used: 2 mcp-catalog-snap snapshots of other servers \(\.mcp-catalog\/github\.json: github, \.mcp-catalog\/slack\.json: slack\)\./);
 });
+
+test('zero-config: parts of a source read that are not readable are named in the summary and the PR comment', () => {
+  const ws = workspace(null);
+  mkdirSync(join(ws, 'src'));
+  writeFileSync(join(ws, 'package.json'), '{"name":"notes","dependencies":{"@modelcontextprotocol/sdk":"1.20.0"}}');
+  writeFileSync(join(ws, 'src', 'index.ts'), 'import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";\nconst server = new McpServer({ name: "notes", version: "1" });\n'
+    + 'server.registerTool("list_notes", { title: "List notes", description: "List the notes of a folder. Use this when browsing.", inputSchema: buildSchema(), annotations: { readOnlyHint: true } }, h);\n');
+  const ctx = { event: pr(), GITHUB_EVENT_NAME: 'pull_request', GITHUB_REF: 'refs/pull/7/merge' };
+  const r = act(ws, { 'pr-comment': 'always' }, ctx);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.summary, /Not readable from source: 1 input schema; \d+ checks? of those parts skipped, and the grades use the rest\./);
+  const body = readFileSync(join(ws, 'mcp-check-results', 'pr-comment.md'), 'utf8');
+  assert.match(body, /Not readable from source: 1 input schema/);
+});
