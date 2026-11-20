@@ -732,15 +732,18 @@
       if (key) return;
       // The phrase checks below (instructions, steering, outside instructions, asking for secrets) read the text with blank
       // and invisible characters as spaces, and a run of words joined by - _ or / ("ignore-all-previous-instructions") as
-      // words. A short identifier (an enum value or event name such as "post-update-password") is not read as a request.
+      // words. A short identifier (an enum value or event name such as "post-update-password") is still read for instructions,
+      // hard steering and outside instructions, but not as asking for secrets or as soft steering.
       const spaced = value.replace(RE_BLANKS, ' ');
-      const texts = SHORT_ID.test(value.trim()) ? [] : /\s/.test(spaced.trim()) ? [spaced] : [spaced, spaced.replace(/[-_\/]+/g, ' ')];
-      const find = (re) => { for (const x of texts) { const m = x.match(re); if (m) return m; } return null; };
+      const shortId = SHORT_ID.test(value.trim());
+      const texts = /\s/.test(spaced.trim()) ? [spaced] : [spaced, spaced.replace(/[-_\/]+/g, ' ')];
+      const findAll = (re) => { for (const x of texts) { const m = x.match(re); if (m) return m; } return null; };
+      const find = (re) => (shortId ? null : findAll(re));
       if (HTML_COMMENT.test(value)) once('sec-html-comment', 'blocking', 'An HTML comment hides text from rendered views.', path);
       const mk = value.match(RE_MARKUP);
       if (mk) once('sec-instruction-markup', 'blocking', 'Prompt markup "' + clip(mk[0].trim(), 40) + '".', path);
-      for (const re of RE_PHRASES) { const m = find(re); if (m) { once('sec-instruction-phrases', 'blocking', 'Instruction to the model: "' + clip(m[0], 80) + '".', path); break; } }
-      const sh = find(RE_STEER_HARD);
+      for (const re of RE_PHRASES) { const m = findAll(re); if (m) { once('sec-instruction-phrases', 'blocking', 'Instruction to the model: "' + clip(m[0], 80) + '".', path); break; } }
+      const sh = findAll(RE_STEER_HARD);
       if (sh) once('sec-cross-tool-steering', 'blocking', 'Steers the model away from other tools: "' + clip(sh[0], 80) + '".', path);
       else {
         const ss = find(RE_STEER_SOFT);
@@ -748,7 +751,7 @@
         const sibling = ss && siblings.some((n) => new RegExp('(^|[^A-Za-z0-9_-])' + n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '($|[^A-Za-z0-9_-])').test(value));
         if (ss && !sibling) once('sec-cross-tool-steering', 'attention', 'Steers tool selection: "' + clip(ss[0], 80) + '".', path);
       }
-      const ex = find(RE_EXTERNAL);
+      const ex = findAll(RE_EXTERNAL);
       if (ex) once('sec-external-instructions', 'blocking', 'Points the model at outside instructions: "' + clip(ex[0], 80) + '".', path);
       const sc = value.match(RE_SECRET_FILES) || find(RE_SECRET_ASK);
       if (sc) once('sec-secret-seeking', 'blocking', 'Seeks secrets or local files: "' + clip(sc[0].trim(), 80) + '".', path);
