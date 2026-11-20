@@ -136,6 +136,13 @@ export function analyseList(parsed, reader, opts = {}) {
       r.tools.forEach((t, i) => { t.findings = t.findings.filter((f) => f.section !== 'surface').concat(fresh.get(i) || []); });
       const next = Object.assign({}, r.sections.surface);
       Object.keys(sur || {}).forEach((k) => { if (k !== 'findings') next[k] = sur[k]; });
+      // name the write tools left out, wherever the section is shown
+      const left = parsed.tools.filter((t) => unknownSchema.has(t.name) && !(t.annotations && t.annotations.readOnlyHint === true) && M.kindOf(t.name) !== 'read').map((t) => t.name);
+      if (left.length) {
+        next.not_counted = left;
+        const msg = left.length + ' write tool' + (left.length === 1 ? '' : 's') + ' with an unreadable schema not counted (' + left.slice(0, 5).join(', ') + (left.length > 5 ? ', …' : '') + ').';
+        ['why', 'summary'].forEach((k) => { if (typeof next[k] === 'string' && next[k]) next[k] = next[k] + ' ' + msg; else if (k === 'why') next[k] = msg; });
+      }
       r.sections.surface = next;
     } catch (e) { /* keep the engine's surface section */ }
   }

@@ -97,12 +97,11 @@
   // parseValue returns { value, end, exact }. Non-literal values become SKIP (exact=false) and are left out of objects.
   const SKIP = { skip: true };
   function skipExpr(t, i) {
-    let d = 0;
     for (; i < t.length; i++) {
       const v = t[i].type === 'p' ? t[i].value : null;
-      if (v === '(' || v === '[' || v === '{') d++;
-      else if (v === ')' || v === ']' || v === '}') { if (d === 0) return i; d--; }
-      else if ((v === ',' || v === ';') && d === 0) return i;
+      if (v === '(' || v === '[' || v === '{') { i = matchClose(t, i); continue; } // over a bracketed part in one step
+      if (v === ')' || v === ']' || v === '}') return i;
+      if (v === ',' || v === ';') return i;
     }
     return i;
   }
@@ -249,7 +248,7 @@
         const mk = isP(t[i + 1], '(') ? key : t[i + 1].value;
         let j = i + 1; while (t[j] && !isP(t[j], '{')) j++;
         j = matchClose(t, j) + 1;
-        if (!HANDLER_KEYS.has(mk)) { unknown.add(mk); literals[mk] = literalsIn(t, i, j); }
+        if (!HANDLER_KEYS.has(mk)) { unknown.add(mk); if (LITERAL_KEYS.has(mk)) literals[mk] = literalsIn(t, i, j); }
         exact = false; i = isP(t[j], ',') ? j + 1 : j; continue;
       }
       if (isP(t[i + 1], ',') || isP(t[i + 1], '}')) { // shorthand { name }
@@ -263,7 +262,7 @@
       if (v.optional) optionalKeys.add(key);
       if (v.partial) partial.add(key);
       if (v.optionalKeys && v.optionalKeys.size) childOptional[key] = v.optionalKeys;
-      if (v.value !== SKIP) { o[key] = v.value; exact = exact && v.exact !== false; } else if (!HANDLER_KEYS.has(key)) { exact = false; unknown.add(key); literals[key] = literalsIn(t, j + 1, v.end); if (ctx && ctx.placeholder) o[key] = {}; }
+      if (v.value !== SKIP) { o[key] = v.value; exact = exact && v.exact !== false; } else if (!HANDLER_KEYS.has(key)) { exact = false; unknown.add(key); if (LITERAL_KEYS.has(key)) literals[key] = literalsIn(t, j + 1, v.end); if (ctx && ctx.placeholder) o[key] = {}; }
       i = v.end;
       if (isP(t[i], ',')) i++;
       else if (!isP(t[i], '}')) return { value: SKIP, end: skipExpr(t, i), exact: false };
@@ -272,9 +271,14 @@
   }
   // The string literals between tokens a and b (the readable parts of an expression that cannot be read as a whole),
   // joined by " … ", so poisoning checks still see them; null when there are none.
+  // Only description and title use them, and at most LITERAL_TOKENS tokens of the value are looked at, so deeply
+  // nested values cost no more than reading them once.
+  const LITERAL_KEYS = new Set(['description', 'title']);
+  const LITERAL_TOKENS = 4096;
   function literalsIn(t, a, b) {
     const out = []; let n = 0;
-    for (let k = a; k < b && k < t.length && n < MAX_STR; k++) {
+    const end = Math.min(b, t.length, a + LITERAL_TOKENS);
+    for (let k = a; k < end && n < MAX_STR; k++) {
       const x = t[k];
       const parts = x.type === 'str' ? [x.value] : x.type === 'tpl' ? x.parts : [];
       parts.forEach((p) => { const q = String(p).trim(); if (q && n < MAX_STR) { out.push(q); n += q.length; } });
@@ -294,10 +298,24 @@
     }
     return { value: a, end: i + 1, exact };
   }
+  // The index of the bracket that closes the one at i, from one pass over the tokens (cached on the token array), so
+  // nested code is never rescanned. An unclosed bracket closes at the last token.
+  const CLOSERS = { '(': ')', '[': ']', '{': '}' };
+  function bracketIndex(t) {
+    if (t.__close && t.__close.length === t.length) return t.__close;
+    const close = new Int32Array(t.length).fill(-1); const stack = [];
+    for (let k = 0; k < t.length; k++) {
+      const x = t[k]; if (x.type !== 'p') continue;
+      if (CLOSERS[x.value]) stack.push(k);
+      else if (x.value === ')' || x.value === ']' || x.value === '}') { if (stack.length && CLOSERS[t[stack[stack.length - 1]].value] === x.value) close[stack.pop()] = k; }
+    }
+    Object.defineProperty(t, '__close', { value: close, enumerable: false, configurable: true });
+    return close;
+  }
   function matchClose(t, i) {
-    const open = t[i] && t[i].value; const close = open === '{' ? '}' : open === '(' ? ')' : ']'; let d = 0;
-    for (; i < t.length; i++) { if (isP(t[i], open)) d++; else if (isP(t[i], close)) { d--; if (d === 0) return i; } }
-    return t.length - 1;
+    if (!t[i] || t[i].type !== 'p' || !CLOSERS[t[i].value]) return t.length - 1;
+    const c = bracketIndex(t)[i];
+    return c < 0 ? t.length - 1 : c;
   }
 
   // ------------------------------------------------------------ zod -> JSON Schema (the common subset)
@@ -653,12 +671,25 @@
   const TOOLISH = /^(?:tool|[a-z][\w$]*Tool)$/;
   const CONFIG_KEYS = ['description', 'title', 'annotations', 'outputSchema'].concat(SCHEMA_KEYS);
   // Parameters of the functions around token i (their names are not knowable at a registration inside them).
+  // Functions as nested intervals, sorted by start, each with its parent: the functions around a token are found by a
+  // binary search and a walk up (at most 64 levels), not by visiting every block.
+  function fnIndex(blocks) {
+    if (blocks.__fn) return blocks.__fn;
+    const fns = blocks.filter((b) => b.kind === 'fn' && b.paramOpen !== undefined).sort((a, b) => a.open - b.open);
+    const stack = [];
+    fns.forEach((b) => { while (stack.length && stack[stack.length - 1].close < b.open) stack.pop(); b.parentFn = stack.length ? stack[stack.length - 1] : null; stack.push(b); });
+    Object.defineProperty(blocks, '__fn', { value: fns, enumerable: false });
+    return fns;
+  }
   function paramsAround(t, blocks, i) {
-    const out = new Set();
-    blocks.forEach((b) => {
-      if (b.kind !== 'fn' || b.paramOpen === undefined || b.open > i || b.close < i) return;
-      for (let k = b.paramOpen + 1; k < b.paramClose; k++) if (t[k].type === 'id') out.add(t[k].value);
-    });
+    const out = new Set(); const fns = fnIndex(blocks);
+    let lo = 0; let hi = fns.length;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (fns[mid].open <= i) lo = mid + 1; else hi = mid; }
+    let b = lo > 0 ? fns[lo - 1] : null; let n = 0;
+    while (b && n < 64) {
+      if (b.close >= i) { for (let k = b.paramOpen + 1; k < b.paramClose && k < b.paramOpen + 256; k++) if (t[k].type === 'id') out.add(t[k].value); n++; }
+      b = b.parentFn;
+    }
     return out;
   }
   // A tool name at token j: a string, a constant or a property of one (TOOLS.SEARCH, dataTool.name), a template or
@@ -789,6 +820,20 @@
       if (isP(t[k], '{')) { const c = matchClose(t, k); for (let m = k + 1; m < c; m++) if (t[m].type === 'id' && t[m].value === 'return' && isP(t[m + 1], '{')) return m + 1; }
       return -1;
     };
+    // Work limits that keep a file linear: objects nested in objects are parsed again at each level, so the tokens
+    // parsed for tools are bounded by a multiple of the file (a hostile file loses tools, never the time of a scan).
+    let budget = 8 * t.length + 200000;
+    const spend = (n) => { budget -= Math.max(1, n); return budget >= 0; };
+    let schemaObj = null;
+    const schemaObjects = () => { // the "{" of every object with a schema key of its own (a key at its first level)
+      if (schemaObj) return schemaObj; schemaObj = new Set(); const stack = [];
+      for (let k = 0; k < t.length; k++) {
+        const x = t[k];
+        if (x.type === 'p') { if (CLOSERS[x.value]) stack.push(k); else if (x.value === ')' || x.value === ']' || x.value === '}') stack.pop(); continue; }
+        if ((x.type === 'id' || x.type === 'str') && isP(t[k + 1], ':') && SCHEMA_KEYS.includes(x.value) && stack.length && isP(t[stack[stack.length - 1]], '{')) schemaObj.add(stack[stack.length - 1]);
+      }
+      return schemaObj;
+    };
     const wrappers = registerWrappers(t);
     for (let i = 0; i < t.length; i++) {
       const tok = t[i];
@@ -816,6 +861,7 @@
         if (objAt >= 0) {
           const fast = fn === 'addTool';
           const actx = fast ? Object.assign({}, ctx, { fl: Object.assign({}, ctx.fl, { dialect: 'draft-07', closed: true, execution: false }) }) : ctx;
+          if (!spend(matchClose(t, objAt) - objAt)) continue;
           const o = parseObjectWithZod(t, objAt, actx); o.start = objAt;
           // keyed: { lookup_docs: tool({ ... }) } names the tool by its key
           const keyTok = !member && isP(t[i - 1], ':') && t[i - 2] && (t[i - 2].type === 'id' || t[i - 2].type === 'str') ? t[i - 2] : null;
@@ -869,10 +915,9 @@
       }
       // 2. object literals with a name and a schema (a low-level Server's tools array, a tool table, a factory's result)
       if (isP(tok, '{')) {
-        // cheap pre-check: a schema key within this object at depth 1
-        const close = matchClose(t, i); let has = false;
-        for (let k = i + 1, d = 0; k < close; k++) { if (isP(t[k], '{') || isP(t[k], '[') || isP(t[k], '(')) d++; else if (isP(t[k], '}') || isP(t[k], ']') || isP(t[k], ')')) d--; else if (d === 0 && (t[k].type === 'id' || t[k].type === 'str') && SCHEMA_KEYS.includes(t[k].value) && isP(t[k + 1], ':')) { has = true; break; } }
-        if (!has) continue;
+        // cheap pre-check: a schema key within this object at depth 1 (from one pass over the file)
+        if (!schemaObjects().has(i)) continue;
+        if (!spend(matchClose(t, i) - i)) continue;
         const o = parseObjectWithZod(t, i, ctx); o.start = i;
         const v = o.value;
         if (!v || v === SKIP) continue;
@@ -966,7 +1011,7 @@
   //   const reg = (name, config, cb) => server.registerTool(name, config, cb);
   // Returns Map(function name -> { nameIdx, cfgIdx }), the parameter positions.
   function registerWrappers(t) {
-    const out = new Map();
+    const out = new Map(); let scanned = 0;
     const params = (open) => { // simple identifiers, with optional TS types and defaults; null if anything else
       const ps = []; for (const a of argStarts(t, open)) { const x = t[a]; if (!x || x.type !== 'id') return null; ps.push(x.value); } return ps;
     };
@@ -983,6 +1028,7 @@
       let b = matchClose(t, open) + 1; if (isP(t[b], '=>')) b++;
       while (t[b] && !isP(t[b], '{') && !(t[b].type === 'id' || isP(t[b], '('))) b++; // skip a TS return type
       const end = isP(t[b], '{') ? matchClose(t, b) : skipExpr(t, b);
+      if ((scanned += end - b) > 8 * t.length + 200000) break; // nested functions: a bounded total, so the scan stays linear
       for (let k = b; k < end - 2; k++) {
         if (!(isP(t[k], '.') && t[k + 1].type === 'id' && t[k + 1].value === 'registerTool' && isP(t[k + 2], '('))) continue;
         const as = argStarts(t, k + 2);
@@ -1107,8 +1153,8 @@
     return t;
   }
   const PY_SKIP = { skip: true };
-  function pyMatch(t, i) { const o = t[i].value; const c = o === '(' ? ')' : o === '[' ? ']' : '}'; let d = 0; for (; i < t.length; i++) { if (isP(t[i], o)) d++; else if (isP(t[i], c)) { d--; if (!d) return i; } } return t.length; }
-  function pySkip(t, i) { let d = 0; for (; i < t.length; i++) { const v = t[i].type === 'p' ? t[i].value : null; if (v === '(' || v === '[' || v === '{') d++; else if (v === ')' || v === ']' || v === '}') { if (!d) return i; d--; } else if ((v === ',' || v === ':') && !d) return i; } return i; }
+  function pyMatch(t, i) { const c = bracketIndex(t)[i]; return c < 0 ? t.length : c; } // one pass over the tokens, cached
+  function pySkip(t, i) { for (; i < t.length; i++) { const v = t[i].type === 'p' ? t[i].value : null; if (v === '(' || v === '[' || v === '{') { i = pyMatch(t, i); continue; } if (v === ')' || v === ']' || v === '}') return i; if (v === ',' || v === ':') return i; } return i; }
   // A constant of the file (or one imported, from the repository's unique module-level names): NAME, Enum.MEMBER(.value).
   function pyLookup(ctx, ids) {
     const c = ctx && ctx.consts; if (!c) return null;

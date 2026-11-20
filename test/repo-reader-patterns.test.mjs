@@ -294,6 +294,8 @@ test('write-surface (rubric 2.2.0 coverage): a write tool with an unreadable sch
   assert.equal(r.sections.surface.state, 'not-enough');
   assert.deepEqual([r.sections.surface.coverage.version, r.sections.surface.coverage.guard], [{ have: 1, of: 1 }, { have: 0, of: 0 }]);
   assert.equal(r.sections.surface.writeTools, 1);
+  assert.deepEqual(r.sections.surface.not_counted, ['delete_record']);
+  assert.match(r.sections.surface.why, /1 write tool with an unreadable schema not counted \(delete_record\)\./);
   assert.equal(r.sections.surface.grade, plain.sections.surface.grade);
 });
 
@@ -466,4 +468,24 @@ test('fromGitHub: a rate-limited or failed file read fails the scan instead of g
   const broken = async (url) => { if (/raw\.githubusercontent.*t7\.ts$/.test(String(url))) return { ok: false, status: 502, headers: { get: () => null }, text: async () => '' }; return base(url); };
   await assert.rejects(R.fromGitHub('github.com/o/r', { fetch: broken }), (e) => e.code === 'incomplete' && /HTTP 502/.test(e.message));
   assert.match(scannedText({ scanned: { read: 10, sourceTotal: 900, source: 10, budgetHit: true } }), /reading stopped at the 64 MiB limit/);
+});
+
+test('deeply nested source stays linear: a hostile file costs about one read of it, not one per level', () => {
+  const big = (n) => 'server.registerTool("a", ' + '{a:'.repeat(n) + '1' + '}'.repeat(n) + ', h);\n';
+  const cases = [
+    ['src/objects.ts', big(147000)],
+    ['src/arrays.ts', 'const T = ' + '['.repeat(147000) + '1' + ']'.repeat(147000) + ';\n'],
+    ['src/describe.ts', 'server.registerTool("a", { description: d(' + '['.repeat(140000) + '"x"' + ']'.repeat(140000) + ') }, h);\n'],
+    ['src/schemas.ts', 'x(' + '{inputSchema:'.repeat(42000) + '1' + '}'.repeat(42000) + ');\n'],
+    ['src/calls.ts', 'tool('.repeat(98000) + '"x"' + ')'.repeat(98000) + ';\n'],
+    ['src/fns.ts', 'function f(name, cfg) {'.repeat(24000) + 'server.registerTool(name, cfg, h);' + '}'.repeat(24000) + '\n'],
+    ['src/a.py', 'from mcp.server.fastmcp import FastMCP\n@mcp.tool(description=' + '('.repeat(140000) + '"x"' + ')'.repeat(140000) + ')\ndef a() -> str:\n    return ""\n'],
+  ];
+  for (const [p, src] of cases) {
+    assert.ok(src.length < 600000, p + ' is read');
+    const t0 = Date.now();
+    R.analyseRepo(new Map([[p, src]]));
+    const ms = Date.now() - t0;
+    assert.ok(ms < 2000, p + ' took ' + ms + ' ms');
+  }
 });
