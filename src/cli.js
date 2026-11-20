@@ -8,6 +8,7 @@ import { InputError, MAX_BYTES, MAX_DEPTH, MAX_TOOLS } from './limits.js';
 import { ALL_SECTIONS, DEFAULT_SECTIONS, GRADED_SECTIONS, GRADES, belowMinGrade, sarifWithLocations, surfaceLine } from './report.js';
 import { approximateLine, collect, InputFailure, line, sourceLine, savedList } from './inputs/collect.js';
 import { tagged } from './links.js';
+import { analyseList } from './unreadable.js';
 
 const USAGE = `mcp-check ${VERSION}: grade an MCP server's tools/list (rubric ${M.RUBRIC_VERSION})
 
@@ -159,7 +160,7 @@ function grade(item, opt, prevTools) {
     if (e instanceof InputError) return { error: e.message };
     throw e;
   }
-  const r = M.analyse(parsed);
+  const r = analyseList(parsed, item.source && item.source.unreadable); // checks of parts the reader could not read are skipped
   const below = belowMinGrade(r, opt.sections, opt.minGrade);
   const diff = prevTools ? M.diffCatalogs(prevTools, parsed.tools) : null;
   return { r, below, diff, parsed, failed: below.length > 0 || !!(diff && diff.highRisk.length) };

@@ -1544,6 +1544,88 @@
     return [ls[0].trim()].concat(ls.slice(1).map((l) => (ind < 1e9 ? l.slice(ind) : l))).join('\n').trim();
   }
 
+  // ------------------------------------------------------------ Go and Rust: names and descriptions only
+  // Not graded (names fidelity): the refusal can then say which tools were found. Go: mcp-go mcp.NewTool("x",
+  // mcp.WithDescription("…")), the go-sdk's &mcp.Tool{Name: "x", Description: "…"}, grafana's MustTool("x", "…", …).
+  // Rust: rmcp #[tool(description = "…")] on fn x (name = "…" when given).
+  function goString(s, i, consts) { // a Go string expression at i: "…", `…`, constants, joined by +
+    let out = ''; let any = false;
+    for (;;) {
+      while (/\s/.test(s[i] || '')) i++;
+      let m;
+      if (s[i] === '"') { let j = i + 1; let v = ''; while (j < s.length && s[j] !== '"' && s[j] !== '\n') { if (s[j] === '\\') { const e = s[j + 1]; v += e === 'n' ? '\n' : e === 't' ? '\t' : e; j += 2; continue; } v += s[j++]; } out += v; any = true; i = j + 1; }
+      else if (s[i] === '`') { const j = s.indexOf('`', i + 1); if (j < 0) return null; out += s.slice(i + 1, j); any = true; i = j + 1; }
+      else if ((m = /^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?/.exec(s.slice(i, i + 120))) && consts && Object.prototype.hasOwnProperty.call(consts, m[0].split('.').pop())) { out += consts[m[0].split('.').pop()]; any = true; i += m[0].length; }
+      else return any ? { value: out, end: i } : null;
+      let k = i; while (/\s/.test(s[k] || '')) k++;
+      if (s[k] === '+') { i = k + 1; continue; }
+      return { value: out, end: i };
+    }
+  }
+  function goConsts(text) {
+    const out = {}; const re = /^\s*(?:const\s+)?([A-Za-z_]\w*)\s*(?:string\s*)?=\s*("(?:\\.|[^"\\\n])*"|`[^`]*`)\s*$/gm; let m;
+    const blocks = text.match(/\bconst\s*\(([\s\S]*?)\n\)/g) || [];
+    const scan = (t) => { while ((m = re.exec(t))) { const v = goString(m[2], 0, null); if (v) out[m[1]] = v.value; } };
+    blocks.forEach(scan); re.lastIndex = 0; scan(text.split('\n').filter((l) => /^\s*const\s/.test(l)).join('\n'));
+    return out;
+  }
+  function extractGo(text, consts) {
+    const out = []; let m;
+    const reNew = /\b(?:mcp\.)?NewTool\s*\(\s*/g;
+    while ((m = reNew.exec(text))) {
+      const n = goString(text, m.index + m[0].length, consts); if (!n) continue;
+      const rest = text.slice(n.end, n.end + 4000); const d = /WithDescription\s*\(\s*/.exec(rest);
+      const dv = d ? goString(rest, d.index + d[0].length, consts) : null;
+      out.push({ name: n.value, description: dv ? dv.value : undefined, line: text.slice(0, m.index).split('\n').length });
+    }
+    const reMust = /\bMustTool\s*\(\s*/g;
+    while ((m = reMust.exec(text))) {
+      const n = goString(text, m.index + m[0].length, consts); if (!n) continue;
+      const after = text.slice(n.end).replace(/^\s*,\s*/, ''); const dv = goString(after, 0, consts);
+      out.push({ name: n.value, description: dv ? dv.value : undefined, line: text.slice(0, m.index).split('\n').length });
+    }
+    const reSdk = /&?mcp\.Tool\s*\{/g;
+    while ((m = reSdk.exec(text))) {
+      const body = text.slice(m.index + m[0].length, m.index + m[0].length + 6000);
+      const nm = /(?:^|[\s,{])Name\s*:\s*/.exec(body); if (!nm) continue;
+      const n = goString(body, nm.index + nm[0].length, consts); if (!n) continue;
+      const dm = /(?:^|[\s,{])Description\s*:\s*/.exec(body); const dv = dm ? goString(body, dm.index + dm[0].length, consts) : null;
+      out.push({ name: n.value, description: dv ? dv.value : undefined, line: text.slice(0, m.index).split('\n').length });
+    }
+    return out;
+  }
+  function rustString(s, i) {
+    while (/\s/.test(s[i] || '')) i++;
+    let m;
+    if ((m = /^r(#*)"/.exec(s.slice(i, i + 10)))) { const close = '"' + m[1]; const j = s.indexOf(close, i + m[0].length); return j < 0 ? null : { value: s.slice(i + m[0].length, j), end: j + close.length }; }
+    if (s[i] === '"') { let j = i + 1; let v = ''; while (j < s.length && s[j] !== '"') { if (s[j] === '\\') { const e = s[j + 1]; v += e === 'n' ? '\n' : e === 't' ? '\t' : e === '\n' ? '' : e; j += 2; if (e === '\n') while (/\s/.test(s[j] || '')) j++; continue; } v += s[j++]; } return { value: v, end: j + 1 }; }
+    return null;
+  }
+  function extractRust(text) {
+    const out = []; const re = /#\[tool\s*\(/g; let m;
+    while ((m = re.exec(text))) {
+      let d = 1; let j = m.index + m[0].length; while (j < text.length && d) { if (text[j] === '(') d++; else if (text[j] === ')') d--; else if (text[j] === '"') { const r = rustString(text, j); if (r) { j = r.end; continue; } } j++; }
+      const attr = text.slice(m.index + m[0].length, j - 1);
+      const after = text.slice(j, j + 2000);
+      const fn = /^(?:\s*\]\s*)?(?:\s*(?:#\[[^\]]*\]|\/\/[^\n]*))*\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+([A-Za-z_]\w*)/.exec(after); if (!fn) continue;
+      const nm = /(?:^|[\s,(])name\s*=\s*/.exec(attr); const nv = nm ? rustString(attr, nm.index + nm[0].length) : null;
+      const dm = /(?:^|[\s,(])description\s*=\s*/.exec(attr); const dv = dm ? rustString(attr, dm.index + dm[0].length) : null;
+      out.push({ name: nv ? nv.value : fn[1], description: dv ? dv.value : undefined, line: text.slice(0, m.index).split('\n').length });
+    }
+    return out;
+  }
+  // The names and descriptions read from Go or Rust files ([[path, text]]); null when none.
+  function namesFromOtherLanguage(files, lang) {
+    const tools = []; const seen = new Set(); const where = [];
+    const consts = {}; if (lang === 'Go') files.forEach(([, t]) => { if (typeof t === 'string') Object.assign(consts, goConsts(t)); });
+    files.forEach(([p, t]) => {
+      if (typeof t !== 'string') return;
+      const got = lang === 'Go' ? extractGo(t, consts) : extractRust(t);
+      got.forEach((x) => { if (!x.name || seen.has(x.name)) return; seen.add(x.name); tools.push(x.description !== undefined ? { name: x.name, description: x.description } : { name: x.name }); where.push({ name: x.name, path: p, line: x.line, fidelity: 'names' }); });
+    });
+    return tools.length ? { kind: lang === 'Go' ? 'go-source' : 'rust-source', language: lang, fidelity: 'names', path: null, files: Array.from(new Set(where.map((w) => w.path))), tools, where } : null;
+  }
+
   // ------------------------------------------------------------ committed lists and manifests
   // A snapshot written by mcp-catalog-snap (.mcp-catalog/<server>.json): { capturedWith | format: "mcp-catalog-snap/…",
   // catalog: { tools, prompts, resourceTemplates }, server, sha256 }. The tools are the server's tools/list, canonical JSON.
@@ -1933,7 +2015,25 @@
     try {
       const info = ref.ref ? null : await getJson(f, 'https://api.github.com/repos/' + ref.owner + '/' + ref.repo, gh);
       const branch = ref.ref || info.default_branch;
-      const tree = await getJson(f, 'https://api.github.com/repos/' + ref.owner + '/' + ref.repo + '/git/trees/' + encodeURIComponent(branch) + '?recursive=1', gh);
+      const api = 'https://api.github.com/repos/' + ref.owner + '/' + ref.repo + '/git/trees/';
+      const raw = (sha) => (p) => 'https://raw.githubusercontent.com/' + ref.owner + '/' + ref.repo + '/' + sha + '/' + p.split('/').map(encodeURIComponent).join('/');
+      const blobs = (tree, prefix) => tree.filter((x) => x.type === 'blob' && (!x.size || x.size < 1500000)).map((x) => prefix + x.path);
+      if (ref.subdir) {
+        // A folder: its own tree, listed recursively, so a large repository's listing limit does not hide it. The
+        // root's files are kept for the manifests (SDK versions); the walk is one request per folder level.
+        const root = await getJson(f, api + encodeURIComponent(branch), gh);
+        let cur = root; let found = true;
+        for (const seg of ref.subdir.split('/')) {
+          const e = (cur.tree || []).find((x) => x.path === seg && x.type === 'tree');
+          if (!e) { found = false; break; }
+          cur = await getJson(f, api + e.sha, gh);
+        }
+        if (found) {
+          const sub = await getJson(f, api + cur.sha + '?recursive=1', gh);
+          return { via: 'github', sha: root.sha, paths: blobs(root.tree || [], '').concat(blobs(sub.tree || [], ref.subdir + '/')), truncated: !!sub.truncated, raw: raw(root.sha) };
+        }
+      }
+      const tree = await getJson(f, api + encodeURIComponent(branch) + '?recursive=1', gh);
       const sha = tree.sha;
       return { via: 'github', sha, paths: tree.tree.filter((x) => x.type === 'blob' && (!x.size || x.size < 1500000)).map((x) => x.path), truncated: !!tree.truncated, raw: (p) => 'https://raw.githubusercontent.com/' + ref.owner + '/' + ref.repo + '/' + sha + '/' + p.split('/').map(encodeURIComponent).join('/') };
     } catch (e) {
@@ -2060,6 +2160,15 @@
     candidates.sort((a, b) => (a.foreign ? 1 : 0) - (b.foreign ? 1 : 0) || rank[a.fidelity] - rank[b.fidelity] || b.tools.length - a.tools.length);
     const langs = otherLanguages(paths);
     if (langs.length) hints.otherLanguages = langs;
+    // Go or Rust source and nothing else to grade: read the tool names and descriptions, so the refusal can list them
+    const lang = langs[0];
+    if (!candidates.length && !hints.servers && lang && (lang.name === 'Go' || lang.name === 'Rust') && lang.files >= lang.readFiles) {
+      const re = lang.name === 'Go' ? /\.go$/ : /\.rs$/;
+      const ps = paths.filter((p) => re.test(p) && !SKIP_DIR.test(p) && !/_test\.go$/.test(p) && !TEST_FILE.test(p)).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)).slice(0, maxRead);
+      const got = (await readMany(ps, 16)).filter(([, t]) => typeof t === 'string' && (lang.name === 'Go' ? /NewTool|MustTool|mcp\.Tool\s*\{/ : /#\[tool/).test(t));
+      const c = namesFromOtherLanguage(got.slice(0, maxSrc), lang.name);
+      if (c) candidates.push(c);
+    }
     if (an.unresolved) hints.unresolvedNames = an.unresolved;
     return { scanned: { exact: plan.exact.length, manifests: plan.manifests.length, source: an.files, candidates: an.candidates, read: an.read, sourceTotal: plan.src.length, capped: plan.src.length > maxRead || an.candidates > an.files }, candidates, best: candidates[0] || null, hints };
   }
@@ -2281,5 +2390,5 @@
     return null;
   }
 
-  return { fromGitHub, fromDirectory, fromCatalogSnap, serverPackages, notServerFolder, constructsServer, ownServerNames, normName, fromRegistry, extractFromFile, extractJs, extractPy, planFiles, detectSdk, collectGlobalConsts, analyseRepo, markConditionals, parseRepoRef, toolsFromJson, fromMcpbManifest, tokenize, commandFor };
+  return { extractGo, extractRust, namesFromOtherLanguage, publicTools, fromGitHub, fromDirectory, fromCatalogSnap, serverPackages, notServerFolder, constructsServer, ownServerNames, normName, fromRegistry, extractFromFile, extractJs, extractPy, planFiles, detectSdk, collectGlobalConsts, analyseRepo, markConditionals, parseRepoRef, toolsFromJson, fromMcpbManifest, tokenize, commandFor };
 });

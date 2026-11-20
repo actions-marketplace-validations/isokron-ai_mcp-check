@@ -122,8 +122,10 @@ test('zero-config: a Go (or Rust, C#) server is not a red job: neutral, and the 
   const r = act(ws, { 'min-grade': 'A' });
   assert.equal(r.status, 0, r.stdout + r.stderr);
   assert.equal(r.outputs['exit-status'], '0');
-  assert.match(r.summary, /The source here is Go \(2 \.go files\): Go source is not read yet \(the reader reads TypeScript, JavaScript and Python\)\./);
-  assert.match(r.stdout, /::warning::mcp-check: not graded: .*Go source is not read yet/);
+  // the tool names are read from the Go source, so the message lists them; Go schemas are not read, so nothing is graded
+  assert.match(r.summary, /Only tool names were found in the source in \. \(1 tool read from the Go source: search\\_notes; names and descriptions only, since Go schemas are not read yet\), which cannot be graded\./);
+  assert.match(r.stdout, /::warning::mcp-check: not graded: .*Go schemas are not read yet/);
+  assert.equal(r.outputs.passed, '');
 });
 
 test('zero-config: tools of several servers are not merged or picked; the summary lists the folders to choose from', () => {
