@@ -1,6 +1,6 @@
 {
   "name": "@isokron/mcp-check",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Grades an MCP server's tools/list against the MCP specification 2026-07-28, the Claude and ChatGPT directory rules, hidden-instruction patterns, schema quality and write-surface design. CLI, library, MCP server and GitHub Action.",
   "mcpName": "io.github.isokron-ai/mcp-check",
   "type": "module",
