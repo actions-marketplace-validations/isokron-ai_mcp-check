@@ -44,6 +44,7 @@ export function repoProvenance(c) {
   const parts = [['inputSchema', 'input schema'], ['description', 'description'], ['annotations', 'annotations']].filter(([k]) => Array.isArray(u[k]) && u[k].length).map(([k, w]) => u[k].length + ' ' + w + (u[k].length === 1 || k === 'annotations' ? '' : 's'));
   const extra = (left.length ? '; ' + left.length + ' tool' + (left.length === 1 ? '' : 's') + ' left out (' + reasons.join(', ') + ')' : '') + (cond.length ? '; ' + cond.length + ' kept but registered under a condition' : '')
     + (parts.length ? '; not readable from source, so their checks are skipped: ' + parts.join(', ') : '')
+    + (u.text && Object.keys(u.text).length ? '; ' + Object.keys(u.text).length + ' tool' + (Object.keys(u.text).length === 1 ? '' : 's') + ' with source text not readable as part of the tool, scanned for hidden instructions' : '')
     + (c.unresolvedNames ? '; ' + c.unresolvedNames + ' registration' + (c.unresolvedNames === 1 ? '' : 's') + ' with a name the reader could not resolve, not listed' : '');
   return { provenance: FIDELITY[c.fidelity](c) + extra, left, cond };
 }
@@ -97,12 +98,20 @@ async function fromRepo(ref, opt, via = null) {
   const c = cliUsable(r, line(where), pick);
   const { provenance: prov, left, cond } = repoProvenance(c);
   const provenance = prov + budgetNote(r);
-  return { data: c.tools, reader: readerNotes(c), source: { kind: 'repo', repo: r.repo, sha: r.sha, via: r.via, fidelity: c.fidelity, approximate: isApproximate(c), provenance, from: c.kind, files: c.files || [c.path], ...(c.unreadable && Object.keys(c.unreadable).length ? { unreadable: c.unreadable } : {}), ...(c.unresolvedNames ? { unresolved_names: c.unresolvedNames } : {}), ...(left.length ? { left_out: left.map((x) => ({ name: line(x.name, 128), reasons: x.reasons.map((y) => line(y, 160)) })) } : {}), ...(cond.length ? { conditional: cond.map((x) => line(x.name, 128)) } : {}), ...(via ? { registry: via } : {}) } };
+  return { data: c.tools, reader: readerNotes(c), source: { kind: 'repo', repo: r.repo, sha: r.sha, via: r.via, fidelity: c.fidelity, approximate: isApproximate(c), provenance, from: c.kind, files: c.files || [c.path], ...(unreadableNames(c) ? { unreadable: unreadableNames(c) } : {}), ...(c.unresolvedNames ? { unresolved_names: c.unresolvedNames } : {}), ...(left.length ? { left_out: left.map((x) => ({ name: line(x.name, 128), reasons: x.reasons.map((y) => line(y, 160)) })) } : {}), ...(cond.length ? { conditional: cond.map((x) => line(x.name, 128)) } : {}), ...(via ? { registry: via } : {}) } };
 }
 
 /** The advice every "cannot grade this read" message ends with (the CLI's and the Action's names for the live inputs). */
 export const LIVE_ADVICE = 'Grade the live list instead: start the server with --command "<start command>", or give a saved tools/list file '
   + '(in the GitHub Action: set command or tools-file).';
+
+/** The tools the reader could not read in full, by part (inputSchema, description, annotations; `text`: tools with
+ *  source text it could not place, which is scanned), for the report's source; null when none. */
+export function unreadableNames(c) {
+  const u = c && c.unreadable; if (!u) return null;
+  const o = {}; Object.keys(u).forEach((k) => { if (k === 'text') { const n = Object.keys(u.text || {}); if (n.length) o.text = n; } else if (Array.isArray(u[k]) && u[k].length) o[k] = u[k]; });
+  return Object.keys(o).length ? o : null;
+}
 
 /** A scan that stopped at the byte limit says so wherever its provenance is shown. */
 export const budgetNote = (r) => (r && r.scanned && r.scanned.budgetHit ? '; reading stopped at the 64 MiB limit for one scan, so some files were not read' : '');
@@ -200,7 +209,7 @@ export function namesOnlyText(c) {
 /** Why a scan was refused as incomplete (the reader's work limit), with the files to look at. */
 export function incompleteText(r) {
   const x = (r.hints && r.hints.incomplete) || { candidates: 0, files: [] };
-  return plural(x.candidates, 'possible tool definition') + ' in ' + x.files.slice(0, 3).map((f) => line(f, 200)).join(', ') + (x.files.length > 3 ? ' and ' + (x.files.length - 3) + ' more' : '') + ' could not be read within the reader\'s work limit (deeply nested source), so the list would be incomplete and nothing was graded';
+  return plural(x.candidates, 'possible tool definition') + ' in ' + x.files.slice(0, 3).map((f) => line(f, 200)).join(', ') + (x.files.length > 3 ? ' and ' + (x.files.length - 3) + ' more' : '') + ' could not be read completely (the reader\'s work limit on deeply nested source, a reader error, or more unreadable text than it keeps), so the list would be incomplete and nothing was graded';
 }
 
 /** The CLI's reading of a scan: the candidate to grade, or an InputFailure (exit 3) with the same advice as the Action. */
@@ -230,7 +239,7 @@ async function fromRepoDir(dir, opt) {
   const c = cliUsable(r, line(dir), (folder) => '--repo-dir ' + (folder === '.' ? base : base + '/' + folder));
   const { provenance: prov, left, cond } = repoProvenance(c);
   const provenance = prov + budgetNote(r);
-  return { data: c.tools, where: c.where || null, reader: readerNotes(c), source: { kind: 'dir', dir: r.repo, fidelity: c.fidelity, approximate: isApproximate(c), provenance, from: c.kind, files: c.files || [c.path], ...(c.unreadable && Object.keys(c.unreadable).length ? { unreadable: c.unreadable } : {}), ...(c.unresolvedNames ? { unresolved_names: c.unresolvedNames } : {}), ...(c.built ? { built: true } : {}), ...(r.truncated ? { truncated: true } : {}), ...(left.length ? { left_out: left.map((x) => ({ name: line(x.name, 128), reasons: x.reasons.map((y) => line(y, 160)) })) } : {}), ...(cond.length ? { conditional: cond.map((x) => line(x.name, 128)) } : {}) } };
+  return { data: c.tools, where: c.where || null, reader: readerNotes(c), source: { kind: 'dir', dir: r.repo, fidelity: c.fidelity, approximate: isApproximate(c), provenance, from: c.kind, files: c.files || [c.path], ...(unreadableNames(c) ? { unreadable: unreadableNames(c) } : {}), ...(c.unresolvedNames ? { unresolved_names: c.unresolvedNames } : {}), ...(c.built ? { built: true } : {}), ...(r.truncated ? { truncated: true } : {}), ...(left.length ? { left_out: left.map((x) => ({ name: line(x.name, 128), reasons: x.reasons.map((y) => line(y, 160)) })) } : {}), ...(cond.length ? { conditional: cond.map((x) => line(x.name, 128)) } : {}) } };
 }
 
 async function fromRegistry(name, opt, note) {

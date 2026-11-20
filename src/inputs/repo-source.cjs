@@ -113,10 +113,44 @@
     while ((isP(t[j], '.') || isP(t[j], '?.')) && t[j + 1] && t[j + 1].type === 'id') { ids.push(t[j + 1].value); j += 2; }
     return { ids, end: j };
   }
+  // ---- what the reader could not keep: never dropped silently
+  // A value the reader cannot read (a call, a value nested past MAX_NEST, a string cut at MAX_STR) is left out of the
+  // tool, but the text in it is kept for the poisoning checks: each such place hands its string literals (or the cut
+  // part of a string) to the collector of the tool being read (LOST.cur). Objects and constants read earlier keep
+  // what they collected and hand it on whenever they are used again. publicTools turns it into unreadable.text.
+  const LOST = { cur: null };
+  function lose(x) { if (LOST.cur && x && (typeof x === 'string' ? x.trim() : x.length)) LOST.cur.push(x); }
+  function collecting(fn) {
+    const prev = LOST.cur; const mine = []; LOST.cur = mine;
+    try { return [fn(), mine]; } finally { LOST.cur = prev; if (prev && mine.length) prev.push(mine); }
+  }
+  // The string literals of tokens a..b-1 (from an index of the file's literal tokens, so nothing is rescanned).
+  function literalIndex(t) {
+    if (t.__lit) return t.__lit;
+    const ix = []; for (let k = 0; k < t.length; k++) if (t[k].type === 'str' || t[k].type === 'tpl') ix.push(k);
+    Object.defineProperty(t, '__lit', { value: ix, enumerable: false });
+    return ix;
+  }
+  function literalsArr(t, a, b) {
+    const ix = literalIndex(t); let lo = 0; let hi = ix.length;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (ix[mid] < a) lo = mid + 1; else hi = mid; }
+    const out = [];
+    for (let k = lo; k < ix.length && ix[k] < b; k++) { const x = t[ix[k]]; (x.type === 'str' ? [x.value] : x.parts).forEach((p) => { const q = String(p).trim(); if (q) out.push(q); }); }
+    return out;
+  }
+  // The text a collector holds, flattened once (shared parts visited once), at most MAX_LOST characters; over that,
+  // `over` is set and the list is refused rather than graded with text left unscanned.
+  const MAX_LOST = 4 * 1024 * 1024;
+  function lostText(tree) {
+    const seen = new Set(); const parts = new Set(); let n = 0; let over = false;
+    const walk = (x) => { if (over) return; if (typeof x === 'string') { if (!parts.has(x)) { parts.add(x); n += x.length; if (n > MAX_LOST) over = true; } return; } if (!Array.isArray(x) || seen.has(x)) return; seen.add(x); x.forEach(walk); };
+    walk(tree);
+    return { text: parts.size ? Array.from(parts).join(' … ') : '', over };
+  }
   // The value of a constant or a property path into one (TOOLS.SEARCH, config.name), or null.
   function chainValue(ctx, ids) {
     if (!ctx || !ctx.consts || !hasOwn(ctx.consts, ids[0])) return null;
-    const c = ctx.consts[ids[0]]; let v = c.value;
+    const c = ctx.consts[ids[0]]; let v = c.value; if (c.lost) lose(c.lost);
     for (const k of ids.slice(1)) {
       if (v && typeof v === 'object' && !Array.isArray(v) && hasOwn(v, k)) v = v[k];
       else return null;
@@ -125,7 +159,7 @@
   }
   // Strings read from source are capped (a constant doubled in a chain must not blow up): longer is partial.
   const MAX_STR = 64 * 1024;
-  const capStr = (r) => { if (r && typeof r.value === 'string' && r.value.length > MAX_STR) { r.value = r.value.slice(0, MAX_STR) + '…'; r.exact = false; r.partial = true; } return r; };
+  const capStr = (r) => { if (r && typeof r.value === 'string' && r.value.length > MAX_STR) { lose(r.value.slice(MAX_STR)); r.value = r.value.slice(0, MAX_STR) + '…'; r.exact = false; r.partial = true; } return r; };
   // A template literal: its ${CONST} parts filled in from constants; others shown as "…" and the value marked partial.
   function tplValue(tok, ctx) {
     let out = tok.parts[0]; let exact = true;
@@ -133,7 +167,7 @@
       const r = /^[A-Za-z_$][\w$]*(\s*\??\.\s*[A-Za-z_$][\w$]*)*$/.test(e) ? chainValue(ctx, e.split(/\s*\??\.\s*/)) : null;
       if (r && (typeof r.value === 'string' || typeof r.value === 'number')) out += String(r.value); else { out += '…'; exact = false; }
       out += tok.parts[k + 1];
-      if (out.length > MAX_STR) { out = out.slice(0, MAX_STR); exact = false; }
+      if (out.length > MAX_STR) { lose(out.slice(MAX_STR)); out = out.slice(0, MAX_STR); exact = false; }
     });
     return capStr({ value: out, exact, partial: !exact });
   }
@@ -153,8 +187,8 @@
         const r = chainValue(ctx, ch.ids);
         if (r && typeof r.value === 'string') { v = r.value; any = true; if (ch.ids.length === 1 && r.c.partial) exact = false; } else if (r && typeof r.value === 'number') v = String(r.value); else { v = '…'; exact = false; }
       } else return null;
-      out += v; j = end;
-      if (out.length > MAX_STR) { out = out.slice(0, MAX_STR); exact = false; }
+      if (out.length >= MAX_STR) { lose(v); exact = false; } else { out += v; if (out.length > MAX_STR) { lose(out.slice(MAX_STR)); out = out.slice(0, MAX_STR); exact = false; } }
+      j = end;
       if (isP(t[j], '+') && t[j + 1] && /^(str|tpl|id|num)$/.test(t[j + 1].type)) { j++; continue; }
       break;
     }
@@ -185,7 +219,7 @@
       const c = ctx.consts[tok.value]; const sch = c.value;
       if (c.zod && sch && sch.type === 'object' && sch.properties) { const req = new Set(sch.required || []); r = { value: sch.properties, end: i + 3, exact: c.exact, rawShape: true, optionalKeys: new Set(Object.keys(sch.properties).filter((k) => !req.has(k))) }; }
     } else if (tok.type === 'id' && ctx && ctx.consts && hasOwn(ctx.consts, tok.value)) {
-      const c = ctx.consts[tok.value];
+      const c = ctx.consts[tok.value]; if (c.lost) lose(c.lost);
       const ch = idChain(t, i);
       if (c.zod && isP(t[i + 1], '.') && t[i + 2] && t[i + 2].type === 'id' && isP(t[i + 3], '(')) {
         // a zod constant with more calls: Param.optional().describe('…')
@@ -227,18 +261,39 @@
   // Each object of a file is parsed once per context: a nested object met again (the "{" of an object already read as
   // part of an outer one) comes from this memo, so nested source costs one read, not one per level. Callers get a copy.
   const OBJ_MEMO = new WeakMap();
-  // Values nested deeper than MAX_NEST (48) are not read (they are SKIP, like any value the reader cannot read): no deep
-  // recursion, and no stack overflow that would make every enclosing level try again.
-  const MAX_NEST = 48; let nest = 0; // under the 64-level limit of a tool list, with room for the list around a tool
+  // Two limits, neither of which drops text silently (what they leave out goes to the collector, see LOST):
+  //   MAX_VDEPTH  a value nested deeper than this is left out of its object or array. It is past the 64 levels a tool
+  //               list may have, so whatever the engine accepts is read in full. It depends only on the value, not on
+  //               where the value was met, so results stay valid in the memo.
+  //   MAX_NEST    the recursion of one parse (stack safety). extractJs reads every object of a file innermost first, so
+  //               its parses stay shallow; a result cut here depends on where it was met and is never kept in the memo.
+  const MAX_VDEPTH = 70;
+  const MAX_NEST = 600; let nest = 0; let capHits = 0;
+  const DEPTHS = new WeakMap();
+  function valueDepth(v) {
+    if (!v || typeof v !== 'object') return 0;
+    const c = DEPTHS.get(v); if (c !== undefined) return c;
+    let d = 0; for (const k of Object.keys(v)) { const x = v[k]; if (x && typeof x === 'object') { const e = valueDepth(x); if (e > d) d = e; } }
+    DEPTHS.set(v, d + 1); return d + 1;
+  }
+  const tooDeepValue = (v) => valueDepth(v) >= MAX_VDEPTH;
   function nested(t, i, fn) {
-    if (nest >= MAX_NEST) return { value: SKIP, end: matchClose(t, i) + 1, exact: false };
+    if (nest >= MAX_NEST) { capHits++; return { value: SKIP, end: matchClose(t, i) + 1, exact: false }; }
     nest++; try { return fn(); } finally { nest--; }
   }
   function parseObject(t, i, ctx) {
     if (!ctx || typeof ctx !== 'object') return nested(t, i, () => parseObjectOnce(t, i, ctx));
     let m = OBJ_MEMO.get(ctx); if (!m) { m = new Map(); OBJ_MEMO.set(ctx, m); }
-    let r = m.get(i);
-    if (!r) { r = nested(t, i, () => parseObjectOnce(t, i, ctx)); m.set(i, r); }
+    let e = m.get(i);
+    if (e) lose(e.lost);
+    else {
+      // only a result read with the full depth available is kept: one cut at MAX_NEST depends on where it was met
+      const caps = capHits;
+      const [r, lost] = collecting(() => nested(t, i, () => parseObjectOnce(t, i, ctx)));
+      e = { r, lost };
+      if (capHits === caps) m.set(i, e);
+    }
+    const r = e.r;
     return Object.assign({}, r, { value: r.value && r.value !== SKIP && typeof r.value === 'object' ? Object.assign({}, r.value) : r.value });
   }
   function parseObjectOnce(t, i, ctx) {
@@ -253,7 +308,7 @@
           Object.assign(o, c.value); exact = exact && c.exact !== false; if (c.optionalKeys) c.optionalKeys.forEach((x) => optionalKeys.add(x));
           i = isP(t[end], ',') ? end + 1 : end; continue;
         }
-        exact = false; spreadUnknown = true; i = skipExpr(t, i + 1); if (isP(t[i], ',')) i++; continue;
+        exact = false; spreadUnknown = true; { const e2 = skipExpr(t, i + 1); lose(literalsArr(t, i + 1, e2)); i = e2; } if (isP(t[i], ',')) i++; continue;
       }
       let key = null;
       if (k.type === 'str' || k.type === 'id') key = String(k.value);
@@ -265,11 +320,11 @@
         const mk = isP(t[i + 1], '(') ? key : t[i + 1].value;
         let j = i + 1; while (t[j] && !isP(t[j], '{')) j++;
         j = matchClose(t, j) + 1;
-        if (!HANDLER_KEYS.has(mk)) { unknown.add(mk); if (LITERAL_KEYS.has(mk)) literals[mk] = literalsIn(t, i, j); }
+        if (!HANDLER_KEYS.has(mk)) { unknown.add(mk); if (LITERAL_KEYS.has(mk)) { literals[mk] = literalsIn(t, i, j); lose(literalsArr(t, i, j)); } }
         exact = false; i = isP(t[j], ',') ? j + 1 : j; continue;
       }
       if (isP(t[i + 1], ',') || isP(t[i + 1], '}')) { // shorthand { name }
-        if (ctx && ctx.consts && hasOwn(ctx.consts, key)) { const c = ctx.consts[key]; o[key] = c.value; exact = exact && c.exact; if (c.optional) optionalKeys.add(key); } else { exact = false; if (!HANDLER_KEYS.has(key)) unknown.add(key); }
+        if (ctx && ctx.consts && hasOwn(ctx.consts, key)) { const c = ctx.consts[key]; if (c.lost) lose(c.lost); o[key] = c.value; exact = exact && c.exact; if (c.optional) optionalKeys.add(key); } else { exact = false; if (!HANDLER_KEYS.has(key)) unknown.add(key); }
         i += isP(t[i + 1], ',') ? 2 : 1; continue;
       }
       let j = i + 1;
@@ -279,7 +334,8 @@
       if (v.optional) optionalKeys.add(key);
       if (v.partial) partial.add(key);
       if (v.optionalKeys && v.optionalKeys.size) childOptional[key] = v.optionalKeys;
-      if (v.value !== SKIP) { o[key] = v.value; exact = exact && v.exact !== false; } else if (!HANDLER_KEYS.has(key)) { exact = false; unknown.add(key); if (LITERAL_KEYS.has(key)) literals[key] = literalsIn(t, j + 1, v.end); if (ctx && ctx.placeholder) o[key] = {}; }
+      if (v.value !== SKIP && tooDeepValue(v.value)) { lose(literalsArr(t, j + 1, v.end)); v.value = SKIP; unknown.add(key); exact = false; }
+      else if (v.value !== SKIP) { o[key] = v.value; exact = exact && v.exact !== false; } else if (!HANDLER_KEYS.has(key)) { exact = false; unknown.add(key); if (LITERAL_KEYS.has(key)) literals[key] = literalsIn(t, j + 1, v.end); lose(literalsArr(t, j + 1, v.end)); if (ctx && ctx.placeholder) o[key] = {}; }
       i = v.end;
       if (isP(t[i], ',')) i++;
       else if (!isP(t[i], '}')) return { value: SKIP, end: skipExpr(t, i), exact: false };
@@ -291,24 +347,31 @@
   // Only description and title use them, and at most LITERAL_TOKENS tokens of the value are looked at, so deeply
   // nested values cost no more than reading them once.
   const LITERAL_KEYS = new Set(['description', 'title']);
-  const LITERAL_TOKENS = 4096;
   function literalsIn(t, a, b) {
     const out = []; let n = 0;
-    const end = Math.min(b, t.length, a + LITERAL_TOKENS);
-    for (let k = a; k < end && n < MAX_STR; k++) {
-      const x = t[k];
-      const parts = x.type === 'str' ? [x.value] : x.type === 'tpl' ? x.parts : [];
-      parts.forEach((p) => { const q = String(p).trim(); if (q && n < MAX_STR) { out.push(q); n += q.length; } });
-    }
+    for (const q of literalsArr(t, a, b)) { if (n >= MAX_STR) break; out.push(q); n += q.length; }
     return out.length ? out.join(' … ').slice(0, MAX_STR) : null;
   }
-  function parseArray(t, i, ctx) { return nested(t, i, () => parseArrayOnce(t, i, ctx)); }
+  const ARR_MEMO = new WeakMap();
+  function parseArray(t, i, ctx) {
+    if (!ctx || typeof ctx !== 'object') return nested(t, i, () => parseArrayOnce(t, i, ctx));
+    let m = ARR_MEMO.get(ctx); if (!m) { m = new Map(); ARR_MEMO.set(ctx, m); }
+    let e = m.get(i);
+    if (e) lose(e.lost);
+    else {
+      const caps = capHits;
+      const [r, lost] = collecting(() => nested(t, i, () => parseArrayOnce(t, i, ctx)));
+      e = { r, lost };
+      if (capHits === caps) m.set(i, e);
+    }
+    return Object.assign({}, e.r, { value: Array.isArray(e.r.value) ? e.r.value.slice() : e.r.value });
+  }
   function parseArrayOnce(t, i, ctx) {
     const a = []; let exact = true; i++;
     while (i < t.length && !isP(t[i], ']')) {
-      if (isP(t[i], '...')) { exact = false; i = skipExpr(t, i + 1); if (isP(t[i], ',')) i++; continue; }
+      if (isP(t[i], '...')) { exact = false; const e2 = skipExpr(t, i + 1); lose(literalsArr(t, i + 1, e2)); i = e2; if (isP(t[i], ',')) i++; continue; }
       const v = parseValue(t, i, ctx);
-      if (v.value !== SKIP) a.push(v.value); else exact = false;
+      if (v.value !== SKIP && !tooDeepValue(v.value)) a.push(v.value); else { exact = false; lose(literalsArr(t, i, v.end)); }
       exact = exact && v.exact !== false;
       i = v.end;
       if (isP(t[i], ',')) i++;
@@ -620,13 +683,14 @@
         let j = i + 2;
         if (isP(t[j], ':')) j = skipType(t, j + 1);
         if (!isP(t[j], '=')) continue;
-        let v; try { v = parseValue(t, j + 1, Object.assign({}, ctx, { consts })); } catch (e) { v = { value: SKIP }; }
+        let v; let lost = [];
+        try { [v, lost] = collecting(() => parseValue(t, j + 1, Object.assign({}, ctx, { consts }))); } catch (e) { v = { value: SKIP }; }
         if (v.value === SKIP && t[j + 1] && t[j + 1].type === 'id') {
           // const toolId = toolName || "web_search": the literal default
           const ch = idChain(t, j + 1);
           if ((isP(t[ch.end], '||') || isP(t[ch.end], '??')) && t[ch.end + 1] && t[ch.end + 1].type === 'str' && (isP(t[ch.end + 2], ';') || isP(t[ch.end + 2], ',') || (t[ch.end + 2] && t[ch.end + 2].nl) || !t[ch.end + 2])) v = { value: t[ch.end + 1].value, exact: false, fallback: true };
         }
-        if (v.value !== SKIP) consts[t[i + 1].value] = { value: v.value, exact: v.exact, optional: !!v.optional, zod: !!v.zod, optionalKeys: v.optionalKeys || null, top: d === 0 && !v.fallback, partial: !!v.partial };
+        if (v.value !== SKIP) consts[t[i + 1].value] = { value: v.value, exact: v.exact, optional: !!v.optional, zod: !!v.zod, optionalKeys: v.optionalKeys || null, top: d === 0 && !v.fallback, partial: !!v.partial, lost: lost.length ? lost : null };
       } else if (tk.value === 'enum' && t[i + 1].type === 'id' && isP(t[i + 2], '{')) {
         const close = matchClose(t, i + 2); const o = {}; let k = i + 3; let n = 0;
         while (k < close) {
@@ -652,7 +716,7 @@
         }
         const k = t[j]; if (!(k.type === 'id' || k.type === 'str') || !isP(t[j + 1], ':')) { exact = false; j = skipExpr(t, j); if (isP(t[j], ',')) j++; continue; }
         const v = parseValue(t, j + 2, ctx);
-        if (v.value !== SKIP) { props[k.value] = v.value; if (v.optional) optionalKeys.add(String(k.value)); } else { exact = false; props[k.value] = {}; }
+        if (v.value !== SKIP) { props[k.value] = v.value; if (v.optional) optionalKeys.add(String(k.value)); } else { exact = false; props[k.value] = {}; lose(literalsArr(t, j + 2, v.end)); }
         exact = exact && v.exact !== false; j = v.end; if (isP(t[j], ',')) j++;
       }
       return { schema: rootSchema(props, optionalKeys, ctx.fl), end: j + 1, exact };
@@ -853,10 +917,16 @@
       }
       return schemaObj;
     };
+    // Every object and array of the file is read once, innermost first, into the memo: a later parse of any of them
+    // (as a tool, a config, or part of an outer value) is a lookup, never a deep recursion or a read cut by position.
+    const fastCtx = Object.assign({}, ctx, { fl: Object.assign({}, ctx.fl, { dialect: 'draft-07', closed: true, execution: false }) });
+    const prepass = (c) => { LOST.cur = null; for (let k = t.length - 1; k >= 0; k--) { try { if (isP(t[k], '{')) parseObject(t, k, c); else if (isP(t[k], '[')) parseArray(t, k, c); } catch (e) { /* read again in the loop */ } } };
+    prepass(ctx); if (/\baddTool\b/.test(src)) prepass(fastCtx);
     const wrappers = registerWrappers(t);
     if (wrappers.overBudget) overBudget.push({ line: null });
     for (let i = 0; i < t.length; i++) {
       const tok = t[i];
+      const iterLost = []; LOST.cur = iterLost; const toolsBefore = tools.length; const unresBefore = unresolved.length;
       try { // one registration that cannot be read never drops the others: it is counted instead
       // 0. A function of this file that forwards two of its parameters to X.registerTool(name, config, ...):
       //    register(server, 'name', { description, inputSchema }, handler) is read as registerTool('name', {...}).
@@ -880,7 +950,7 @@
         const objAt = isP(t[a0], '{') ? a0 : args.length === 1 ? factoryObject(a0) : -1;
         if (objAt >= 0) {
           const fast = fn === 'addTool';
-          const actx = fast ? Object.assign({}, ctx, { fl: Object.assign({}, ctx.fl, { dialect: 'draft-07', closed: true, execution: false }) }) : ctx;
+          const actx = fast ? fastCtx : ctx;
           if (!spend(objAt, matchClose(t, objAt))) { overBudget.push({ line: lineOf(at) }); continue; }
           const o = parseObjectWithZod(t, objAt, actx); o.start = objAt;
           // keyed: { lookup_docs: tool({ ... }) } names the tool by its key
@@ -957,9 +1027,13 @@
           if (add(tool, literalExact ? 'literal' : 'derived', tok.start, { binding: bound, literal: true })) i = o.end - 1;
         }
       }
-      } catch (e) { const f = isP(tok, '.') ? t[i + 1] : tok; if (f && f.type === 'id' && (SDK_CALLS.has(f.value) || TOOLISH.test(f.value)) && isP(t[isP(tok, '.') ? i + 2 : i + 1], '(')) unresolved.push({ line: lineOf(tok.start) }); }
+      } catch (e) { const f = isP(tok, '.') ? t[i + 1] : tok; if (f && f.type === 'id' && (SDK_CALLS.has(f.value) || TOOLISH.test(f.value)) && isP(t[isP(tok, '.') ? i + 2 : i + 1], '(')) overBudget.push({ line: lineOf(tok.start), why: 'error' }); } finally {
+        LOST.cur = null;
+        // what this registration could not keep goes with its tools (and unnamed registrations), to be scanned
+        if (iterLost.length) { for (let k = toolsBefore; k < tools.length; k++) tools[k].tool._lost = iterLost; for (let k = unresBefore; k < unresolved.length; k++) unresolved[k].lost = iterLost; }
+      }
     }
-    if (opts.classTools && opts.classTools.size) { let ct = []; try { ct = classTools(t, ctx, opts.classTools); } catch (e) { ct = []; } ct.forEach((x) => add(x.tool, 'derived', x.at, { classTool: true, groupPath: opts.classTools.root ? opts.classTools.root.get(x.base) : undefined })); }
+    if (opts.classTools && opts.classTools.size) { let ct = []; try { ct = classTools(t, ctx, opts.classTools); } catch (e) { ct = []; overBudget.push({ line: null, why: 'error' }); } finally { LOST.cur = null; } ct.forEach((x) => add(x.tool, 'derived', x.at, { classTool: true, groupPath: opts.classTools.root ? opts.classTools.root.get(x.base) : undefined })); }
     tools.unresolved = unresolved; tools.overBudget = overBudget;
     return tools;
   }
@@ -974,6 +1048,7 @@
       let k = i + 2; if (!(t[k] && t[k].type === 'id' && t[k].value === 'extends')) continue;
       let b = k + 1; while (isP(t[b + 1], '.') && t[b + 2] && t[b + 2].type === 'id') b += 2;
       if (!t[b] || !bases.has(t[b].value)) continue;
+      LOST.cur = []; // what this class's fields could not keep
       while (t[k] && !isP(t[k], '{')) { if (isP(t[k], '<')) { let d = 0; for (; k < t.length; k++) { if (isP(t[k], '<')) d++; else if (isP(t[k], '>')) { d--; if (!d) break; } } } k++; }
       if (!isP(t[k], '{')) continue;
       const open = k; const close = matchClose(t, open);
@@ -1016,6 +1091,7 @@
       if (fields.outputSchema && fields.outputSchema.value && fields.outputSchema.value !== SKIP && typeof fields.outputSchema.value === 'object') tool.outputSchema = fields.outputSchema.value;
       if (ctx.fl.execution) tool.execution = { taskSupport: 'forbidden' };
       tool._unreadable = un;
+      if (LOST.cur.length) tool._lost = LOST.cur;
       out.push({ tool, at: t[fieldTok.name || fieldTok.toolName || fieldTok.TOOL_NAME].start, base: t[b].value });
     }
     return out;
@@ -1031,10 +1107,12 @@
   //   const reg = (name, config, cb) => server.registerTool(name, config, cb);
   // Returns Map(function name -> { nameIdx, cfgIdx }), the parameter positions.
   function registerWrappers(t) {
-    const out = new Map(); let scanned = 0;
+    const out = new Map();
     const params = (open) => { // simple identifiers, with optional TS types and defaults; null if anything else
       const ps = []; for (const a of argStarts(t, open)) { const x = t[a]; if (!x || x.type !== 'id') return null; ps.push(x.value); } return ps;
     };
+    // the functions that could be helpers: name, parameters and body range
+    const fns = [];
     for (let i = 0; i < t.length - 3; i++) {
       let name = null; let open = -1;
       if (t[i].type === 'id' && t[i].value === 'function' && t[i + 1] && t[i + 1].type === 'id' && isP(t[i + 2], '(')) { name = t[i + 1].value; open = i + 2; }
@@ -1048,14 +1126,24 @@
       let b = matchClose(t, open) + 1; if (isP(t[b], '=>')) b++;
       while (t[b] && !isP(t[b], '{') && !(t[b].type === 'id' || isP(t[b], '('))) b++; // skip a TS return type
       const end = isP(t[b], '{') ? matchClose(t, b) : skipExpr(t, b);
-      if ((scanned += end - b) > 8 * t.length + 200000) { out.overBudget = true; break; } // nested functions: a bounded total, so the scan stays linear
-      for (let k = b; k < end - 2; k++) {
-        if (!(isP(t[k], '.') && t[k + 1].type === 'id' && t[k + 1].value === 'registerTool' && isP(t[k + 2], '('))) continue;
-        const as = argStarts(t, k + 2);
-        const a0 = t[as[0]]; const a1 = t[as[1]];
-        if (!a0 || !a1 || a0.type !== 'id' || a1.type !== 'id' || !isP(t[as[0] + 1], ',') || !(isP(t[as[1] + 1], ',') || isP(t[as[1] + 1], ')'))) continue;
-        const ni = ps.indexOf(a0.value); const ci = ps.indexOf(a1.value);
-        if (ni >= 0 && ci >= 0) { out.set(name, { nameIdx: ni, cfgIdx: ci }); break; }
+      fns.push({ name, ps, b, end });
+    }
+    if (!fns.length) return out;
+    // nested ranges: each function's parent, so a call finds the functions around it by a search and a short walk up
+    fns.sort((x, y) => x.b - y.b); const stack = [];
+    fns.forEach((f) => { while (stack.length && stack[stack.length - 1].end < f.b) stack.pop(); f.parent = stack.length ? stack[stack.length - 1] : null; stack.push(f); });
+    for (let k = 0; k < t.length - 2; k++) {
+      if (!(isP(t[k], '.') && t[k + 1].type === 'id' && t[k + 1].value === 'registerTool' && isP(t[k + 2], '('))) continue;
+      const as = argStarts(t, k + 2);
+      const a0 = t[as[0]]; const a1 = t[as[1]];
+      if (!a0 || !a1 || a0.type !== 'id' || a1.type !== 'id' || !isP(t[as[0] + 1], ',') || !(isP(t[as[1] + 1], ',') || isP(t[as[1] + 1], ')'))) continue;
+      let lo = 0; let hi = fns.length; while (lo < hi) { const mid = (lo + hi) >> 1; if (fns[mid].b <= k) lo = mid + 1; else hi = mid; }
+      for (let f = lo > 0 ? fns[lo - 1] : null, n = 0; f && n < 64; f = f.parent) {
+        if (f.end < k) continue;
+        n++;
+        if (out.has(f.name)) continue;
+        const ni = f.ps.indexOf(a0.value); const ci = f.ps.indexOf(a1.value);
+        if (ni >= 0 && ci >= 0) out.set(f.name, { nameIdx: ni, cfgIdx: ci });
       }
     }
     return out;
@@ -1199,7 +1287,7 @@
   function pyLookup(ctx, ids) {
     const c = ctx && ctx.consts; if (!c) return null;
     if (!hasOwn(c, ids[0])) return null;
-    let v = c[ids[0]];
+    let v = c[ids[0]]; if (ctx.lostOf && ctx.lostOf[ids[0]]) lose(ctx.lostOf[ids[0]]);
     for (let k = 1; k < ids.length; k++) {
       if (v && typeof v === 'object' && !Array.isArray(v) && hasOwn(v, ids[k])) v = v[ids[k]];
       else if ((ids[k] === 'value') && (typeof v === 'string' || typeof v === 'number')) continue;
@@ -1221,7 +1309,7 @@
   let pyNest = 0;
   function pyValue(t, i, ctx) {
     const tok = t[i]; if (!tok) return { value: PY_SKIP, end: i };
-    if (pyNest >= MAX_NEST) return { value: PY_SKIP, end: pySkip(t, i) }; // deeper values are not read (no deep recursion)
+    if (pyNest >= MAX_NEST) return { value: PY_SKIP, end: pySkip(t, i) }; // not read past MAX_NEST: the caller keeps its text (lose)
     pyNest++; try { return pyValueOnce(t, i, ctx, tok); } finally { pyNest--; }
   }
   function pyValueOnce(t, i, ctx, tok) {
@@ -1241,7 +1329,7 @@
           else { out += '…'; exact = false; if (!ctx.prefixOk || !/prefix|namespace|(^|_)ns$/i.test(ids[ids.length - 1])) ok = ok && true; r = r || { unresolvedIds: ids }; }
           j = m;
         } else break;
-        if (out.length > MAX_STR) { out = out.slice(0, MAX_STR) + '…'; exact = false; }
+        if (out.length > MAX_STR) { lose(out.slice(MAX_STR)); out = out.slice(0, MAX_STR) + '…'; exact = false; }
         // .strip() and friends on a string
         while (isP(t[j], '.') && t[j + 1] && /^(strip|lstrip|rstrip)$/.test(t[j + 1].value) && isP(t[j + 2], '(') && isP(t[j + 3], ')')) { out = t[j + 1].value === 'strip' ? out.trim() : t[j + 1].value === 'lstrip' ? out.replace(/^\s+/, '') : out.replace(/\s+$/, ''); j += 4; }
         if (isP(t[j], '.') && t[j + 1] && t[j + 1].value === 'format') { exact = false; j = pyMatch(t, j + 2) + 1; }
@@ -1257,13 +1345,13 @@
     else if (tok.type === 'id' && /^(True|False|None)$/.test(tok.value)) r = { value: tok.value === 'None' ? null : tok.value === 'True', end: i + 1, exact: true };
     else if (isP(tok, '[') || isP(tok, '(')) {
       const close = pyMatch(t, i); const a = []; let k = i + 1; let exact = true; let comma = false;
-      while (k < close) { const v = pyValue(t, k, ctx); if (v.value === PY_SKIP) { exact = false; k = pySkip(t, k); } else { a.push(v.value); exact = exact && v.exact !== false; k = v.end; } if (isP(t[k], ',')) { comma = true; k++; } else break; }
+      while (k < close) { const v = pyValue(t, k, ctx); if (v.value === PY_SKIP) { exact = false; const e2 = pySkip(t, k); lose(literalsArr(t, k, e2)); k = e2; } else { a.push(v.value); exact = exact && v.exact !== false; k = v.end; } if (isP(t[k], ',')) { comma = true; k++; } else break; }
       if (k >= close || isP(t[k], tok.value === '[' ? ']' : ')')) r = isP(tok, '(') && !comma && a.length === 1 ? { value: a[0], end: close + 1, exact } : { value: a, end: close + 1, exact };
     } else if (isP(tok, '{')) {
       const close = pyMatch(t, i); const o = {}; let k = i + 1; let exact = true;
       while (k < close) {
-        const kv = pyValue(t, k, ctx); if (kv.value === PY_SKIP || typeof kv.value !== 'string' || !isP(t[kv.end], ':')) { exact = false; break; }
-        const v = pyValue(t, kv.end + 1, ctx); if (v.value === PY_SKIP) { exact = false; k = pySkip(t, kv.end + 1); } else { o[kv.value] = v.value; exact = exact && v.exact !== false; k = v.end; }
+        const kv = pyValue(t, k, ctx); if (kv.value === PY_SKIP || typeof kv.value !== 'string' || !isP(t[kv.end], ':')) { exact = false; lose(literalsArr(t, k, close)); break; }
+        const v = pyValue(t, kv.end + 1, ctx); if (v.value === PY_SKIP) { exact = false; const e2 = pySkip(t, kv.end + 1); lose(literalsArr(t, kv.end + 1, e2)); k = e2; } else { o[kv.value] = v.value; exact = exact && v.exact !== false; k = v.end; }
         if (isP(t[k], ',')) k++; else break;
       }
       r = { value: o, end: close + 1, exact };
@@ -1284,8 +1372,8 @@
   // Module-level constants of a Python file and the members of its classes (Enum and constant holders):
   // { NAME: value, Cls: { MEMBER: value } }, plus `partial` names (strings read in part) and the names it imports.
   function pyFileConsts(lines, globals) {
-    const consts = {}; const partialNames = new Set(); const imported = new Set();
-    const ctx = { consts, partialNames };
+    const consts = {}; const partialNames = new Set(); const imported = new Set(); const lostOf = {};
+    const ctx = { consts, partialNames, lostOf };
     lines.forEach((l) => { if (l.indent !== 0) return; const m = /^from\s+[\w.]+\s+import\s+\(?([\s\S]+?)\)?\s*$/.exec(l.text); if (m) m[1].split(',').forEach((x) => { const q = x.trim().split(/\s+as\s+/); if (q[0]) imported.add((q[1] || q[0]).trim()); }); });
     if (globals) imported.forEach((n) => { if (hasOwn(globals, n)) consts[n] = globals[n]; });
     let cls = null;
@@ -1295,7 +1383,7 @@
         cls = c ? { name: c[1], members: {} } : null;
         if (cls) { consts[cls.name] = cls.members; return; }
         const m = /^([A-Za-z_]\w*)\s*(?::\s*[^=]+?)?=(?!=)\s*([\s\S]+)$/.exec(l.text);
-        if (m) { try { const t = pyTokenize(m[2]); const v = pyValue(t, 0, ctx); if (v.value !== PY_SKIP && v.end >= t.length) { consts[m[1]] = v.value; if (v.partial) partialNames.add(m[1]); } } catch (e) { /* not a constant the reader can use */ } }
+        if (m) { try { const t = pyTokenize(m[2]); const [v, lost] = collecting(() => pyValue(t, 0, ctx)); if (v.value !== PY_SKIP && v.end >= t.length) { consts[m[1]] = v.value; if (v.partial) partialNames.add(m[1]); if (lost.length) lostOf[m[1]] = lost; } } catch (e) { /* not a constant the reader can use */ } }
         return;
       }
       if (cls && l.indent > 0) {
@@ -1303,7 +1391,7 @@
         if (m && l.indent <= 8) { try { const t = pyTokenize(m[2]); const v = pyValue(t, 0, ctx); if (v.value !== PY_SKIP && v.end >= t.length && (typeof v.value === 'string' || typeof v.value === 'number')) cls.members[m[1]] = v.value; } catch (e) { /* skip */ } }
       }
     });
-    return { consts, partialNames, imported };
+    return { consts, partialNames, imported, lostOf };
   }
 
   // ------------------------------------------------------------ Python extraction (@x.tool decorated functions)
@@ -1337,7 +1425,7 @@
   function tooDeep(s, max) { let d = 0; let q = null; for (let i = 0; i < s.length; i++) { const c = s[i]; if (q) { if (c === '\\') i++; else if (c === q) q = null; continue; } if (c === '"' || c === "'") q = c; else if (c === '(' || c === '[' || c === '{') { if (++d > max) return true; } else if (c === ')' || c === ']' || c === '}') d--; } return false; }
   function pyLiteral(s) {
     s = s.trim();
-    if (tooDeep(s, 64)) return null;
+    if (tooDeep(s, 64)) { lose(pyLiterals(s)); return null; }
     if (/^(["'])(?:\\.|(?!\1).)*\1$/.test(s)) return { v: s.slice(1, -1).replace(/\\(.)/g, '$1') };
     if (/^-?\d+$/.test(s)) return { v: parseInt(s, 10) };
     if (/^-?\d*\.\d+(e-?\d+)?$/i.test(s)) return { v: parseFloat(s) };
@@ -1350,7 +1438,7 @@
   function pyKwargs(argstr) { const o = {}; splitTop(argstr, ',').forEach((p) => { const m = /^(\w+)\s*=\s*([\s\S]+)$/.exec(p); if (m) o[m[1]] = m[2]; }); return o; }
   function pyType(tp) {
     tp = tp.trim();
-    if (tooDeep(tp, 64)) return { schema: {}, exact: false };
+    if (tooDeep(tp, 64)) { lose(pyLiterals(tp)); return { schema: {}, exact: false }; }
     let m;
     if ((m = /^Annotated\[([\s\S]+)\]$/.exec(tp))) {
       const parts = splitTop(m[1], ','); const s = pyType(parts[0]);
@@ -1419,11 +1507,11 @@
     const clean = pyStripComments(src);
     const L = pyLogicalLines(clean);
     const fc = pyFileConsts(L, opts.pyConsts || null);
-    const ctx = { consts: fc.consts, partialNames: fc.partialNames };
+    const ctx = { consts: fc.consts, partialNames: fc.partialNames, lostOf: fc.lostOf };
     PYC = {}; Object.keys(fc.consts).forEach((k) => { const v = fc.consts[k]; if (v === null || typeof v !== 'object') PYC[k] = v; });
     const usesMcp = /^\s*(?:from|import)\s+(?:mcp|fastmcp)\b/m.test(clean) || /\bFastMCP\b|\bMCPServer\b/.test(clean);
     const registrars = opts.pyRegistrars || new Set();
-    const tools = []; const seen = new Set(); const unresolved = [];
+    const tools = []; const seen = new Set(); const unresolved = []; const overBudget = [];
     const add = (tool, line, extra) => {
       if (!tool || typeof tool.name !== 'string' || !tool.name || seen.has(tool.name)) return;
       if (tool._unreadable && !tool._unreadable.length) delete tool._unreadable;
@@ -1475,6 +1563,7 @@
         if (tp && CTX_TYPES.test(tp.trim())) return;
         if (!tp && /^(ctx|context)$/.test(pn)) return;
         const ty = tp ? pyType(tp) : { schema: {}, exact: false };
+        if (tp && !ty.exact) lose(pyLiterals(tp)); // text in a type the reader cannot read (a model, a nested Literal)
         exact = exact && ty.exact;
         const sch = Object.assign({}, ty.schema); const ordered = {};
         if (ty.default !== undefined) ordered.default = ty.default;
@@ -1483,13 +1572,13 @@
         let hasDefault = ty.default !== undefined;
         if (def !== undefined) {
           const field = /^(?:Field|pydantic\.Field)\(([\s\S]*)\)$/.exec(def.trim());
-          if (!field) { const dv = pyLiteral(def); if (dv) out.default = dv.v; else exact = false; hasDefault = true; } else {
+          if (!field) { const dv = pyLiteral(def); if (dv) out.default = dv.v; else { exact = false; lose(pyLiterals(def)); } hasDefault = true; } else {
             const fk = pyKwargs(field[1]); const pos = splitTop(field[1], ',')[0]; const posArg = pos && !/^\w+\s*=/.test(pos) ? pos : null;
             hasDefault = false;
             if (posArg !== null) { if (posArg !== '...') { hasDefault = true; const dv = pyLiteral(posArg); if (dv) out.default = dv.v; else exact = false; } }
             else if (fk.default !== undefined) { hasDefault = true; const dv = pyLiteral(fk.default); if (dv) out.default = dv.v; else exact = false; }
             else if (fk.default_factory !== undefined) { hasDefault = true; exact = false; }
-            if (fk.description) { const dd = exprVal(fk.description); if (dd && typeof dd.value === 'string') out.description = dd.value; else exact = false; }
+            if (fk.description) { const dd = exprVal(fk.description); if (dd && typeof dd.value === 'string') out.description = dd.value; else { exact = false; lose(pyLiterals(fk.description)); } }
             if (fk.title && !fmcp) { const tt = pyLiteral(fk.title); if (tt) out.title = tt.v; }
             pyConstraints(out, fk);
           }
@@ -1501,7 +1590,7 @@
       const tool = { name }; const un = [];
       if (typeof given.title === 'string') tool.title = given.title;
       const ds = fmcp && doc ? pyDocSections(doc) : null;
-      if (given.description !== undefined) { if (typeof given.description === 'string') tool.description = given.description; else if (given.descriptionLiterals) tool.description = given.descriptionLiterals; if (given.descriptionPartial || given.description === null) un.push('description'); }
+      if (given.description !== undefined) { if (typeof given.description === 'string') tool.description = given.description; else if (given.descriptionLiterals) tool.description = given.descriptionLiterals.slice(0, MAX_STR); if (given.descriptionPartial || given.description === null) un.push('description'); }
       else if (doc) tool.description = ds ? ds.description : doc;
       if (ds) Object.keys(props).forEach((pn) => { if (props[pn].description === undefined && ds.params[pn]) props[pn].description = ds.params[pn]; });
       tool.inputSchema = fmcp ? { properties: props, required: required.length ? required : undefined, type: 'object', additionalProperties: false } : { properties: props, required: required.length ? required : undefined, title: fname + 'Arguments', type: 'object' };
@@ -1526,7 +1615,7 @@
       const g = {};
       if (kw.name !== undefined) { const n = nameOf(kw.name); g.name = n; if (!n) g.nameUnknown = true; }
       if (kw.title !== undefined) { const v = exprVal(kw.title); if (v && typeof v.value === 'string') g.title = v.value; }
-      if (kw.description !== undefined) { const v = exprVal(kw.description); if (v && typeof v.value === 'string') { g.description = v.value; if (v.partial) g.descriptionPartial = true; } else { g.description = null; g.descriptionLiterals = pyLiterals(kw.description); } }
+      if (kw.description !== undefined) { const v = exprVal(kw.description); if (v && typeof v.value === 'string') { g.description = v.value; if (v.partial) g.descriptionPartial = true; } else { g.description = null; g.descriptionLiterals = pyLiterals(kw.description); lose(g.descriptionLiterals); } }
       if (kw.annotations !== undefined) { const a = pyAnnotationsValue(kw.annotations); g.annotations = a; }
       else if (['read_only_hint', 'destructive_hint', 'idempotent_hint', 'open_world_hint'].some((k) => kw[k] !== undefined)) g.annotationsUnknown = true;
       if (kw.structured_output !== undefined && /^False$/.test(kw.structured_output.trim())) g.structured = false;
@@ -1544,6 +1633,7 @@
     };
     for (let k = 0; k < L.length; k++) {
       const l = L[k];
+      const lineLost = []; LOST.cur = lineLost; const toolsBefore = tools.length; const unresBefore = unresolved.length;
       try { // one registration that cannot be read never drops the others: it is counted instead
       // decorators, then the def they decorate
       if (l.text[0] === '@') {
@@ -1587,7 +1677,7 @@
           if (!name) { unresolved.push(unresolvedText(l.line, g)); continue; }
           const tool = { name }; const un = [];
           if (g.title) tool.title = g.title;
-          if (g.description !== undefined) { if (typeof g.description === 'string') tool.description = g.description; else if (g.descriptionLiterals) tool.description = g.descriptionLiterals; if (g.description === null || g.descriptionPartial) un.push('description'); }
+          if (g.description !== undefined) { if (typeof g.description === 'string') tool.description = g.description; else if (g.descriptionLiterals) tool.description = g.descriptionLiterals.slice(0, MAX_STR); if (g.description === null || g.descriptionPartial) un.push('description'); }
           const sk = a.kw.inputSchema !== undefined ? 'inputSchema' : 'input_schema';
           const sv = a.kw[sk] !== undefined ? pyValue(t, a.kw[sk], ctx) : null;
           if (sv && sv.value !== PY_SKIP && sv.value && typeof sv.value === 'object' && !Array.isArray(sv.value)) tool.inputSchema = sv.value;
@@ -1595,7 +1685,9 @@
           if (a.kw.outputSchema !== undefined) { const ov = pyValue(t, a.kw.outputSchema, ctx); if (ov.value && ov.value !== PY_SKIP && typeof ov.value === 'object') tool.outputSchema = ov.value; }
           if (g.annotations !== undefined) { if (g.annotations) tool.annotations = g.annotations; else un.push('annotations'); }
           tool._unreadable = un;
-          add(tool, l.line, { lowLevel: true, literal: !un.length, exactTypes: !un.length && !!(sv && sv.exact) });
+          // NAME = Tool(...) at module level is a declaration: kept when something refers to NAME (markConditionals)
+          const bm = l.indent === 0 ? /^([A-Za-z_]\w*)\s*(?::[^=]+)?=\s*(?:[\w.]+\.)?Tool\s*\(/.exec(l.text) : null;
+          add(tool, l.line, { lowLevel: true, literal: true, binding: bm ? bm[1] : null, exactTypes: !un.length && !!(sv && sv.exact) });
           i = a.close; continue;
         }
         // a function made a tool: x.tool(fn, name=...), x.add_tool(fn, ...), Tool.from_function(fn, ...), ToolDefinition(fn=...)
@@ -1617,24 +1709,27 @@
         } else {
           const name = given.name || fnRef;
           const tool = { name, inputSchema: { type: 'object' } }; const un = ['inputSchema'];
-          if (typeof given.description === 'string') tool.description = given.description; else { if (given.descriptionLiterals) tool.description = given.descriptionLiterals; un.push('description'); }
+          if (typeof given.description === 'string') tool.description = given.description; else { if (given.descriptionLiterals) tool.description = given.descriptionLiterals.slice(0, MAX_STR); un.push('description'); }
           if (given.annotations) tool.annotations = given.annotations; else un.push('annotations');
           tool._unreadable = un;
           add(tool, l.line, { server: dotted && fn !== 'from_function' ? owner : null, fn: fnRef });
         }
         i = a.close;
       }
-      } catch (e) { if (/\btool\b|Tool\s*\(|_tool\b/.test(l.text)) unresolved.push({ line: l.line }); }
+      } catch (e) { if (/\btool\b|Tool\s*\(|_tool\b/.test(l.text)) overBudget.push({ line: l.line, why: 'error' }); } finally {
+        LOST.cur = null;
+        if (lineLost.length) { for (let x = toolsBefore; x < tools.length; x++) tools[x].tool._lost = lineLost; for (let x = unresBefore; x < unresolved.length; x++) unresolved[x].lost = lineLost; }
+      }
     }
-    tools.unresolved = unresolved;
+    tools.unresolved = unresolved; tools.overBudget = overBudget;
     return tools;
   }
   // The string literals of a Python expression (the readable parts of one that cannot be read as a whole), or null.
   function pyLiterals(text) {
     let t; try { t = pyTokenize(String(text)); } catch (e) { return null; }
     const out = []; let n = 0;
-    t.forEach((x) => { (x.type === 'str' ? [x.value] : x.type === 'tpl' ? x.parts : []).forEach((p) => { const q = String(p).trim(); if (q && n < MAX_STR) { out.push(q); n += q.length; } }); });
-    return out.length ? out.join(' … ').slice(0, MAX_STR) : null;
+    t.forEach((x) => { (x.type === 'str' ? [x.value] : x.type === 'tpl' ? x.parts : []).forEach((p) => { const q = String(p).trim(); if (q) { out.push(q); n += q.length; } }); });
+    return out.length ? out.join(' … ') : null;
   }
   function tokText(text, t, a, b) { return a < b && t[a] && t[b - 1] ? text.slice(t[a].s, t[b - 1].e) : ''; }
   // Methods and functions of the repository that register a tool (their body calls .tool(, add_tool(, Tool.from_function(
@@ -2333,7 +2428,13 @@
       const marked = an.found.filter((x) => x.marks.length && found.some((f) => servers.rootOf(f.groupPath || f.path) === servers.rootOf(x.groupPath || x.path))).map((x) => ({ name: x.tool.name, reasons: x.marks.map((m) => m.reason), excluded: x.excluded }));
       const out = publicTools(found.map((x) => x.tool));
       // registrations without a readable name in the graded package(s): not listed, but their text is scanned
-      const unres = (an.unresolvedList || []).filter((u) => servers.keep && servers.keep.has(servers.rootOf(u.path)));
+      const unres = (an.unresolvedList || []).filter((u) => servers.keep && servers.keep.has(servers.rootOf(u.path))).map((u) => {
+        if (!u.lost) return u;
+        const lt = lostText(u.lost); const v = Object.assign({}, u); delete v.lost;
+        if (lt.over) out.over.push('(unnamed registration at ' + u.path + ')'); else if (lt.text) v.text = lt.text;
+        return v;
+      });
+      if (out.over.length) hints.incomplete = { candidates: out.over.length, files: Array.from(new Set(found.filter((x) => out.over.includes(x.tool.name)).map((x) => x.path))).concat(out.over.filter((n) => /^\(unnamed/.test(n))), why: 'text' };
       candidates.push({ kind: 'source', fidelity: allLiteral && !Object.keys(out.unreadable).length ? 'literal' : 'derived', path: null, built, files: Array.from(new Set(found.map((x) => x.path))), tools: out.tools, unreadable: out.unreadable, unresolved: unres, unresolvedNames: unres.length, where: found.map((x) => ({ name: x.tool.name, path: x.path, line: x.line, fidelity: x.fidelity })), excluded: an.excluded.filter((x) => found.some((f) => servers.rootOf(f.groupPath || f.path) === servers.rootOf(x.groupPath || x.path))).map((x) => ({ name: x.tool.name, path: x.path, line: x.line, reasons: x.marks.filter((m) => m.exclude).map((m) => m.reason + (m.detail ? ' (' + m.detail + ')' : '')) })).concat(setAside), marked, sdk: an.sdk });
     }
     // A snapshot counts as this repository's exact list only when it names this repository's server. A snapshot of
@@ -2361,7 +2462,7 @@
     }
     if (an.unresolved) hints.unresolvedNames = an.unresolved;
     // Candidates the reader had to skip at its work limit: the list would be incomplete, so nothing is graded.
-    if (an.overBudget && an.overBudget.length) hints.incomplete = { candidates: an.overBudget.length, files: Array.from(new Set(an.overBudget.map((x) => x.path))) };
+    if (an.overBudget && an.overBudget.length) { const prev = hints.incomplete || { candidates: 0, files: [] }; hints.incomplete = { candidates: prev.candidates + an.overBudget.length, files: Array.from(new Set(prev.files.concat(an.overBudget.map((x) => x.path)))) }; }
     return { scanned: { exact: plan.exact.length, manifests: plan.manifests.length, source: an.files, candidates: an.candidates, read: an.read, sourceTotal: plan.src.length, capped: plan.src.length > maxRead || an.candidates > an.files, budgetHit: !!(o.state && o.state.budgetHit) }, candidates, best: candidates[0] || null, hints };
   }
 
@@ -2369,9 +2470,16 @@
   // ({ inputSchema: [names], description: [names], annotations: [names] }); an unreadable inputSchema is
   // { "type": "object", "x-mcp-check-unknown": true }, so a saved list says so too. Checks of those parts are skipped.
   const UNKNOWN_MARK = 'x-mcp-check-unknown';
+  // Text the reader could not place in a tool (see LOST) is listed per tool in unreadable.text, for the poisoning checks;
+  // a tool whose text runs over MAX_LOST is named in `over`, and the scan refuses the list.
   function publicTools(tools) {
-    const unreadable = {};
+    const unreadable = {}; const over = [];
     const out = tools.map((t) => {
+      if (t._lost) {
+        const lt = lostText(t._lost);
+        if (lt.over) over.push(t.name); else if (lt.text) (unreadable.text = unreadable.text || {})[t.name] = lt.text;
+        t = Object.assign({}, t); delete t._lost;
+      }
       const u = t._unreadable;
       if (t._deprecated) { t = Object.assign({}, t); delete t._deprecated; }
       if (!u || !u.length) { if (t._unreadable) { t = Object.assign({}, t); delete t._unreadable; } return t; }
@@ -2380,7 +2488,7 @@
       if (u.includes('inputSchema')) c.inputSchema = { type: 'object', [UNKNOWN_MARK]: true };
       return c;
     });
-    return { tools: out, unreadable };
+    return { tools: out, unreadable, over };
   }
 
   // ------------------------------------------------------------ one server or several

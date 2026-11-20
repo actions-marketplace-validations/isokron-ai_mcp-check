@@ -70,9 +70,10 @@ const sameSection = (a, b) => a && b && a.grade === b.grade && a.score === b.sco
 
 // Poisoning findings in the text of registrations whose name could not be resolved, as list-level findings.
 export function unresolvedFindings(unresolved) {
-  const pseudo = (unresolved || []).filter((u) => u && (typeof u.description === 'string' || typeof u.title === 'string')).map((u, k) => {
+  const pseudo = (unresolved || []).filter((u) => u && (typeof u.description === 'string' || typeof u.title === 'string' || typeof u.text === 'string')).map((u, k) => {
     const t = { name: 'unresolved_' + (k + 1), inputSchema: { type: 'object' } };
-    if (typeof u.description === 'string') t.description = u.description;
+    const d = [u.description, u.text].filter((x) => typeof x === 'string' && x).join(' … ');
+    if (d) t.description = d;
     if (typeof u.title === 'string') t.title = u.title;
     return { t, u };
   });
@@ -84,6 +85,18 @@ export function unresolvedFindings(unresolved) {
     const g = Object.assign({}, f, { message: 'A registration at ' + where + ' whose name could not be read: ' + f.message });
     delete g.tool; out.push(g);
   }));
+  return out;
+}
+
+// Poisoning findings in text the reader could not place in a tool (reader.unreadable.text: { name: text }), per tool.
+export function unreadTextFindings(tools, text) {
+  const names = Object.keys(text || {}).filter((n) => typeof text[n] === 'string' && text[n] && (tools || []).some((t) => t && t.name === n));
+  const out = new Map(); if (!names.length) return out;
+  const r = M.analyse(names.map((n, k) => ({ name: 'unread_' + (k + 1), description: text[n], inputSchema: { type: 'object' } })));
+  r.tools.forEach((rt, k) => {
+    const fs = rt.findings.filter((f) => f.section === 'security').map((f) => Object.assign({}, f, { tool: names[k], path: 'source (not readable as part of the tool)', message: 'In source text the reader could not read as part of this tool: ' + f.message }));
+    if (fs.length) out.set(names[k], fs);
+  });
   return out;
 }
 
@@ -100,17 +113,23 @@ export function analyseList(parsed, reader, opts = {}) {
   const parts = unreadableParts(parsed.tools, reader);
   const extraServer = unresolvedFindings(reader.unresolved);
   const unresolvedCount = Array.isArray(reader.unresolved) ? reader.unresolved.length : 0;
-  if (!parts.size && !extraServer.length && !unresolvedCount) return r;
+  const text = reader.unreadable && reader.unreadable.text && typeof reader.unreadable.text === 'object' ? reader.unreadable.text : {};
+  const textFindings = unreadTextFindings(parsed.tools, text);
+  const textCount = Object.keys(text).filter((n) => parsed.tools.some((t) => t && t.name === n)).length;
+  if (!parts.size && !extraServer.length && !unresolvedCount && !textCount) return r;
   const count = (p) => Array.from(parts.values()).filter((s) => s.has(p)).length;
-  const note = { input_schemas: count('inputSchema'), descriptions: count('description'), annotations: count('annotations'), skipped: 0, regraded: false, unresolved_scanned: unresolvedCount };
+  const note = { input_schemas: count('inputSchema'), descriptions: count('description'), annotations: count('annotations'), skipped: 0, regraded: false, unresolved_scanned: unresolvedCount, unread_text_scanned: textCount };
+  // poisoning in text the reader could not place in a tool counts as that tool's finding
+  r.tools.forEach((t) => { const f = textFindings.get(t.name); if (f) t.findings = t.findings.concat(f); });
   r.skipped_checks = note;
   const grade = opts.gradeFindings || gradeFindings;
   const before = grade(r.tools, r.server);
   if (!GRADED.every((s) => sameSection(before[s], r.sections[s]))) {
     // Cannot regrade: keep the engine's grades, but poisoning found in unresolved registrations still applies.
-    if (extraServer.length) {
+    const blockingText = Array.from(textFindings.values()).some((fs) => fs.some((f) => f.severity === 'blocking'));
+    if (extraServer.length || blockingText) {
       r.server = r.server.concat(extraServer);
-      if (extraServer.some((f) => f.severity === 'blocking')) ['security', 'anthropic', 'openai'].forEach((sec) => { const s = r.sections[sec]; s.grade = 'F'; if (!s.caps.includes(F_CAP)) s.caps = s.caps.concat(F_CAP); s.ready = false; });
+      if (extraServer.some((f) => f.severity === 'blocking') || blockingText) ['security', 'anthropic', 'openai'].forEach((sec) => { const s = r.sections[sec]; s.grade = 'F'; if (!s.caps.includes(F_CAP)) s.caps = s.caps.concat(F_CAP); s.ready = false; });
     }
     return r;
   }
@@ -157,6 +176,7 @@ export function skippedLine(r) {
   const out = [];
   if (parts.length && n.regraded) out.push('Not readable from source: ' + parts.join(', ') + '; ' + n.skipped + ' check' + (n.skipped === 1 ? '' : 's') + ' of those parts skipped, and the grades use the rest.');
   if (parts.length && !n.regraded) out.push('Not readable from source: ' + parts.join(', ') + '; their checks could not be skipped under this rubric, so these grades include them as read.');
+  if (n.unread_text_scanned) out.push(n.unread_text_scanned + ' tool' + (n.unread_text_scanned === 1 ? '' : 's') + ' with source the reader could not read in full (deeply nested or computed values): that text was scanned for hidden instructions.');
   if (n.unresolved_scanned) out.push(n.unresolved_scanned + ' registration' + (n.unresolved_scanned === 1 ? '' : 's') + ' with a name the reader could not resolve: not listed, but scanned for hidden instructions.');
   return out.length ? out.join(' ') : null;
 }
