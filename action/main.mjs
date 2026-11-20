@@ -10,7 +10,8 @@ import { capture, CaptureError, splitCommand as split } from '../src/capture.js'
 import { parseList } from '../src/tools.js';
 import { InputError as LimitError } from '../src/limits.js';
 import { registryUrl, tagDocsLinks } from '../src/links.js';
-import { isApproximate, repoProvenance, serverChoices, serverFolders, usableList, whyNothing } from '../src/inputs/collect.js';
+import { analyseList, skippedLine } from '../src/unreadable.js';
+import { budgetNote, incompleteText, isApproximate, namesOnlyText, readerNotes, repoProvenance, scannedText, serverChoices, serverFolders, usableList, whyNothing } from '../src/inputs/collect.js';
 import { commentAction, markerFor, MODES as COMMENT_MODES, prContext, renderComment, renderNotGraded, runStamp, validKey } from './pr-comment.mjs';
 import { ALL_SECTIONS, DEFAULT_SECTIONS, GRADED_SECTIONS, GRADES, badgeFile, badgeSnippet, belowMinGrade, mdCode, mdText, sarifWithLocations, summaryMarkdown, webLink } from '../src/report.js';
 
@@ -170,7 +171,7 @@ export async function run() {
 
   // 1. The tool list: a file in the repository, tools/list from the server the command starts, or (neither set) the
   //    tool definitions read from the repository code, without running anything.
-  let text, listRel, source, sourceKind, note = null, where = null, commentSource = '', sarifText = null, sarifUri = null, approximate = false;
+  let text, listRel, source, sourceKind, note = null, where = null, commentSource = '', sarifText = null, sarifUri = null, approximate = false, unreadable = null;
   if (toolsFile) {
     sourceKind = 'tools-file';
     const f = inWorkspace(toolsFile, 'tools-file');
@@ -217,9 +218,10 @@ export async function run() {
     const LIVE = { text: 'Set command (the command that starts the server, for example node dist/index.js) or tools-file (a saved tools/list answer).', md: 'Set `command` to the command that starts your server, or `tools-file` to a saved `tools/list` answer: [how](' + ZERO_CONFIG_DOCS + ').' };
     const u = usableList(scan);
     let stop;
-    if (u.problem === 'none') stop = notGraded('No tool definitions found in the source in ' + dir.rel + ' (scanned ' + scan.scanned.source + ' of ' + scan.scanned.sourceTotal + ' source files, and the committed tool lists and MCPB manifests' + (scan.truncated ? '; the folder holds more files than the listing limit, and the deepest were not listed' : '') + ').' + whyNothing(scan), LIVE);
+    if (u.problem === 'incomplete') stop = notGraded('Reading the source in ' + dir.rel + ': ' + incompleteText(scan) + '.', LIVE);
+    else if (u.problem === 'none') stop = notGraded('No tool definitions found in the source in ' + dir.rel + ' (' + scannedText(scan) + (scan.truncated ? '; the folder holds more files than the listing limit, and the deepest were not listed' : '') + ').' + whyNothing(scan), LIVE);
     // Names without schemas (an MCPB manifest's tools array) would be graded on schemas that do not exist.
-    else if (u.problem === 'names') stop = notGraded('Only tool names were found in the source in ' + dir.rel + ' (' + u.candidate.path + ' lists names and descriptions without schemas), which cannot be graded.', LIVE);
+    else if (u.problem === 'names') stop = notGraded('Only tool names were found in the source in ' + dir.rel + ' (' + namesOnlyText(u.candidate) + '), which cannot be graded.', LIVE);
     else if (u.problem === 'multiple') {
       const folders = serverFolders(scan).map((f) => (f === '.' ? dir.rel : prefix0 + f));
       stop = notGraded('Tool definitions of more than one server were found in ' + dir.rel + ': ' + serverChoices(scan) + '. Nothing was merged or picked.', {
@@ -230,6 +232,7 @@ export async function run() {
     if (u.problem) { if (stop) throw stop; return 0; }
     const c = u.candidate;
     approximate = isApproximate(c);
+    unreadable = readerNotes(c);
     const candidateAbs = c.path ? join(dir.abs, c.path) : null;
     if (baseline && candidateAbs && (candidateAbs === baseline.abs || (c.path.endsWith('/') && baseline.abs.startsWith(candidateAbs)))) throw new InputError('the tool list found in the source is the baseline ' + baseline.rel + ' itself; set command or tools-file');
     text = JSON.stringify({ tools: c.tools }, null, 2) + '\n';
@@ -242,7 +245,7 @@ export async function run() {
       const st2 = lstatOrNull(candidateAbs);
       if (st2 && st2.isFile()) { sarifText = readFileSync(candidateAbs, 'utf8'); sarifUri = prefix + c.path; }
     }
-    const { provenance } = repoProvenance(c);
+    const provenance = repoProvenance(c).provenance + budgetNote(scan);
     const committed = c.kind !== 'source';
     source = committed ? 'the committed list ' + mdCode(prefix + (c.path || '')) : 'the repository code in ' + mdCode(dir.rel);
     const how = ' For exact grades of the list your server sends, set `command` (the command that starts it, for example `node dist/index.js`) or `tools-file` (a saved `tools/list` answer): [how](' + ZERO_CONFIG_DOCS + ').';
@@ -280,7 +283,9 @@ export async function run() {
 
   // 2. Grade it.
   const parsed = parse(text, 'the tool list');
-  const r = M.analyse(parsed);
+  const r = analyseList(parsed, unreadable); // a source read: checks of parts the reader could not read are skipped
+  const skipped = skippedLine(r);
+  if (skipped) { note = (note ? note + ' ' : '') + mdText(skipped); commentSource = (commentSource ? commentSource + ' ' : '') + mdText(skipped); }
   const below = belowMinGrade(r, sections, minGrade);
   let diff = null;
   if (baseline) {

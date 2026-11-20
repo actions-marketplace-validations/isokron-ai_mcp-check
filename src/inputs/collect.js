@@ -29,7 +29,7 @@ export function expandEnv(v, env = process.env) {
 }
 
 export const FIDELITY = {
-  exact: (c) => 'exact: ' + (c.kind === 'snapshots' ? 'committed tool snapshots' : c.kind === 'mcpb' ? 'MCPB manifest static tools/list' : c.kind === 'catalog' ? 'committed mcp-catalog-snap snapshot ' + c.path + (c.foreign ? ' of ' + line(c.server || 'an unnamed server', 100) + ', which may not be this repository\'s server' : '') : 'committed tool list ' + c.path + (Array.isArray(c.notUsed) && c.notUsed.length ? ' (of ' + (c.notUsed.length + 1) + ' committed lists, the one nearest the server; not used: ' + c.notUsed.slice(0, 5).map((x) => line(x, 200)).join(', ') + (c.notUsed.length > 5 ? ' and ' + (c.notUsed.length - 5) + ' more' : '') + ')' : '')),
+  exact: (c) => 'exact: ' + (c.kind === 'snapshots' ? 'committed tool snapshots (every toolset and flag variant in them; the server\'s default list may be smaller)' : c.kind === 'mcpb' ? 'MCPB manifest static tools/list' : c.kind === 'catalog' ? 'committed mcp-catalog-snap snapshot ' + c.path + (c.foreign ? ' of ' + line(c.server || 'an unnamed server', 100) + ', which may not be this repository\'s server' : '') : 'committed tool list ' + c.path + (Array.isArray(c.notUsed) && c.notUsed.length ? ' (of ' + (c.notUsed.length + 1) + ' committed lists, the one nearest the server; not used: ' + c.notUsed.slice(0, 5).map((x) => line(x, 200)).join(', ') + (c.notUsed.length > 5 ? ' and ' + (c.notUsed.length - 5) + ' more' : '') + ')' : '')),
   literal: () => 'literal: tool definitions written as literals in the source',
   derived: () => 'derived: reproduced from SDK registrations in the source; schemas follow the SDK\'s output and may differ in detail',
   names: () => 'names only: an MCPB manifest lists names and descriptions; schema checks do not apply',
@@ -40,7 +40,12 @@ export function repoProvenance(c) {
   const left = Array.isArray(c.excluded) ? c.excluded : [];
   const cond = (Array.isArray(c.marked) ? c.marked : []).filter((m) => !m.excluded && m.reasons.some((x) => /^conditional-/.test(x)));
   const reasons = [...new Set(left.flatMap((x) => x.reasons.map((y) => y.replace(/ \(.*$/, ''))))];
-  const extra = (left.length ? '; ' + left.length + ' tool' + (left.length === 1 ? '' : 's') + ' left out (' + reasons.join(', ') + ')' : '') + (cond.length ? '; ' + cond.length + ' kept but registered under a condition' : '');
+  const u = c.unreadable || {};
+  const parts = [['inputSchema', 'input schema'], ['description', 'description'], ['annotations', 'annotations']].filter(([k]) => Array.isArray(u[k]) && u[k].length).map(([k, w]) => u[k].length + ' ' + w + (u[k].length === 1 || k === 'annotations' ? '' : 's'));
+  const extra = (left.length ? '; ' + left.length + ' tool' + (left.length === 1 ? '' : 's') + ' left out (' + reasons.join(', ') + ')' : '') + (cond.length ? '; ' + cond.length + ' kept but registered under a condition' : '')
+    + (parts.length ? '; not readable from source, so their checks are skipped: ' + parts.join(', ') : '')
+    + (u.text && Object.keys(u.text).length ? '; ' + Object.keys(u.text).length + ' tool' + (Object.keys(u.text).length === 1 ? '' : 's') + ' with source text not readable as part of the tool, scanned for hidden instructions' : '')
+    + (c.unresolvedNames ? '; ' + c.unresolvedNames + ' registration' + (c.unresolvedNames === 1 ? '' : 's') + ' with a name the reader could not resolve, not listed' : '');
   return { provenance: FIDELITY[c.fidelity](c) + extra, left, cond };
 }
 
@@ -91,17 +96,47 @@ async function fromRepo(ref, opt, via = null) {
   const where = r.repo + (parsed.subdir ? '/' + parsed.subdir : '');
   const pick = (folder) => '--repo github.com/' + r.repo + '/tree/' + (parsed.ref || String(r.sha || 'HEAD')) + '/' + folder;
   const c = cliUsable(r, line(where), pick);
-  const { provenance, left, cond } = repoProvenance(c);
-  return { data: c.tools, source: { kind: 'repo', repo: r.repo, sha: r.sha, via: r.via, fidelity: c.fidelity, approximate: isApproximate(c), provenance, from: c.kind, files: c.files || [c.path], ...(left.length ? { left_out: left.map((x) => ({ name: line(x.name, 128), reasons: x.reasons.map((y) => line(y, 160)) })) } : {}), ...(cond.length ? { conditional: cond.map((x) => line(x.name, 128)) } : {}), ...(via ? { registry: via } : {}) } };
+  const { provenance: prov, left, cond } = repoProvenance(c);
+  const provenance = prov + budgetNote(r);
+  return { data: c.tools, reader: readerNotes(c), source: { kind: 'repo', repo: r.repo, sha: r.sha, via: r.via, fidelity: c.fidelity, approximate: isApproximate(c), provenance, from: c.kind, files: c.files || [c.path], ...(unreadableNames(c) ? { unreadable: unreadableNames(c) } : {}), ...(c.unresolvedNames ? { unresolved_names: c.unresolvedNames } : {}), ...(left.length ? { left_out: left.map((x) => ({ name: line(x.name, 128), reasons: x.reasons.map((y) => line(y, 160)) })) } : {}), ...(cond.length ? { conditional: cond.map((x) => line(x.name, 128)) } : {}), ...(via ? { registry: via } : {}) } };
 }
 
 /** The advice every "cannot grade this read" message ends with (the CLI's and the Action's names for the live inputs). */
 export const LIVE_ADVICE = 'Grade the live list instead: start the server with --command "<start command>", or give a saved tools/list file '
   + '(in the GitHub Action: set command or tools-file).';
 
+/** The tools the reader could not read in full, by part (inputSchema, description, annotations; `text`: tools with
+ *  source text it could not place, which is scanned), for the report's source; null when none. */
+export function unreadableNames(c) {
+  const u = c && c.unreadable; if (!u) return null;
+  const o = {}; Object.keys(u).forEach((k) => { if (k === 'text') { const n = Object.keys(u.text || {}); if (n.length) o.text = n; } else if (Array.isArray(u[k]) && u[k].length) o[k] = u[k]; });
+  return Object.keys(o).length ? o : null;
+}
+
+/** A scan that stopped at the byte limit says so wherever its provenance is shown. */
+export const budgetNote = (r) => (r && r.scanned && r.scanned.budgetHit ? '; reading stopped at the 64 MiB limit for one scan, so some files were not read' : '');
+
+/** What the reader itself knows about a list it read from source (never taken from the list): parts it could not read,
+ *  and registrations whose name it could not resolve, with their text for the poisoning scan. null for other lists. */
+export function readerNotes(c) {
+  if (!c || c.kind !== 'source') return null;
+  return { unreadable: c.unreadable || {}, unresolved: Array.isArray(c.unresolved) ? c.unresolved : [] };
+}
+
 /** No tool definitions in a folder: the message names the live alternatives (the CLI's and the Action's). */
 export function noToolsMessage(where, r) {
-  return 'no tool definitions found in ' + where + ' (scanned ' + r.scanned.source + ' of ' + r.scanned.sourceTotal + ' source files, and the committed tool lists and MCPB manifests). ' + LIVE_ADVICE;
+  return 'no tool definitions found in ' + where + ' (' + scannedText(r) + '). ' + LIVE_ADVICE;
+}
+
+/** What a scan read: "scanned 120 of 130 source files, and the committed tool lists and MCPB manifests", with the limits it hit. */
+export function scannedText(r) {
+  const s = r.scanned || {};
+  const read = s.read !== undefined ? s.read : s.source;
+  let out = 'scanned ' + read + ' of ' + s.sourceTotal + ' source files, and the committed tool lists and MCPB manifests';
+  if (s.candidates !== undefined && s.candidates > s.source) out += '; ' + s.candidates + ' files may define a tool and the first ' + s.source + ' were read for tools';
+  if (s.budgetHit) out += '; reading stopped at the 64 MiB limit for one scan, so some files were not read';
+  if (r.truncated && r.via !== 'directory') out += '; GitHub cut the repository listing short (truncated), so files were missed: point --repo at the server\'s folder (…/tree/<ref>/<folder>)';
+  return out;
 }
 
 /** Snapshots of other servers that were found and not used (several, and no tool defined in the source). */
@@ -122,9 +157,11 @@ export const APPROXIMATE = 'approximate: read from source, not the server\'s liv
  *   { problem: 'none' }                 no tool definition found (or only in folders that are not the server)
  *   { problem: 'names', candidate }     only tool names (an MCPB manifest), which cannot be graded
  *   { problem: 'multiple' }             tools of more than one server (or several committed lists): nothing is merged or picked
+ *   { problem: 'incomplete' }           the reader had to skip tool candidates at its work limit: the list would be incomplete
  */
 export function usableList(r) {
   const c = r.best;
+  if (r.hints && r.hints.incomplete) return { problem: 'incomplete' };
   const multi = !!(r.hints && (r.hints.servers || r.hints.lists));
   if ((!c || c.fidelity === 'names') && multi) return { problem: 'multiple' };
   if (!c) return { problem: 'none' };
@@ -155,15 +192,32 @@ export function whyNothing(r) {
   const ign = (h.ignoredFolders || []).filter((x) => x.tools);
   if (ign.length) s += ' Tool definitions were found only in folders that look like admin, console, docs, examples, evaluation or test code, which are not graded from a parent folder: ' + ign.map((x) => line(x.path, 200) + ' (' + plural(x.tools, 'tool') + ')').join(', ') + '; if one of them is the server, point the check at that folder.';
   if (h.serverWithoutTools) s += ' A server is constructed in ' + line(h.serverWithoutTools || '.', 200) + ', but none of its tools could be read.';
+  if (h.unresolvedNames) s += ' ' + plural(h.unresolvedNames, 'tool registration') + ' had a name the reader could not resolve (computed at run time).';
   if (h.lists) s += ' Not used: ' + plural(h.lists.length, 'committed tool list') + ' in different places (' + h.lists.map((x) => line(x.path, 200)).join(', ') + '); grade one by giving the file itself.';
   return s + foreignNote(r);
+}
+
+/** Where a names-only list came from: a manifest, or the source of a language whose schemas are not read yet. */
+export function namesOnlyText(c) {
+  if (c.language) {
+    const names = c.tools.slice(0, 5).map((t) => line(t.name, 80)).join(', ') + (c.tools.length > 5 ? ', …' : '');
+    return plural(c.tools.length, 'tool') + ' read from the ' + c.language + ' source: ' + names + '; names and descriptions only, since ' + c.language + ' schemas are not read yet';
+  }
+  return line(c.path, 200) + ' lists names and descriptions without schemas';
+}
+
+/** Why a scan was refused as incomplete (the reader's work limit), with the files to look at. */
+export function incompleteText(r) {
+  const x = (r.hints && r.hints.incomplete) || { candidates: 0, files: [] };
+  return plural(x.candidates, 'possible tool definition') + ' in ' + x.files.slice(0, 3).map((f) => line(f, 200)).join(', ') + (x.files.length > 3 ? ' and ' + (x.files.length - 3) + ' more' : '') + ' could not be read completely (the reader\'s work limit on deeply nested source, a reader error, or more unreadable text than it keeps), so the list would be incomplete and nothing was graded';
 }
 
 /** The CLI's reading of a scan: the candidate to grade, or an InputFailure (exit 3) with the same advice as the Action. */
 function cliUsable(r, where, pick) {
   const u = usableList(r);
+  if (u.problem === 'incomplete') throw new InputFailure('reading ' + where + ': ' + incompleteText(r) + '. ' + LIVE_ADVICE, 'unreachable');
   if (u.problem === 'none') throw new InputFailure(noToolsMessage(where, r) + whyNothing(r), 'unreachable');
-  if (u.problem === 'names') throw new InputFailure('only tool names were found in ' + where + ' (' + line(u.candidate.path, 200) + ' lists names and descriptions without schemas), which cannot be graded. ' + LIVE_ADVICE, 'unreachable');
+  if (u.problem === 'names') throw new InputFailure('only tool names were found in ' + where + ' (' + namesOnlyText(u.candidate) + '), which cannot be graded. ' + LIVE_ADVICE, 'unreachable');
   if (u.problem === 'multiple') {
     throw new InputFailure('found tool definitions of more than one server in ' + where + ': ' + serverChoices(r) + '. Nothing was merged or picked. '
       + 'Check one server at a time (' + serverFolders(r).slice(0, 3).map((f) => pick(f)).join(', ') + '), or ' + LIVE_ADVICE.charAt(0).toLowerCase() + LIVE_ADVICE.slice(1), 'unreachable');
@@ -183,8 +237,9 @@ async function fromRepoDir(dir, opt) {
   }
   const base = String(dir).replace(/\/+$/, '') || '.';
   const c = cliUsable(r, line(dir), (folder) => '--repo-dir ' + (folder === '.' ? base : base + '/' + folder));
-  const { provenance, left, cond } = repoProvenance(c);
-  return { data: c.tools, where: c.where || null, source: { kind: 'dir', dir: r.repo, fidelity: c.fidelity, approximate: isApproximate(c), provenance, from: c.kind, files: c.files || [c.path], ...(c.built ? { built: true } : {}), ...(r.truncated ? { truncated: true } : {}), ...(left.length ? { left_out: left.map((x) => ({ name: line(x.name, 128), reasons: x.reasons.map((y) => line(y, 160)) })) } : {}), ...(cond.length ? { conditional: cond.map((x) => line(x.name, 128)) } : {}) } };
+  const { provenance: prov, left, cond } = repoProvenance(c);
+  const provenance = prov + budgetNote(r);
+  return { data: c.tools, where: c.where || null, reader: readerNotes(c), source: { kind: 'dir', dir: r.repo, fidelity: c.fidelity, approximate: isApproximate(c), provenance, from: c.kind, files: c.files || [c.path], ...(unreadableNames(c) ? { unreadable: unreadableNames(c) } : {}), ...(c.unresolvedNames ? { unresolved_names: c.unresolvedNames } : {}), ...(c.built ? { built: true } : {}), ...(r.truncated ? { truncated: true } : {}), ...(left.length ? { left_out: left.map((x) => ({ name: line(x.name, 128), reasons: x.reasons.map((y) => line(y, 160)) })) } : {}), ...(cond.length ? { conditional: cond.map((x) => line(x.name, 128)) } : {}) } };
 }
 
 async function fromRegistry(name, opt, note) {

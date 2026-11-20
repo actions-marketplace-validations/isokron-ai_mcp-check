@@ -8,6 +8,7 @@ import { InputError, MAX_BYTES, MAX_DEPTH, MAX_TOOLS } from './limits.js';
 import { ALL_SECTIONS, DEFAULT_SECTIONS, GRADED_SECTIONS, GRADES, belowMinGrade, sarifWithLocations, surfaceLine } from './report.js';
 import { approximateLine, collect, InputFailure, line, sourceLine, savedList } from './inputs/collect.js';
 import { tagged } from './links.js';
+import { analyseList, skippedLine } from './unreadable.js';
 
 const USAGE = `mcp-check ${VERSION}: grade an MCP server's tools/list (rubric ${M.RUBRIC_VERSION})
 
@@ -137,6 +138,8 @@ function textReport(r, opt, below, diff, source) {
   if (sl) out.push(sl);
   const al = approximateLine(source);
   if (al) out.push(al);
+  const sk = skippedLine(r);
+  if (sk) out.push(sk);
   GRADED_SECTIONS.forEach((k) => {
     const s = r.sections[k];
     out.push('  ' + s.name.padEnd(32) + (s.grade || 'n/a').padEnd(3) + (s.score == null ? '' : String(s.score).padStart(3) + '/100') + (s.ready === false ? '  not ready' : '') + (s.caps && s.caps.length ? '  ' + s.caps.join(' ') : '') + (opt.sections.includes(k) ? '' : '  (not gated)'));
@@ -159,7 +162,7 @@ function grade(item, opt, prevTools) {
     if (e instanceof InputError) return { error: e.message };
     throw e;
   }
-  const r = M.analyse(parsed);
+  const r = analyseList(parsed, item.reader || null); // a source read: checks of parts the reader could not read are skipped
   const below = belowMinGrade(r, opt.sections, opt.minGrade);
   const diff = prevTools ? M.diffCatalogs(prevTools, parsed.tools) : null;
   return { r, below, diff, parsed, failed: below.length > 0 || !!(diff && diff.highRisk.length) };
@@ -182,7 +185,7 @@ function render(item, x, opt, multi) {
   }
   if (opt.format === 'md') {
     const md = M.toMarkdown(x.r);
-    const sl = [sourceLine(src), approximateLine(src)].filter(Boolean).map(mdEscape).join('\n\n');
+    const sl = [sourceLine(src), approximateLine(src), skippedLine(x.r)].filter(Boolean).map(mdEscape).join('\n\n');
     return (multi ? '<!-- ' + line(item.label).replace(/--/g, '- -') + ' -->\n' : '') + (sl ? md.replace(/^(# [^\n]*\n)/, (m) => m + '\n' + sl + '\n') : md);
   }
   return (multi ? '== ' + item.label + '\n' : '') + textReport(x.r, opt, x.below, x.diff, src);

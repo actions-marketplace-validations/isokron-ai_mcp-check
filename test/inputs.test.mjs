@@ -250,7 +250,7 @@ test('repo: snapshots win over source; provenance label on the Source line', asy
   const [item] = await withFetch(f, () => collect(opt({ repo: 'github.com/o/r' }), (n) => notes.push(n)));
   assert.equal(item.data.length, 2);
   assert.equal(item.source.fidelity, 'exact');
-  assert.equal(sourceLine(item.source), 'Source: o/r@abc123 (github), exact: committed tool snapshots');
+  assert.equal(sourceLine(item.source), 'Source: o/r@abc123 (github), exact: committed tool snapshots (every toolset and flag variant in them; the server\'s default list may be smaller)');
   assert.match(notes[0], /found 2 tools in o\/r@abc123/);
 });
 test('repo: GitHub refused (403) -> jsDelivr; derived fidelity; an oversized file is not read', async () => {
