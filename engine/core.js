@@ -773,7 +773,7 @@
       const spaced = value.replace(RE_BLANKS, ' ');
       const shortId = SHORT_ID.test(value.trim());
       const prose = /\s/.test(spaced.trim());
-      const unjoined = prose ? spaced.replace(/[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+){2,}/g, (m) => m.replace(/[-_]+/g, ' ')) : null;
+      const unjoined = prose ? spaced.replace(/(?<![A-Za-z0-9])[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+){2,}/g, (m) => m.replace(/[-_]+/g, ' ')) : null;
       const texts = prose ? [spaced] : [spaced, spaced.replace(/[-_\/]+/g, ' ')];
       const textsAll = unjoined && unjoined !== spaced ? texts.concat([unjoined]) : texts;
       const findAll = (re) => { for (const x of textsAll) { const m = x.match(re); if (m) return m; } return null; };
