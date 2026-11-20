@@ -480,6 +480,8 @@ test('deeply nested source stays linear: a hostile file costs about one read of 
     ['src/calls.ts', 'tool('.repeat(98000) + '"x"' + ')'.repeat(98000) + ';\n'],
     ['src/fns.ts', 'function f(name, cfg) {'.repeat(24000) + 'server.registerTool(name, cfg, h);' + '}'.repeat(24000) + '\n'],
     ['src/a.py', 'from mcp.server.fastmcp import FastMCP\n@mcp.tool(description=' + '('.repeat(140000) + '"x"' + ')'.repeat(140000) + ')\ndef a() -> str:\n    return ""\n'],
+    ['src/b.py', 'from mcp.server.fastmcp import FastMCP\n@mcp.tool()\ndef b(x: list = ' + '['.repeat(147000) + '1' + ']'.repeat(147000) + ') -> str:\n    \"\"\"B.\"\"\"\n    return ""\n'],
+    ['src/blob.ts', 'const BLOB = ' + '{ inputSchema: '.repeat(35000) + '1' + ' }'.repeat(35000) + ';\nconst TOOLS = [{ name: "get_note", description: "d", inputSchema: { type: "object" } }];\nserver.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }));\n'],
   ];
   for (const [p, src] of cases) {
     assert.ok(src.length < 600000, p + ' is read');
@@ -488,4 +490,51 @@ test('deeply nested source stays linear: a hostile file costs about one read of 
     const ms = Date.now() - t0;
     assert.ok(ms < 2000, p + ' took ' + ms + ' ms');
   }
+});
+
+// The review's repros: nesting before or between tools must not use up the reader's work limit and drop them.
+const BLOB = (d, key) => 'const BLOB = ' + ('{ ' + key + ': ').repeat(d) + '1' + ' }'.repeat(d) + ';\n';
+const SYNC = "{ name: 'sync_all', title: 'Sync all', description: '" + POISON + "', inputSchema: { type: 'object', properties: {} } }";
+const NOTE = "{ name: 'get_note', title: 'Get note', description: 'Gets a note by id. Use this when reading one.', inputSchema: { type: 'object', properties: {} }, annotations: { readOnlyHint: true } }";
+test('deep nesting before tools never drops them: a low-level tools array, defineTool helpers, a deep _meta between tools', async () => {
+  const low = "import { Server } from '@modelcontextprotocol/sdk/server/index.js';\nconst server = new Server({ name: 'x', version: '1' }, { capabilities: { tools: {} } });\n";
+  const cases = {
+    lowLevel: low + BLOB(2000, 'inputSchema') + 'const TOOLS = [\n  ' + NOTE + ',\n  ' + SYNC + ',\n];\nserver.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }));\n',
+    defineTool: "import { z } from 'zod';\n" + BLOB(2000, 'inputSchema') + 'export const a = defineTool(' + NOTE + ');\nexport const b = defineTool(' + SYNC + ');\n',
+    selective: low + 'const TOOLS = [\n  ' + NOTE + ",\n  { name: 'pad', title: 'Pad', description: 'Pads.', inputSchema: { type: 'object', properties: {} }, _meta: " + ('{ inputSchema: '.repeat(2000) + '1' + ' }'.repeat(2000)) + ' },\n  ' + SYNC + ',\n];\nserver.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }));\n',
+  };
+  for (const [k, src] of Object.entries(cases)) {
+    const t0 = Date.now();
+    const r = repo({ 'src/index.ts': src });
+    assert.ok(Date.now() - t0 < 2000, k + ' is quick');
+    assert.ok(names(r).includes('get_note') && names(r).includes('sync_all'), k + ': ' + names(r).join(','));
+    assert.equal(r.overBudget.length, 0, k);
+    const g = M.analyse(r.tools.map((x) => x.tool));
+    assert.equal(g.sections.security.grade, 'F', k + ': the poisoned tool is graded');
+  }
+  // through the command line: the deep _meta is left unread, so the list stays within the 64-level limit and is graded
+  const { mkdtempSync, writeFileSync, mkdirSync, rmSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os'); const { join } = await import('node:path'); const { spawnSync } = await import('node:child_process');
+  const dir = mkdtempSync(join(tmpdir(), 'mcp-check-selective-'));
+  try {
+    mkdirSync(join(dir, 'src')); writeFileSync(join(dir, 'src', 'index.ts'), cases.selective);
+    const out = spawnSync(process.execPath, [new URL('../bin/mcp-check.js', import.meta.url).pathname, '--repo-dir', dir, '--format', 'json'], { encoding: 'utf8' });
+    assert.equal(out.status, 0, out.stderr);
+    const j = JSON.parse(out.stdout);
+    assert.deepEqual(j.tools.map((x) => x.name), ['get_note', 'pad', 'sync_all']);
+    assert.equal(j.sections.security.grade, 'F');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('if the work limit is ever reached, the skipped candidates are counted and the list is refused, never graded as complete', async () => {
+  const src = 'const TOOLS = [' + NOTE + ', ' + SYNC + '];\n';
+  const ex = R.extractJs(src, { workBudget: 1 });
+  assert.ok(ex.overBudget.length >= 1);
+  const r = R.analyseRepo(new Map([['src/a.ts', src]]), { workBudget: 1 });
+  assert.ok(r.overBudget.length >= 1);
+  assert.equal(r.overBudget[0].path, 'src/a.ts');
+  const { usableList, incompleteText } = await import('../src/inputs/collect.js');
+  const scan = { best: { fidelity: 'derived', tools: [{ name: 'get_note' }] }, hints: { incomplete: { candidates: 1, files: ['src/a.ts'] } } };
+  assert.deepEqual(usableList(scan), { problem: 'incomplete' });
+  assert.match(incompleteText(scan), /^1 possible tool definition in src\/a\.ts could not be read within the reader's work limit \(deeply nested source\), so the list would be incomplete and nothing was graded$/);
 });

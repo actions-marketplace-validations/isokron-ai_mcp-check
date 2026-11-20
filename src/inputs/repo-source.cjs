@@ -224,7 +224,24 @@
   const HANDLER_KEYS = new Set(['handler', 'execute', 'callback', 'run', 'cb', 'fn', 'impl']);
   // An object literal. Besides the value: `unknownKeys` (keys whose value could not be read), `partialKeys` (strings read in part,
   // a template with an unresolved ${…}) and `spreadUnknown` (a ...spread that could not be read).
+  // Each object of a file is parsed once per context: a nested object met again (the "{" of an object already read as
+  // part of an outer one) comes from this memo, so nested source costs one read, not one per level. Callers get a copy.
+  const OBJ_MEMO = new WeakMap();
+  // Values nested deeper than MAX_NEST (48) are not read (they are SKIP, like any value the reader cannot read): no deep
+  // recursion, and no stack overflow that would make every enclosing level try again.
+  const MAX_NEST = 48; let nest = 0; // under the 64-level limit of a tool list, with room for the list around a tool
+  function nested(t, i, fn) {
+    if (nest >= MAX_NEST) return { value: SKIP, end: matchClose(t, i) + 1, exact: false };
+    nest++; try { return fn(); } finally { nest--; }
+  }
   function parseObject(t, i, ctx) {
+    if (!ctx || typeof ctx !== 'object') return nested(t, i, () => parseObjectOnce(t, i, ctx));
+    let m = OBJ_MEMO.get(ctx); if (!m) { m = new Map(); OBJ_MEMO.set(ctx, m); }
+    let r = m.get(i);
+    if (!r) { r = nested(t, i, () => parseObjectOnce(t, i, ctx)); m.set(i, r); }
+    return Object.assign({}, r, { value: r.value && r.value !== SKIP && typeof r.value === 'object' ? Object.assign({}, r.value) : r.value });
+  }
+  function parseObjectOnce(t, i, ctx) {
     const o = {}; let exact = true; const optionalKeys = new Set(); const unknown = new Set(); const partial = new Set(); let spreadUnknown = false; const childOptional = {}; const literals = {}; i++;
     while (i < t.length && !isP(t[i], '}')) {
       const k = t[i];
@@ -285,7 +302,8 @@
     }
     return out.length ? out.join(' … ').slice(0, MAX_STR) : null;
   }
-  function parseArray(t, i, ctx) {
+  function parseArray(t, i, ctx) { return nested(t, i, () => parseArrayOnce(t, i, ctx)); }
+  function parseArrayOnce(t, i, ctx) {
     const a = []; let exact = true; i++;
     while (i < t.length && !isP(t[i], ']')) {
       if (isP(t[i], '...')) { exact = false; i = skipExpr(t, i + 1); if (isP(t[i], ',')) i++; continue; }
@@ -820,10 +838,11 @@
       if (isP(t[k], '{')) { const c = matchClose(t, k); for (let m = k + 1; m < c; m++) if (t[m].type === 'id' && t[m].value === 'return' && isP(t[m + 1], '{')) return m + 1; }
       return -1;
     };
-    // Work limits that keep a file linear: objects nested in objects are parsed again at each level, so the tokens
-    // parsed for tools are bounded by a multiple of the file (a hostile file loses tools, never the time of a scan).
-    let budget = 8 * t.length + 200000;
-    const spend = (n) => { budget -= Math.max(1, n); return budget >= 0; };
+    // A work limit that keeps a file linear. Each token is charged once (an object nested in one already read comes from
+    // the parse memo), so the limit is a safety net; if it ever runs out, the candidates it skips are counted
+    // (tools.overBudget) and the scan refuses to grade the list rather than drop them silently.
+    let budget = opts.workBudget !== undefined ? opts.workBudget : 8 * t.length + 200000; let paidTo = -1; const overBudget = []; // opts.workBudget: tests
+    const spend = (a, b) => { const extra = Math.max(1, b - Math.max(a, paidTo)); if (b > paidTo) paidTo = b; budget -= extra; return budget >= 0; };
     let schemaObj = null;
     const schemaObjects = () => { // the "{" of every object with a schema key of its own (a key at its first level)
       if (schemaObj) return schemaObj; schemaObj = new Set(); const stack = [];
@@ -835,6 +854,7 @@
       return schemaObj;
     };
     const wrappers = registerWrappers(t);
+    if (wrappers.overBudget) overBudget.push({ line: null });
     for (let i = 0; i < t.length; i++) {
       const tok = t[i];
       try { // one registration that cannot be read never drops the others: it is counted instead
@@ -861,7 +881,7 @@
         if (objAt >= 0) {
           const fast = fn === 'addTool';
           const actx = fast ? Object.assign({}, ctx, { fl: Object.assign({}, ctx.fl, { dialect: 'draft-07', closed: true, execution: false }) }) : ctx;
-          if (!spend(matchClose(t, objAt) - objAt)) continue;
+          if (!spend(objAt, matchClose(t, objAt))) { overBudget.push({ line: lineOf(at) }); continue; }
           const o = parseObjectWithZod(t, objAt, actx); o.start = objAt;
           // keyed: { lookup_docs: tool({ ... }) } names the tool by its key
           const keyTok = !member && isP(t[i - 1], ':') && t[i - 2] && (t[i - 2].type === 'id' || t[i - 2].type === 'str') ? t[i - 2] : null;
@@ -917,7 +937,7 @@
       if (isP(tok, '{')) {
         // cheap pre-check: a schema key within this object at depth 1 (from one pass over the file)
         if (!schemaObjects().has(i)) continue;
-        if (!spend(matchClose(t, i) - i)) continue;
+        if (!spend(i, matchClose(t, i))) { overBudget.push({ line: lineOf(tok.start) }); continue; }
         const o = parseObjectWithZod(t, i, ctx); o.start = i;
         const v = o.value;
         if (!v || v === SKIP) continue;
@@ -940,7 +960,7 @@
       } catch (e) { const f = isP(tok, '.') ? t[i + 1] : tok; if (f && f.type === 'id' && (SDK_CALLS.has(f.value) || TOOLISH.test(f.value)) && isP(t[isP(tok, '.') ? i + 2 : i + 1], '(')) unresolved.push({ line: lineOf(tok.start) }); }
     }
     if (opts.classTools && opts.classTools.size) { let ct = []; try { ct = classTools(t, ctx, opts.classTools); } catch (e) { ct = []; } ct.forEach((x) => add(x.tool, 'derived', x.at, { classTool: true, groupPath: opts.classTools.root ? opts.classTools.root.get(x.base) : undefined })); }
-    tools.unresolved = unresolved;
+    tools.unresolved = unresolved; tools.overBudget = overBudget;
     return tools;
   }
   // Tools written as classes whose base class registers them (server.registerTool(this.name, …)):
@@ -1028,7 +1048,7 @@
       let b = matchClose(t, open) + 1; if (isP(t[b], '=>')) b++;
       while (t[b] && !isP(t[b], '{') && !(t[b].type === 'id' || isP(t[b], '('))) b++; // skip a TS return type
       const end = isP(t[b], '{') ? matchClose(t, b) : skipExpr(t, b);
-      if ((scanned += end - b) > 8 * t.length + 200000) break; // nested functions: a bounded total, so the scan stays linear
+      if ((scanned += end - b) > 8 * t.length + 200000) { out.overBudget = true; break; } // nested functions: a bounded total, so the scan stays linear
       for (let k = b; k < end - 2; k++) {
         if (!(isP(t[k], '.') && t[k + 1].type === 'id' && t[k + 1].value === 'registerTool' && isP(t[k + 2], '('))) continue;
         const as = argStarts(t, k + 2);
@@ -1040,7 +1060,7 @@
     }
     return out;
   }
-  function findKeyToken(t, from, to, key) { for (let k = from + 1, d = 0; k < to; k++) { if (isP(t[k], '{') || isP(t[k], '[') || isP(t[k], '(')) d++; else if (isP(t[k], '}') || isP(t[k], ']') || isP(t[k], ')')) d--; else if (d === 0 && (t[k].type === 'id' || t[k].type === 'str') && t[k].value === key && isP(t[k + 1], ':')) return k; } return -1; }
+  function findKeyToken(t, from, to, key) { return keyAtTop(t, from, to, key); }
   // A raw shape { a: <schema>, b: <schema> } rather than a schema (no type, $ref, composition or properties keyword).
   // A JSON Schema rather than a raw shape: a keyword with a schema value ("type": "string", "$ref", anyOf, …). A raw
   // shape can have a property named "type" whose value is a schema ({ type: z.enum([...]) }).
@@ -1053,15 +1073,35 @@
   function isRawShape(s) { return !!s && typeof s === 'object' && !Array.isArray(s) && !isSchemaObj(s) && Object.values(s).every((x) => x && typeof x === 'object' && !Array.isArray(x)); }
   function isZodShapeLike(s) { return s && s.type === 'object' && s.properties; }
   function isAnnotations(s) { return s && Object.keys(s).some((k) => /Hint$/.test(k) || k === 'title'); }
-  function parseObjectWithZod(t, i, ctx) {
-    let sawZod = false;
-    const c2 = Object.assign({}, ctx);
-    const r = parseObject(t, i, c2);
-    // a zod value anywhere in the object (or the .shape of a zod constant) makes it derived
-    for (let k = i; k < r.end; k++) {
-      if (t[k].type === 'id' && ctx.zodNames && ctx.zodNames.has(t[k].value) && isP(t[k + 1], '.')) { sawZod = true; break; }
-      if (t[k].type === 'id' && t[k].value === 'shape' && isP(t[k - 1], '.') && t[k - 2] && t[k - 2].type === 'id' && ctx.consts && ctx.consts[t[k - 2].value] && ctx.consts[t[k - 2].value].zod) { sawZod = true; break; }
+  // Where zod is used in a file (a zod binding followed by ".", or .shape of a zod constant), as running counts, so
+  // "is there zod between a and b" is answered without rescanning (cached per token array and constant table).
+  const ZOD_PREFIX = new WeakMap();
+  function zodBetween(t, ctx, a, b) {
+    let byConsts = ZOD_PREFIX.get(t); if (!byConsts) { byConsts = new WeakMap(); ZOD_PREFIX.set(t, byConsts); }
+    const key = ctx.consts || ZOD_PREFIX; let pre = byConsts.get(key);
+    if (!pre) {
+      pre = new Int32Array(t.length + 1);
+      for (let k = 0; k < t.length; k++) {
+        const z = (t[k].type === 'id' && ctx.zodNames && ctx.zodNames.has(t[k].value) && isP(t[k + 1], '.'))
+          || (t[k].type === 'id' && t[k].value === 'shape' && isP(t[k - 1], '.') && t[k - 2] && t[k - 2].type === 'id' && ctx.consts && ctx.consts[t[k - 2].value] && ctx.consts[t[k - 2].value].zod);
+        pre[k + 1] = pre[k] + (z ? 1 : 0);
+      }
+      byConsts.set(key, pre);
     }
+    return pre[Math.min(b, t.length)] - pre[Math.max(0, a)] > 0;
+  }
+  // The token of `key:` at the first level of the object at i (stepping over nested brackets), or -1.
+  function keyAtTop(t, i, end, key) {
+    for (let k = i + 1; k < end; k++) {
+      if (isP(t[k], '{') || isP(t[k], '[') || isP(t[k], '(')) { k = matchClose(t, k); continue; }
+      if ((t[k].type === 'id' || t[k].type === 'str') && t[k].value === key && isP(t[k + 1], ':')) return k;
+    }
+    return -1;
+  }
+  function parseObjectWithZod(t, i, ctx) {
+    const r = parseObject(t, i, ctx);
+    // a zod value anywhere in the object (or the .shape of a zod constant) makes it derived
+    const sawZod = zodBetween(t, ctx, i, r.end);
     // inputSchema given as a raw zod shape { a: z.string() } (registerTool): wrap as an object schema
     if (r.value && r.value !== SKIP) {
       const fl = ctx.fl || FL_DEFAULT;
@@ -1069,7 +1109,7 @@
         const s = r.value[key];
         if (sawZod && s && typeof s === 'object' && !isSchemaObj(s)) {
           // find the key in tokens to recover optional flags
-          for (let k = i + 1; k < r.end; k++) if ((t[k].type === 'id' || t[k].type === 'str') && t[k].value === key && isP(t[k + 1], ':')) { const sh = zodShapeAt(t, k + 2, ctx); if (sh.schema) r.value[key] = sh.schema; break; }
+          const k = keyAtTop(t, i, r.end, key); if (k >= 0) { const sh = zodShapeAt(t, k + 2, ctx); if (sh.schema) r.value[key] = sh.schema; }
         } else if (sawZod && s && s.type === 'object' && !s.$schema) { r.value[key] = Object.assign({}, s, { $schema: DIALECT[fl.dialect] }, fl.closed && s.additionalProperties === undefined ? { additionalProperties: false } : {}); }
       });
     }
@@ -1178,8 +1218,13 @@
   }
   // A Python expression's value when it is knowable statically: strings (adjacent, "+", f-strings with constant parts,
   // dedent(…), .strip()), numbers, True/False/None, lists, tuples, dicts, dict(...), ToolAnnotations(...), constants.
+  let pyNest = 0;
   function pyValue(t, i, ctx) {
     const tok = t[i]; if (!tok) return { value: PY_SKIP, end: i };
+    if (pyNest >= MAX_NEST) return { value: PY_SKIP, end: pySkip(t, i) }; // deeper values are not read (no deep recursion)
+    pyNest++; try { return pyValueOnce(t, i, ctx, tok); } finally { pyNest--; }
+  }
+  function pyValueOnce(t, i, ctx, tok) {
     let r = null;
     if (tok.type === 'str' || tok.type === 'tpl' || (tok.type === 'id' && !isP(t[i + 1], '('))) {
       let out = ''; let exact = true; let any = false; let j = i; let ok = true;
@@ -1287,8 +1332,12 @@
     }
     return -1;
   }
+  // Deeper than 64 brackets: not read (a default or a type the reader leaves unknown), which keeps splitTop's
+  // per-level work bounded and the read linear in the text.
+  function tooDeep(s, max) { let d = 0; let q = null; for (let i = 0; i < s.length; i++) { const c = s[i]; if (q) { if (c === '\\') i++; else if (c === q) q = null; continue; } if (c === '"' || c === "'") q = c; else if (c === '(' || c === '[' || c === '{') { if (++d > max) return true; } else if (c === ')' || c === ']' || c === '}') d--; } return false; }
   function pyLiteral(s) {
     s = s.trim();
+    if (tooDeep(s, 64)) return null;
     if (/^(["'])(?:\\.|(?!\1).)*\1$/.test(s)) return { v: s.slice(1, -1).replace(/\\(.)/g, '$1') };
     if (/^-?\d+$/.test(s)) return { v: parseInt(s, 10) };
     if (/^-?\d*\.\d+(e-?\d+)?$/i.test(s)) return { v: parseFloat(s) };
@@ -1301,6 +1350,7 @@
   function pyKwargs(argstr) { const o = {}; splitTop(argstr, ',').forEach((p) => { const m = /^(\w+)\s*=\s*([\s\S]+)$/.exec(p); if (m) o[m[1]] = m[2]; }); return o; }
   function pyType(tp) {
     tp = tp.trim();
+    if (tooDeep(tp, 64)) return { schema: {}, exact: false };
     let m;
     if ((m = /^Annotated\[([\s\S]+)\]$/.exec(tp))) {
       const parts = splitTop(m[1], ','); const s = pyType(parts[0]);
@@ -2067,14 +2117,15 @@
     const pyConsts = pyGlobalConsts(readable); const pyRegs = pyRegistrars(readable); const mounts = pyMounts(readable);
     const bases = toolBases(readable);
     const found = []; const byName = new Set();
-    const dupes = []; const unresolved = [];
+    const dupes = []; const unresolved = []; const overBudget = [];
     srcList.forEach(([p, t]) => {
       let ts = [];
       try {
         const js = /\.(ts|mts|cts|js|mjs|cjs)$/.test(p);
-        ts = extractFromFile(p, t, js ? { sdk, consts: mods.seedFor(p), tokens: mods.tokens(p), classTools: bases } : { sdk, pyConsts, pyRegistrars: pyRegs });
+        ts = extractFromFile(p, t, js ? { sdk, consts: mods.seedFor(p), tokens: mods.tokens(p), classTools: bases, workBudget: opts.workBudget } : { sdk, pyConsts, pyRegistrars: pyRegs });
       } catch (e) { ts = []; ts.unresolved = [{ line: null }]; } // a file the reader fails on counts as one unread registration
       (ts.unresolved || []).forEach((u) => unresolved.push(Object.assign({ path: p }, u)));
+      (ts.overBudget || []).forEach((u) => overBudget.push(Object.assign({ path: p }, u)));
       ts.forEach((x) => {
         // a FastMCP server mounted under a prefix lists its tools as <prefix>_<name>
         if (x.server && mounts.has(x.server)) { x.tool = Object.assign({}, x.tool, { name: mounts.get(x.server) + '_' + x.tool.name }); x.prefix = mounts.get(x.server); }
@@ -2087,7 +2138,7 @@
     found.forEach((f) => { f.marks = marks.get(f); f.excluded = f.marks.some((m) => m.exclude); });
     // Never return an empty list because of exclusions: the marks stay, the exclusion does not apply.
     if (found.length && found.every((f) => f.excluded)) found.forEach((f) => { f.excluded = false; f.marks.forEach((m) => { m.exclude = false; }); });
-    return { found, tools: found.filter((f) => !f.excluded), excluded: found.filter((f) => f.excluded), sdk, plan, files: srcList.length, candidates: candidates.length, read: readable.length, unresolved: unresolved.length, unresolvedList: unresolved };
+    return { found, tools: found.filter((f) => !f.excluded), excluded: found.filter((f) => f.excluded), sdk, plan, files: srcList.length, candidates: candidates.length, read: readable.length, unresolved: unresolved.length, unresolvedList: unresolved, overBudget };
   }
 
   // ------------------------------------------------------------ network
@@ -2309,6 +2360,8 @@
       if (c) candidates.push(c);
     }
     if (an.unresolved) hints.unresolvedNames = an.unresolved;
+    // Candidates the reader had to skip at its work limit: the list would be incomplete, so nothing is graded.
+    if (an.overBudget && an.overBudget.length) hints.incomplete = { candidates: an.overBudget.length, files: Array.from(new Set(an.overBudget.map((x) => x.path))) };
     return { scanned: { exact: plan.exact.length, manifests: plan.manifests.length, source: an.files, candidates: an.candidates, read: an.read, sourceTotal: plan.src.length, capped: plan.src.length > maxRead || an.candidates > an.files, budgetHit: !!(o.state && o.state.budgetHit) }, candidates, best: candidates[0] || null, hints };
   }
 

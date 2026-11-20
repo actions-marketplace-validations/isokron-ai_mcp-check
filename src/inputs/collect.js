@@ -148,9 +148,11 @@ export const APPROXIMATE = 'approximate: read from source, not the server\'s liv
  *   { problem: 'none' }                 no tool definition found (or only in folders that are not the server)
  *   { problem: 'names', candidate }     only tool names (an MCPB manifest), which cannot be graded
  *   { problem: 'multiple' }             tools of more than one server (or several committed lists): nothing is merged or picked
+ *   { problem: 'incomplete' }           the reader had to skip tool candidates at its work limit: the list would be incomplete
  */
 export function usableList(r) {
   const c = r.best;
+  if (r.hints && r.hints.incomplete) return { problem: 'incomplete' };
   const multi = !!(r.hints && (r.hints.servers || r.hints.lists));
   if ((!c || c.fidelity === 'names') && multi) return { problem: 'multiple' };
   if (!c) return { problem: 'none' };
@@ -195,9 +197,16 @@ export function namesOnlyText(c) {
   return line(c.path, 200) + ' lists names and descriptions without schemas';
 }
 
+/** Why a scan was refused as incomplete (the reader's work limit), with the files to look at. */
+export function incompleteText(r) {
+  const x = (r.hints && r.hints.incomplete) || { candidates: 0, files: [] };
+  return plural(x.candidates, 'possible tool definition') + ' in ' + x.files.slice(0, 3).map((f) => line(f, 200)).join(', ') + (x.files.length > 3 ? ' and ' + (x.files.length - 3) + ' more' : '') + ' could not be read within the reader\'s work limit (deeply nested source), so the list would be incomplete and nothing was graded';
+}
+
 /** The CLI's reading of a scan: the candidate to grade, or an InputFailure (exit 3) with the same advice as the Action. */
 function cliUsable(r, where, pick) {
   const u = usableList(r);
+  if (u.problem === 'incomplete') throw new InputFailure('reading ' + where + ': ' + incompleteText(r) + '. ' + LIVE_ADVICE, 'unreachable');
   if (u.problem === 'none') throw new InputFailure(noToolsMessage(where, r) + whyNothing(r), 'unreachable');
   if (u.problem === 'names') throw new InputFailure('only tool names were found in ' + where + ' (' + namesOnlyText(u.candidate) + '), which cannot be graded. ' + LIVE_ADVICE, 'unreachable');
   if (u.problem === 'multiple') {
