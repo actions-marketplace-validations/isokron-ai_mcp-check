@@ -11,9 +11,10 @@
 //            _meta[*].static_responses["tools/list"]
 //   literal  JS/TS object literals { name, description, inputSchema: {JSON Schema literal} }
 //   derived  SDK registrations converted the way the SDK would: TS registerTool / server.tool with zod shapes,
-//            Python @mcp.tool functions (type hints and docstrings). Schemas are close to, not exactly, what
-//            the server sends; the report must say so.
-//   names    an MCPB manifest "tools" array (name and description only)
+//            factories, keyed tables and classes; Python @x.tool functions (type hints and docstrings), registries and
+//            low-level Tool(...). Schemas are close to, not exactly, what the server sends; the report must say so.
+//            Parts that cannot be read statically are marked (publicTools), and the grader skips their checks.
+//   names    an MCPB manifest "tools" array, or tool names read from Go or Rust source (name and description only)
 // Network: GitHub's REST API (CORS for any origin, 60 requests/hour per user IP without a token) for the file tree,
 // raw.githubusercontent.com for files; data.jsdelivr.com / cdn.jsdelivr.net as the fallback. The registry API at
 // registry.modelcontextprotocol.io sends Access-Control-Allow-Origin: *. Nothing goes to IsoKron.
@@ -2335,7 +2336,7 @@
    * The same reading as fromGitHub, over a folder on this machine: no network, nothing executed. Symlinks are not
    * followed (a link could lead outside the folder); files over MAX_FILE are not read, as on GitHub.
    * opts: { rootDir } a parent folder whose package.json / package-lock.json / pyproject.toml also count (a monorepo
-   * package read from its own folder); { maxSourceFiles } as fromGitHub (default 60, so a local read and --repo agree);
+   * package read from its own folder); { maxSourceFiles } as fromGitHub (default 400 files that may define a tool, of up to 1,500 read; the same as --repo, so the two agree);
    * { exclude } folders and files (relative paths) not to read, such as a baseline list; { skipIfContains } a file name
    * that marks a folder not to read; { maxList } the listing limit (default MAX_LIST). The answer's `truncated` says
    * the folder held more files than the limit (the deepest and least likely ones were not listed).
