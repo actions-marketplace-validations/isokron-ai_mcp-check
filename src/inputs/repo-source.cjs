@@ -14,14 +14,16 @@
 //            factories, keyed tables and classes; Python @x.tool functions (type hints and docstrings), registries and
 //            low-level Tool(...). Schemas are close to, not exactly, what the server sends; the report must say so.
 //            Parts that cannot be read statically are marked (publicTools), and the grader skips their checks.
-//   names    an MCPB manifest "tools" array, or tool names read from Go or Rust source (name and description only)
+//            Go (mcp-go, the go-sdk, mcp-golang; repo-go.cjs) tool definitions, read the same way, with their schemas
+//            as the SDK derives them from Go structs.
+//   names    an MCPB manifest "tools" array (name and description only)
 // Network: GitHub's REST API (CORS for any origin, 60 requests/hour per user IP without a token) for the file tree,
 // raw.githubusercontent.com for files; data.jsdelivr.com / cdn.jsdelivr.net as the fallback. The registry API at
 // registry.modelcontextprotocol.io sends Access-Control-Allow-Origin: *. Nothing goes to IsoKron.
 (function (root, factory) {
-  if (typeof module === 'object' && module.exports) module.exports = factory();
-  else root.RepoSource = factory();
-})(typeof self !== 'undefined' ? self : this, function () {
+  if (typeof module === 'object' && module.exports) module.exports = factory(require('./repo-go.cjs'), null);
+  else root.RepoSource = factory(root.RepoGo, null); // in a browser, load repo-go.cjs first
+})(typeof self !== 'undefined' ? self : this, function (RepoGo, RepoRust) {
   'use strict';
 
   // ------------------------------------------------------------ tokenizer (JS/TS)
@@ -1793,88 +1795,6 @@
     return [ls[0].trim()].concat(ls.slice(1).map((l) => (ind < 1e9 ? l.slice(ind) : l))).join('\n').trim();
   }
 
-  // ------------------------------------------------------------ Go and Rust: names and descriptions only
-  // Not graded (names fidelity): the refusal can then say which tools were found. Go: mcp-go mcp.NewTool("x",
-  // mcp.WithDescription("…")), the go-sdk's &mcp.Tool{Name: "x", Description: "…"}, MustTool("x", "…", …) helpers.
-  // Rust: rmcp #[tool(description = "…")] on fn x (name = "…" when given).
-  function goString(s, i, consts) { // a Go string expression at i: "…", `…`, constants, joined by +
-    let out = ''; let any = false;
-    for (;;) {
-      while (/\s/.test(s[i] || '')) i++;
-      let m;
-      if (s[i] === '"') { let j = i + 1; let v = ''; while (j < s.length && s[j] !== '"' && s[j] !== '\n') { if (s[j] === '\\') { const e = s[j + 1]; v += e === 'n' ? '\n' : e === 't' ? '\t' : e; j += 2; continue; } v += s[j++]; } out += v; any = true; i = j + 1; }
-      else if (s[i] === '`') { const j = s.indexOf('`', i + 1); if (j < 0) return null; out += s.slice(i + 1, j); any = true; i = j + 1; }
-      else if ((m = /^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?/.exec(s.slice(i, i + 120))) && consts && Object.prototype.hasOwnProperty.call(consts, m[0].split('.').pop())) { out += consts[m[0].split('.').pop()]; any = true; i += m[0].length; }
-      else return any ? { value: out, end: i } : null;
-      let k = i; while (/\s/.test(s[k] || '')) k++;
-      if (s[k] === '+') { i = k + 1; continue; }
-      return { value: out, end: i };
-    }
-  }
-  function goConsts(text) {
-    const out = {}; const re = /^\s*(?:const\s+)?([A-Za-z_]\w*)\s*(?:string\s*)?=\s*("(?:\\.|[^"\\\n])*"|`[^`]*`)\s*$/gm; let m;
-    const blocks = text.match(/\bconst\s*\(([\s\S]*?)\n\)/g) || [];
-    const scan = (t) => { while ((m = re.exec(t))) { const v = goString(m[2], 0, null); if (v) out[m[1]] = v.value; } };
-    blocks.forEach(scan); re.lastIndex = 0; scan(text.split('\n').filter((l) => /^\s*const\s/.test(l)).join('\n'));
-    return out;
-  }
-  function extractGo(text, consts) {
-    const out = []; let m;
-    const reNew = /\b(?:mcp\.)?NewTool\s*\(\s*/g;
-    while ((m = reNew.exec(text))) {
-      const n = goString(text, m.index + m[0].length, consts); if (!n) continue;
-      const rest = text.slice(n.end, n.end + 4000); const d = /WithDescription\s*\(\s*/.exec(rest);
-      const dv = d ? goString(rest, d.index + d[0].length, consts) : null;
-      out.push({ name: n.value, description: dv ? dv.value : undefined, line: text.slice(0, m.index).split('\n').length });
-    }
-    const reMust = /\bMustTool\s*\(\s*/g;
-    while ((m = reMust.exec(text))) {
-      const n = goString(text, m.index + m[0].length, consts); if (!n) continue;
-      const after = text.slice(n.end).replace(/^\s*,\s*/, ''); const dv = goString(after, 0, consts);
-      out.push({ name: n.value, description: dv ? dv.value : undefined, line: text.slice(0, m.index).split('\n').length });
-    }
-    const reSdk = /&?mcp\.Tool\s*\{/g;
-    while ((m = reSdk.exec(text))) {
-      const body = text.slice(m.index + m[0].length, m.index + m[0].length + 6000);
-      const nm = /(?:^|[\s,{])Name\s*:\s*/.exec(body); if (!nm) continue;
-      const n = goString(body, nm.index + nm[0].length, consts); if (!n) continue;
-      const dm = /(?:^|[\s,{])Description\s*:\s*/.exec(body); const dv = dm ? goString(body, dm.index + dm[0].length, consts) : null;
-      out.push({ name: n.value, description: dv ? dv.value : undefined, line: text.slice(0, m.index).split('\n').length });
-    }
-    return out;
-  }
-  function rustString(s, i) {
-    while (/\s/.test(s[i] || '')) i++;
-    let m;
-    if ((m = /^r(#*)"/.exec(s.slice(i, i + 10)))) { const close = '"' + m[1]; const j = s.indexOf(close, i + m[0].length); return j < 0 ? null : { value: s.slice(i + m[0].length, j), end: j + close.length }; }
-    if (s[i] === '"') { let j = i + 1; let v = ''; while (j < s.length && s[j] !== '"') { if (s[j] === '\\') { const e = s[j + 1]; v += e === 'n' ? '\n' : e === 't' ? '\t' : e === '\n' ? '' : e; j += 2; if (e === '\n') while (/\s/.test(s[j] || '')) j++; continue; } v += s[j++]; } return { value: v, end: j + 1 }; }
-    return null;
-  }
-  function extractRust(text) {
-    const out = []; const re = /#\[tool\s*\(/g; let m;
-    while ((m = re.exec(text))) {
-      let d = 1; let j = m.index + m[0].length; while (j < text.length && d) { if (text[j] === '(') d++; else if (text[j] === ')') d--; else if (text[j] === '"') { const r = rustString(text, j); if (r) { j = r.end; continue; } } j++; }
-      const attr = text.slice(m.index + m[0].length, j - 1);
-      const after = text.slice(j, j + 2000);
-      const fn = /^(?:\s*\]\s*)?(?:\s*(?:#\[[^\]]*\]|\/\/[^\n]*))*\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+([A-Za-z_]\w*)/.exec(after); if (!fn) continue;
-      const nm = /(?:^|[\s,(])name\s*=\s*/.exec(attr); const nv = nm ? rustString(attr, nm.index + nm[0].length) : null;
-      const dm = /(?:^|[\s,(])description\s*=\s*/.exec(attr); const dv = dm ? rustString(attr, dm.index + dm[0].length) : null;
-      out.push({ name: nv ? nv.value : fn[1], description: dv ? dv.value : undefined, line: text.slice(0, m.index).split('\n').length });
-    }
-    return out;
-  }
-  // The names and descriptions read from Go or Rust files ([[path, text]]); null when none.
-  function namesFromOtherLanguage(files, lang) {
-    const tools = []; const seen = new Set(); const where = [];
-    const consts = {}; if (lang === 'Go') files.forEach(([, t]) => { if (typeof t === 'string') Object.assign(consts, goConsts(t)); });
-    files.forEach(([p, t]) => {
-      if (typeof t !== 'string') return;
-      const got = lang === 'Go' ? extractGo(t, consts) : extractRust(t);
-      got.forEach((x) => { if (!x.name || seen.has(x.name)) return; seen.add(x.name); tools.push(x.description !== undefined ? { name: x.name, description: x.description } : { name: x.name }); where.push({ name: x.name, path: p, line: x.line, fidelity: 'names' }); });
-    });
-    return tools.length ? { kind: lang === 'Go' ? 'go-source' : 'rust-source', language: lang, fidelity: 'names', path: null, files: Array.from(new Set(where.map((w) => w.path))), tools, where } : null;
-  }
-
   // ------------------------------------------------------------ committed lists and manifests
   // A snapshot written by mcp-catalog-snap (.mcp-catalog/<server>.json): { capturedWith | format: "mcp-catalog-snap/…",
   // catalog: { tools, prompts, resourceTemplates }, server, sha256 }. The tools are the server's tools/list, canonical JSON.
@@ -2392,9 +2312,40 @@
       const bp = planFiles(paths, { allowBuilt: true });
       if (bp.src.length > plan.src.length) { const b = await analyse(bp, true); if (b.tools.length) { an = b; plan = bp; built = true; } }
     }
+    // Go and Rust: read when the reader of TypeScript, JavaScript and Python found no tool, or when the repository holds
+    // at least as many Go (Rust) source files as TypeScript, JavaScript and Python ones. Their tools join the others
+    // (grouped by go.mod / Cargo.toml folder), so several servers are still refused and never merged.
+    const extraManifests = []; const serverDirs = new Set();
+    let langRead = null;
+    // paths relative to the folder read, so a server pointed at inside an examples/ or docs/ folder is read
+    const sub = o.subdir ? o.subdir + '/' : '';
+    const relPaths = sub ? paths.map((p) => (p.startsWith(sub) ? p.slice(sub.length) : p)) : paths;
+    const absOf = (p) => sub + p;
+    for (const L of SYSTEM_LANGS) {
+      const lang = otherLanguages(relPaths).find((x) => x.name === L.name);
+      if (!lang || !L.mod) continue;
+      if (an.tools.length && !(lang.files >= lang.readFiles)) continue;
+      const srcPaths = L.plan(relPaths).slice(0, maxRead).map(absOf);
+      const mans = relPaths.filter((p) => L.manifest.test(p) && !L.skip.test(p)).sort((a, b) => a.split('/').length - b.split('/').length || (a < b ? -1 : a > b ? 1 : 0)).slice(0, 200).map(absOf)
+        .concat(o.all.filter((p) => L.manifest.test(p) && !p.startsWith(sub) && sub.startsWith(p.replace(/[^/]*$/, '')))); // and the ones above the folder (the module path)
+      const mfiles = (await readMany(mans, 8)).filter(([, t]) => typeof t === 'string');
+      const sfiles = (await readMany(srcPaths, 16)).filter(([, t]) => typeof t === 'string');
+      mfiles.forEach(([p, t]) => readFiles.set(p, t)); sfiles.forEach(([p, t]) => readFiles.set(p, t));
+      extraManifests.push(L.manifest);
+      // a Go main package or a Rust module that constructs a server is a server of its own, even inside one go.mod or
+      // Cargo.toml (a repository of several servers in one module): its folder groups the tools like a package
+      sfiles.forEach(([p, t]) => { if (L.serverRoot(t)) serverDirs.add(p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : ''); });
+      let got;
+      try { got = L.analyse(sfiles, mfiles); } catch (e) { got = { found: [], unresolved: [], overBudget: [{ path: (sfiles[0] || ['?'])[0], line: null }] }; }
+      langRead = langRead || { name: L.name, files: 0, total: 0 };
+      if (langRead.name !== L.name) langRead.name += ' and ' + L.name;
+      langRead.files += sfiles.length; langRead.total += L.plan(relPaths).length;
+      mergeLanguage(an, got, readFiles);
+    }
+    if (langRead) hints.languageRead = langRead;
     // One server or several: the tools (and server constructors) grouped by package (serverPackages). With more than one
     // server, nothing is merged or picked: hints.servers lists them and no source candidate is made.
-    const servers = serverPackages(paths, o.subdir || '', an.tools, readFiles);
+    const servers = serverPackages(paths, o.subdir || '', an.tools, readFiles, extraManifests, serverDirs);
     let found = [];
     const setAside = [];
     if (servers.multiple) hints.servers = servers.multiple.map((x) => ({ path: x.path, tools: x.tools, constructor: x.constructor }));
@@ -2435,7 +2386,9 @@
         return v;
       });
       if (out.over.length) hints.incomplete = { candidates: out.over.length, files: Array.from(new Set(found.filter((x) => out.over.includes(x.tool.name)).map((x) => x.path))).concat(out.over.filter((n) => /^\(unnamed/.test(n))), why: 'text' };
-      candidates.push({ kind: 'source', fidelity: allLiteral && !Object.keys(out.unreadable).length ? 'literal' : 'derived', path: null, built, files: Array.from(new Set(found.map((x) => x.path))), tools: out.tools, unreadable: out.unreadable, unresolved: unres, unresolvedNames: unres.length, where: found.map((x) => ({ name: x.tool.name, path: x.path, line: x.line, fidelity: x.fidelity })), excluded: an.excluded.filter((x) => found.some((f) => servers.rootOf(f.groupPath || f.path) === servers.rootOf(x.groupPath || x.path))).map((x) => ({ name: x.tool.name, path: x.path, line: x.line, reasons: x.marks.filter((m) => m.exclude).map((m) => m.reason + (m.detail ? ' (' + m.detail + ')' : '')) })).concat(setAside), marked, sdk: an.sdk });
+      const langs2 = Array.from(new Set(found.map((x) => x.language || null)));
+      const language = langs2.length === 1 && langs2[0] ? langs2[0] : null;
+      candidates.push({ kind: 'source', fidelity: allLiteral && !Object.keys(out.unreadable).length && !language ? 'literal' : 'derived', language, path: null, built, files: Array.from(new Set(found.map((x) => x.path))), tools: out.tools, unreadable: out.unreadable, unresolved: unres, unresolvedNames: unres.length, where: found.map((x) => ({ name: x.tool.name, path: x.path, line: x.line, fidelity: x.fidelity })), excluded: an.excluded.filter((x) => found.some((f) => servers.rootOf(f.groupPath || f.path) === servers.rootOf(x.groupPath || x.path))).map((x) => ({ name: x.tool.name, path: x.path, line: x.line, reasons: x.marks.filter((m) => m.exclude).map((m) => m.reason + (m.detail ? ' (' + m.detail + ')' : '')) })).concat(setAside), marked, sdk: an.sdk });
     }
     // A snapshot counts as this repository's exact list only when it names this repository's server. A snapshot of
     // another server (one this repository uses or tests against) is never chosen over tools read from source; with
@@ -2451,19 +2404,11 @@
     candidates.sort((a, b) => (a.foreign ? 1 : 0) - (b.foreign ? 1 : 0) || rank[a.fidelity] - rank[b.fidelity] || b.tools.length - a.tools.length);
     const langs = otherLanguages(paths);
     if (langs.length) hints.otherLanguages = langs;
-    // Go or Rust source and nothing else to grade: read the tool names and descriptions, so the refusal can list them
-    const lang = langs[0];
-    if (!candidates.length && !hints.servers && lang && (lang.name === 'Go' || lang.name === 'Rust') && lang.files >= lang.readFiles) {
-      const re = lang.name === 'Go' ? /\.go$/ : /\.rs$/;
-      const ps = paths.filter((p) => re.test(p) && !SKIP_DIR.test(p) && !/_test\.go$/.test(p) && !TEST_FILE.test(p)).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)).slice(0, maxRead);
-      const got = (await readMany(ps, 16)).filter(([, t]) => typeof t === 'string' && (lang.name === 'Go' ? /NewTool|MustTool|mcp\.Tool\s*\{/ : /#\[tool/).test(t));
-      const c = namesFromOtherLanguage(got.slice(0, maxSrc), lang.name);
-      if (c) candidates.push(c);
-    }
     if (an.unresolved) hints.unresolvedNames = an.unresolved;
     // Candidates the reader had to skip at its work limit: the list would be incomplete, so nothing is graded.
     if (an.overBudget && an.overBudget.length) { const prev = hints.incomplete || { candidates: 0, files: [] }; hints.incomplete = { candidates: prev.candidates + an.overBudget.length, files: Array.from(new Set(prev.files.concat(an.overBudget.map((x) => x.path)))) }; }
-    return { scanned: { exact: plan.exact.length, manifests: plan.manifests.length, source: an.files, candidates: an.candidates, read: an.read, sourceTotal: plan.src.length, capped: plan.src.length > maxRead || an.candidates > an.files, budgetHit: !!(o.state && o.state.budgetHit) }, candidates, best: candidates[0] || null, hints };
+    const lr = hints.languageRead || { files: 0, total: 0 };
+    return { scanned: { exact: plan.exact.length, manifests: plan.manifests.length, source: an.files + lr.files, candidates: an.candidates + lr.files, read: an.read + lr.files, sourceTotal: plan.src.length + lr.total, capped: plan.src.length > maxRead || an.candidates > an.files, budgetHit: !!(o.state && o.state.budgetHit) }, candidates, best: candidates[0] || null, hints };
   }
 
   // The tools as they are graded: what could not be read is taken out of each tool and listed per part
@@ -2507,6 +2452,8 @@
     if (typeof text !== 'string') return false;
     if (/\.(ts|mts|cts|js|mjs|cjs)$/.test(p)) return /\bnew\s+(?:McpServer|FastMCP)\s*[(<]/.test(text) || (/\bnew\s+Server\s*\(/.test(text) && /@modelcontextprotocol\//.test(text));
     if (/\.py$/.test(p)) return /\b(?:FastMCP|MCPServer)\s*\(/.test(text) || (/\bServer\s*\(\s*['"]/.test(text) && /\b(?:from|import)\s+mcp\b/.test(text));
+    if (/\.go$/.test(p)) return !!RepoGo && RepoGo.constructsServer(text);
+    if (/\.rs$/.test(p)) return !!RepoRust && RepoRust.constructsServer(text);
     return false;
   }
   // Which package(s) a repository's tools belong to. paths: the listing (inside `base`); found: the tools read ({ path, literal });
@@ -2522,10 +2469,12 @@
   //   5. No package constructs a server: one package is graded; of several, the only one with SDK registrations; else multiple.
   // Returns { rootOf, keep: Set(root) | null, multiple: [group] | null, reason: Map(root -> why set aside), ignored: [group],
   // serverWithoutTools: root | null }; a group is { path, tools, sdk, literal, constructor }.
-  function serverPackages(paths, base, found, files) {
+  function serverPackages(paths, base, found, files, extraManifests, extraDirs) {
     const up = (d) => (d.includes('/') ? d.slice(0, d.lastIndexOf('/')) : '');
     const dirs = new Set();
-    paths.forEach((p) => { if (PKG_MANIFEST.test(p) && !SKIP_DIR.test(p)) dirs.add(up(p)); });
+    const isManifest = (p) => PKG_MANIFEST.test(p) || (extraManifests || []).some((re) => re.test(p));
+    paths.forEach((p) => { if (isManifest(p) && !SKIP_DIR.test(p)) dirs.add(up(p)); });
+    (extraDirs || []).forEach((d) => { if (d === base || !base || d.startsWith(base + '/')) dirs.add(d); });
     const rootOf = (p) => { for (let d = up(p); ; d = up(d)) { if (dirs.has(d)) return d; if (d === base || d === '' || (base && !d.startsWith(base + '/'))) return base; } };
     const groups = new Map();
     const g = (r) => { if (!groups.has(r)) groups.set(r, { path: r, tools: 0, sdk: 0, literal: 0, constructor: false }); return groups.get(r); };
@@ -2558,6 +2507,43 @@
     rest.filter((x) => !keep.includes(x)).forEach((x) => reason.set(x.path, 'not-server-package'));
     out.keep = new Set(keep.map((x) => x.path));
     return out;
+  }
+
+  // ------------------------------------------------------------ Go and Rust (repo-go.cjs, repo-rust.cjs)
+  // Which files of a listing are read: source files outside dependency, build, test, example and fixture folders, likely
+  // tool files first, then by path (so every listing order reads the same files).
+  const GO_SKIP = new RegExp(SKIP_DIR.source.replace('(node_modules|', '(node_modules|testdata|'), 'i');
+  const RUST_SKIP = new RegExp(SKIP_DIR.source.replace('(node_modules|', '(node_modules|target|'), 'i');
+  const langScore = (p) => (/(^|\/)(tools?|server|mcp|handlers?)[^/]*$/i.test(p) || /(^|\/)(tools?|mcp|server)\//i.test(p) ? 0 : /tool/i.test(p) ? 1 : 2) + p.split('/').length * 0.01;
+  const byScore = (a, b) => langScore(a) - langScore(b) || (a < b ? -1 : a > b ? 1 : 0);
+  const SYSTEM_LANGS = [
+    { name: 'Go', mod: RepoGo, manifest: /(^|\/)go\.mod$/, skip: GO_SKIP,
+      plan: (paths) => paths.filter((p) => /\.go$/.test(p) && !/_test\.go$/.test(p) && !GO_SKIP.test(p) && !TEST_FILE.test(p)).sort(byScore),
+      serverRoot: (t) => /^\s*package\s+main\b/m.test(t) && RepoGo.constructsServer(t),
+      analyse: (src, man) => RepoGo.analyse(src, { goMods: man }) },
+    { name: 'Rust', mod: RepoRust, manifest: /(^|\/)Cargo\.toml$/, skip: RUST_SKIP,
+      plan: (paths) => paths.filter((p) => /\.rs$/.test(p) && !RUST_SKIP.test(p) && !TEST_FILE.test(p) && !/(^|\/)build\.rs$/.test(p)).sort(byScore),
+      serverRoot: (t) => RepoRust.constructsServer(t),
+      analyse: (src, man) => RepoRust.analyse(src, { cargo: man }) },
+  ];
+  // Adds the tools a Go or Rust reading found to the analysis `an` (as analyseRepo returns it): names already found are
+  // duplicates (several modules with the same names are alternatives, as for the other languages), marks applied.
+  function mergeLanguage(an, got, readFiles) {
+    const byName = new Set(an.found.map((x) => x.tool.name));
+    const fresh = []; const dupes = [];
+    got.found.forEach((x) => {
+      if (byName.has(x.tool.name)) { dupes.push({ path: x.path, name: x.tool.name }); return; }
+      byName.add(x.tool.name);
+      fresh.push({ path: x.path, line: x.line, tool: x.tool, fidelity: x.fidelity, literal: !!x.literal, language: x.language, own: x.marks || [] });
+    });
+    const marks = markConditionals(fresh, [], dupes, Array.from(readFiles.entries()));
+    fresh.forEach((x) => { x.marks = x.own.concat(marks.get(x) || []); delete x.own; x.excluded = x.marks.some((m) => m.exclude); });
+    // never an empty list because of exclusions
+    if (!an.tools.length && fresh.length && fresh.every((x) => x.excluded)) fresh.forEach((x) => { x.excluded = false; x.marks.forEach((m) => { m.exclude = false; }); });
+    fresh.forEach((x) => { an.found.push(x); if (x.excluded) an.excluded.push(x); else an.tools.push(x); });
+    (got.unresolved || []).forEach((u) => an.unresolvedList.push(Object.assign({}, u)));
+    an.unresolved = an.unresolvedList.length;
+    (got.overBudget || []).forEach((u) => an.overBudget.push(u));
   }
 
   // Server source in languages the reader does not read yet, by file count (only when there are some).
@@ -2692,5 +2678,5 @@
     return null;
   }
 
-  return { extractGo, extractRust, namesFromOtherLanguage, publicTools, fromGitHub, fromDirectory, fromCatalogSnap, serverPackages, notServerFolder, constructsServer, ownServerNames, normName, fromRegistry, extractFromFile, extractJs, extractPy, planFiles, detectSdk, collectGlobalConsts, analyseRepo, markConditionals, parseRepoRef, toolsFromJson, fromMcpbManifest, tokenize, commandFor };
+  return { publicTools, fromGitHub, fromDirectory, fromCatalogSnap, serverPackages, notServerFolder, constructsServer, ownServerNames, normName, fromRegistry, extractFromFile, extractJs, extractPy, planFiles, detectSdk, collectGlobalConsts, analyseRepo, markConditionals, parseRepoRef, toolsFromJson, fromMcpbManifest, tokenize, commandFor };
 });

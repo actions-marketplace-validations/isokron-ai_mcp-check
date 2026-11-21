@@ -111,21 +111,28 @@ test('zero-config: no tool definitions ends neutral (a warning and the fix), or 
   assert.match(act(ws, { 'working-directory': '../x' }).stdout, /working-directory must be a path inside the workspace/);
 });
 
-test('zero-config: a Go (or Rust, C#) server is not a red job: neutral, and the summary says the language is not read yet', () => {
+test('zero-config: a Go server is read from its source and graded (approximate); a C# server is not read yet: neutral, not a red job', () => {
   const ws = workspace(null);
   mkdirSync(join(ws, 'pkg', 'tools'), { recursive: true });
   writeFileSync(join(ws, 'go.mod'), 'module example.com/notes\n');
-  writeFileSync(join(ws, 'main.go'), 'package main\nfunc main() { s := server.NewMCPServer("notes", "1.0") }\n');
-  writeFileSync(join(ws, 'pkg', 'tools', 'notes.go'), 'package tools\nvar T = mcp.NewTool("search_notes", mcp.WithDescription("Search notes."))\n');
-  writeFileSync(join(ws, 'pkg', 'tools', 'notes_test.go'), 'package tools\n');
+  writeFileSync(join(ws, 'main.go'), 'package main\nimport (\n\t"github.com/mark3labs/mcp-go/server"\n\t"example.com/notes/pkg/tools"\n)\nfunc main() { s := server.NewMCPServer("notes", "1.0"); s.AddTool(tools.T, nil) }\n');
+  writeFileSync(join(ws, 'pkg', 'tools', 'notes.go'), 'package tools\nimport "github.com/mark3labs/mcp-go/mcp"\nvar T = mcp.NewTool("search_notes", mcp.WithDescription("Search notes by text. Use it to find a note before reading it."), mcp.WithTitleAnnotation("Search notes"), mcp.WithReadOnlyHintAnnotation(true), mcp.WithString("query", mcp.Required(), mcp.Description("Words to find")))\n');
+  writeFileSync(join(ws, 'pkg', 'tools', 'notes_test.go'), 'package tools\nimport "github.com/mark3labs/mcp-go/mcp"\nvar X = mcp.NewTool("test_only")\n');
   writeFileSync(join(ws, 'scripts.js'), 'module.exports = 1;\n');
-  const r = act(ws, { 'min-grade': 'A' });
+  const r = act(ws, {});
   assert.equal(r.status, 0, r.stdout + r.stderr);
-  assert.equal(r.outputs['exit-status'], '0');
-  // the tool names are read from the Go source, so the message lists them; Go schemas are not read, so nothing is graded
-  assert.match(r.summary, /Only tool names were found in the source in \. \(1 tool read from the Go source: search\\_notes; names and descriptions only, since Go schemas are not read yet\), which cannot be graded\./);
-  assert.match(r.stdout, /::warning::mcp-check: not graded: .*Go schemas are not read yet/);
-  assert.equal(r.outputs.passed, '');
+  assert.equal(r.outputs.source, 'repo-static');
+  assert.equal(r.outputs.approximate, 'true');
+  assert.match(r.summary, /^## MCP check \(approximate\)\n/);
+  assert.match(r.summary, /Derived: reproduced from Go SDK registrations in the source/);
+  assert.deepEqual(JSON.parse(readFileSync(join(ws, 'mcp-check-results', 'tools-list.json'), 'utf8')).tools.map((t) => t.name), ['search_notes']);
+  // C# is not read yet: neutral, the summary names the language
+  const cs = workspace(null);
+  writeFileSync(join(cs, 'Program.cs'), 'class P { static void Main() {} }\n');
+  const c = act(cs, { 'min-grade': 'A' });
+  assert.equal(c.status, 0, c.stdout + c.stderr);
+  assert.equal(c.outputs.passed, '');
+  assert.match(c.summary, /C\\# source is not read yet/);
 });
 
 test('zero-config: tools of several servers are not merged or picked; the summary lists the folders to choose from', () => {

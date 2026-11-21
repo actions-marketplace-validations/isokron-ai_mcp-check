@@ -1,6 +1,6 @@
 // --repo / --repo-dir 1.2 reader patterns, each on a small synthetic source (no real server's text): tool names held in
 // constants and imports, factories, keyed tables and classes, Python decorators, registries and low-level Tool(...),
-// FastMCP mounts, unreadable parts skipped by the grader, the file pre-filter, subfolder listing, Go and Rust names.
+// FastMCP mounts, unreadable parts skipped by the grader, the file pre-filter, subfolder listing, Go and Rust joining.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
@@ -335,14 +335,17 @@ test('fromGitHub with a subfolder lists that folder\'s own tree (a truncated rep
   assert.match(scannedText({ scanned: { read: 0, sourceTotal: 0, source: 0 }, truncated: true, via: 'github' }), /GitHub cut the repository listing short/);
 });
 
-// ------------------------------------------------------------ Go and Rust: names only, never graded (D11)
-test('Go and Rust: tool names and descriptions are read for the refusal; schemas are not', () => {
-  const go = 'package tools\nconst SearchName = "search_notes"\nvar T = mcp.NewTool(SearchName, mcp.WithDescription("Search notes."))\nvar L = toolkit.MustTool(\n\t"list_groups",\n\t"List groups.",\n\tlistGroups,\n)\nvar S = &mcp.Tool{Name: "get_item", Description: `Get an item.`}\n';
-  const c = R.namesFromOtherLanguage([['pkg/tools/notes.go', go]], 'Go');
-  assert.equal(c.fidelity, 'names');
-  assert.deepEqual(c.tools, [{ name: 'search_notes', description: 'Search notes.' }, { name: 'list_groups', description: 'List groups.' }, { name: 'get_item', description: 'Get an item.' }]);
-  const rs = 'impl S {\n    #[tool(\n        description = "List all collections",\n        annotations(title = "List", read_only_hint = true)\n    )]\n    async fn list_collections(&self) -> R { }\n    #[tool(name = "doc_search", description = r#"Search "docs"."#)]\n    pub async fn search(&self) -> R { }\n}\n';
-  assert.deepEqual(R.namesFromOtherLanguage([['src/s.rs', rs]], 'Rust').tools, [{ name: 'list_collections', description: 'List all collections' }, { name: 'doc_search', description: 'Search "docs".' }]);
+// ------------------------------------------------------------ Go and Rust (1.3): read in full, see repo-reader-go and repo-reader-rust
+test('Go and Rust tools join the repository analysis with their language, schemas and annotations', async () => {
+  const files = {
+    'go.mod': 'module example.com/x\n',
+    'pkg/tools/notes.go': 'package tools\nimport "github.com/mark3labs/mcp-go/mcp"\nconst SearchName = "search_notes"\nvar T = mcp.NewTool(SearchName, mcp.WithDescription("Search notes."), mcp.WithString("q", mcp.Required()))\nfunc init() { register(T) }\n',
+  };
+  const got = await R.fromGitHub('github.com/o/r', { fetch: fakeGithub(files, null, []) });
+  assert.equal(got.best.language, 'Go');
+  assert.equal(got.best.fidelity, 'derived');
+  assert.deepEqual(got.best.tools, [{ name: 'search_notes', description: 'Search notes.', inputSchema: { type: 'object', properties: { q: { type: 'string' } }, required: ['q'] }, annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true } }]);
+  assert.match(repoProvenance(got.best).provenance, /^derived: reproduced from Go SDK registrations/);
 });
 
 // A fake GitHub API: the recursive listing in `order`, folder trees by "t-<path>" ids, raw files by path. `seen` collects URLs.
