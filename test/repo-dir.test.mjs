@@ -397,12 +397,17 @@ test('cli: names-only lists are never graded (exit 3, same advice as the Action)
   assert.ok(!/Approximate/.test(cli(['--repo-dir', join(repos, 'catalog-snap')]).stdout));
 });
 
-test('cli: a Go repository exits 3 and says Go source is not read yet', () => {
+test('cli: a Go repository with no tool definition exits 3 and names the forms read; a C# one says it is not read yet', () => {
   const go = mkdtempSync(join(tmpdir(), 'mcpcheck-go-'));
   writeFileSync(join(go, 'main.go'), 'package main\n');
   const r = cli(['--repo-dir', go]);
   assert.equal(r.status, 3);
-  assert.match(r.stderr, /The source here is Go \(1 \.go file\): Go source is not read yet/);
+  assert.match(r.stderr, /The source here is Go \(1 \.go file\): no tool definition the reader knows was found in it/);
+  const cs = mkdtempSync(join(tmpdir(), 'mcpcheck-cs-'));
+  writeFileSync(join(cs, 'Program.cs'), 'class P {}\n');
+  const c = cli(['--repo-dir', cs]);
+  assert.equal(c.status, 3);
+  assert.match(c.stderr, /The source here is C# \(1 \.cs file\): C# source is not read yet/);
 });
 
 /** A folder holding the given files (path -> text). */

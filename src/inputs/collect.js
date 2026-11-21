@@ -31,21 +31,30 @@ export function expandEnv(v, env = process.env) {
 export const FIDELITY = {
   exact: (c) => 'exact: ' + (c.kind === 'snapshots' ? 'committed tool snapshots (every toolset and flag variant in them; the server\'s default list may be smaller)' : c.kind === 'mcpb' ? 'MCPB manifest static tools/list' : c.kind === 'catalog' ? 'committed mcp-catalog-snap snapshot ' + c.path + (c.foreign ? ' of ' + line(c.server || 'an unnamed server', 100) + ', which may not be this repository\'s server' : '') : 'committed tool list ' + c.path + (Array.isArray(c.notUsed) && c.notUsed.length ? ' (of ' + (c.notUsed.length + 1) + ' committed lists, the one nearest the server; not used: ' + c.notUsed.slice(0, 5).map((x) => line(x, 200)).join(', ') + (c.notUsed.length > 5 ? ' and ' + (c.notUsed.length - 5) + ' more' : '') + ')' : '')),
   literal: () => 'literal: tool definitions written as literals in the source',
-  derived: () => 'derived: reproduced from SDK registrations in the source; schemas follow the SDK\'s output and may differ in detail',
+  derived: (c) => 'derived: reproduced from ' + (c && c.language ? c.language + ' ' : '') + 'SDK registrations in the source; schemas follow the SDK\'s output and may differ in detail',
   names: () => 'names only: an MCPB manifest lists names and descriptions; schema checks do not apply',
 };
+
+/** Tools read from source whose registration the reader did not see (Go: a tool type built only inside another type,
+ *  or never visibly built). They are listed, never dropped; this names them. */
+export function registrationNotSeen(c) {
+  return (Array.isArray(c && c.marked) ? c.marked : []).filter((m) => !m.excluded && m.reasons.some((x) => /^registration-not-seen/.test(x))).map((m) => m.name);
+}
 
 /** The provenance of a repository list: its fidelity, then the tools left out as off by default and the ones kept under a condition. */
 export function repoProvenance(c) {
   const left = Array.isArray(c.excluded) ? c.excluded : [];
   const cond = (Array.isArray(c.marked) ? c.marked : []).filter((m) => !m.excluded && m.reasons.some((x) => /^conditional-/.test(x)));
+  const unseen = registrationNotSeen(c);
   const reasons = [...new Set(left.flatMap((x) => x.reasons.map((y) => y.replace(/ \(.*$/, ''))))];
   const u = c.unreadable || {};
   const parts = [['inputSchema', 'input schema'], ['description', 'description'], ['annotations', 'annotations']].filter(([k]) => Array.isArray(u[k]) && u[k].length).map(([k, w]) => u[k].length + ' ' + w + (u[k].length === 1 || k === 'annotations' ? '' : 's'));
   const extra = (left.length ? '; ' + left.length + ' tool' + (left.length === 1 ? '' : 's') + ' left out (' + reasons.join(', ') + ')' : '') + (cond.length ? '; ' + cond.length + ' kept but registered under a condition' : '')
     + (parts.length ? '; not readable from source, so their checks are skipped: ' + parts.join(', ') : '')
     + (u.text && Object.keys(u.text).length ? '; ' + Object.keys(u.text).length + ' tool' + (Object.keys(u.text).length === 1 ? '' : 's') + ' with source text not readable as part of the tool, scanned for hidden instructions' : '')
-    + (c.unresolvedNames ? '; ' + c.unresolvedNames + ' registration' + (c.unresolvedNames === 1 ? '' : 's') + ' with a name the reader could not resolve, not listed' : '');
+    + (c.unresolvedNames ? '; ' + c.unresolvedNames + ' registration' + (c.unresolvedNames === 1 ? '' : 's') + ' with a name the reader could not resolve, not listed' : '')
+    + (Array.isArray(c.notes) && c.notes.length ? '; ' + c.notes.map((x) => line(x, 300)).join('; ') : '')
+    + (unseen.length ? '; ' + unseen.length + ' tool' + (unseen.length === 1 ? '' : 's') + ' listed whose registration the reader did not see (built only inside another type, or never visibly built)' : '');
   return { provenance: FIDELITY[c.fidelity](c) + extra, left, cond };
 }
 
@@ -98,7 +107,7 @@ async function fromRepo(ref, opt, via = null) {
   const c = cliUsable(r, line(where), pick);
   const { provenance: prov, left, cond } = repoProvenance(c);
   const provenance = prov + budgetNote(r);
-  return { data: c.tools, reader: readerNotes(c), source: { kind: 'repo', repo: r.repo, sha: r.sha, via: r.via, fidelity: c.fidelity, approximate: isApproximate(c), provenance, from: c.kind, files: c.files || [c.path], ...(unreadableNames(c) ? { unreadable: unreadableNames(c) } : {}), ...(c.unresolvedNames ? { unresolved_names: c.unresolvedNames } : {}), ...(left.length ? { left_out: left.map((x) => ({ name: line(x.name, 128), reasons: x.reasons.map((y) => line(y, 160)) })) } : {}), ...(cond.length ? { conditional: cond.map((x) => line(x.name, 128)) } : {}), ...(via ? { registry: via } : {}) } };
+  return { data: c.tools, reader: readerNotes(c), source: { kind: 'repo', repo: r.repo, sha: r.sha, via: r.via, fidelity: c.fidelity, approximate: isApproximate(c), provenance, from: c.kind, ...(c.language ? { language: c.language.toLowerCase() } : {}), ...(registrationNotSeen(c).length ? { registration_not_seen: registrationNotSeen(c).map((x) => line(x, 128)) } : {}), files: c.files || [c.path], ...(unreadableNames(c) ? { unreadable: unreadableNames(c) } : {}), ...(c.unresolvedNames ? { unresolved_names: c.unresolvedNames } : {}), ...(left.length ? { left_out: left.map((x) => ({ name: line(x.name, 128), reasons: x.reasons.map((y) => line(y, 160)) })) } : {}), ...(cond.length ? { conditional: cond.map((x) => line(x.name, 128)) } : {}), ...(via ? { registry: via } : {}) } };
 }
 
 /** The advice every "cannot grade this read" message ends with (the CLI's and the Action's names for the live inputs). */
@@ -183,12 +192,20 @@ export function serverFolders(r) {
   return Array.from(new Set((h.lists || []).map((x) => (x.path.includes('/') ? x.path.slice(0, x.path.lastIndexOf('/')) : '.'))));
 }
 
+/** The Go and Rust SDK forms the reader knows, for the message when none was found. */
+const READ_LANGS = {
+  Go: 'mark3labs/mcp-go NewTool and options, the official go-sdk AddTool with mcp.Tool, mcp-golang RegisterTool, and helpers that build them',
+  Rust: 'rmcp #[tool] methods, rust-mcp-sdk #[mcp_tool] structs, and Tool::new or Tool { … } built by hand',
+};
+
 /** Why nothing usable was found, beyond "no tool definitions": languages not read, folders set aside, lists not used. */
 export function whyNothing(r) {
   const h = r.hints || {};
   let s = '';
   const lang = (h.otherLanguages || [])[0];
-  if (lang && lang.files >= lang.readFiles) s += ' The source here is ' + lang.name + ' (' + plural(lang.files, '.' + ({ Go: 'go', Rust: 'rs', 'C#': 'cs', Java: 'java', Kotlin: 'kt', Ruby: 'rb', PHP: 'php', Swift: 'swift' }[lang.name] || lang.name) + ' file') + '): ' + lang.name + ' source is not read yet (the reader reads TypeScript, JavaScript and Python).';
+  const ext = (n) => '.' + ({ Go: 'go', Rust: 'rs', 'C#': 'cs', Java: 'java', Kotlin: 'kt', Ruby: 'rb', PHP: 'php', Swift: 'swift' }[n] || n);
+  if (lang && lang.files >= lang.readFiles && READ_LANGS[lang.name]) s += ' The source here is ' + lang.name + ' (' + plural(lang.files, ext(lang.name) + ' file') + '): no tool definition the reader knows was found in it (' + READ_LANGS[lang.name] + ').';
+  else if (lang && lang.files >= lang.readFiles) s += ' The source here is ' + lang.name + ' (' + plural(lang.files, ext(lang.name) + ' file') + '): ' + lang.name + ' source is not read yet (the reader reads TypeScript, JavaScript, Python, Go and Rust).';
   const ign = (h.ignoredFolders || []).filter((x) => x.tools);
   if (ign.length) s += ' Tool definitions were found only in folders that look like admin, console, docs, examples, evaluation or test code, which are not graded from a parent folder: ' + ign.map((x) => line(x.path, 200) + ' (' + plural(x.tools, 'tool') + ')').join(', ') + '; if one of them is the server, point the check at that folder.';
   if (h.serverWithoutTools) s += ' A server is constructed in ' + line(h.serverWithoutTools || '.', 200) + ', but none of its tools could be read.';
@@ -197,19 +214,16 @@ export function whyNothing(r) {
   return s + foreignNote(r);
 }
 
-/** Where a names-only list came from: a manifest, or the source of a language whose schemas are not read yet. */
+/** Where a names-only list came from: an MCPB manifest that lists names and descriptions without schemas. */
 export function namesOnlyText(c) {
-  if (c.language) {
-    const names = c.tools.slice(0, 5).map((t) => line(t.name, 80)).join(', ') + (c.tools.length > 5 ? ', …' : '');
-    return plural(c.tools.length, 'tool') + ' read from the ' + c.language + ' source: ' + names + '; names and descriptions only, since ' + c.language + ' schemas are not read yet';
-  }
   return line(c.path, 200) + ' lists names and descriptions without schemas';
 }
 
 /** Why a scan was refused as incomplete (the reader's work limit), with the files to look at. */
 export function incompleteText(r) {
   const x = (r.hints && r.hints.incomplete) || { candidates: 0, files: [] };
-  return plural(x.candidates, 'possible tool definition') + ' in ' + x.files.slice(0, 3).map((f) => line(f, 200)).join(', ') + (x.files.length > 3 ? ' and ' + (x.files.length - 3) + ' more' : '') + ' could not be read completely (the reader\'s work limit on deeply nested source, a reader error, or more unreadable text than it keeps), so the list would be incomplete and nothing was graded';
+  const why = Array.isArray(x.reasons) && x.reasons.length ? x.reasons.map((r) => line(r, 120)).join('; ') : 'the reader\'s work limit on deeply nested source, a reader error, or more unreadable text than it keeps';
+  return plural(x.candidates, 'possible tool definition') + ' in ' + x.files.slice(0, 3).map((f) => line(f, 200)).join(', ') + (x.files.length > 3 ? ' and ' + (x.files.length - 3) + ' more' : '') + ' could not be read completely (' + why + '), so the list would be incomplete and nothing was graded';
 }
 
 /** The CLI's reading of a scan: the candidate to grade, or an InputFailure (exit 3) with the same advice as the Action. */
@@ -239,7 +253,7 @@ async function fromRepoDir(dir, opt) {
   const c = cliUsable(r, line(dir), (folder) => '--repo-dir ' + (folder === '.' ? base : base + '/' + folder));
   const { provenance: prov, left, cond } = repoProvenance(c);
   const provenance = prov + budgetNote(r);
-  return { data: c.tools, where: c.where || null, reader: readerNotes(c), source: { kind: 'dir', dir: r.repo, fidelity: c.fidelity, approximate: isApproximate(c), provenance, from: c.kind, files: c.files || [c.path], ...(unreadableNames(c) ? { unreadable: unreadableNames(c) } : {}), ...(c.unresolvedNames ? { unresolved_names: c.unresolvedNames } : {}), ...(c.built ? { built: true } : {}), ...(r.truncated ? { truncated: true } : {}), ...(left.length ? { left_out: left.map((x) => ({ name: line(x.name, 128), reasons: x.reasons.map((y) => line(y, 160)) })) } : {}), ...(cond.length ? { conditional: cond.map((x) => line(x.name, 128)) } : {}) } };
+  return { data: c.tools, where: c.where || null, reader: readerNotes(c), source: { kind: 'dir', dir: r.repo, fidelity: c.fidelity, approximate: isApproximate(c), provenance, from: c.kind, ...(c.language ? { language: c.language.toLowerCase() } : {}), ...(registrationNotSeen(c).length ? { registration_not_seen: registrationNotSeen(c).map((x) => line(x, 128)) } : {}), files: c.files || [c.path], ...(unreadableNames(c) ? { unreadable: unreadableNames(c) } : {}), ...(c.unresolvedNames ? { unresolved_names: c.unresolvedNames } : {}), ...(c.built ? { built: true } : {}), ...(r.truncated ? { truncated: true } : {}), ...(left.length ? { left_out: left.map((x) => ({ name: line(x.name, 128), reasons: x.reasons.map((y) => line(y, 160)) })) } : {}), ...(cond.length ? { conditional: cond.map((x) => line(x.name, 128)) } : {}) } };
 }
 
 async function fromRegistry(name, opt, note) {
