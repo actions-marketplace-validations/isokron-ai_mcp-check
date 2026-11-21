@@ -432,7 +432,7 @@
   const has = Object.prototype.hasOwnProperty;
 
   function tokens(name) {
-    return String(name).replace(/([a-z0-9])([A-Z])/g, '$1_$2').replace(/([A-Z]+)([A-Z][a-z])/g, '$1_$2').toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+    return String(name).replace(/([a-z0-9])([A-Z])/g, '$1_$2').replace(/([A-Z])(?=[A-Z][a-z])/g, '$1_').toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
   }
   const norm = (k) => tokens(k).join('_');
   const set = (s) => new Set(s.split(' '));
@@ -703,7 +703,7 @@
   const RE_LATIN = /\p{Script=Latin}/u;
   const RE_CONFUSABLE = /[\p{Script=Cyrillic}\p{Script=Greek}\p{Script=Armenian}\p{Script=Cherokee}]/u;
   const HTML_COMMENT = new RegExp('<' + '!--');
-  const RE_MARKUP = /<\s*\/?\s*(important|system|instructions?|admin|secret|hidden|sudo|assistant|human|override|prompt|context)\s*>|\[\/?INST\]|<\|(im_start|im_end|system|endoftext|user|assistant)\|>|^\s*#{1,3}\s*(system|instructions)\b/im;
+  const RE_MARKUP = /<\s*\/?\s*(important|system|instructions?|admin|secret|hidden|sudo|assistant|human|override|prompt|context)\s*>|\[\/?INST\]|<\|(im_start|im_end|system|endoftext|user|assistant)\|>|^[^\S\r\n\u2028\u2029]*#{1,3}\s*(system|instructions)\b/im;
   const RE_PHRASES = [
     /\b(ignore|disregard|forget|override|bypass)\b[^.\n]{0,40}\b(previous|prior|above|earlier|other|all|any|system|safety|your)\b[^.\n]{0,25}\b(instructions?|prompts?|rules|guidelines|directives|messages|policies)\b/i,
     /\b(do not|don['’]t|never)\s+(tell|inform|mention|show|reveal|notify|alert)\b[^.\n]{0,30}\b(the\s+)?user\b/i,
@@ -737,7 +737,7 @@
   const RE_HEX = /\b(?:[0-9a-fA-F]{2}){24,}\b/g;
 
   const atobSafe = (s) => { try { const b = s.replace(/-/g, '+').replace(/_/g, '/'); return typeof root.atob === 'function' ? root.atob(b + '==='.slice((b.length + 3) % 4)) : null; } catch (e) { return null; } };
-  const printable = (s) => s && s.length >= 12 && (s.match(/[\x20-\x7E\n\t]/g) || []).length / s.length > 0.9 && /[a-z]{3,}\s+[a-z]{2,}/i.test(s);
+  const printable = (s) => s && s.length >= 12 && (s.match(/[\x20-\x7E\n\t]/g) || []).length / s.length > 0.9 && /(?<![a-z])[a-z]{3,}\s+[a-z]{2,}/i.test(s);
   const decodeTags = (s) => Array.from(s).map((ch) => { const cp = ch.codePointAt(0); return cp >= 0xE0020 && cp <= 0xE007E ? String.fromCharCode(cp - 0xE0000) : ''; }).join('');
   const clip = (s, n) => (s.length > n ? s.slice(0, n) + '…' : s);
   const visible = (s) => s.replace(STRIP_RE, (c) => '\\u{' + c.codePointAt(0).toString(16).toUpperCase() + '}');
@@ -773,7 +773,7 @@
       const spaced = value.replace(RE_BLANKS, ' ');
       const shortId = SHORT_ID.test(value.trim());
       const prose = /\s/.test(spaced.trim());
-      const unjoined = prose ? spaced.replace(/[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+){2,}/g, (m) => m.replace(/[-_]+/g, ' ')) : null;
+      const unjoined = prose ? spaced.replace(/(?<![A-Za-z0-9])[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+){2,}/g, (m) => m.replace(/[-_]+/g, ' ')) : null;
       const texts = prose ? [spaced] : [spaced, spaced.replace(/[-_\/]+/g, ' ')];
       const textsAll = unjoined && unjoined !== spaced ? texts.concat([unjoined]) : texts;
       const findAll = (re) => { for (const x of textsAll) { const m = x.match(re); if (m) return m; } return null; };
