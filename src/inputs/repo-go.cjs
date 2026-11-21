@@ -2036,16 +2036,16 @@
       if (holder && (this.refCount().get(holder) || 0) <= 1) marks.push({ reason: 'unreferenced-declaration', detail: holder, exclude: true });
       // a tool type built only inside another tool (a unified tool that dispatches to it) is not registered itself
       const sub = s.fn && s.fn.recvType ? subTools.get(s.fn.pkg.dir + '\u0000' + s.fn.recvType) : null;
-      if (sub) marks.push({ reason: 'not-registered', detail: 'built only inside ' + sub, exclude: true });
+      if (sub) marks.push({ reason: 'not-registered', detail: sub, exclude: true });
       found.push({ path: f.path, line, tool, fidelity: 'derived', literal: s.kind === 'lit' && !(r.st.flavour === 'go-sdk'), marks, language: 'Go' });
     });
     return { found, unresolved, overBudget };
   };
 
-  // Tool types (a type whose method builds a tool with a fixed name, such as Definition()) that the repository only
-  // builds inside another tool type (its methods, or the constructor that returns it): sub-tools a unified tool
-  // dispatches to, not registered with the server. Map(pkg dir + type -> the other tool type). A tool type that is
-  // never built where the reader can see it is not called a sub-tool.
+  // Tool types (a type whose method builds a tool with a fixed name, such as Definition()) that are not registered:
+  // ones the repository only builds inside another tool type (its methods, or the constructor that returns it), the
+  // sub-tools a unified tool dispatches to; and, when the repository registers tool types by building them, ones it
+  // never builds. Map(pkg dir + type -> why).
   Repo.prototype.subToolTypes = function (results) {
     const out = new Map(); const key = (pk, n) => (pk ? pk.dir : '') + '\u0000' + n;
     const types = new Map();
@@ -2074,6 +2074,7 @@
         const before = t[qualified ? k - 3 : k - 1];
         const valuePlace = isP(before, '&') || isP(before, '(') || isP(before, ',') || isP(before, '=') || isP(before, ':=') || isP(before, ':') || isP(before, '{') || isId(before, 'return');
         if (typeNames.has(x.v) && isP(t[k + 1], '{') && valuePlace) tk = key(pk, x.v); // a composite literal, not a type before a body
+        else if (typeNames.has(x.v) && isP(t[k + 1], ')') && (isP(before, '(') && isId(t[qualified ? k - 4 : k - 2], 'new'))) tk = key(pk, x.v); // new(T)
         else if (ctorsByName.has(x.v) && isP(t[k + 1], '(') && !isId(t[k - 1], 'func')) { const c = ctorsByName.get(x.v).find((y) => y.pkg === pk); if (c) tk = c.key; }
         if (!tk || !types.has(tk)) continue;
         const cont = containerOf(fnAtTok(fns, k));
@@ -2081,7 +2082,12 @@
         if (!sites.has(tk)) sites.set(tk, []); sites.get(tk).push(cont);
       }
     });
-    sites.forEach((conts, tk) => { if (conts.length && conts.every((c) => c && types.has(c) && c !== tk)) out.set(tk, types.get(conts[0])); });
+    sites.forEach((conts, tk) => { if (conts.length && conts.every((c) => c && types.has(c) && c !== tk)) out.set(tk, 'built only inside ' + types.get(conts[0])); });
+    // When the repository visibly registers tool types by building them (some tool type is built outside every tool
+    // type, as in registry.Register(&X{}) or AddTool(x.Definition(), …)), a tool type it never builds is unused
+    // (superseded code). Without such a sign (reflection, plugin loading) nothing is concluded from its absence.
+    const visible = Array.from(sites.values()).some((conts) => conts.some((c) => !c || !types.has(c)));
+    if (visible) types.forEach((name, tk) => { if (!out.has(tk) && !(sites.get(tk) || []).length) out.set(tk, 'never built in the source read'); });
     return out;
   };
   // How often each identifier occurs in the repository's files (one pass, for unreferenced declarations).

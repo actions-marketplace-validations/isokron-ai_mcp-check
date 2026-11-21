@@ -432,3 +432,15 @@ test('tool types built only inside another tool (a unified tool and its sub-tool
   const out = cli(['--repo-dir', d, '--format', 'json']);
   assert.match(JSON.parse(out.stdout).source.provenance, /3 tools left out \(not-registered\)/);
 });
+
+test('tool types never built are unused when the repository registers tools by building them; kept when it shows no such mechanism', () => {
+  const old = (N, n) => 'type ' + N + ' struct{}\nfunc (t *' + N + ') Definition() mcp.Tool { return mcp.NewTool("' + n + '", mcp.WithDescription("Old ' + n + '.")) }\n';
+  const r = read({ 'tools/all.go': 'package tools\n' + MCPGO + 'import "example.com/srv/registry"\n'
+    + 'type UnifiedTool struct{}\nfunc (t *UnifiedTool) Definition() mcp.Tool { return mcp.NewTool("unified", mcp.WithDescription("Everything.")) }\n'
+    + 'func init() { registry.Register(&UnifiedTool{}) }\n' + old('ListTool', 'old_list') + old('GetTool', 'old_get') + old('DeleteTool', 'old_delete') });
+  const marks = Object.fromEntries(r.found.map((x) => [x.tool.name, x.marks.filter((m) => m.exclude).map((m) => m.reason + ': ' + m.detail)]));
+  assert.deepEqual(marks, { unified: [], old_list: ['not-registered: never built in the source read'], old_get: ['not-registered: never built in the source read'], old_delete: ['not-registered: never built in the source read'] });
+  // no tool type is built anywhere (registered by reflection or plugins): nothing is concluded, all are kept
+  const r2 = read({ 'tools/all.go': 'package tools\n' + MCPGO + old('ListTool', 'old_list') + old('GetTool', 'old_get') + 'func init() { registry.RegisterTypes(reflect.TypeOf((*ListTool)(nil)), reflect.TypeOf((*GetTool)(nil))) }\n' });
+  assert.deepEqual(r2.found.filter((x) => x.marks.some((m) => m.exclude)).map((x) => x.tool.name), []);
+});
