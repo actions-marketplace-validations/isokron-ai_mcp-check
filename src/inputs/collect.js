@@ -45,7 +45,8 @@ export function repoProvenance(c) {
   const extra = (left.length ? '; ' + left.length + ' tool' + (left.length === 1 ? '' : 's') + ' left out (' + reasons.join(', ') + ')' : '') + (cond.length ? '; ' + cond.length + ' kept but registered under a condition' : '')
     + (parts.length ? '; not readable from source, so their checks are skipped: ' + parts.join(', ') : '')
     + (u.text && Object.keys(u.text).length ? '; ' + Object.keys(u.text).length + ' tool' + (Object.keys(u.text).length === 1 ? '' : 's') + ' with source text not readable as part of the tool, scanned for hidden instructions' : '')
-    + (c.unresolvedNames ? '; ' + c.unresolvedNames + ' registration' + (c.unresolvedNames === 1 ? '' : 's') + ' with a name the reader could not resolve, not listed' : '');
+    + (c.unresolvedNames ? '; ' + c.unresolvedNames + ' registration' + (c.unresolvedNames === 1 ? '' : 's') + ' with a name the reader could not resolve, not listed' : '')
+    + (Array.isArray(c.notes) && c.notes.length ? '; ' + c.notes.map((x) => line(x, 300)).join('; ') : '');
   return { provenance: FIDELITY[c.fidelity](c) + extra, left, cond };
 }
 
@@ -213,7 +214,8 @@ export function namesOnlyText(c) {
 /** Why a scan was refused as incomplete (the reader's work limit), with the files to look at. */
 export function incompleteText(r) {
   const x = (r.hints && r.hints.incomplete) || { candidates: 0, files: [] };
-  return plural(x.candidates, 'possible tool definition') + ' in ' + x.files.slice(0, 3).map((f) => line(f, 200)).join(', ') + (x.files.length > 3 ? ' and ' + (x.files.length - 3) + ' more' : '') + ' could not be read completely (the reader\'s work limit on deeply nested source, a reader error, or more unreadable text than it keeps), so the list would be incomplete and nothing was graded';
+  const why = Array.isArray(x.reasons) && x.reasons.length ? x.reasons.map((r) => line(r, 120)).join('; ') : 'the reader\'s work limit on deeply nested source, a reader error, or more unreadable text than it keeps';
+  return plural(x.candidates, 'possible tool definition') + ' in ' + x.files.slice(0, 3).map((f) => line(f, 200)).join(', ') + (x.files.length > 3 ? ' and ' + (x.files.length - 3) + ' more' : '') + ' could not be read completely (' + why + '), so the list would be incomplete and nothing was graded';
 }
 
 /** The CLI's reading of a scan: the candidate to grade, or an InputFailure (exit 3) with the same advice as the Action. */

@@ -1,4 +1,6 @@
 // repo-source: find an MCP server's tool list from its source, without running it. Browser and Node.
+// In Node it requires repo-go.cjs and repo-rust.cjs; in a browser, load those two scripts first (they define
+// RepoGo and RepoRust), or Go and Rust are not read.
 // Every download is size-capped (MAX_FILE per file, MAX_JSON per API answer); nothing fetched is executed.
 //
 //   await RepoSource.fromGitHub('github.com/owner/repo', { fetch })   -> { candidates, best, hints }
@@ -2321,12 +2323,13 @@
     const sub = o.subdir ? o.subdir + '/' : '';
     const relPaths = sub ? paths.map((p) => (p.startsWith(sub) ? p.slice(sub.length) : p)) : paths;
     const absOf = (p) => sub + p;
+    const jsPy = relPaths.filter((p) => /\.(ts|mts|cts|js|mjs|cjs|py)$/.test(p) && !SKIP_DIR.test(p) && !TEST_FILE.test(p) && !/\.d\.ts$/.test(p)).length;
     for (const L of SYSTEM_LANGS) {
-      const lang = otherLanguages(relPaths).find((x) => x.name === L.name);
-      if (!lang || !L.mod) continue;
-      if (an.tools.length && !(lang.files >= lang.readFiles)) continue;
-      const srcPaths = L.plan(relPaths).slice(0, maxRead).map(absOf);
-      const mans = relPaths.filter((p) => L.manifest.test(p) && !L.skip.test(p)).sort((a, b) => a.split('/').length - b.split('/').length || (a < b ? -1 : a > b ? 1 : 0)).slice(0, 200).map(absOf)
+      const planned = L.mod ? L.plan(relPaths) : [];
+      if (!planned.length) continue;
+      if (an.tools.length && !(planned.length >= jsPy)) continue;
+      const srcPaths = planned.slice(0, maxRead).map(absOf);
+      const mans = relPaths.filter((p) => L.manifest.test(p) && !L.skip(p, relPaths)).sort((a, b) => a.split('/').length - b.split('/').length || (a < b ? -1 : a > b ? 1 : 0)).slice(0, 200).map(absOf)
         .concat(o.all.filter((p) => L.manifest.test(p) && !p.startsWith(sub) && sub.startsWith(p.replace(/[^/]*$/, '')))); // and the ones above the folder (the module path)
       // in plan order, whatever order the reads finish in (so --repo and --repo-dir give one list and one catalog hash)
       const inOrder = (ps, got) => { const m = new Map(got); return ps.filter((p) => typeof m.get(p) === 'string').map((p) => [p, m.get(p)]); };
@@ -2336,12 +2339,24 @@
       extraManifests.push(L.manifest);
       // a Go main package or a Rust module that constructs a server is a server of its own, even inside one go.mod or
       // Cargo.toml (a repository of several servers in one module): its folder groups the tools like a package
-      sfiles.forEach(([p, t]) => { if (L.serverRoot(t)) serverDirs.add(p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : ''); });
+      sfiles.forEach(([p, t]) => { if (L.serverRoot(t)) serverDirs.add(L.rootDir(p, paths)); });
+      // tool definitions in folders not read (tests, examples, testdata, benches): named, not graded
+      const skipped = L.skippedFolders(relPaths).slice(0, 200);
+      if (skipped.length) {
+        const hits = new Map();
+        for (const [p, t] of await readMany(skipped.map(absOf), 8)) {
+          if (typeof t !== 'string') continue;
+          const n = (t.match(L.toolHint) || []).length; if (!n) continue;
+          const dir = L.skippedFolderOf(p); const h = hits.get(dir) || { path: dir, tools: 0, constructor: false };
+          h.tools += n; if (L.serverRoot(t)) h.constructor = true; hits.set(dir, h);
+        }
+        if (hits.size) hints.ignoredFolders = (hints.ignoredFolders || []).concat(Array.from(hits.values()));
+      }
       let got;
       try { got = L.analyse(sfiles, mfiles); } catch (e) { got = { found: [], unresolved: [], overBudget: [{ path: (sfiles[0] || ['?'])[0], line: null }] }; }
       langRead = langRead || { name: L.name, files: 0, total: 0 };
       if (langRead.name !== L.name) langRead.name += ' and ' + L.name;
-      langRead.files += sfiles.length; langRead.total += L.plan(relPaths).length;
+      langRead.files += sfiles.length; langRead.total += planned.length;
       mergeLanguage(an, got, readFiles);
     }
     if (langRead) hints.languageRead = langRead;
@@ -2391,6 +2406,10 @@
       const langs2 = Array.from(new Set(found.map((x) => x.language || null)));
       const language = langs2.length === 1 && langs2[0] ? langs2[0] : null;
       candidates.push({ kind: 'source', fidelity: allLiteral && !Object.keys(out.unreadable).length && !language ? 'literal' : 'derived', language, path: null, built, files: Array.from(new Set(found.map((x) => x.path))), tools: out.tools, unreadable: out.unreadable, unresolved: unres, unresolvedNames: unres.length, where: found.map((x) => ({ name: x.tool.name, path: x.path, line: x.line, fidelity: x.fidelity })), excluded: an.excluded.filter((x) => found.some((f) => servers.rootOf(f.groupPath || f.path) === servers.rootOf(x.groupPath || x.path))).map((x) => ({ name: x.tool.name, path: x.path, line: x.line, reasons: x.marks.filter((m) => m.exclude).map((m) => m.reason + (m.detail ? ' (' + m.detail + ')' : '')) })).concat(setAside), marked, sdk: an.sdk });
+      // several Go main packages (or Rust modules) construct a server and none of them holds tools: they share the
+      // tools read, and each may register only part of them; the list is their union, and the report says so
+      const ctorOnly = Array.from(serverDirs).filter((d) => d && !found.some((x) => x.path.startsWith(d + '/')));
+      if (language && ctorOnly.length >= 2) candidates[candidates.length - 1].notes = [ctorOnly.length + ' ' + language + ' servers are started from ' + ctorOnly.slice(0, 4).map((d) => d || '.').join(', ') + (ctorOnly.length > 4 ? ' and more' : '') + ' and share these tools; each may register only part of them (this list is their union)'];
     }
     // A snapshot counts as this repository's exact list only when it names this repository's server. A snapshot of
     // another server (one this repository uses or tests against) is never chosen over tools read from source; with
@@ -2408,7 +2427,7 @@
     if (langs.length) hints.otherLanguages = langs;
     if (an.unresolved) hints.unresolvedNames = an.unresolved;
     // Candidates the reader had to skip at its work limit: the list would be incomplete, so nothing is graded.
-    if (an.overBudget && an.overBudget.length) { const prev = hints.incomplete || { candidates: 0, files: [] }; hints.incomplete = { candidates: prev.candidates + an.overBudget.length, files: Array.from(new Set(prev.files.concat(an.overBudget.map((x) => x.path)))) }; }
+    if (an.overBudget && an.overBudget.length) { const prev = hints.incomplete || { candidates: 0, files: [] }; hints.incomplete = { candidates: prev.candidates + an.overBudget.length, files: Array.from(new Set(prev.files.concat(an.overBudget.map((x) => x.path)))) }; const why = Array.from(new Set(an.overBudget.map((x) => x.why).filter(Boolean))); if (why.length) hints.incomplete.reasons = why; }
     const lr = hints.languageRead || { files: 0, total: 0 };
     return { scanned: { exact: plan.exact.length, manifests: plan.manifests.length, source: an.files + lr.files, candidates: an.candidates + lr.files, read: an.read + lr.files, sourceTotal: plan.src.length + lr.total, capped: plan.src.length > maxRead || an.candidates > an.files, budgetHit: !!(o.state && o.state.budgetHit) }, candidates, best: candidates[0] || null, hints };
   }
@@ -2514,18 +2533,36 @@
   // ------------------------------------------------------------ Go and Rust (repo-go.cjs, repo-rust.cjs)
   // Which files of a listing are read: source files outside dependency, build, test, example and fixture folders, likely
   // tool files first, then by path (so every listing order reads the same files).
-  const GO_SKIP = new RegExp(SKIP_DIR.source.replace('(node_modules|', '(node_modules|testdata|'), 'i');
-  const RUST_SKIP = new RegExp(SKIP_DIR.source.replace('(node_modules|', '(node_modules|target|'), 'i');
+  // Their own folders not read (not the TypeScript list: a Go or Rust crate may keep tools in docs/, spec/ or build/):
+  // Go: node_modules, vendor, testdata, and examples at a module's root; Rust: target, tests, benches, examples.
+  const GO_DEP = /(^|\/)(node_modules|vendor|\.git)\//;
+  const GO_NOT_READ = /(^|\/)(testdata)\//;
+  const RUST_DEP = /(^|\/)(node_modules|target|\.git)\//;
+  const RUST_NOT_READ = /(^|\/)(tests|benches|examples)\//;
+  const goModRoots = (paths) => { const k = paths.__goRoots; if (k) return k; const s = new Set(paths.filter((p) => /(^|\/)go\.mod$/.test(p)).map((p) => (p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : ''))); Object.defineProperty(paths, '__goRoots', { value: s, enumerable: false }); return s; };
+  // the examples/ (or example/) folder right under a module root, or null
+  const goExamplesOf = (p, paths) => { const segs = p.split('/'); for (let k = 0; k < segs.length - 1; k++) { if (/^examples?$/.test(segs[k]) && goModRoots(paths).has(segs.slice(0, k).join('/'))) return segs.slice(0, k + 1).join('/'); } return null; };
   const langScore = (p) => (/(^|\/)(tools?|server|mcp|handlers?)[^/]*$/i.test(p) || /(^|\/)(tools?|mcp|server)\//i.test(p) ? 0 : /tool/i.test(p) ? 1 : 2) + p.split('/').length * 0.01;
   const byScore = (a, b) => langScore(a) - langScore(b) || (a < b ? -1 : a > b ? 1 : 0);
   const SYSTEM_LANGS = [
-    { name: 'Go', mod: RepoGo, manifest: /(^|\/)go\.mod$/, skip: GO_SKIP,
-      plan: (paths) => paths.filter((p) => /\.go$/.test(p) && !/_test\.go$/.test(p) && !GO_SKIP.test(p) && !TEST_FILE.test(p)).sort(byScore),
+    { name: 'Go', mod: RepoGo, manifest: /(^|\/)go\.mod$/,
+      skip: (p, paths) => GO_DEP.test(p) || GO_NOT_READ.test(p) || !!goExamplesOf(p, paths),
+      plan: (paths) => paths.filter((p) => /\.go$/.test(p) && !/_test\.go$/.test(p) && !GO_DEP.test(p) && !GO_NOT_READ.test(p) && !goExamplesOf(p, paths)).sort(byScore),
+      skippedFolders: (paths) => paths.filter((p) => /\.go$/.test(p) && !/_test\.go$/.test(p) && !GO_DEP.test(p) && (GO_NOT_READ.test(p) || !!goExamplesOf(p, paths))).sort(),
+      skippedFolderOf: (p) => { const m = /^(.*?(?:^|\/)(?:testdata|examples?))\//.exec(p); return m ? m[1] : p.replace(/\/[^/]*$/, ''); },
+      toolHint: /\bNewTool\s*\(|\bAddTool\s*\(|\bRegisterTool\s*\(|\bmcp\.Tool\s*\{/g,
       serverRoot: (t) => /^\s*package\s+main\b/m.test(t) && RepoGo.constructsServer(t),
+      rootDir: (p) => (p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : ''),
       analyse: (src, man) => RepoGo.analyse(src, { goMods: man }) },
-    { name: 'Rust', mod: RepoRust, manifest: /(^|\/)Cargo\.toml$/, skip: RUST_SKIP,
-      plan: (paths) => paths.filter((p) => /\.rs$/.test(p) && !RUST_SKIP.test(p) && !TEST_FILE.test(p) && !/(^|\/)build\.rs$/.test(p)).sort(byScore),
+    { name: 'Rust', mod: RepoRust, manifest: /(^|\/)Cargo\.toml$/,
+      skip: (p) => RUST_DEP.test(p) || RUST_NOT_READ.test(p),
+      plan: (paths) => paths.filter((p) => /\.rs$/.test(p) && !RUST_DEP.test(p) && !RUST_NOT_READ.test(p) && !/(^|\/)build\.rs$/.test(p)).sort(byScore),
+      skippedFolders: (paths) => paths.filter((p) => /\.rs$/.test(p) && !RUST_DEP.test(p) && RUST_NOT_READ.test(p)).sort(),
+      skippedFolderOf: (p) => { const m = /^(.*?(?:^|\/)(?:tests|benches|examples))\//.exec(p); return m ? m[1] : p.replace(/\/[^/]*$/, ''); },
+      toolHint: /#\[\s*(?:rmcp::)?tool\b|#\[\s*(?:[\w:]*::)?mcp_tool\s*\(|\bTool::new\s*\(/g,
       serverRoot: (t) => RepoRust.constructsServer(t),
+      // a server in the crate's own src/ is the crate (suggest ws/a, not ws/a/src); one in a submodule is that module
+      rootDir: (p, paths) => { const dir = p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : ''; const m = /^(.*?)(?:^|\/)src$/.exec(dir); if (m) { const crate = dir === 'src' ? '' : dir.slice(0, -4); if (paths.includes((crate ? crate + '/' : '') + 'Cargo.toml')) return crate; } return dir; },
       analyse: (src, man) => RepoRust.analyse(src, { cargo: man }) },
   ];
   // Adds the tools a Go or Rust reading found to the analysis `an` (as analyseRepo returns it): names already found are

@@ -140,6 +140,16 @@
   // struct literal: { __struct: true, type: { pkg, name, path }, f: { Field: value }, pos }
   // function: { __fn: decl | lit, scope }; option: { __opt: name, args: [values], spread }
   class OverBudget extends Error {}
+  // Values nested deeper than this are not kept (a tools/list may nest 64 levels in all, and the tool and its schema
+  // keywords take some): such a schema is marked unreadable rather than refused by the list limit.
+  const MAX_JSON_DEPTH = 56;
+  const stringsOf = (v) => { const out = []; const stack = [v]; while (stack.length && out.length < 5000) { const x = stack.pop(); if (typeof x === 'string') { if (x.trim()) out.push(x); } else if (x && typeof x === 'object') for (const k of Object.keys(x)) { stack.push(x[k]); if (!Array.isArray(x)) out.push(k); } } return out; };
+  // what a value nested past MAX_JSON_DEPTH becomes: the schema holding it is unreadable (see finish)
+  const TOO_DEEP = Object.freeze({ __tooDeep: true });
+  const hasTooDeep = (v) => { const stack = [v]; let n = 0; while (stack.length && n++ < 200000) { const x = stack.pop(); if (x === TOO_DEEP) return true; if (x && typeof x === 'object') for (const k of Object.keys(x)) stack.push(x[k]); } return false; };
+  const tooDeep = (v, max) => { const stack = [[v, 0]]; while (stack.length) { const [x, d] = stack.pop(); if (d > max) return true; if (x && typeof x === 'object') for (const k of Object.keys(x)) stack.push([x[k], d + 1]); } return false; };
+  const WHY_WORK = 'the reader\'s work limit for one repository';
+  const WHY_MANY = 'more than 20,000 tool definitions';
 
   // ------------------------------------------------------------ file model
   function lineIndex(src) { const ix = [0]; for (let k = 0; k < src.length; k++) if (src.charCodeAt(k) === 10) ix.push(k + 1); return ix; }
@@ -588,7 +598,7 @@
     // the if / else blocks around each position: a stack of { close, cond: [a, b) | null, neg }
     const blocks = [];
     let lastIf = null; // the condition of the if block that just closed (for a following else)
-    const add = (name, at, op, a, b, idx, count) => { if (name === '_') return; if (!out.has(name)) out.set(name, []); out.get(name).push({ at, op, a, b, idx, count, conds: blocks.filter((x) => x.cond || x.unknown).map((x) => ({ cond: x.cond, neg: x.neg, unknown: x.unknown })), depth: blocks.length }); };
+    const add = (name, at, op, a, b, idx, count) => { if (name === '_') return; if (!out.has(name)) out.set(name, []); out.get(name).push({ at, op, a, b, idx, count, conds: blocks.filter((x) => x.cond || x.unknown).map((x) => ({ cond: x.cond, neg: x.neg, unknown: x.unknown, open: x.open, close: x.close })), depth: blocks.length }); };
     for (let k = body[0] + 1; k < body[1]; k++) {
       if (--this.work.left < 0) throw new OverBudget('work');
       const x = t[k];
@@ -602,12 +612,14 @@
         const kw = t[hs];
         if (isId(kw, 'if')) {
           let a = hs + 1; for (let q = hs + 1; q < k; q++) if (isP(t[q], ';')) a = q + 1; // if init; cond {
-          blocks.push({ close: c, cond: [a, k], neg: false, isIf: true });
+          blocks.push({ open: k, close: c, cond: [a, k], neg: false, isIf: true });
         } else if (isId(t[k - 1], 'else') && lastIf && lastIf.close === k - 2) {
-          blocks.push({ close: c, cond: lastIf.cond, neg: !lastIf.neg });
+          blocks.push({ open: k, close: c, cond: lastIf.cond, neg: !lastIf.neg });
+        } else if (isId(kw) && /^(for|switch|select)$/.test(kw.v)) {
+          blocks.push({ open: k, close: c, cond: null, unknown: true }); // a loop or switch body
         } else if (k > body[0] + 1 && TYPEISH_PREV(t[k - 1])) {
           blocks.push({ close: c, cond: null, literal: true }); // a composite literal
-        } else blocks.push({ close: c, cond: null, unknown: !isId(kw, 'func') && kw !== undefined });
+        } else blocks.push({ open: k, close: c, cond: null, unknown: !isId(kw, 'func') && kw !== undefined });
         continue;
       }
       if (x.y !== 'id') continue;
@@ -764,8 +776,9 @@
       if (s.body && s.fn) {
         const loc = this.locals(s.f, s.body).get(name);
         if (loc) {
-          const before = loc.filter((x) => at === undefined || x.at < at);
-          if (before.length) return this.localValue(before, s, name, depth, sc);
+          // the assignments before this place, not the one whose right-hand side holds it (opts = append(opts, …))
+          const before = loc.filter((x) => at === undefined || (x.at < at && !(x.a <= at && at < x.b)));
+          if (before.length) return this.localValue(before, s, name, depth, sc, at);
         }
       }
       if (s.isPkg) {
@@ -783,10 +796,11 @@
     if (b.list) return b.list;
     return UNK();
   };
-  Repo.prototype.localValue = function (assigns, home, name, depth, from) {
-    // home: the function's scope (its file and body); from: the scope the name was looked up in (a loop's scope)
+  Repo.prototype.localValue = function (assigns, home, name, depth, from, at) {
+    // home: the function's scope (its file and body); from: the scope the name was looked up in (a loop's scope);
+    // at: where it is read (a block that also holds that place is not a condition of the assignments in it)
     const sc = from && from.f === home.f ? from : home;
-    const key = '__l' + assigns[assigns.length - 1].at + ':' + name; sc.cache = sc.cache || new Map();
+    const key = '__l' + assigns[assigns.length - 1].at + ':' + name + ':' + (at === undefined ? '' : at); sc.cache = sc.cache || new Map();
     if (sc.cache.has(key)) return sc.cache.get(key);
     sc.cache.set(key, UNK());
     // in order; an assignment under an if whose condition is known false is skipped, one under an unknown
@@ -795,6 +809,7 @@
     for (const a of assigns) {
       let state = true; let paramCond = null;
       for (const c of a.conds) {
+        if (at !== undefined && c.open !== undefined && c.open < at && at < c.close) continue; // the read is in this block too
         if (c.unknown) { state = null; continue; }
         const r = this.ev(sc.f.P.expr(c.cond[0], c.cond[1]).n, sc, depth + 1);
         if (isParam(r)) paramCond = r;
@@ -900,6 +915,13 @@
     // conversions and pure helpers
     if (fnNode.k === 'tslice' || (fnNode.k === 'paren' && fnNode.x && fnNode.x.k === 'tslice')) { const v = A(0); return typeof v === 'string' ? v : v; }
     if (fnNode.k === 'id' && BASIC_CONV.has(name) && args.length === 1 && !sc.lookup(name)) return A(0); // float64(x), string(x), …
+    if (fnNode.k === 'id' && name === 'append' && args.length >= 1 && !sc.lookup(name)) {
+      // append(slice, x, y) / append(slice, xs...): the elements in order; an unknown part stays as an unknown element
+      const base = A(0); const out = Array.isArray(base) ? base.slice() : [base === null ? [] : base].filter((x) => !Array.isArray(x) || x.length);
+      if (n.spread && args.length === 2) { const xs = A(1); if (Array.isArray(xs)) out.push(...xs); else out.push(isUnk(xs) ? xs : UNK(literals(args[1]))); }
+      else args.slice(1).forEach((a) => out.push({ __arg: true, n: a, sc }));
+      return out;
+    }
     if ((name === 'RawMessage' || (name === 'Value' && qualName === 'jsontext')) && args.length === 1) { const v = A(0); return typeof v === 'string' ? jsonOrUnk(v) : isPlain(v) ? v : UNK(literals(n)); }
     if (name === 'MustMarshal' || (name === 'Marshal' && qualName === 'json')) { const v = A(0); return isPlain(v) || Array.isArray(v) ? v : UNK(literals(n)); }
     if (args.length === 1 && PTR_FN.test(name || '') && (!q || !q.pkg)) { const v = A(0); if (typeof v === 'boolean' || typeof v === 'string' || typeof v === 'number' || isParam(v)) return v; if (name === 'new') return v; }
@@ -1101,7 +1123,7 @@
   // maps and slices as they are. Parts that are not known set c.unk and keep their literals in c.lost.
   Repo.prototype.toJson = function (v, c, depth) {
     depth = depth || 0;
-    if (depth > 64) { c.unk = true; return undefined; }
+    if (depth > MAX_JSON_DEPTH) { c.unk = true; if (v && typeof v === 'object' && !v.__unk && !v.__struct && !v.__fn && !v.__tool && !v.__type && !v.__opt) c.lost.push(...stringsOf(v).filter((x) => typeof x === 'string')); return TOO_DEEP; }
     if (v === null || typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') return v;
     if (v === undefined) { c.unk = true; return undefined; }
     if (isUnk(v)) { c.unk = true; if (v.lost) c.lost.push(...v.lost); if (v.__partial) c.lost.push(v.v); return undefined; }
@@ -1166,7 +1188,7 @@
         if (!ty.pkg) {
           const b = BASIC[ty.v]; if (b) return Object.assign({}, ctx.dialect === 'google' ? b : { type: b.type });
           if (ty.v === 'any' || ty.v === 'error') return {};
-        } else if (ty.pkg === 'time' && ty.v === 'Time') return { type: 'string', format: 'date-time' };
+        } else if (ty.pkg === 'time' && ty.v === 'Time') return { type: 'string' }; // as google/jsonschema-go lists it (no format)
         else if (ty.pkg === 'time' && ty.v === 'Duration') return { type: 'integer' };
         else if (ty.pkg === 'json' && ty.v === 'RawMessage') return {};
         const d = this.typeDef({ pkg: ty.pkg, name: ty.v }, f);
@@ -1298,7 +1320,8 @@
       return this.applyFnOption(o, st, depth + 1);
     }
     if (o.__toolcall) return;
-    if (isUnk(o) || isParam(o)) { st.lost.push(...(o.lost || [])); st.unreadable.add('inputSchema'); st.unreadable.add('annotations'); return; }
+    // an option the reader cannot see (a slice filled at run time): any part of the tool may come from it
+    if (isUnk(o) || isParam(o)) { st.lost.push(...(o.lost || [])); st.unreadable.add('inputSchema'); st.unreadable.add('annotations'); st.optsUnknown = true; return; }
   };
   Repo.prototype.applyFnOption = function (o, st, depth) {
     const lit = o.__fn.lit; const f = lit ? o.__fn.f : o.__fn.file; const sig = lit ? lit.sig : o.__fn.sig; const body = lit ? lit.body : o.__fn.body;
@@ -1454,6 +1477,7 @@
 
   // The tools/list entry of a built tool. part flags: _unreadable [inputSchema, description, annotations]; _lost texts.
   function finish(st) {
+    if (st.optsUnknown && (st.description === undefined || st.description === '')) st.unreadable.add('description');
     const tool = { name: st.name };
     if (st.title !== undefined && st.title !== '') tool.title = st.title;
     if (st.description !== undefined && st.description !== '') tool.description = st.description;
@@ -1464,8 +1488,11 @@
       if (st.flavour === 'mcp-go') input.required = st.required.slice(); else if (st.required.length) input.required = st.required.slice();
       if (st.additionalProperties !== undefined) input.additionalProperties = st.additionalProperties;
     }
+    // nested past what a list may hold: unreadable here, rather than the whole list refused by the list limit
+    if (tooDeep(input, MAX_JSON_DEPTH) || hasTooDeep(input)) { st.lost.push(...stringsOf(input)); input = { type: 'object', properties: {} }; st.unreadable.add('inputSchema'); }
     tool.inputSchema = input;
-    if (st.output) tool.outputSchema = st.output;
+    if (st.output && !tooDeep(st.output, MAX_JSON_DEPTH) && !hasTooDeep(st.output)) tool.outputSchema = st.output;
+    if (st.annotations && hasTooDeep(st.annotations)) { st.unreadable.add('annotations'); st.annotations = undefined; }
     if (st.annotations && Object.keys(st.annotations).length) tool.annotations = st.annotations;
     const un = Array.from(st.unreadable);
     if (un.length) tool._unreadable = un;
@@ -1685,6 +1712,17 @@
       return res;
     }
     const n = this.callAt(f, site.i, site.at); if (!n) return res;
+    if (site.kind !== 'wrap') {
+      // a function of the repository named like the SDK's (its own NewTool, AddTool, RegisterTool): a helper when it
+      // builds a tool from its parameters; otherwise not read (counted), unless it only passes a Tool literal on
+      const rc = this.repoCallee(n, f, sc);
+      if (rc) {
+        if (this.wrappers && this.wrappers.has(rc)) return this.evalWrapper(rc, n, sc, depth + 1);
+        const passesLiteral = n.args.some((a) => { const b = a.k === 'unary' ? a.x : a; const tn = b.k === 'lit' ? typeName(b.type) : null; return !!tn && (tn.name === 'Tool' || this.toolShaped().has(tn.name)); });
+        if (passesLiteral || !this.wrappers) return res;
+        return [{ st: null, unresolved: true }];
+      }
+    }
     if (site.kind === 'new') {
       if (!n.args.length) return res;
       const callee = n.fn.k === 'index' ? n.fn.x : n.fn;
@@ -1769,6 +1807,17 @@
     }
     return res;
   };
+  // The repository function (or method) a call names, when it is one: NewTool(…), pkg.NewTool(…), x.AddTool(…).
+  // A method counts only when it is a known helper (a value's method may as well be the SDK's).
+  Repo.prototype.repoCallee = function (n, f, sc) {
+    const c = n.fn.k === 'index' ? n.fn.x : n.fn;
+    if (c.k === 'id') { if (sc.lookup(c.v) || this.isValue(c, sc) && !f.pkg.funcs.has(c.v)) return null; const d = f.pkg.funcs.get(c.v); return d ? d[0] : null; }
+    if (c.k !== 'sel') return null;
+    if (c.x.k === 'id') { const q = this.qual(f, c.x.v); if (q && !this.isValue(c.x, sc)) { const d = q.pkg && q.pkg.funcs.get(c.v); return d ? d[0] : null; } }
+    if (!this.wrappers) return null;
+    for (const pk of [sc.pkg].concat(Array.from(this.pkgs.values()))) { const ms = pk && pk.methods.get(c.v); const w = ms && ms.find((m) => this.wrappers.has(m)); if (w) return w; }
+    return null;
+  };
   // Is an identifier a value (a variable, parameter or package-level var) rather than a package qualifier?
   Repo.prototype.isValue = function (n, sc) {
     if (!n || n.k !== 'id') return true;
@@ -1803,7 +1852,7 @@
           const child = new Scope(sc, f, sc.pkg, null);
           if (r.names[0] && r.names[0] !== '_') child.vars.set(r.names[0], { val: r.names.length === 1 && !Array.isArray(coll) ? k : (r.names.length === 1 ? k : k) });
           if (r.names[1] && r.names[1] !== '_') child.vars.set(r.names[1], { val: v && v.__arg ? this.ev(v.n, v.sc) : v });
-          child.callDepth = sc.callDepth;
+          child.callDepth = sc.callDepth; child.stack = sc.stack;
           next.push(child);
         });
       }
@@ -1816,8 +1865,10 @@
   // A call to a wrapper: its own sites, with its parameters bound to the call's arguments.
   Repo.prototype.evalWrapper = function (d, n, sc, depth) {
     const out = [];
-    if (depth > 40 || (sc.callDepth || 0) >= MAX_CALL_DEPTH) return out;
+    // a chain of helpers deeper than followed, or one calling itself again: counted as unresolved, never guessed
+    if (depth > 40 || (sc.callDepth || 0) >= MAX_CALL_DEPTH || (sc.stack || []).includes(d)) return [{ st: null, unresolved: true }];
     const inner = this.bindCall(d, n, sc);
+    inner.stack = (sc.stack || []).concat([d]);
     const info = this.wrappers.get(d);
     // options passed in a variadic …Option parameter apply to the tool, wherever the wrapper applies them
     const vp = (d.sig.params || []).findIndex((p) => p.variadic && /Option$/.test(typeName(p.type.x) ? typeName(p.type.x).name : ''));
@@ -1910,7 +1961,7 @@
     }
     const allWithCtors = () => { all(); this.files.forEach((f) => { if (ctorSites.has(f)) fileSites.set(f, (fileSites.get(f) || []).concat(ctorSites.get(f))); }); };
     // wrappers: functions with a site whose tool name is one of their parameters; repeated to follow chains
-    for (let round = 0; round < 6; round++) {
+    for (let round = 0; round < MAX_CALL_DEPTH + 4; round++) {
       let grew = false;
       this.files.forEach((f) => {
         (fileSites.get(f) || []).forEach((s) => {
@@ -1939,8 +1990,8 @@
         if (s.inWrapper || s.recvBound) return;
         if (overBudget.length) return;
         let got;
-        try { got = this.evalInLoops(s, f); } catch (e) { if (e instanceof OverBudget) { overBudget.push({ path: f.path, line: lineAt(f, f.t[s.i].s) }); return; } got = [{ st: null, unresolved: true }]; }
-        if (results.length + got.length > MAX_RESULTS) { overBudget.push({ path: f.path, line: lineAt(f, f.t[s.i].s) }); return; }
+        try { got = this.evalInLoops(s, f); } catch (e) { if (e instanceof OverBudget) { overBudget.push({ path: f.path, line: lineAt(f, f.t[s.i].s), why: WHY_WORK }); return; } got = [{ st: null, unresolved: true }]; }
+        if (results.length + got.length > MAX_RESULTS) { overBudget.push({ path: f.path, line: lineAt(f, f.t[s.i].s), why: WHY_MANY }); return; }
         if (got.consumed) got.consumed.forEach((x) => consumed.add(x));
         got.forEach((r) => results.push({ r, f, s }));
       });
@@ -1967,8 +2018,8 @@
     results.forEach(({ r, f, s }) => {
       if ((s.kind === 'lit' || s.kind === 'wrap') && consumed.has(f.path + ':' + s.i)) return;
       const line = lineAt(f, f.t[s.i].s);
-      if (r.param) return;
-      if (r.unresolved || !r.name) {
+      // a tool name that is a parameter of a function not followed as a helper (a chain longer than followed)
+      if (r.unresolved || r.param || !r.name) {
         const u = { line };
         if (r.st) { if (typeof r.st.description === 'string') u.description = r.st.description; if (typeof r.st.title === 'string') u.title = r.st.title; if (r.st.lost.length) u.lost = r.st.lost.slice(0, 200); if (isUnk(r.st.name) && r.st.name.lost && r.st.name.lost.length) u.lost = (u.lost || []).concat(r.st.name.lost); }
         unresolved.push(Object.assign({ path: f.path }, u));
@@ -2004,9 +2055,9 @@
   // unresolved: [{ path, line, description, title, lost }], overBudget: [{ path, line }] }.
   function analyse(files, opts) {
     let repo;
-    try { repo = new Repo(files, opts); } catch (e) { if (e instanceof OverBudget) return { found: [], unresolved: [], overBudget: [{ path: (files[0] || [''])[0], line: null }] }; throw e; }
+    try { repo = new Repo(files, opts); } catch (e) { if (e instanceof OverBudget) return { found: [], unresolved: [], overBudget: [{ path: (files[0] || [''])[0], line: null, why: WHY_WORK }] }; throw e; }
     try { const r = repo.run(); r.work = (opts && opts.workBudget || DEFAULT_BUDGET) - repo.work.left; if (r.overBudget.length) { r.found = []; r.unresolved = []; r.overBudget = r.overBudget.slice(0, 20); } return r; } catch (e) {
-      if (e instanceof OverBudget) return { found: [], unresolved: [], overBudget: [{ path: (files[0] || [''])[0], line: null }] };
+      if (e instanceof OverBudget) return { found: [], unresolved: [], overBudget: [{ path: (files[0] || [''])[0], line: null, why: WHY_WORK }] };
       throw e;
     }
   }

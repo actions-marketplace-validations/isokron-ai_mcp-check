@@ -333,3 +333,82 @@ test('--repo-dir: a Go repository with no tool the reader knows says so (not "no
   assert.equal(out.status, 3);
   assert.match(out.stderr, /The source here is Go \(1 \.go file\): no tool definition the reader knows was found in it \(mark3labs\/mcp-go/);
 });
+
+// ------------------------------------------------------------ review fixes (1.3.0 review round)
+test('a repository helper named like the SDK (its own NewTool, AddTool) is followed as a helper, or counted, never dropped', () => {
+  const r = read({
+    'mcpgo/tool.go': 'package mcpgo\n' + MCPGO + `
+type Param struct{ Name, Desc string }
+func NewTool(s *server.MCPServer, name, desc string, params []Param, handler server.ToolHandlerFunc) {
+	opts := []mcp.ToolOption{mcp.WithDescription(desc)}
+	s.AddTool(mcp.NewTool(name, opts...), handler)
+}
+`,
+    'tools/all.go': 'package tools\nimport "example.com/srv/mcpgo"\n' + `
+func Register(s *server.MCPServer) {
+	mcpgo.NewTool(s, "list_rooms", "List the rooms.", nil, listRooms)
+	mcpgo.NewTool(s, "get_room", "Get one room.", nil, getRoom)
+}
+`,
+    'other/new.go': 'package other\n' + `
+func NewTool(def Def) Tool { return Tool{def: def} }
+func use() { _ = NewTool(loadDef()) }
+`,
+  });
+  assert.deepEqual(r.found.map((x) => x.tool.name).sort(), ['get_room', 'list_rooms']);
+  assert.equal(byName(r).get_room.description, 'Get one room.');
+  assert.equal(r.unresolved.length, 1, 'a NewTool of the repository that is not a helper is counted');
+});
+
+test('options from a slice filled at run time mark the description unreadable instead of grading it missing; for-loop locals', () => {
+  const r = read({ 'reg.go': 'package reg\n' + MCPGO + `
+type Spec struct { Name, Description string; Options []mcp.ToolOption }
+var specs = []Spec{{Name: "with_desc", Description: "Has one."}, {Name: "from_options"}}
+func register(s *server.MCPServer, extra []mcp.ToolOption) {
+	for _, spec := range specs {
+		opts := append([]mcp.ToolOption{mcp.WithDescription(spec.Description)}, spec.Options...)
+		opts = append(opts, extra...)
+		s.AddTool(mcp.NewTool(spec.Name, opts...), h)
+	}
+}
+` });
+  const t = byName(r);
+  assert.equal(t.with_desc.description, 'Has one.');
+  assert.ok(t.from_options._unreadable.includes('description'));
+  assert.ok(t.with_desc._unreadable.includes('inputSchema') && t.with_desc._unreadable.includes('annotations'));
+});
+
+test('helper chains longer than followed and recursive helpers are counted as unresolved, never guessed', () => {
+  const chain = Array.from({ length: 12 }, (_, k) => `func h${k}(n string) mcp.Tool { return h${k + 1}(n) }`).join('\n') + '\nfunc h12(n string) mcp.Tool { return mcp.NewTool(n, mcp.WithDescription("Deep.")) }\nvar T = h0("deep_tool")\nfunc init() { use(T) }\n';
+  const r1 = read({ 'chain.go': 'package c\n' + MCPGO + chain });
+  assert.equal(r1.found.length + r1.unresolved.length >= 1, true, 'the deep chain is read or counted');
+  const r2 = read({ 'rec.go': 'package c\n' + MCPGO + `
+func f(n string, k int) mcp.Tool { if k > 0 { return g(n+"_x", k-1) }; return mcp.NewTool(n, mcp.WithDescription("R.")) }
+func g(n string, k int) mcp.Tool { return f(n, k) }
+var T = f("base", 3)
+func init() { use(T) }
+` });
+  assert.ok(!r2.found.some((x) => /_x_x_x_x/.test(x.tool.name)), 'no names made up by following a recursion: ' + r2.found.map((x) => x.tool.name));
+});
+
+test('a schema nested past the list limit is marked unreadable (its text kept), so the list is still graded', () => {
+  let deep = '{"type":"string","description":"leaf"}'; for (let k = 0; k < 70; k++) deep = '{"type":"object","properties":{"a":' + deep + '}}';
+  const r = read({ 'deep.go': 'package d\n' + MCPGO + 'var T = mcp.NewTool("deep_schema", mcp.WithDescription("Deep."), mcp.WithRawInputSchema(json.RawMessage(`' + deep + '`)))\nfunc init() { use(T) }\n' });
+  const t = byName(r).deep_schema;
+  assert.ok(t._unreadable.includes('inputSchema'));
+  assert.ok(t._lost.includes('leaf'));
+});
+
+test('--repo-dir: Go reads docs/ and spec/ folders, names tools in testdata and root examples it does not read, and notes shared tools of several mains', async () => {
+  const d = tree({
+    'go.mod': 'module example.com/x\n',
+    'cmd/a/main.go': 'package main\n' + MCPGO + 'import "example.com/x/docs/tools"\nfunc main() { s := server.NewMCPServer("a", "1"); s.AddTool(tools.A(), nil) }\n',
+    'cmd/b/main.go': 'package main\n' + MCPGO + 'import "example.com/x/docs/tools"\nfunc main() { s := server.NewMCPServer("b", "1"); s.AddTool(tools.B(), nil) }\n',
+    'docs/tools/t.go': 'package tools\n' + MCPGO + 'func A() mcp.Tool { return mcp.NewTool("tool_a", mcp.WithDescription("A.")) }\nfunc B() mcp.Tool { return mcp.NewTool("tool_b", mcp.WithDescription("B.")) }\n',
+    'examples/demo/main.go': 'package main\n' + MCPGO + 'func main() { s := server.NewMCPServer("demo", "1"); s.AddTool(mcp.NewTool("demo_tool"), nil) }\n',
+  });
+  const r = await R.fromDirectory(d);
+  assert.deepEqual(r.best.tools.map((t) => t.name).sort(), ['tool_a', 'tool_b']);
+  assert.match(r.best.notes[0], /2 Go servers are started from cmd\/a, cmd\/b and share these tools/);
+  assert.deepEqual(r.hints.ignoredFolders.map((x) => [x.path, x.tools]), [['examples', 2]]);
+});
