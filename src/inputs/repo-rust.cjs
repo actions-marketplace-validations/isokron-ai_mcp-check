@@ -29,6 +29,16 @@
   const MAX_DEPTH = 80;
   const DEFAULT_BUDGET = 2e6;
   class OverBudget extends Error {}
+  // Values nested deeper than this are not kept (a tools/list may nest 64 levels in all, and the tool and its schema
+  // keywords take some): such a schema is marked unreadable rather than refused by the list limit.
+  const MAX_JSON_DEPTH = 56;
+  const stringsOf = (v) => { const out = []; const stack = [v]; while (stack.length && out.length < 5000) { const x = stack.pop(); if (typeof x === 'string') { if (x.trim()) out.push(x); } else if (x && typeof x === 'object') for (const k of Object.keys(x)) { stack.push(x[k]); if (!Array.isArray(x)) out.push(k); } } return out; };
+  // what a value nested past MAX_JSON_DEPTH becomes: the schema holding it is unreadable (see finish)
+  const TOO_DEEP = Object.freeze({ __tooDeep: true });
+  const hasTooDeep = (v) => { const stack = [v]; let n = 0; while (stack.length && n++ < 200000) { const x = stack.pop(); if (x === TOO_DEEP) return true; if (x && typeof x === 'object') for (const k of Object.keys(x)) stack.push(x[k]); } return false; };
+  const tooDeep = (v, max) => { const stack = [[v, 0]]; while (stack.length) { const [x, d] = stack.pop(); if (d > max) return true; if (x && typeof x === 'object') for (const k of Object.keys(x)) stack.push([x[k], d + 1]); } return false; };
+  const WHY_WORK = 'the reader\'s work limit for one repository';
+  const WHY_MANY = 'more than 20,000 tool definitions';
 
   // ------------------------------------------------------------ tokenizer
   // Tokens: { y: 'id' | 'str' | 'num' | 'char' | 'life' | 'p' | 'doc', v, s, nl }. '<' and '>' are always single
@@ -400,18 +410,31 @@
     // macro declares are read like written ones
     const live = parsed.filter((f) => !testFiles.has(f.path));
     const macros = new Map(); live.forEach((f) => f.items.macros.forEach((m) => { if (!macros.has(m.name)) macros.set(m.name, m); }));
+    // A worklist: an expansion's own item macros are expanded in turn, up to MAX_MACRO_DEPTH levels and MAX_EXPANSIONS in
+    // all. An invocation of a repository macro that is not expanded (no arm matches, too deep, too many) is counted as
+    // unresolved with its literals; past MAX_EXPANSIONS the reading is refused as incomplete.
     let expansions = 0;
+    this.macroUnresolved = []; this.macroOver = null;
     if (macros.size) {
-      live.slice().forEach((f) => f.items.invocations.forEach((inv) => {
-        const m = macros.get(inv.name); if (!m || expansions >= MAX_EXPANSIONS) return;
-        const text = expandMacro(m, inv); if (!text) return;
+      const queue = [];
+      live.forEach((f) => f.items.invocations.forEach((inv) => queue.push({ f, inv, depth: 0, line: null })));
+      for (let qi = 0; qi < queue.length; qi++) {
+        if (--this.work.left < 0) throw new OverBudget('work');
+        const { f, inv, depth } = queue[qi];
+        const m = macros.get(inv.name); if (!m) continue;
+        const line = queue[qi].line || lineAt(f, f.t[inv.s].s);
+        const unread = (why) => this.macroUnresolved.push({ path: f.path, line, lost: literalsIn(f, inv.a, inv.b).slice(0, 200), why });
+        if (expansions >= MAX_EXPANSIONS) { if (!this.macroOver) this.macroOver = { path: f.path, line }; continue; }
+        if (depth >= MAX_MACRO_DEPTH) { unread('macro nested deeper than ' + MAX_MACRO_DEPTH); continue; }
+        const text = expandMacro(m, inv); if (!text) { unread('no macro arm matched'); continue; }
         expansions++;
-        const t = tokenize(text); const g = { path: f.path, text, t, close: bracketIndex(t), dir: f.dir, fixedLine: lineAt(f, f.t[inv.s].s), expanded: true };
+        const t = tokenize(text); const g = { path: f.path, text, t, close: bracketIndex(t), dir: f.dir, fixedLine: line, expanded: true };
         const out = { types: [], consts: [], fns: [], impls: [], aliases: [], testMods: [], skip: [], macros: [], invocations: [] };
-        try { parseItems(g, 0, t.length, { work: this.work, cfg: inv.cfg, top: false, inner: [], mod: [] }, out); } catch (e) { if (e instanceof OverBudget) throw e; return; }
+        try { parseItems(g, 0, t.length, { work: this.work, cfg: inv.cfg, top: false, inner: [], mod: [] }, out); } catch (e) { if (e instanceof OverBudget) throw e; unread('expansion not read'); continue; }
         g.items = out; g.inner = [];
         parsed.push(g);
-      }));
+        out.invocations.forEach((x) => queue.push({ f: g, inv: x, depth: depth + 1, line }));
+      }
     }
     parsed.forEach((f) => {
       if (testFiles.has(f.path)) return;
@@ -423,6 +446,7 @@
     });
   }
   const MAX_EXPANSIONS = 2000;
+  const MAX_MACRO_DEPTH = 8;
   // The text of a macro_rules! invocation: the first arm whose pattern (literal tokens and $x:frag captures, no
   // repetitions) matches the arguments, its body with the captures put in. null when no arm matches.
   function expandMacro(m, inv) {
@@ -475,11 +499,20 @@
   // The source length of token k (up to the next token, without the space between).
   function tokLen(g, k) { const next = g.t[k + 1] ? g.t[k + 1].s : g.text.length; return g.text.slice(g.t[k].s, next).replace(/\s+$/, '').length; }
   // [features] default = ["a", "b"] of a Cargo.toml.
+  // The features `default` turns on, followed through the features it names (a visited set; "dep:x" is x, and
+  // "x/y" turns on x).
   function cargoDefaults(text) {
     const sec = /^\[features\]\s*$([\s\S]*?)(?=^\[|(?![\s\S]))/m.exec(text);
     if (!sec) return new Set();
-    const m = /^\s*default\s*=\s*\[([\s\S]*?)\]/m.exec(sec[1]);
-    return new Set(m ? (m[1].match(/"([^"]+)"/g) || []).map((x) => x.slice(1, -1)) : []);
+    const table = new Map(); const re = /^\s*("?)([\w.-]+)\1\s*=\s*\[([\s\S]*?)\]/gm; let m;
+    while ((m = re.exec(sec[1]))) table.set(m[2], (m[3].match(/"([^"]+)"/g) || []).map((x) => x.slice(1, -1)));
+    const on = new Set(); const todo = (table.get('default') || []).slice();
+    while (todo.length) {
+      let x = todo.pop(); x = x.replace(/^dep:/, '').replace(/\?.*$/, '').replace(/\/.*$/, '');
+      if (!x || on.has(x)) continue; on.add(x);
+      (table.get(x) || []).forEach((y) => todo.push(y));
+    }
+    return on;
   }
   Repo.prototype.crateOf = function (path) { return this.crates.find((c) => !c.dir || path === c.dir || path.startsWith(c.dir + '/')) || null; };
   Repo.prototype.step = function () { if (--this.work.left < 0) throw new OverBudget('work'); };
@@ -920,7 +953,7 @@
   // JSON from a value; unknown parts set c.unk and keep their literals.
   function toJson(v, c, depth) {
     depth = depth || 0;
-    if (depth > 64) { c.unk = true; return undefined; }
+    if (depth > MAX_JSON_DEPTH) { c.unk = true; if (v && typeof v === 'object' && !v.__unk && !v.__struct && !v.__fn && !v.__tool && !v.__type && !v.__opt) c.lost.push(...stringsOf(v).filter((x) => typeof x === 'string')); return TOO_DEEP; }
     if (v === null || typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') return v;
     if (v === undefined || isUnk(v)) { c.unk = true; if (v && v.lost) c.lost.push(...v.lost); return undefined; }
     if (Array.isArray(v)) return v.map((x) => toJson(x, c, depth + 1)).filter((x) => x !== undefined);
@@ -1137,7 +1170,10 @@
     if (typeof st.title === 'string' && st.title) tool.title = st.title;
     if (typeof st.description === 'string' && st.description) tool.description = st.description;
     tool.inputSchema = st.input && typeof st.input === 'object' ? st.input : { type: 'object', properties: {} };
-    if (st.output && typeof st.output === 'object') tool.outputSchema = st.output;
+    // nested past what a list may hold: unreadable here, rather than the whole list refused by the list limit
+    if (tooDeep(tool.inputSchema, MAX_JSON_DEPTH) || hasTooDeep(tool.inputSchema)) { st.lost.push(...stringsOf(tool.inputSchema)); tool.inputSchema = { type: 'object', properties: {} }; st.unreadable.add('inputSchema'); }
+    if (st.output && typeof st.output === 'object' && !tooDeep(st.output, MAX_JSON_DEPTH) && !hasTooDeep(st.output)) tool.outputSchema = st.output;
+    if (st.annotations && hasTooDeep(st.annotations)) { st.unreadable.add('annotations'); st.annotations = undefined; }
     if (st.annotations && typeof st.annotations === 'object' && Object.keys(st.annotations).length) tool.annotations = st.annotations;
     const un = Array.from(st.unreadable); if (un.length) tool._unreadable = un;
     const lost = st.lost.filter((x) => typeof x === 'string' && x.trim()); if (lost.length) tool._lost = lost;
@@ -1353,6 +1389,8 @@
   // ------------------------------------------------------------ the whole repository
   Repo.prototype.run = function () {
     const found = []; const unresolved = []; const overBudget = []; const wrappers = new Set();
+    (this.macroUnresolved || []).forEach((u) => unresolved.push({ path: u.path, line: u.line, lost: u.lost }));
+    if (this.macroOver) overBudget.push({ path: this.macroOver.path, line: this.macroOver.line, why: 'more than ' + MAX_EXPANSIONS + ' macro expansions' });
     const push = (st, f, s, item, kind) => {
       const line = lineAt(f, s);
       if (typeof st.name !== 'string' || !st.name) {
@@ -1471,7 +1509,7 @@
           push(this.handTool(v), f, t[k].s, fn || null, 'hand');
           k = (isNew ? k + 3 : k + 1);
         }
-      } catch (e) { if (e instanceof OverBudget) { overBudget.push({ path: f.path, line: null }); return; } throw e; }
+      } catch (e) { if (e instanceof OverBudget) { overBudget.push({ path: f.path, line: null, why: WHY_WORK }); return; } throw e; }
     });
     // helpers that build a tool from their parameters (fn tool(name: &str, …) -> Tool { Tool::new(name, …) }): each call
     // is a tool; a caller that passes its own parameter on is a helper too (a few levels)
@@ -1498,11 +1536,11 @@
             v = this.callPath([t[k].v], null, f, k + 2, c, env, 0);
             let e = c + 1; // builder calls chained on the result
             while (v && v.__tool && isP(t[e], '.') && isId(t[e + 1]) && isP(t[e + 2], '(') && f.close[e + 2] > 0) { v = this.method(v, t[e + 1].v, null, f, e + 3, f.close[e + 2], env, 0); e = f.close[e + 2] + 1; }
-          } catch (x) { if (x instanceof OverBudget) { overBudget.push({ path: f.path, line: null }); return; } v = UNK(); }
+          } catch (x) { if (x instanceof OverBudget) { overBudget.push({ path: f.path, line: null, why: WHY_WORK }); return; } v = UNK(); }
           if (!v || (!v.__tool && !v.__struct)) continue;
           const nm = v.__tool ? v.name : v.f.name;
           if (fn && isParamOf(nm, fn)) { next.add(fn.name); continue; }
-          if (found.length + unresolved.length > MAX_RESULTS) { overBudget.push({ path: f.path, line: null }); return; }
+          if (found.length + unresolved.length > MAX_RESULTS) { overBudget.push({ path: f.path, line: null, why: WHY_MANY }); return; }
           push(this.handTool(v), f, t[k].s, fn || null, 'hand');
         }
       });
@@ -1515,7 +1553,7 @@
   function analyse(files, opts) {
     let repo;
     try { repo = new Repo(files, opts); const r = repo.run(); r.work = (opts && opts.workBudget || DEFAULT_BUDGET) - repo.work.left; if (r.overBudget.length) { r.found = []; r.unresolved = []; } return r; } catch (e) {
-      if (e instanceof OverBudget) return { found: [], unresolved: [], overBudget: [{ path: (files[0] || [''])[0], line: null }] };
+      if (e instanceof OverBudget) return { found: [], unresolved: [], overBudget: [{ path: (files[0] || [''])[0], line: null, why: WHY_WORK }] };
       throw e;
     }
   }

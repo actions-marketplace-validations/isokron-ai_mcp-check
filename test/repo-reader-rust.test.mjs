@@ -347,3 +347,54 @@ test('--repo-dir: several servers in one crate (each module with its own ServerH
   assert.equal(out.status, 3);
   assert.match(out.stderr, /more than one server .*src\/alpha \(server constructor, 1 tool\), src\/beta \(server constructor, 1 tool\)\. Nothing was merged or picked/);
 });
+
+// ------------------------------------------------------------ review fixes (1.3.0 review round)
+test('macros that expand to macros are expanded in turn; one not expanded is counted; a fan-out past the limit is refused with its reason', () => {
+  const r = read({ 'src/m.rs': `
+macro_rules! simple_tool { ($n:literal) => { #[tool_router] impl S { #[tool(name = $n, description = "D.")] fn f(&self) {} } }; }
+macro_rules! pair { ($a:literal, $b:literal) => { simple_tool!($a); simple_tool!($b); }; }
+macro_rules! quad { () => { pair!("a_tool", "b_tool"); pair!("c_tool", "d_tool"); }; }
+quad!();
+macro_rules! only_x { (x) => {}; }
+only_x!("not matched, kept");
+` });
+  assert.deepEqual(r.found.map((x) => x.tool.name).sort(), ['a_tool', 'b_tool', 'c_tool', 'd_tool']);
+  assert.equal(r.unresolved.length, 1);
+  assert.ok(r.unresolved[0].lost.includes('not matched, kept'));
+  const fan = Array.from({ length: 12 }, (_, k) => `macro_rules! m${k} { () => { m${k + 1}!(); m${k + 1}!(); m${k + 1}!(); }; }`).join('\n') + '\nmacro_rules! m12 { () => { #[tool_router] impl S { #[tool] fn t(&self) {} } }; }\nm0!();';
+  const f = read({ 'src/fan.rs': fan });
+  assert.equal(f.found.length, 0);
+  assert.ok(f.unresolved.length > 0 || f.overBudget.some((x) => /macro expansions/.test(x.why || '')), 'counted or refused with the reason');
+});
+
+test('Cargo default features are followed through the features they turn on (and dep:x)', () => {
+  assert.deepEqual(Array.from(RR.cargoDefaults('[features]\ndefault = ["full"]\nfull = ["tools", "dep:serde", "rmcp/server"]\ntools = ["extra"]\nextra = []\npro = []\n')).sort(), ['extra', 'full', 'rmcp', 'serde', 'tools']);
+  const r = read({ 'src/lib.rs': '#[tool_router]\nimpl S {\n#[cfg(feature = "extra")]\n#[tool(description = "E.")]\nfn extra_tool(&self) {}\n#[cfg(feature = "pro")]\n#[tool(description = "P.")]\nfn pro_tool(&self) {}\n}\n' }, { 'Cargo.toml': '[package]\nname = "s"\n[features]\ndefault = ["full"]\nfull = ["extra"]\nextra = []\npro = []\n' });
+  assert.deepEqual(Object.fromEntries(r.found.map((x) => [x.tool.name, x.marks.some((m) => m.exclude)])), { extra_tool: false, pro_tool: true });
+});
+
+test('a json! schema nested past the list limit is marked unreadable, and the CLI grades the list (not exit 2)', () => {
+  let deep = '{"type": "string", "description": "leaf"}'; for (let k = 0; k < 70; k++) deep = '{"type": "object", "properties": {"a": ' + deep + '}}';
+  const src = 'fn tools() -> Vec<Tool> { vec![Tool::new("deep_tool", "Deep.", Arc::new(json!(' + deep + ').as_object().unwrap().clone()))] }\n#[tool_handler]\nimpl ServerHandler for S {}\n';
+  const r = read({ 'src/lib.rs': src });
+  assert.ok(byName(r).deep_tool._unreadable.includes('inputSchema'));
+  const d = tree({ 'Cargo.toml': '[package]\nname = "deep"\n', 'src/lib.rs': src });
+  const out = cli(['--repo-dir', d]);
+  assert.ok(out.status === 0 || out.status === 1, out.stderr);
+});
+
+test('--repo-dir: Rust reads src/tools/docs/, names tools in tests/ and examples/ it does not read; separate server crates are suggested by crate folder', async () => {
+  const d = tree({
+    'Cargo.toml': '[package]\nname = "docs"\n',
+    'src/main.rs': 'mod tools;\n#[tool_handler]\nimpl ServerHandler for S {}\n',
+    'src/tools/docs/search.rs': '#[tool_router]\nimpl S {\n#[tool(description = "Search the docs.")]\nfn search_docs(&self) {}\n#[tool(description = "Read a doc.")]\nfn read_doc(&self) {}\n}\n',
+    'tests/it.rs': '#[tool_router]\nimpl T {\n#[tool(description = "Test.")]\nfn test_only(&self) {}\n}\n',
+  });
+  const r = await R.fromDirectory(d);
+  assert.deepEqual(r.best.tools.map((t) => t.name).sort(), ['read_doc', 'search_docs']);
+  assert.deepEqual(r.hints.ignoredFolders.map((x) => [x.path, x.tools]), [['tests', 1]]);
+  const ws = tree({ 'Cargo.toml': '[workspace]\nmembers = ["a", "b"]\n', 'a/Cargo.toml': '[package]\nname = "a"\n', 'a/src/main.rs': SERVER('Alpha'), 'b/Cargo.toml': '[package]\nname = "b"\n', 'b/src/main.rs': SERVER('Beta') });
+  const out = cli(['--repo-dir', ws]);
+  assert.equal(out.status, 3);
+  assert.match(out.stderr, /\ba \(server constructor, 1 tool\), b \(server constructor, 1 tool\)/);
+});
