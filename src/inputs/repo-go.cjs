@@ -27,6 +27,7 @@
   const MAX_STR = 64 * 1024;      // a string built from constants is cut here (the rest is kept as lost text)
   const MAX_DEPTH = 80;           // expression and type nesting read; deeper is unreadable
   const MAX_CALL_DEPTH = 8;       // repository functions followed into
+  const MAX_HELPER_ROUNDS = 64;   // levels of helpers (functions that build a tool from their parameters) found
   const DEFAULT_BUDGET = 2e6;     // evaluation steps for one repository (the largest servers read take under 0.2e6)
   const MAX_RESULTS = 20000;      // tool definitions read in one repository (more: refused as over the work limit)
 
@@ -1535,10 +1536,10 @@
     if (shape) { // a repository's own tool type: its fields by their json tags
       const G = {}; [['Name', shape.name], ['Description', shape.description], ['Title', shape.title], ['InputSchema', shape.input], ['OutputSchema', shape.output], ['Annotations', shape.annotations]].forEach(([k, fld]) => { if (fld && fld in F) G[k] = F[fld]; });
       F = G;
-      // a repository's own type is converted to the SDK's tool at run time: annotations (and the title) it has no
-      // field for, or leaves unset, may be added there, so they are not known
-      if (!shape.annotations || !('Annotations' in F)) st.unreadable.add('annotations');
-      st.ownType = true;
+      // a repository's own tool type: whether a conversion the reader cannot follow may change it is decided in run();
+      // annotations left unset here but assigned to that field elsewhere (d.Annotations = …) are set at run time
+      st.ownType = { name: v.type.name, pkg: (v.def && v.def.pkg) || null };
+      if (shape.annotations && !('Annotations' in F) && this.fieldAssigned(shape.annotations)) st.unreadable.add('annotations');
     }
     st.name = F.Name;
     if ('Title' in F) st.title = this.str(F.Title, st, null);
@@ -1728,7 +1729,7 @@
         if (this.wrappers && this.wrappers.has(rc)) return this.evalWrapper(rc, n, sc, depth + 1);
         const passesLiteral = n.args.some((a) => { const b = a.k === 'unary' ? a.x : a; const tn = b.k === 'lit' ? typeName(b.type) : null; return !!tn && (tn.name === 'Tool' || this.toolShaped().has(tn.name)); });
         if (passesLiteral || !this.wrappers) return res;
-        return [{ st: null, unresolved: true }];
+        return [{ st: null, unresolved: true, lost: literals(n).slice(0, 200) }];
       }
     }
     if (site.kind === 'new') {
@@ -1875,7 +1876,7 @@
   Repo.prototype.evalWrapper = function (d, n, sc, depth) {
     const out = [];
     // a chain of helpers deeper than followed, or one calling itself again: counted as unresolved, never guessed
-    if (depth > 40 || (sc.callDepth || 0) >= MAX_CALL_DEPTH || (sc.stack || []).includes(d)) return [{ st: null, unresolved: true }];
+    if (depth > 40 || (sc.callDepth || 0) >= MAX_CALL_DEPTH || (sc.stack || []).includes(d)) return [{ st: null, unresolved: true, capped: true, lost: literals(n).slice(0, 200) }];
     const inner = this.bindCall(d, n, sc);
     inner.stack = (sc.stack || []).concat([d]);
     const info = this.wrappers.get(d);
@@ -1894,6 +1895,9 @@
           const s = h && h.input ? this.schemaFor(h.input, h.f, 'google', { requiredFromTags: true }) : null;
           if (s && s.schema) { r.st.input = s.schema; r.st.inputSet = true; r.st.unreadable.delete('inputSchema'); }
         }
+        // text this call passes that the tool could not place (a description through helpers not followed): scanned
+        if (r.st && (r.st.optsUnknown || r.st.unreadable.has('description'))) r.st.lost.push(...literals(n).slice(0, 200));
+        if (r.lost && !r.st) r.lost = r.lost.concat(literals(n).slice(0, 200));
         if (r.st && isParam(r.st.name) && r.st.name.owner === sc.fn) r.param = true;
         else if (r.st && typeof r.st.name === 'string') { r.name = r.st.name; delete r.unresolved; }
         else if (r.st) { r.unresolved = true; delete r.param; }
@@ -1970,14 +1974,21 @@
     }
     const allWithCtors = () => { all(); this.files.forEach((f) => { if (ctorSites.has(f)) fileSites.set(f, (fileSites.get(f) || []).concat(ctorSites.get(f))); }); };
     // wrappers: functions with a site whose tool name is one of their parameters; repeated to follow chains
-    for (let round = 0; round < MAX_CALL_DEPTH + 4; round++) {
-      let grew = false;
+    // Each round looks at the sites not looked at before, and at calls named like a helper found in the last round,
+    // so a chain of helpers is followed to its end (up to MAX_HELPER_ROUNDS) in time linear in the sites.
+    let fresh = null;
+    for (let round = 0; round < MAX_HELPER_ROUNDS; round++) {
+      let grew = false; const added = new Set();
       this.files.forEach((f) => {
         (fileSites.get(f) || []).forEach((s) => {
           if (!s.fn || s.inWrapper) return; // already a site of a known helper
+          if (s.looked && !(fresh && fresh.has(f.t[s.at] && f.t[s.at].v))) return;
+          s.looked = true;
           let got; try { got = this.evalSite(s, f, this.scopeFor(s, f), 0); } catch (e) { if (e instanceof OverBudget) throw e; return; }
-          if (got.some((r) => r.param)) {
-            if (!this.wrappers.has(s.fn)) { this.wrappers.set(s.fn, { sites: [], reflects: false }); this.wrapperNames.add(s.fn.name); grew = true; }
+          // a helper too: one whose tool name is its parameter, or one that passes its parameters on into a chain
+          // too long to follow (its callers' text is then scanned as an unresolved registration)
+          if (got.some((r) => r.param || (r.capped && (s.fn.sig.params || []).some((p) => p.name)))) {
+            if (!this.wrappers.has(s.fn)) { this.wrappers.set(s.fn, { sites: [], reflects: false }); this.wrapperNames.add(s.fn.name); added.add(s.fn.name); grew = true; }
             const w = this.wrappers.get(s.fn); if (!s.inWrapper) w.sites.push(s);
             s.inWrapper = true;
             s.usesVariadic = (() => { const vp = (s.fn.sig.params || []).find((p) => p.variadic); if (!vp) return false; const n = s.kind === 'lit' ? null : this.callAt(f, s.i, s.at); return !!(n && n.spread && n.args.length && n.args[n.args.length - 1].k === 'id' && n.args[n.args.length - 1].v === vp.name); })();
@@ -1985,6 +1996,7 @@
         });
       });
       if (!grew) break;
+      fresh = added;
       this.wrappers.forEach((w, d) => { w.reflects = this.reflects(d, 0); });
       allWithCtors(); // calls to the new wrappers are sites too
     }
@@ -2025,7 +2037,7 @@
       });
     });
     const subTools = this.subToolTypes(results);
-    const unresolvedSites = results.filter(({ r }) => r && (r.unresolved || r.param || !r.name)).length;
+    const converted = this.convertedOwnTypes(results);
     results.forEach(({ r, f, s }) => {
       if ((s.kind === 'lit' || s.kind === 'wrap') && consumed.has(f.path + ':' + s.i)) return;
       const line = lineAt(f, f.t[s.i].s);
@@ -2033,10 +2045,16 @@
       if (r.unresolved || r.param || !r.name) {
         const u = { line };
         if (r.st) { if (typeof r.st.description === 'string') u.description = r.st.description; if (typeof r.st.title === 'string') u.title = r.st.title; if (r.st.lost.length) u.lost = r.st.lost.slice(0, 200); if (isUnk(r.st.name) && r.st.name.lost && r.st.name.lost.length) u.lost = (u.lost || []).concat(r.st.name.lost); }
+        if (r.lost && r.lost.length) u.lost = (u.lost || []).concat(r.lost);
+        // and the text written at the site itself (a call whose helpers were not followed to the end)
+        if (s.kind !== 'lit' && s.kind !== 'json' && s.kind !== 'map' && s.kind !== 'ctor') { try { const cn = this.callAt(f, s.i, s.at); if (cn) u.lost = (u.lost || []).concat(literals(cn).slice(0, 200)); } catch (e) { if (e instanceof OverBudget) throw e; } }
+        if (u.lost) u.lost = Array.from(new Set(u.lost)).slice(0, 400);
         unresolved.push(Object.assign({ path: f.path }, u));
         return;
       }
-      if (r.st.ownType && unresolvedSites > 0) r.st.unreadable.add('description'); // a conversion the reader cannot follow may rewrite it
+      // a repository's own tool type that code the reader could not follow converts (it reads the type's fields or
+      // builds from it where a registration is unresolved): its description may be rewritten and annotations added
+      if (r.st.ownType && converted.has(r.st.ownType.name)) { r.st.unreadable.add('description'); r.st.unreadable.add('annotations'); }
       const tool = finish(r.st);
       const marks = [];
       if (f.tag && f.tag.expr) marks.push({ reason: 'conditional-build-tag', detail: f.tag.expr.slice(0, 120), exclude: false });
@@ -2101,6 +2119,36 @@
     const visible = Array.from(sites.values()).some((conts) => conts.some((c) => !c || !types.has(c)));
     if (visible) types.forEach((name, tk) => { if (!out.has(tk) && !(sites.get(tk) || []).length) out.set(tk, 'never built in the source read'); });
     return out;
+  };
+  // A repository's own tool types (fields tagged json "name" and "inputSchema") that code around an unresolved
+  // registration converts: the function holding that registration names the type, reads its description field
+  // (spec.Definition.Description), or calls a function that returns it. Set(type name).
+  Repo.prototype.convertedOwnTypes = function (results) {
+    const out = new Set(); const shaped = this.toolShaped(); if (!shaped.size) return out;
+    const fns = new Set(); results.forEach(({ r, s }) => { if (r && (r.unresolved || r.param || !r.name) && s && s.fn && s.fn.body) fns.add(s.fn); });
+    if (!fns.size) return out;
+    const returns = new Map(); // function name -> own type it returns (T, *T, []T, []*T)
+    const ownOf = (ty) => { for (let k = 0; k < 3 && ty && (ty.k === 'tptr' || ty.k === 'tslice' || ty.k === 'tarray'); k++) ty = ty.x; return ty && ty.k === 'tname' && shaped.has(ty.v) ? ty.v : null; };
+    this.pkgs.forEach((pk) => [pk.funcs, pk.methods].forEach((m) => m.forEach((ds) => ds.forEach((d) => { const r0 = d.sig && d.sig.results[0]; const o = r0 && ownOf(r0.type); if (o) returns.set(d.name, o); }))));
+    fns.forEach((fn) => {
+      const t = fn.file.t;
+      for (let k = fn.body[0]; k < fn.body[1]; k++) {
+        const x = t[k]; if (x.y !== 'id') continue;
+        if (shaped.has(x.v)) out.add(x.v);
+        if (isP(t[k - 1], '.')) shaped.forEach((map, name) => { if (map.description && x.v === map.description) out.add(name); });
+        if (isP(t[k + 1], '(') && returns.has(x.v)) out.add(returns.get(x.v));
+      }
+    });
+    return out;
+  };
+  // Is a struct field of this name assigned anywhere (x.Field = …)? One pass over the files, cached.
+  Repo.prototype.fieldAssigned = function (name) {
+    if (!this._assigned) {
+      const m = new Set();
+      this.files.forEach((f) => { const t = f.t; for (let k = 1; k < t.length - 1; k++) if (t[k].y === 'id' && isP(t[k - 1], '.') && isP(t[k + 1], '=')) m.add(t[k].v); });
+      this._assigned = m;
+    }
+    return this._assigned.has(name);
   };
   // How often each identifier occurs in the repository's files (one pass, for unreferenced declarations).
   Repo.prototype.refCount = function () {
