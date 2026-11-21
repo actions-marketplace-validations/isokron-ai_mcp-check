@@ -160,6 +160,7 @@
   const PARAM = (fn, name) => ({ __unk: true, __param: true, fn, name, lost: [] });
   const isParamOf = (v, fn) => !!v && v.__param === true && v.fn === fn;
   const MAX_RESULTS = 20000;
+  const MAX_HELPER_ROUNDS = 64; // levels of helpers that build a tool from their parameters
   const isUnk = (v) => !!v && typeof v === 'object' && v.__unk === true;
   const isPlain = (v) => !!v && typeof v === 'object' && !Array.isArray(v) && !v.__unk && !v.__struct && !v.__type && !v.__tool && !v.__ann;
   function literalsIn(f, a, b) { const out = []; for (let k = a; k < b && out.length < 2000; k++) if (f.t[k].y === 'str' && f.t[k].v.trim()) out.push(f.t[k].v); return out; }
@@ -1513,9 +1514,9 @@
     });
     // helpers that build a tool from their parameters (fn tool(name: &str, …) -> Tool { Tool::new(name, …) }): each call
     // is a tool; a caller that passes its own parameter on is a helper too (a few levels)
-    const done = new Set();
-    for (let round = 0; round < 4 && wrappers.size && !overBudget.length; round++) {
-      const next = new Set();
+    const done = new Set(); let next = new Set(); const pending = new Map(); // helper name -> its calls that pass a parameter on
+    for (let round = 0; round < MAX_HELPER_ROUNDS && wrappers.size && !overBudget.length; round++) {
+      next = new Set();
       this.files.forEach((f) => {
         if (f.failed) return;
         const t = f.t; const skip = f.items.skip;
@@ -1537,9 +1538,10 @@
             let e = c + 1; // builder calls chained on the result
             while (v && v.__tool && isP(t[e], '.') && isId(t[e + 1]) && isP(t[e + 2], '(') && f.close[e + 2] > 0) { v = this.method(v, t[e + 1].v, null, f, e + 3, f.close[e + 2], env, 0); e = f.close[e + 2] + 1; }
           } catch (x) { if (x instanceof OverBudget) { overBudget.push({ path: f.path, line: null, why: WHY_WORK }); return; } v = UNK(); }
-          if (!v || (!v.__tool && !v.__struct)) continue;
+          // a call of a helper that gives no tool the reader can read: counted, with its text scanned
+          if (!v || (!v.__tool && !v.__struct)) { unresolved.push({ path: f.path, line: lineAt(f, t[k].s), lost: literalsIn(f, k, c).slice(0, 200) }); continue; }
           const nm = v.__tool ? v.name : v.f.name;
-          if (fn && isParamOf(nm, fn)) { next.add(fn.name); continue; }
+          if (fn && isParamOf(nm, fn)) { next.add(fn.name); if (!pending.has(fn.name)) pending.set(fn.name, []); pending.get(fn.name).push({ path: f.path, line: lineAt(f, t[k].s), lost: literalsIn(f, k, c).slice(0, 200) }); continue; }
           if (found.length + unresolved.length > MAX_RESULTS) { overBudget.push({ path: f.path, line: null, why: WHY_MANY }); return; }
           push(this.handTool(v), f, t[k].s, fn || null, 'hand');
         }
@@ -1547,6 +1549,8 @@
       next.forEach((n) => wrappers.add(n));
       if (!next.size) break;
     }
+    // helpers found in the last round allowed, whose callers were not followed: their calls are counted
+    next.forEach((n) => (pending.get(n) || []).forEach((u) => unresolved.push(u)));
     return { found, unresolved, overBudget };
   };
 
