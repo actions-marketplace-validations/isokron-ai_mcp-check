@@ -186,6 +186,7 @@ export function serverFolders(r) {
 /** The Go and Rust SDK forms the reader knows, for the message when none was found. */
 const READ_LANGS = {
   Go: 'mark3labs/mcp-go NewTool and options, the official go-sdk AddTool with mcp.Tool, mcp-golang RegisterTool, and helpers that build them',
+  Rust: 'rmcp #[tool] methods, rust-mcp-sdk #[mcp_tool] structs, and Tool::new or Tool { … } built by hand',
 };
 
 /** Why nothing usable was found, beyond "no tool definitions": languages not read, folders set aside, lists not used. */
@@ -195,7 +196,7 @@ export function whyNothing(r) {
   const lang = (h.otherLanguages || [])[0];
   const ext = (n) => '.' + ({ Go: 'go', Rust: 'rs', 'C#': 'cs', Java: 'java', Kotlin: 'kt', Ruby: 'rb', PHP: 'php', Swift: 'swift' }[n] || n);
   if (lang && lang.files >= lang.readFiles && READ_LANGS[lang.name]) s += ' The source here is ' + lang.name + ' (' + plural(lang.files, ext(lang.name) + ' file') + '): no tool definition the reader knows was found in it (' + READ_LANGS[lang.name] + ').';
-  else if (lang && lang.files >= lang.readFiles) s += ' The source here is ' + lang.name + ' (' + plural(lang.files, ext(lang.name) + ' file') + '): ' + lang.name + ' source is not read yet (the reader reads TypeScript, JavaScript, Python and Go).';
+  else if (lang && lang.files >= lang.readFiles) s += ' The source here is ' + lang.name + ' (' + plural(lang.files, ext(lang.name) + ' file') + '): ' + lang.name + ' source is not read yet (the reader reads TypeScript, JavaScript, Python, Go and Rust).';
   const ign = (h.ignoredFolders || []).filter((x) => x.tools);
   if (ign.length) s += ' Tool definitions were found only in folders that look like admin, console, docs, examples, evaluation or test code, which are not graded from a parent folder: ' + ign.map((x) => line(x.path, 200) + ' (' + plural(x.tools, 'tool') + ')').join(', ') + '; if one of them is the server, point the check at that folder.';
   if (h.serverWithoutTools) s += ' A server is constructed in ' + line(h.serverWithoutTools || '.', 200) + ', but none of its tools could be read.';

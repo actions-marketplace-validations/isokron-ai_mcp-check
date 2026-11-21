@@ -46,7 +46,7 @@ inputs:
   fail-on-no-tools:
     description: >-
       With neither command nor tools-file: fail the job when the source gives no list to grade (no tool
-      definitions, for example a Go, Rust or C# server; names only; or tools of more than one server).
+      definitions, for example a C# server; names only; or tools of more than one server).
       Default false: the job ends with a warning and the fix in the summary, not red.
     required: false
     default: 'false'

@@ -14,15 +14,15 @@
 //            factories, keyed tables and classes; Python @x.tool functions (type hints and docstrings), registries and
 //            low-level Tool(...). Schemas are close to, not exactly, what the server sends; the report must say so.
 //            Parts that cannot be read statically are marked (publicTools), and the grader skips their checks.
-//            Go (mcp-go, the go-sdk, mcp-golang; repo-go.cjs) tool definitions, read the same way, with their schemas
-//            as the SDK derives them from Go structs.
+//            Go (mcp-go, the go-sdk, mcp-golang; repo-go.cjs) and Rust (rmcp, rust-mcp-sdk; repo-rust.cjs) tool
+//            definitions, read the same way, with their schemas as the SDK derives them from Go structs and Rust types.
 //   names    an MCPB manifest "tools" array (name and description only)
 // Network: GitHub's REST API (CORS for any origin, 60 requests/hour per user IP without a token) for the file tree,
 // raw.githubusercontent.com for files; data.jsdelivr.com / cdn.jsdelivr.net as the fallback. The registry API at
 // registry.modelcontextprotocol.io sends Access-Control-Allow-Origin: *. Nothing goes to IsoKron.
 (function (root, factory) {
-  if (typeof module === 'object' && module.exports) module.exports = factory(require('./repo-go.cjs'), null);
-  else root.RepoSource = factory(root.RepoGo, null); // in a browser, load repo-go.cjs first
+  if (typeof module === 'object' && module.exports) module.exports = factory(require('./repo-go.cjs'), require('./repo-rust.cjs'));
+  else root.RepoSource = factory(root.RepoGo, root.RepoRust); // in a browser, load repo-go.cjs and repo-rust.cjs first
 })(typeof self !== 'undefined' ? self : this, function (RepoGo, RepoRust) {
   'use strict';
 
