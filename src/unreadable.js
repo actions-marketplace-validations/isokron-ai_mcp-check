@@ -119,12 +119,15 @@ export function analyseList(parsed, reader, opts = {}) {
   if (!parts.size && !extraServer.length && !unresolvedCount && !textCount) return r;
   const count = (p) => Array.from(parts.values()).filter((s) => s.has(p)).length;
   const note = { input_schemas: count('inputSchema'), descriptions: count('description'), annotations: count('annotations'), skipped: 0, regraded: false, unresolved_scanned: unresolvedCount, unread_text_scanned: textCount };
-  // poisoning in text the reader could not place in a tool counts as that tool's finding
-  r.tools.forEach((t) => { const f = textFindings.get(t.name); if (f) t.findings = t.findings.concat(f); });
   r.skipped_checks = note;
+  // The mirror is compared with the engine's grades on the engine's own findings, before any finding of unplaced text
+  // is added (one poisoning hit there must not switch off the skipping for the whole list).
   const grade = opts.gradeFindings || gradeFindings;
   const before = grade(r.tools, r.server);
+  // poisoning in text the reader could not place in a tool counts as that tool's finding
+  const addText = () => r.tools.forEach((t) => { const f = textFindings.get(t.name); if (f) t.findings = t.findings.concat(f); });
   if (!GRADED.every((s) => sameSection(before[s], r.sections[s]))) {
+    addText();
     // Cannot regrade: keep the engine's grades, but poisoning found in unresolved registrations still applies.
     const blockingText = Array.from(textFindings.values()).some((fs) => fs.some((f) => f.severity === 'blocking'));
     if (extraServer.length || blockingText) {
@@ -139,6 +142,7 @@ export function analyseList(parsed, reader, opts = {}) {
     const keep = t.findings.filter((f) => !Array.from(ps).some((p) => NEEDS[p](f)));
     skipped += t.findings.length - keep.length; t.findings = keep;
   });
+  addText();
   r.server = r.server.concat(extraServer);
   const after = gradeFindings(r.tools, r.server);
   GRADED.forEach((s) => { r.sections[s] = Object.assign({}, r.sections[s], after[s]); });

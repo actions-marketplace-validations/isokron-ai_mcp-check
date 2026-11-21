@@ -27,7 +27,7 @@
   const MAX_STR = 64 * 1024;      // a string built from constants is cut here (the rest is kept as lost text)
   const MAX_DEPTH = 80;           // expression and type nesting read; deeper is unreadable
   const MAX_CALL_DEPTH = 8;       // repository functions followed into
-  const MAX_HELPER_ROUNDS = 64;   // levels of helpers (functions that build a tool from their parameters) found
+  const MAX_HELPER_ROUNDS = 64;   // rounds of helper discovery (functions that build a tool from their parameters); past it, or past MAX_CALL_DEPTH nested calls, the list is refused
   const DEFAULT_BUDGET = 2e6;     // evaluation steps for one repository (the largest servers read take under 0.2e6)
   const MAX_RESULTS = 20000;      // tool definitions read in one repository (more: refused as over the work limit)
 
@@ -151,6 +151,7 @@
   const tooDeep = (v, max) => { const stack = [[v, 0]]; while (stack.length) { const [x, d] = stack.pop(); if (d > max) return true; if (x && typeof x === 'object') for (const k of Object.keys(x)) stack.push([x[k], d + 1]); } return false; };
   const WHY_WORK = 'the reader\'s work limit for one repository';
   const WHY_MANY = 'more than 20,000 tool definitions';
+  const WHY_CHAIN = 'a chain of helpers longer than followed';
 
   // ------------------------------------------------------------ file model
   function lineIndex(src) { const ix = [0]; for (let k = 0; k < src.length; k++) if (src.charCodeAt(k) === 10) ix.push(k + 1); return ix; }
@@ -1319,7 +1320,7 @@
   };
   Repo.prototype.applyOption = function (o, st, depth) {
     this.step();
-    if (depth > 12) { st.unreadable.add('inputSchema'); st.optsUnknown = true; return; } // options followed past 12 levels: any part may come from them
+    if (depth > 48) { st.unreadable.add('inputSchema'); st.optsUnknown = true; return; } // options followed past 48 levels: any part may come from them
     o = this.argVal(o, depth + 1);
     if (o === null || o === undefined) return;
     if (o.__opt) return this.applyKnown(o, st, depth + 1);
@@ -1417,7 +1418,7 @@
   // Apply a property option to a property schema; true when it makes the property required.
   Repo.prototype.applyProp = function (p, schema, st, depth) {
     this.step();
-    if (depth > 12) return false;
+    if (depth > 48) return false;
     p = this.argVal(p, depth + 1);
     if (!p) return false;
     if (p.__fn) return this.applyFnProp(p, schema, st, depth + 1);
@@ -1876,7 +1877,8 @@
   Repo.prototype.evalWrapper = function (d, n, sc, depth) {
     const out = [];
     // a chain of helpers deeper than followed, or one calling itself again: counted as unresolved, never guessed
-    if (depth > 40 || (sc.callDepth || 0) >= MAX_CALL_DEPTH || (sc.stack || []).includes(d)) return [{ st: null, unresolved: true, capped: true, lost: literals(n).slice(0, 200) }];
+    if ((sc.stack || []).includes(d)) return [{ st: null, unresolved: true, capped: 'recursion', lost: literals(n).slice(0, 200) }];
+    if (depth > 40 || (sc.callDepth || 0) >= MAX_CALL_DEPTH) return [{ st: null, unresolved: true, capped: 'depth', lost: literals(n).slice(0, 200) }];
     const inner = this.bindCall(d, n, sc);
     inner.stack = (sc.stack || []).concat([d]);
     const info = this.wrappers.get(d);
@@ -1896,7 +1898,11 @@
           if (s && s.schema) { r.st.input = s.schema; r.st.inputSet = true; r.st.unreadable.delete('inputSchema'); }
         }
         // text this call passes that the tool could not place (a description through helpers not followed): scanned
-        if (r.st && (r.st.optsUnknown || r.st.unreadable.has('description'))) r.st.lost.push(...literals(n).slice(0, 200));
+        // (only when the description is unreadable or unset, and not the text already placed in the tool)
+        if (r.st && (r.st.unreadable.has('description') || r.st.description === undefined || r.st.description === '')) {
+          const placed = new Set([r.st.name, r.st.description, r.st.title].filter((x) => typeof x === 'string'));
+          r.st.lost.push(...literals(n).slice(0, 200).filter((x) => !placed.has(x)));
+        }
         if (r.lost && !r.st) r.lost = r.lost.concat(literals(n).slice(0, 200));
         if (r.st && isParam(r.st.name) && r.st.name.owner === sc.fn) r.param = true;
         else if (r.st && typeof r.st.name === 'string') { r.name = r.st.name; delete r.unresolved; }
@@ -1996,6 +2002,7 @@
         });
       });
       if (!grew) break;
+      if (round === MAX_HELPER_ROUNDS - 1) { const last = Array.from(this.wrappers.keys()).pop(); overBudget.push({ path: last ? last.file.path : (this.files[0] || {}).path, line: null, why: WHY_CHAIN }); }
       fresh = added;
       this.wrappers.forEach((w, d) => { w.reflects = this.reflects(d, 0); });
       allWithCtors(); // calls to the new wrappers are sites too
@@ -2014,6 +2021,8 @@
         try { got = this.evalInLoops(s, f); } catch (e) { if (e instanceof OverBudget) { overBudget.push({ path: f.path, line: lineAt(f, f.t[s.i].s), why: WHY_WORK }); return; } got = [{ st: null, unresolved: true }]; }
         if (results.length + got.length > MAX_RESULTS) { overBudget.push({ path: f.path, line: lineAt(f, f.t[s.i].s), why: WHY_MANY }); return; }
         if (got.consumed) got.consumed.forEach((x) => consumed.add(x));
+        // a chain of helpers deeper than followed: the list would be incomplete, so it is refused
+        if (got.some((r) => r.capped === 'depth')) { overBudget.push({ path: f.path, line: lineAt(f, f.t[s.i].s), why: WHY_CHAIN }); return; }
         got.forEach((r) => results.push({ r, f, s }));
       });
     });
@@ -2125,15 +2134,22 @@
   // (spec.Definition.Description), or calls a function that returns it. Set(type name).
   Repo.prototype.convertedOwnTypes = function (results) {
     const out = new Set(); const shaped = this.toolShaped(); if (!shaped.size) return out;
-    const fns = new Set(); results.forEach(({ r, s }) => { if (r && (r.unresolved || r.param || !r.name) && s && s.fn && s.fn.body) fns.add(s.fn); });
+    // (not a site that is itself a literal of the own type with a name known only at run time, nor a function that
+    // only builds and returns the own type: those convert nothing)
+    const fns = new Map(); // function -> the token indexes of its unresolved sites (a call there builds, not converts)
+    results.forEach(({ r, s }) => { if (r && (r.unresolved || r.param || !r.name) && s && s.fn && s.fn.body && s.kind !== 'lit') { if (!fns.has(s.fn)) fns.set(s.fn, new Set()); fns.get(s.fn).add(s.at); } });
     if (!fns.size) return out;
     const returns = new Map(); // function name -> own type it returns (T, *T, []T, []*T)
     const ownOf = (ty) => { for (let k = 0; k < 3 && ty && (ty.k === 'tptr' || ty.k === 'tslice' || ty.k === 'tarray'); k++) ty = ty.x; return ty && ty.k === 'tname' && shaped.has(ty.v) ? ty.v : null; };
     this.pkgs.forEach((pk) => [pk.funcs, pk.methods].forEach((m) => m.forEach((ds) => ds.forEach((d) => { const r0 = d.sig && d.sig.results[0]; const o = r0 && ownOf(r0.type); if (o) returns.set(d.name, o); }))));
-    fns.forEach((fn) => {
+    fns.forEach((ats, fn) => {
+      const r0 = fn.sig && fn.sig.results[0]; if (r0 && ownOf(r0.type)) return;
       const t = fn.file.t;
+      // a call that is itself the unresolved site (dyn(os.Getenv(…)) returning a ToolDef) builds a tool whose name
+      // is known only at run time; it converts nothing
       for (let k = fn.body[0]; k < fn.body[1]; k++) {
         const x = t[k]; if (x.y !== 'id') continue;
+        if (ats.has(k)) continue;
         if (shaped.has(x.v)) out.add(x.v);
         if (isP(t[k - 1], '.')) shaped.forEach((map, name) => { if (map.description && x.v === map.description) out.add(name); });
         if (isP(t[k + 1], '(') && returns.has(x.v)) out.add(returns.get(x.v));

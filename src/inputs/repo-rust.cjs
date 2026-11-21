@@ -39,6 +39,7 @@
   const tooDeep = (v, max) => { const stack = [[v, 0]]; while (stack.length) { const [x, d] = stack.pop(); if (d > max) return true; if (x && typeof x === 'object') for (const k of Object.keys(x)) stack.push([x[k], d + 1]); } return false; };
   const WHY_WORK = 'the reader\'s work limit for one repository';
   const WHY_MANY = 'more than 20,000 tool definitions';
+  const WHY_CHAIN = 'a chain of helpers longer than followed';
 
   // ------------------------------------------------------------ tokenizer
   // Tokens: { y: 'id' | 'str' | 'num' | 'char' | 'life' | 'p' | 'doc', v, s, nl }. '<' and '>' are always single
@@ -160,7 +161,7 @@
   const PARAM = (fn, name) => ({ __unk: true, __param: true, fn, name, lost: [] });
   const isParamOf = (v, fn) => !!v && v.__param === true && v.fn === fn;
   const MAX_RESULTS = 20000;
-  const MAX_HELPER_ROUNDS = 64; // levels of helpers that build a tool from their parameters
+  const MAX_HELPER_ROUNDS = 64; // rounds of helper discovery; evaluation depth (40) limits a chain to about 19 helpers, past which the list is refused
   const isUnk = (v) => !!v && typeof v === 'object' && v.__unk === true;
   const isPlain = (v) => !!v && typeof v === 'object' && !Array.isArray(v) && !v.__unk && !v.__struct && !v.__type && !v.__tool && !v.__ann;
   function literalsIn(f, a, b) { const out = []; for (let k = a; k < b && out.length < 2000; k++) if (f.t[k].y === 'str' && f.t[k].v.trim()) out.push(f.t[k].v); return out; }
@@ -812,6 +813,7 @@
     if (name === 'from_str' && (owner === 'serde_json' || !owner)) { const v = one(); if (typeof v === 'string') { try { return JSON.parse(v); } catch (e) { return UNK([v]); } } return v; }
     // a function of the repository returning one expression
     const fn = segs.length <= 3 ? this.fns.find((d) => d.name === name && d.body && (!owner || owner === 'Self' || (d.impl && d.impl.selfName === owner) || !/^[A-Z]/.test(owner))) : null;
+    if (fn && depth >= 40) this.depthHit = true; // a chain deeper than followed
     if (fn && depth < 40) {
       const ret = this.singleReturn(fn);
       if (ret) {
@@ -1532,14 +1534,20 @@
           done.add(key);
           const env = { selfName: fn && fn.impl && fn.impl.selfName, vars: {} };
           if (fn) { fn.params.filter((p) => !p.self && p.name).forEach((p) => { env.vars[p.name] = PARAM(fn, p.name); }); env.locals = this.localsOf(fn, env.vars); }
-          let v;
+          let v; this.depthHit = false;
           try {
             v = this.callPath([t[k].v], null, f, k + 2, c, env, 0);
             let e = c + 1; // builder calls chained on the result
             while (v && v.__tool && isP(t[e], '.') && isId(t[e + 1]) && isP(t[e + 2], '(') && f.close[e + 2] > 0) { v = this.method(v, t[e + 1].v, null, f, e + 3, f.close[e + 2], env, 0); e = f.close[e + 2] + 1; }
           } catch (x) { if (x instanceof OverBudget) { overBudget.push({ path: f.path, line: null, why: WHY_WORK }); return; } v = UNK(); }
-          // a call of a helper that gives no tool the reader can read: counted, with its text scanned
-          if (!v || (!v.__tool && !v.__struct)) { unresolved.push({ path: f.path, line: lineAt(f, t[k].s), lost: literalsIn(f, k, c).slice(0, 200) }); continue; }
+          // a call of a helper that gives no tool the reader can read: counted, with its text scanned; refused as
+          // incomplete when that is because the chain of helpers is longer than followed (the evaluation went too deep,
+          // or the call passes its own function's parameters on into it)
+          if (!v || (!v.__tool && !v.__struct)) {
+            const passesParams = !!fn && fn.params.some((p) => p.name && !p.self && t.slice(k + 2, c).some((x) => x.y === 'id' && x.v === p.name));
+            if (this.depthHit || passesParams) { overBudget.push({ path: f.path, line: lineAt(f, t[k].s), why: WHY_CHAIN }); return; }
+            unresolved.push({ path: f.path, line: lineAt(f, t[k].s), lost: literalsIn(f, k, c).slice(0, 200) }); continue;
+          }
           const nm = v.__tool ? v.name : v.f.name;
           if (fn && isParamOf(nm, fn)) { next.add(fn.name); if (!pending.has(fn.name)) pending.set(fn.name, []); pending.get(fn.name).push({ path: f.path, line: lineAt(f, t[k].s), lost: literalsIn(f, k, c).slice(0, 200) }); continue; }
           if (found.length + unresolved.length > MAX_RESULTS) { overBudget.push({ path: f.path, line: null, why: WHY_MANY }); return; }
@@ -1549,8 +1557,8 @@
       next.forEach((n) => wrappers.add(n));
       if (!next.size) break;
     }
-    // helpers found in the last round allowed, whose callers were not followed: their calls are counted
-    next.forEach((n) => (pending.get(n) || []).forEach((u) => unresolved.push(u)));
+    // helpers found in the last round allowed, whose callers were not followed: refused as incomplete
+    if (next.size) { const u = (pending.get(Array.from(next)[0]) || [])[0]; overBudget.push({ path: u ? u.path : null, line: u ? u.line : null, why: WHY_CHAIN }); }
     return { found, unresolved, overBudget };
   };
 
