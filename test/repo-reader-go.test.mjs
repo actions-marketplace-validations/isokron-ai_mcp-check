@@ -602,3 +602,24 @@ test('a literal of the own tool type built with a run-time name converts nothing
   assert.ok(!(t._unreadable || []).includes('description') && !(t._unreadable || []).includes('annotations'), JSON.stringify(t._unreadable));
   assert.equal(r.unresolved.length, 1, 'the run-time name is counted');
 });
+
+test('a repository tool type converted through an SDK &mcp.Tool{…} literal named at run time marks its descriptions and annotations unreadable, with no false findings', () => {
+  const GOSDK_ONLY = 'import (\n\t"github.com/modelcontextprotocol/go-sdk/mcp"\n)\n';
+  const d = tree({
+    'go.mod': 'module example.com/panel\n',
+    'tools/defs.go': 'package tools\n'
+      + 'type ToolDefinition struct {\n\tName string `json:"name"`\n\tDescription string `json:"description"`\n\tInputSchema map[string]any `json:"inputSchema"`\n}\n'
+      + 'type Spec struct { Definition ToolDefinition; ReadOnly bool }\n'
+      + 'var Specs = []Spec{\n\t{Definition: ToolDefinition{Name: "list_sites", Description: "List the websites on this host.", InputSchema: map[string]any{"type": "object"}}, ReadOnly: true},\n'
+      + '\t{Definition: ToolDefinition{Name: "delete_site", Description: "Delete one website by its id.", InputSchema: map[string]any{"type": "object", "properties": map[string]any{"id": map[string]any{"type": "string"}}}}},\n}\n'
+      + 'func Load() []Spec { return append(Specs, plugins()...) }\n',
+    'main.go': 'package main\n' + GOSDK_ONLY + 'import "example.com/panel/tools"\n'
+      + 'func main() {\n\tserver := mcp.NewServer(&mcp.Implementation{Name: "panel", Version: "1"}, nil)\n\tfor _, spec := range tools.Load() {\n'
+      + '\t\tserver.AddTool(&mcp.Tool{Name: spec.Definition.Name, Description: spec.Definition.Description, InputSchema: spec.Definition.InputSchema, Annotations: &mcp.ToolAnnotations{ReadOnlyHint: spec.ReadOnly}}, nil)\n\t}\n}\n',
+  });
+  const j = JSON.parse(cli(['--repo-dir', d, '--format', 'json']).stdout);
+  assert.deepEqual(j.tools.map((t) => t.name).sort(), ['delete_site', 'list_sites']);
+  assert.deepEqual(j.source.unreadable.description.slice().sort(), ['delete_site', 'list_sites']);
+  assert.deepEqual(j.source.unreadable.annotations.slice().sort(), ['delete_site', 'list_sites']);
+  assert.deepEqual(j.tools.flatMap((t) => t.findings.filter((f) => f.severity === 'blocking').map((f) => t.name + ':' + f.id)), []);
+});

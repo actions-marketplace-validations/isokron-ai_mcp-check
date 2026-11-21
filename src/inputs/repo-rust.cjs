@@ -1541,11 +1541,9 @@
             while (v && v.__tool && isP(t[e], '.') && isId(t[e + 1]) && isP(t[e + 2], '(') && f.close[e + 2] > 0) { v = this.method(v, t[e + 1].v, null, f, e + 3, f.close[e + 2], env, 0); e = f.close[e + 2] + 1; }
           } catch (x) { if (x instanceof OverBudget) { overBudget.push({ path: f.path, line: null, why: WHY_WORK }); return; } v = UNK(); }
           // a call of a helper that gives no tool the reader can read: counted, with its text scanned; refused as
-          // incomplete when that is because the chain of helpers is longer than followed (the evaluation went too deep,
-          // or the call passes its own function's parameters on into it)
+          // incomplete only when that is because the chain of helpers is longer than followed (the evaluation went too deep)
           if (!v || (!v.__tool && !v.__struct)) {
-            const passesParams = !!fn && fn.params.some((p) => p.name && !p.self && t.slice(k + 2, c).some((x) => x.y === 'id' && x.v === p.name));
-            if (this.depthHit || passesParams) { overBudget.push({ path: f.path, line: lineAt(f, t[k].s), why: WHY_CHAIN }); return; }
+            if (this.depthHit) { overBudget.push({ path: f.path, line: lineAt(f, t[k].s), why: WHY_CHAIN }); return; }
             unresolved.push({ path: f.path, line: lineAt(f, t[k].s), lost: literalsIn(f, k, c).slice(0, 200) }); continue;
           }
           const nm = v.__tool ? v.name : v.f.name;

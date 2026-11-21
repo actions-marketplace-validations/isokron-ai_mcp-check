@@ -2137,7 +2137,7 @@
     // (not a site that is itself a literal of the own type with a name known only at run time, nor a function that
     // only builds and returns the own type: those convert nothing)
     const fns = new Map(); // function -> the token indexes of its unresolved sites (a call there builds, not converts)
-    results.forEach(({ r, s }) => { if (r && (r.unresolved || r.param || !r.name) && s && s.fn && s.fn.body && s.kind !== 'lit') { if (!fns.has(s.fn)) fns.set(s.fn, new Set()); fns.get(s.fn).add(s.at); } });
+    results.forEach(({ r, s }) => { if (r && (r.unresolved || r.param || !r.name) && s && s.fn && s.fn.body && !(s.kind === 'lit' && r.st && r.st.ownType)) { if (!fns.has(s.fn)) fns.set(s.fn, new Set()); fns.get(s.fn).add(s.at); } });
     if (!fns.size) return out;
     const returns = new Map(); // function name -> own type it returns (T, *T, []T, []*T)
     const ownOf = (ty) => { for (let k = 0; k < 3 && ty && (ty.k === 'tptr' || ty.k === 'tslice' || ty.k === 'tarray'); k++) ty = ty.x; return ty && ty.k === 'tname' && shaped.has(ty.v) ? ty.v : null; };

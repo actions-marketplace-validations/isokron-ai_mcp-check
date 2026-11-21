@@ -431,3 +431,12 @@ test('a helper chain longer than followed (25 or 70 levels) is refused with the 
   assert.equal(r.found.length, 0);
   assert.ok(r.overBudget.some((o) => o.why === 'a chain of helpers longer than followed'), JSON.stringify(r.overBudget));
 });
+
+test('a helper whose body is not a single expression is counted as unresolved with its text, not refused as a long chain', () => {
+  const r = read({ 'src/lib.rs': 'fn mk(n: &str, ro: bool) -> Tool { let mut t = Tool::new(n.to_string(), "Read one record.", Arc::new(JsonObject::new())); if ro { t.annotations = Some(ToolAnnotations::new().read_only(true)); } t }\n'
+    + 'fn tools(ro: bool) -> Vec<Tool> { vec![mk("get_record", ro), Tool::new("plain", "Read one record by its id.", Arc::new(JsonObject::new()))] }\n' });
+  assert.deepEqual(r.overBudget, []);
+  assert.deepEqual(r.found.map((x) => x.tool.name), ['plain']);
+  assert.equal(r.unresolved.length, 1);
+  assert.ok(r.unresolved[0].lost.includes('get_record'));
+});
