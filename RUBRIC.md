@@ -101,7 +101,7 @@ The specification and directories give no numbers for these, so the values are o
 
 The grades cover static rules read from the tool list. They do not test behavior: whether hints match what tools do, whether retries are safe, whether stale writes are refused. Those are MWS tests against a running server. Name-based checks are heuristics and say so in their findings.
 
-## Changes in rubric 2.2.0 (unreleased)
+## Changes in rubric 2.2.0 (20 November 2026)
 
 No weight, band or cap changes for the five graded sections. The write-surface letter, which fed nothing else, is gone; four checks read less into names and arguments; one poisoning reading gets wider.
 

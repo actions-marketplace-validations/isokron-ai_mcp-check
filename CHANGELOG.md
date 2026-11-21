@@ -2,7 +2,7 @@
 
 All notable changes to `@isokron/mcp-check` and the `isokron-ai/mcp-check` Action. The package follows [semantic versioning](https://semver.org/); the grading rubric has its own version (`rubric_version`), noted with each release.
 
-## 1.2.0 (unreleased)
+## 1.2.0 (2026-11-20)
 
 ### Rubric 2.2.0
 
