@@ -827,7 +827,13 @@
       if (a.op === 'zero') nv = '';
       else if (a.op === '+=' && v !== undefined) nv = typeof v === 'string' && typeof x === 'string' ? v + x : concatPartial(v, x);
       else nv = x;
-      if (state === null && paramCond && v !== undefined && !(typeof nv === 'string' && nv === v)) v = paramCond; // depends on a parameter: a helper
+      const same = (x, y) => x === y || (!!x && !!y && ((x.__opt && x.n === y.n) || (x.__arg && x.n === y.n) || (isUnk(x) && isUnk(y))));
+      let prefix = 0;
+      if (state === null && Array.isArray(v) && Array.isArray(nv)) while (prefix < v.length && prefix < nv.length && same(nv[prefix], v[prefix])) prefix++;
+      if (state === null && Array.isArray(v) && Array.isArray(nv) && prefix > 0) {
+        // x = append(x, …) under a condition or in a loop: what both have in common stays, and more may follow
+        v = v.slice(0, prefix); if (!isUnk(v[v.length - 1])) v.push(UNK());
+      } else if (state === null && paramCond && v !== undefined && !(typeof nv === 'string' && nv === v)) v = paramCond; // depends on a parameter: a helper
       else if (state === null && v !== undefined && !(typeof nv === 'string' && nv === v)) {
         const lost = [].concat(typeof v === 'string' ? [v] : isUnk(v) ? v.lost : [], typeof nv === 'string' ? [nv] : isUnk(nv) ? nv.lost : []);
         v = UNK(lost);
@@ -1312,7 +1318,7 @@
   };
   Repo.prototype.applyOption = function (o, st, depth) {
     this.step();
-    if (depth > 12) { st.unreadable.add('inputSchema'); return; }
+    if (depth > 12) { st.unreadable.add('inputSchema'); st.optsUnknown = true; return; } // options followed past 12 levels: any part may come from them
     o = this.argVal(o, depth + 1);
     if (o === null || o === undefined) return;
     if (o.__opt) return this.applyKnown(o, st, depth + 1);
@@ -1529,8 +1535,10 @@
     if (shape) { // a repository's own tool type: its fields by their json tags
       const G = {}; [['Name', shape.name], ['Description', shape.description], ['Title', shape.title], ['InputSchema', shape.input], ['OutputSchema', shape.output], ['Annotations', shape.annotations]].forEach(([k, fld]) => { if (fld && fld in F) G[k] = F[fld]; });
       F = G;
-      // annotations a run-time step may fill in: not known
-      if (shape.annotations && !('Annotations' in F)) st.unreadable.add('annotations');
+      // a repository's own type is converted to the SDK's tool at run time: annotations (and the title) it has no
+      // field for, or leaves unset, may be added there, so they are not known
+      if (!shape.annotations || !('Annotations' in F)) st.unreadable.add('annotations');
+      st.ownType = true;
     }
     st.name = F.Name;
     if ('Title' in F) st.title = this.str(F.Title, st, null);
@@ -2017,6 +2025,7 @@
       });
     });
     const subTools = this.subToolTypes(results);
+    const unresolvedSites = results.filter(({ r }) => r && (r.unresolved || r.param || !r.name)).length;
     results.forEach(({ r, f, s }) => {
       if ((s.kind === 'lit' || s.kind === 'wrap') && consumed.has(f.path + ':' + s.i)) return;
       const line = lineAt(f, f.t[s.i].s);
@@ -2027,6 +2036,7 @@
         unresolved.push(Object.assign({ path: f.path }, u));
         return;
       }
+      if (r.st.ownType && unresolvedSites > 0) r.st.unreadable.add('description'); // a conversion the reader cannot follow may rewrite it
       const tool = finish(r.st);
       const marks = [];
       if (f.tag && f.tag.expr) marks.push({ reason: 'conditional-build-tag', detail: f.tag.expr.slice(0, 120), exclude: false });
@@ -2035,8 +2045,10 @@
       const holder = this.holderOf(f, s);
       if (holder && (this.refCount().get(holder) || 0) <= 1) marks.push({ reason: 'unreferenced-declaration', detail: holder, exclude: true });
       // a tool type built only inside another tool (a unified tool that dispatches to it) is not registered itself
+      // a tool type whose registration the reader does not see (built only inside another type, or never visibly
+      // built): listed, and marked so the report can say so; never dropped
       const sub = s.fn && s.fn.recvType ? subTools.get(s.fn.pkg.dir + '\u0000' + s.fn.recvType) : null;
-      if (sub) marks.push({ reason: 'not-registered', detail: sub, exclude: true });
+      if (sub) marks.push({ reason: 'registration-not-seen', detail: sub, exclude: false });
       found.push({ path: f.path, line, tool, fidelity: 'derived', literal: s.kind === 'lit' && !(r.st.flavour === 'go-sdk'), marks, language: 'Go' });
     });
     return { found, unresolved, overBudget };

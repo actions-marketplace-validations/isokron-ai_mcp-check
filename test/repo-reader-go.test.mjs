@@ -413,7 +413,7 @@ test('--repo-dir: Go reads docs/ and spec/ folders, names tools in testdata and 
   assert.deepEqual(r.hints.ignoredFolders.map((x) => [x.path, x.tools]), [['examples', 2]]);
 });
 
-test('tool types built only inside another tool (a unified tool and its sub-tools) are not registered: left out and counted', async () => {
+test('tool types built only inside another tool (a unified tool and its sub-tools) are listed and marked, never dropped', async () => {
   const sub = (n, N) => 'package ' + n + '\nimport "github.com/mark3labs/mcp-go/mcp"\ntype ' + N + 'Tool struct{}\nfunc New' + N + 'Tool() *' + N + 'Tool { return &' + N + 'Tool{} }\nfunc (t *' + N + 'Tool) Definition() mcp.Tool { return mcp.NewTool("' + n + '_search", mcp.WithDescription("Search ' + n + ' packages.")) }\n';
   const d = tree({
     'go.mod': 'module example.com/pkgs\n',
@@ -427,20 +427,86 @@ test('tool types built only inside another tool (a unified tool and its sub-tool
     'main.go': 'package main\nimport (\n\t"github.com/mark3labs/mcp-go/server"\n\t"example.com/pkgs/pkg/registry"\n\t"example.com/pkgs/pkg/tools"\n)\nfunc main() {\n\ts := server.NewMCPServer("pkgs", "1.0")\n\tr := &registry.Registry{}\n\tr.Register(&tools.SearchTool{})\n\tr.Register(&tools.FetchTool{})\n\tr.Register(tools.NewUnifiedTool())\n\tr.Apply(s)\n}\n',
   });
   const r = await R.fromDirectory(d);
-  assert.deepEqual(r.best.tools.map((t) => t.name).sort(), ['fetch', 'package_search', 'search']);
-  assert.deepEqual(r.best.excluded.map((x) => [x.name, x.reasons[0].replace(/ \(.*$/, '')]).sort(), [['cargo_search', 'not-registered'], ['npm_search', 'not-registered'], ['pypi_search', 'not-registered']]);
+  assert.deepEqual(r.best.tools.map((t) => t.name).sort(), ['cargo_search', 'fetch', 'npm_search', 'package_search', 'pypi_search', 'search']);
+  assert.equal(r.best.excluded.length, 0);
   const out = cli(['--repo-dir', d, '--format', 'json']);
-  assert.match(JSON.parse(out.stdout).source.provenance, /3 tools left out \(not-registered\)/);
+  const src = JSON.parse(out.stdout).source;
+  assert.deepEqual(src.registration_not_seen.sort(), ['cargo_search', 'npm_search', 'pypi_search']);
+  assert.match(src.provenance, /3 tools listed whose registration the reader did not see/);
 });
 
-test('tool types never built are unused when the repository registers tools by building them; kept when it shows no such mechanism', () => {
+test('tool types never built are listed and marked when the repository registers tools by building them; unmarked without such a mechanism', () => {
   const old = (N, n) => 'type ' + N + ' struct{}\nfunc (t *' + N + ') Definition() mcp.Tool { return mcp.NewTool("' + n + '", mcp.WithDescription("Old ' + n + '.")) }\n';
   const r = read({ 'tools/all.go': 'package tools\n' + MCPGO + 'import "example.com/srv/registry"\n'
     + 'type UnifiedTool struct{}\nfunc (t *UnifiedTool) Definition() mcp.Tool { return mcp.NewTool("unified", mcp.WithDescription("Everything.")) }\n'
     + 'func init() { registry.Register(&UnifiedTool{}) }\n' + old('ListTool', 'old_list') + old('GetTool', 'old_get') + old('DeleteTool', 'old_delete') });
-  const marks = Object.fromEntries(r.found.map((x) => [x.tool.name, x.marks.filter((m) => m.exclude).map((m) => m.reason + ': ' + m.detail)]));
-  assert.deepEqual(marks, { unified: [], old_list: ['not-registered: never built in the source read'], old_get: ['not-registered: never built in the source read'], old_delete: ['not-registered: never built in the source read'] });
+  const marks = Object.fromEntries(r.found.map((x) => [x.tool.name, x.marks.map((m) => m.reason + (m.exclude ? '!' : '') + ': ' + m.detail)]));
+  assert.deepEqual(marks, { unified: [], old_list: ['registration-not-seen: never built in the source read'], old_get: ['registration-not-seen: never built in the source read'], old_delete: ['registration-not-seen: never built in the source read'] });
   // no tool type is built anywhere (registered by reflection or plugins): nothing is concluded, all are kept
   const r2 = read({ 'tools/all.go': 'package tools\n' + MCPGO + old('ListTool', 'old_list') + old('GetTool', 'old_get') + 'func init() { registry.RegisterTypes(reflect.TypeOf((*ListTool)(nil)), reflect.TypeOf((*GetTool)(nil))) }\n' });
-  assert.deepEqual(r2.found.filter((x) => x.marks.some((m) => m.exclude)).map((x) => x.tool.name), []);
+  assert.deepEqual(r2.found.filter((x) => x.marks.length).map((x) => x.tool.name), []);
+});
+
+test('registered tool types in the forms a reviewer found are all listed (never dropped by the registration note)', () => {
+  const T = (n) => 'type ' + n + ' struct{}\nfunc (t *' + n + ') Definition() mcp.Tool { return mcp.NewTool("' + n.toLowerCase() + '", mcp.WithDescription("' + n + '.")) }\n';
+  const cases = {
+    serverBuildsTools: T('QueryTool') + T('Server') + 'type Srv struct{ q *QueryTool }\nfunc NewServer() *Srv { return &Srv{q: &QueryTool{}} }\nfunc (s *Srv) register(m *server.MCPServer) { m.AddTool(s.q.Definition(), nil) }\n',
+    ownMethodsInline: T('QueryTool') + 'type Server struct{ q *QueryTool }\nfunc (s *Server) Definition() mcp.Tool { return mcp.NewTool("inline", mcp.WithDescription("Inline.")) }\nfunc New() *Server { return &Server{q: &QueryTool{}} }\nfunc (s *Server) registerTools(m *server.MCPServer) { m.AddTool(s.q.Definition(), nil) }\n',
+    varDecl: T('QueryTool') + 'func reg(m *server.MCPServer) { var q QueryTool; m.AddTool(q.Definition(), nil) }\n',
+    generic: T('QueryTool') + 'func register[X interface{ Definition() mcp.Tool }](m *server.MCPServer) { var x X; m.AddTool(x.Definition(), nil) }\nfunc reg(m *server.MCPServer) { register[*QueryTool](m) }\n',
+    sliceOfPtr: T('QueryTool') + 'var all = []*QueryTool{{}}\nfunc reg(m *server.MCPServer) { for _, t := range all { m.AddTool(t.Definition(), nil) } }\n',
+    mapOf: T('QueryTool') + 'var all = map[string]*QueryTool{"a": {}}\nfunc reg(m *server.MCPServer) { for _, t := range all { m.AddTool(t.Definition(), nil) } }\n',
+    nilCast: T('QueryTool') + 'func reg(m *server.MCPServer) { m.AddTool((*QueryTool)(nil).Definition(), nil) }\n',
+    ctorValue: T('QueryTool') + 'func NewQuery() *QueryTool { return &QueryTool{} }\nvar makers = []func() *QueryTool{NewQuery}\nfunc reg(m *server.MCPServer) { for _, mk := range makers { m.AddTool(mk().Definition(), nil) } }\n',
+    embedded: T('QueryTool') + 'type Wrapped struct{ QueryTool }\nfunc reg(m *server.MCPServer) { w := Wrapped{}; m.AddTool(w.Definition(), nil) }\n',
+  };
+  for (const [k, body] of Object.entries(cases)) {
+    const r = read({ 'tools/t.go': 'package tools\n' + MCPGO + body + T('Other') + 'func init() { registry.Register(&Other{}) }\n' });
+    assert.ok(r.found.some((x) => x.tool.name === 'querytool'), k + ': ' + r.found.map((x) => x.tool.name));
+    assert.ok(r.found.every((x) => !x.marks.some((m) => m.exclude)), k + ': nothing is dropped');
+  }
+});
+
+test("a repository's own tool type with no annotations field leaves annotations unknown; its description is unknown when a conversion is not followed", () => {
+  const own = 'type ToolDefinition struct {\n\tName string `json:"name"`\n\tDescription string `json:"description"`\n\tInputSchema map[string]any `json:"inputSchema"`\n}\n';
+  const r = read({ 'shared/tool.go': 'package shared\n' + MCPGO + own + 'var defs = []ToolDefinition{{Name: "list_sites", Description: "List sites.", InputSchema: map[string]any{"type": "object"}}}\n'
+    + 'func Register(s *server.MCPServer) { for _, d := range loadDefs() { s.AddTool(mcp.NewTool(d.Name, mcp.WithDescription(d.Description), mcp.WithReadOnlyHintAnnotation(true)), nil) } }\nfunc init() { use(defs) }\n' });
+  const t = byName(r).list_sites;
+  assert.ok(t._unreadable.includes('annotations') && t._unreadable.includes('description'), JSON.stringify(t._unreadable));
+});
+
+test('a description passed through a long chain of option helpers is marked unreadable, not graded as missing', () => {
+  const chain = Array.from({ length: 14 }, (_, k) => 'func o' + k + '(d string) mcp.ToolOption { return o' + (k + 1) + '(d) }').join('\n') + '\nfunc o14(d string) mcp.ToolOption { return mcp.WithDescription(d) }\n';
+  const r = read({ 't.go': 'package t\n' + MCPGO + chain + 'var T = mcp.NewTool("chained", o0("Deep."))\nfunc init() { use(T) }\n' });
+  const t = byName(r).chained;
+  assert.ok(t.description === 'Deep.' || t._unreadable.includes('description'), JSON.stringify(t));
+});
+
+test('options appended in a loop or a branch keep the ones appended before (a description passed to a helper is read)', () => {
+  const r = read({ 'mcpgo/tool.go': 'package mcpgo\n' + MCPGO + `
+type impl struct { name string; description string; parameters []P; readOnly bool }
+func NewTool(name, description string, parameters []P) *impl { return &impl{name: name, description: description, parameters: parameters} }
+func (t *impl) toServerTool() mcp.Tool {
+	var toolOpts []mcp.ToolOption
+	toolOpts = append(toolOpts, mcp.WithDescription(t.description))
+	for _, p := range t.parameters {
+		switch p.Type {
+		case "string":
+			toolOpts = append(toolOpts, mcp.WithString(p.Name))
+		default:
+			toolOpts = append(toolOpts, mcp.WithNumber(p.Name))
+		}
+	}
+	if t.readOnly {
+		toolOpts = append(toolOpts, mcp.WithReadOnlyHintAnnotation(true))
+	} else {
+		toolOpts = append(toolOpts, mcp.WithReadOnlyHintAnnotation(false))
+	}
+	return mcp.NewTool(t.name, toolOpts...)
+}
+func FetchPayment() *impl { return NewTool("fetch_payment", "Fetch one payment "+"by its id.", nil) }
+` });
+  const t = byName(r).fetch_payment;
+  assert.equal(t.description, 'Fetch one payment by its id.');
+  assert.ok(t._unreadable.includes('inputSchema') && t._unreadable.includes('annotations') && !t._unreadable.includes('description'));
 });

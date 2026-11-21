@@ -35,10 +35,17 @@ export const FIDELITY = {
   names: () => 'names only: an MCPB manifest lists names and descriptions; schema checks do not apply',
 };
 
+/** Tools read from source whose registration the reader did not see (Go: a tool type built only inside another type,
+ *  or never visibly built). They are listed, never dropped; this names them. */
+export function registrationNotSeen(c) {
+  return (Array.isArray(c && c.marked) ? c.marked : []).filter((m) => !m.excluded && m.reasons.some((x) => /^registration-not-seen/.test(x))).map((m) => m.name);
+}
+
 /** The provenance of a repository list: its fidelity, then the tools left out as off by default and the ones kept under a condition. */
 export function repoProvenance(c) {
   const left = Array.isArray(c.excluded) ? c.excluded : [];
   const cond = (Array.isArray(c.marked) ? c.marked : []).filter((m) => !m.excluded && m.reasons.some((x) => /^conditional-/.test(x)));
+  const unseen = registrationNotSeen(c);
   const reasons = [...new Set(left.flatMap((x) => x.reasons.map((y) => y.replace(/ \(.*$/, ''))))];
   const u = c.unreadable || {};
   const parts = [['inputSchema', 'input schema'], ['description', 'description'], ['annotations', 'annotations']].filter(([k]) => Array.isArray(u[k]) && u[k].length).map(([k, w]) => u[k].length + ' ' + w + (u[k].length === 1 || k === 'annotations' ? '' : 's'));
@@ -46,7 +53,8 @@ export function repoProvenance(c) {
     + (parts.length ? '; not readable from source, so their checks are skipped: ' + parts.join(', ') : '')
     + (u.text && Object.keys(u.text).length ? '; ' + Object.keys(u.text).length + ' tool' + (Object.keys(u.text).length === 1 ? '' : 's') + ' with source text not readable as part of the tool, scanned for hidden instructions' : '')
     + (c.unresolvedNames ? '; ' + c.unresolvedNames + ' registration' + (c.unresolvedNames === 1 ? '' : 's') + ' with a name the reader could not resolve, not listed' : '')
-    + (Array.isArray(c.notes) && c.notes.length ? '; ' + c.notes.map((x) => line(x, 300)).join('; ') : '');
+    + (Array.isArray(c.notes) && c.notes.length ? '; ' + c.notes.map((x) => line(x, 300)).join('; ') : '')
+    + (unseen.length ? '; ' + unseen.length + ' tool' + (unseen.length === 1 ? '' : 's') + ' listed whose registration the reader did not see (built only inside another type, or never visibly built)' : '');
   return { provenance: FIDELITY[c.fidelity](c) + extra, left, cond };
 }
 
@@ -99,7 +107,7 @@ async function fromRepo(ref, opt, via = null) {
   const c = cliUsable(r, line(where), pick);
   const { provenance: prov, left, cond } = repoProvenance(c);
   const provenance = prov + budgetNote(r);
-  return { data: c.tools, reader: readerNotes(c), source: { kind: 'repo', repo: r.repo, sha: r.sha, via: r.via, fidelity: c.fidelity, approximate: isApproximate(c), provenance, from: c.kind, ...(c.language ? { language: c.language.toLowerCase() } : {}), files: c.files || [c.path], ...(unreadableNames(c) ? { unreadable: unreadableNames(c) } : {}), ...(c.unresolvedNames ? { unresolved_names: c.unresolvedNames } : {}), ...(left.length ? { left_out: left.map((x) => ({ name: line(x.name, 128), reasons: x.reasons.map((y) => line(y, 160)) })) } : {}), ...(cond.length ? { conditional: cond.map((x) => line(x.name, 128)) } : {}), ...(via ? { registry: via } : {}) } };
+  return { data: c.tools, reader: readerNotes(c), source: { kind: 'repo', repo: r.repo, sha: r.sha, via: r.via, fidelity: c.fidelity, approximate: isApproximate(c), provenance, from: c.kind, ...(c.language ? { language: c.language.toLowerCase() } : {}), ...(registrationNotSeen(c).length ? { registration_not_seen: registrationNotSeen(c).map((x) => line(x, 128)) } : {}), files: c.files || [c.path], ...(unreadableNames(c) ? { unreadable: unreadableNames(c) } : {}), ...(c.unresolvedNames ? { unresolved_names: c.unresolvedNames } : {}), ...(left.length ? { left_out: left.map((x) => ({ name: line(x.name, 128), reasons: x.reasons.map((y) => line(y, 160)) })) } : {}), ...(cond.length ? { conditional: cond.map((x) => line(x.name, 128)) } : {}), ...(via ? { registry: via } : {}) } };
 }
 
 /** The advice every "cannot grade this read" message ends with (the CLI's and the Action's names for the live inputs). */
@@ -245,7 +253,7 @@ async function fromRepoDir(dir, opt) {
   const c = cliUsable(r, line(dir), (folder) => '--repo-dir ' + (folder === '.' ? base : base + '/' + folder));
   const { provenance: prov, left, cond } = repoProvenance(c);
   const provenance = prov + budgetNote(r);
-  return { data: c.tools, where: c.where || null, reader: readerNotes(c), source: { kind: 'dir', dir: r.repo, fidelity: c.fidelity, approximate: isApproximate(c), provenance, from: c.kind, ...(c.language ? { language: c.language.toLowerCase() } : {}), files: c.files || [c.path], ...(unreadableNames(c) ? { unreadable: unreadableNames(c) } : {}), ...(c.unresolvedNames ? { unresolved_names: c.unresolvedNames } : {}), ...(c.built ? { built: true } : {}), ...(r.truncated ? { truncated: true } : {}), ...(left.length ? { left_out: left.map((x) => ({ name: line(x.name, 128), reasons: x.reasons.map((y) => line(y, 160)) })) } : {}), ...(cond.length ? { conditional: cond.map((x) => line(x.name, 128)) } : {}) } };
+  return { data: c.tools, where: c.where || null, reader: readerNotes(c), source: { kind: 'dir', dir: r.repo, fidelity: c.fidelity, approximate: isApproximate(c), provenance, from: c.kind, ...(c.language ? { language: c.language.toLowerCase() } : {}), ...(registrationNotSeen(c).length ? { registration_not_seen: registrationNotSeen(c).map((x) => line(x, 128)) } : {}), files: c.files || [c.path], ...(unreadableNames(c) ? { unreadable: unreadableNames(c) } : {}), ...(c.unresolvedNames ? { unresolved_names: c.unresolvedNames } : {}), ...(c.built ? { built: true } : {}), ...(r.truncated ? { truncated: true } : {}), ...(left.length ? { left_out: left.map((x) => ({ name: line(x.name, 128), reasons: x.reasons.map((y) => line(y, 160)) })) } : {}), ...(cond.length ? { conditional: cond.map((x) => line(x.name, 128)) } : {}) } };
 }
 
 async function fromRegistry(name, opt, note) {
