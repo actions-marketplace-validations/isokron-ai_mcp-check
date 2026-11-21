@@ -2328,8 +2328,10 @@
       const srcPaths = L.plan(relPaths).slice(0, maxRead).map(absOf);
       const mans = relPaths.filter((p) => L.manifest.test(p) && !L.skip.test(p)).sort((a, b) => a.split('/').length - b.split('/').length || (a < b ? -1 : a > b ? 1 : 0)).slice(0, 200).map(absOf)
         .concat(o.all.filter((p) => L.manifest.test(p) && !p.startsWith(sub) && sub.startsWith(p.replace(/[^/]*$/, '')))); // and the ones above the folder (the module path)
-      const mfiles = (await readMany(mans, 8)).filter(([, t]) => typeof t === 'string');
-      const sfiles = (await readMany(srcPaths, 16)).filter(([, t]) => typeof t === 'string');
+      // in plan order, whatever order the reads finish in (so --repo and --repo-dir give one list and one catalog hash)
+      const inOrder = (ps, got) => { const m = new Map(got); return ps.filter((p) => typeof m.get(p) === 'string').map((p) => [p, m.get(p)]); };
+      const mfiles = inOrder(mans, await readMany(mans, 8));
+      const sfiles = inOrder(srcPaths, await readMany(srcPaths, 16));
       mfiles.forEach(([p, t]) => readFiles.set(p, t)); sfiles.forEach(([p, t]) => readFiles.set(p, t));
       extraManifests.push(L.manifest);
       // a Go main package or a Rust module that constructs a server is a server of its own, even inside one go.mod or
