@@ -1517,6 +1517,7 @@
     // helpers that build a tool from their parameters (fn tool(name: &str, …) -> Tool { Tool::new(name, …) }): each call
     // is a tool; a caller that passes its own parameter on is a helper too (a few levels)
     const done = new Set(); let next = new Set(); const pending = new Map(); // helper name -> its calls that pass a parameter on
+    const called = new Set(); // helpers with a call the reader looked at
     for (let round = 0; round < MAX_HELPER_ROUNDS && wrappers.size && !overBudget.length; round++) {
       next = new Set();
       this.files.forEach((f) => {
@@ -1531,7 +1532,7 @@
           const c = f.close[k + 1]; if (c < 0) continue;
           const fn = fnAt(f, k);
           if (fn && fn.name === t[k].v) continue; // recursion
-          done.add(key);
+          done.add(key); called.add(t[k].v);
           const env = { selfName: fn && fn.impl && fn.impl.selfName, vars: {} };
           if (fn) { fn.params.filter((p) => !p.self && p.name).forEach((p) => { env.vars[p.name] = PARAM(fn, p.name); }); env.locals = this.localsOf(fn, env.vars); }
           let v; this.depthHit = false;
@@ -1540,10 +1541,13 @@
             let e = c + 1; // builder calls chained on the result
             while (v && v.__tool && isP(t[e], '.') && isId(t[e + 1]) && isP(t[e + 2], '(') && f.close[e + 2] > 0) { v = this.method(v, t[e + 1].v, null, f, e + 3, f.close[e + 2], env, 0); e = f.close[e + 2] + 1; }
           } catch (x) { if (x instanceof OverBudget) { overBudget.push({ path: f.path, line: null, why: WHY_WORK }); return; } v = UNK(); }
-          // a call of a helper that gives no tool the reader can read: counted, with its text scanned; refused as
-          // incomplete only when that is because the chain of helpers is longer than followed (the evaluation went too deep)
+          // a call of a helper that gives no tool the reader can read: refused as incomplete when the chain of helpers is
+          // longer than followed (the evaluation went too deep); when it passes the enclosing function's parameters on,
+          // that function is followed to its callers (the text may come from there); otherwise counted, its text scanned
           if (!v || (!v.__tool && !v.__struct)) {
             if (this.depthHit) { overBudget.push({ path: f.path, line: lineAt(f, t[k].s), why: WHY_CHAIN }); return; }
+            const passesParams = !!fn && fn.params.some((p) => p.name && !p.self && t.slice(k + 2, c).some((x) => x.y === 'id' && x.v === p.name));
+            if (passesParams) { next.add(fn.name); if (!pending.has(fn.name)) pending.set(fn.name, []); pending.get(fn.name).push({ path: f.path, line: lineAt(f, t[k].s), lost: literalsIn(f, k, c).slice(0, 200) }); continue; }
             unresolved.push({ path: f.path, line: lineAt(f, t[k].s), lost: literalsIn(f, k, c).slice(0, 200) }); continue;
           }
           const nm = v.__tool ? v.name : v.f.name;
@@ -1557,6 +1561,9 @@
     }
     // helpers found in the last round allowed, whose callers were not followed: refused as incomplete
     if (next.size) { const u = (pending.get(Array.from(next)[0]) || [])[0]; overBudget.push({ path: u ? u.path : null, line: u ? u.line : null, why: WHY_CHAIN }); }
+    // a function followed to its callers that has none the reader sees (called from code it does not read): the calls
+    // in it are counted as unresolved, with their text
+    else pending.forEach((calls, name) => { if (!called.has(name)) calls.forEach((u) => unresolved.push(u)); });
     return { found, unresolved, overBudget };
   };
 
