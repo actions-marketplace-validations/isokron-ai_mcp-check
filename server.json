@@ -3,7 +3,7 @@
   "name": "io.github.isokron-ai/mcp-check",
   "title": "IsoKron MCP check",
   "description": "Grades an MCP tools/list against the MCP spec and Claude and ChatGPT directory rules. Read-only.",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "websiteUrl": "https://isokron.ai/mcp-check?utm_source=mcp-check-registry&utm_medium=registry",
   "repository": {
     "url": "https://github.com/isokron-ai/mcp-check",
@@ -14,7 +14,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@isokron/mcp-check",
-      "version": "1.2.0",
+      "version": "1.3.0",
       "runtimeHint": "npx",
       "packageArguments": [
         { "type": "positional", "value": "serve" }
