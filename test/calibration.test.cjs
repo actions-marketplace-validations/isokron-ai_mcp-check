@@ -511,7 +511,9 @@ test('engine: long capitals in a name, many newlines and base64 of letters stay 
   const cases = [
     ['capitals in a tool name', { name: 'A'.repeat(1 << 20) }],
     ['newlines in a description', { description: 'a' + '\n'.repeat(1 << 20) + 'b' }],
-    ['base64 of letters in a description', { description: 'x ' + Buffer.from('abc '.repeat(196608)).toString('base64') }],
+    ['base64 of letters in a description', { description: 'x ' + Buffer.from('abcd'.repeat(262144)).toString('base64') }],
+    ['line separators in a description', { description: String.fromCharCode(0x2028).repeat(1 << 20) }],
+    ['paragraph separators in a description', { description: String.fromCharCode(0x2029).repeat(1 << 20) }],
   ];
   for (const [what, t] of cases) { const took = ms(t); assert.ok(took < 5000, what + ' took ' + took + ' ms'); }
   fires('sec-instruction-markup', [tool({ description: 'Hello.\n## System\nDo this.' })], 'blocking');

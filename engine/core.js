@@ -703,7 +703,7 @@
   const RE_LATIN = /\p{Script=Latin}/u;
   const RE_CONFUSABLE = /[\p{Script=Cyrillic}\p{Script=Greek}\p{Script=Armenian}\p{Script=Cherokee}]/u;
   const HTML_COMMENT = new RegExp('<' + '!--');
-  const RE_MARKUP = /<\s*\/?\s*(important|system|instructions?|admin|secret|hidden|sudo|assistant|human|override|prompt|context)\s*>|\[\/?INST\]|<\|(im_start|im_end|system|endoftext|user|assistant)\|>|^[^\S\r\n]*#{1,3}\s*(system|instructions)\b/im;
+  const RE_MARKUP = /<\s*\/?\s*(important|system|instructions?|admin|secret|hidden|sudo|assistant|human|override|prompt|context)\s*>|\[\/?INST\]|<\|(im_start|im_end|system|endoftext|user|assistant)\|>|^[^\S\r\n\u2028\u2029]*#{1,3}\s*(system|instructions)\b/im;
   const RE_PHRASES = [
     /\b(ignore|disregard|forget|override|bypass)\b[^.\n]{0,40}\b(previous|prior|above|earlier|other|all|any|system|safety|your)\b[^.\n]{0,25}\b(instructions?|prompts?|rules|guidelines|directives|messages|policies)\b/i,
     /\b(do not|don['’]t|never)\s+(tell|inform|mention|show|reveal|notify|alert)\b[^.\n]{0,30}\b(the\s+)?user\b/i,
