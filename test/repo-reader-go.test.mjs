@@ -412,3 +412,23 @@ test('--repo-dir: Go reads docs/ and spec/ folders, names tools in testdata and 
   assert.match(r.best.notes[0], /2 Go servers are started from cmd\/a, cmd\/b and share these tools/);
   assert.deepEqual(r.hints.ignoredFolders.map((x) => [x.path, x.tools]), [['examples', 2]]);
 });
+
+test('tool types built only inside another tool (a unified tool and its sub-tools) are not registered: left out and counted', async () => {
+  const sub = (n, N) => 'package ' + n + '\nimport "github.com/mark3labs/mcp-go/mcp"\ntype ' + N + 'Tool struct{}\nfunc New' + N + 'Tool() *' + N + 'Tool { return &' + N + 'Tool{} }\nfunc (t *' + N + 'Tool) Definition() mcp.Tool { return mcp.NewTool("' + n + '_search", mcp.WithDescription("Search ' + n + ' packages.")) }\n';
+  const d = tree({
+    'go.mod': 'module example.com/pkgs\n',
+    'pkg/registry/registry.go': 'package registry\n' + MCPGO + 'type Tool interface { Definition() mcp.Tool }\ntype Registry struct{ tools []Tool }\nfunc (r *Registry) Register(t Tool) { r.tools = append(r.tools, t) }\nfunc (r *Registry) Apply(s *server.MCPServer) { for _, t := range r.tools { s.AddTool(t.Definition(), nil) } }\n',
+    'pkg/npm/npm.go': sub('npm', 'Npm'), 'pkg/pypi/pypi.go': sub('pypi', 'Pypi'), 'pkg/cargo/cargo.go': sub('cargo', 'Cargo'),
+    'pkg/tools/tools.go': 'package tools\nimport (\n\t"github.com/mark3labs/mcp-go/mcp"\n\t"example.com/pkgs/pkg/cargo"\n\t"example.com/pkgs/pkg/npm"\n\t"example.com/pkgs/pkg/pypi"\n\t"example.com/pkgs/pkg/registry"\n)\n'
+      + 'type SearchTool struct{}\nfunc (t *SearchTool) Definition() mcp.Tool { return mcp.NewTool("search", mcp.WithDescription("Search.")) }\n'
+      + 'type FetchTool struct{}\nfunc (t *FetchTool) Definition() mcp.Tool { return mcp.NewTool("fetch", mcp.WithDescription("Fetch.")) }\n'
+      + 'type UnifiedTool struct{ subs []registry.Tool }\nfunc NewUnifiedTool() *UnifiedTool { return &UnifiedTool{subs: []registry.Tool{npm.NewNpmTool(), pypi.NewPypiTool(), cargo.NewCargoTool()}} }\n'
+      + 'func (t *UnifiedTool) Definition() mcp.Tool { return mcp.NewTool("package_search", mcp.WithDescription("Search packages in any registry.")) }\n',
+    'main.go': 'package main\nimport (\n\t"github.com/mark3labs/mcp-go/server"\n\t"example.com/pkgs/pkg/registry"\n\t"example.com/pkgs/pkg/tools"\n)\nfunc main() {\n\ts := server.NewMCPServer("pkgs", "1.0")\n\tr := &registry.Registry{}\n\tr.Register(&tools.SearchTool{})\n\tr.Register(&tools.FetchTool{})\n\tr.Register(tools.NewUnifiedTool())\n\tr.Apply(s)\n}\n',
+  });
+  const r = await R.fromDirectory(d);
+  assert.deepEqual(r.best.tools.map((t) => t.name).sort(), ['fetch', 'package_search', 'search']);
+  assert.deepEqual(r.best.excluded.map((x) => [x.name, x.reasons[0].replace(/ \(.*$/, '')]).sort(), [['cargo_search', 'not-registered'], ['npm_search', 'not-registered'], ['pypi_search', 'not-registered']]);
+  const out = cli(['--repo-dir', d, '--format', 'json']);
+  assert.match(JSON.parse(out.stdout).source.provenance, /3 tools left out \(not-registered\)/);
+});

@@ -2015,6 +2015,7 @@
         walk(d, 0);
       });
     });
+    const subTools = this.subToolTypes(results);
     results.forEach(({ r, f, s }) => {
       if ((s.kind === 'lit' || s.kind === 'wrap') && consumed.has(f.path + ':' + s.i)) return;
       const line = lineAt(f, f.t[s.i].s);
@@ -2032,11 +2033,56 @@
       // not registered (as for literal tool objects in the other languages)
       const holder = this.holderOf(f, s);
       if (holder && (this.refCount().get(holder) || 0) <= 1) marks.push({ reason: 'unreferenced-declaration', detail: holder, exclude: true });
+      // a tool type built only inside another tool (a unified tool that dispatches to it) is not registered itself
+      const sub = s.fn && s.fn.recvType ? subTools.get(s.fn.pkg.dir + '\u0000' + s.fn.recvType) : null;
+      if (sub) marks.push({ reason: 'not-registered', detail: 'built only inside ' + sub, exclude: true });
       found.push({ path: f.path, line, tool, fidelity: 'derived', literal: s.kind === 'lit' && !(r.st.flavour === 'go-sdk'), marks, language: 'Go' });
     });
     return { found, unresolved, overBudget };
   };
 
+  // Tool types (a type whose method builds a tool with a fixed name, such as Definition()) that the repository only
+  // builds inside another tool type (its methods, or the constructor that returns it): sub-tools a unified tool
+  // dispatches to, not registered with the server. Map(pkg dir + type -> the other tool type). A tool type that is
+  // never built where the reader can see it is not called a sub-tool.
+  Repo.prototype.subToolTypes = function (results) {
+    const out = new Map(); const key = (pk, n) => (pk ? pk.dir : '') + '\u0000' + n;
+    const types = new Map();
+    results.forEach(({ r, s }) => { if (s && s.fn && s.fn.recvType && r && typeof r.name === 'string') types.set(key(s.fn.pkg, s.fn.recvType), s.fn.recvType); });
+    if (types.size < 2) return out;
+    // constructors: plain functions returning T or *T of a tool type
+    const ctorOf = new Map(); // decl -> type key
+    const ctorsByName = new Map(); // name -> [{ pkg, key }]
+    this.pkgs.forEach((pk) => pk.funcs.forEach((ds) => ds.forEach((d) => {
+      const r0 = d.sig && d.sig.results[0] && d.sig.results[0].type; const b = r0 && r0.k === 'tptr' ? r0.x : r0;
+      if (!b || b.k !== 'tname' || b.pkg) return;
+      const k = key(pk, b.v); if (!types.has(k)) return;
+      ctorOf.set(d, k); if (!ctorsByName.has(d.name)) ctorsByName.set(d.name, []); ctorsByName.get(d.name).push({ pkg: pk, key: k });
+    })));
+    const containerOf = (d) => (!d ? null : d.recvType ? key(d.pkg, d.recvType) : ctorOf.get(d) || null);
+    const sites = new Map(); // type key -> [container key | null]
+    const typeNames = new Set(types.values());
+    this.files.forEach((f) => {
+      const t = f.t; const fns = f.decls.funcs.filter((d) => d.body).sort((a, b) => a.body[0] - b.body[0]);
+      for (let k = 0; k < t.length - 1; k++) {
+        const x = t[k]; if (x.y !== 'id') continue;
+        const qualified = isP(t[k - 1], '.') && isId(t[k - 2]);
+        const pk = qualified ? (this.qual(f, t[k - 2].v) || {}).pkg : f.pkg;
+        if (qualified && !pk) continue;
+        let tk = null;
+        const before = t[qualified ? k - 3 : k - 1];
+        const valuePlace = isP(before, '&') || isP(before, '(') || isP(before, ',') || isP(before, '=') || isP(before, ':=') || isP(before, ':') || isP(before, '{') || isId(before, 'return');
+        if (typeNames.has(x.v) && isP(t[k + 1], '{') && valuePlace) tk = key(pk, x.v); // a composite literal, not a type before a body
+        else if (ctorsByName.has(x.v) && isP(t[k + 1], '(') && !isId(t[k - 1], 'func')) { const c = ctorsByName.get(x.v).find((y) => y.pkg === pk); if (c) tk = c.key; }
+        if (!tk || !types.has(tk)) continue;
+        const cont = containerOf(fnAtTok(fns, k));
+        if (cont === tk) continue; // its own constructor or methods
+        if (!sites.has(tk)) sites.set(tk, []); sites.get(tk).push(cont);
+      }
+    });
+    sites.forEach((conts, tk) => { if (conts.length && conts.every((c) => c && types.has(c) && c !== tk)) out.set(tk, types.get(conts[0])); });
+    return out;
+  };
   // How often each identifier occurs in the repository's files (one pass, for unreferenced declarations).
   Repo.prototype.refCount = function () {
     if (this._refs) return this._refs;
