@@ -1810,6 +1810,7 @@
   // The repository function (or method) a call names, when it is one: NewTool(…), pkg.NewTool(…), x.AddTool(…).
   // A method counts only when it is a known helper (a value's method may as well be the SDK's).
   Repo.prototype.repoCallee = function (n, f, sc) {
+    this.step();
     const c = n.fn.k === 'index' ? n.fn.x : n.fn;
     if (c.k === 'id') { if (sc.lookup(c.v) || this.isValue(c, sc) && !f.pkg.funcs.has(c.v)) return null; const d = f.pkg.funcs.get(c.v); return d ? d[0] : null; }
     if (c.k !== 'sel') return null;
@@ -1965,11 +1966,11 @@
       let grew = false;
       this.files.forEach((f) => {
         (fileSites.get(f) || []).forEach((s) => {
-          if (!s.fn || this.wrappers.has(s.fn) && this.wrappers.get(s.fn).sites.includes(s)) return;
+          if (!s.fn || s.inWrapper) return; // already a site of a known helper
           let got; try { got = this.evalSite(s, f, this.scopeFor(s, f), 0); } catch (e) { if (e instanceof OverBudget) throw e; return; }
           if (got.some((r) => r.param)) {
             if (!this.wrappers.has(s.fn)) { this.wrappers.set(s.fn, { sites: [], reflects: false }); this.wrapperNames.add(s.fn.name); grew = true; }
-            const w = this.wrappers.get(s.fn); if (!w.sites.includes(s)) w.sites.push(s);
+            const w = this.wrappers.get(s.fn); if (!s.inWrapper) w.sites.push(s);
             s.inWrapper = true;
             s.usesVariadic = (() => { const vp = (s.fn.sig.params || []).find((p) => p.variadic); if (!vp) return false; const n = s.kind === 'lit' ? null : this.callAt(f, s.i, s.at); return !!(n && n.spread && n.args.length && n.args[n.args.length - 1].k === 'id' && n.args[n.args.length - 1].v === vp.name); })();
           }
