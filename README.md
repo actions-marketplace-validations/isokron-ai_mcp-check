@@ -91,7 +91,7 @@ jobs:
 
 > **Behaviour change in 1.1.1.** With neither `command` nor `tools-file`, a repository that gives nothing to grade (no tool definitions, names only, or more than one server) no longer fails the job: it ends with a warning, the `passed` output is empty, and with `pr-comment` on the comment says "not graded on this run". If your workflow relied on that red job, set `fail-on-no-tools: true`.
 
-The job summary says the list was read from source and that its grades are **approximate**: the reader reproduces what your SDK registrations would list, and can miss or misread tools. It never fails the job on grades unless you set `min-grade` (a gate on approximate grades is at your own risk). When the source gives nothing to grade (for example a Go, Rust or C# server, a manifest with names only, or a monorepo with several servers), the job ends with a warning and the fix, not red (`fail-on-no-tools: true` to fail it). For exact grades of the list your server sends, start it with `command` (or give a saved list with `tools-file`):
+The job summary says the list was read from source and that its grades are **approximate**: the reader reproduces what your SDK registrations would list, and can miss or misread tools. It never fails the job on grades unless you set `min-grade` (a gate on approximate grades is at your own risk). When the source gives nothing to grade (for example a C# server, which is not read yet, a manifest with names only, or a monorepo with several servers), the job ends with a warning and the fix, not red (`fail-on-no-tools: true` to fail it). For exact grades of the list your server sends, start it with `command` (or give a saved list with `tools-file`):
 
 ```yaml
       - uses: actions/setup-node@v7
