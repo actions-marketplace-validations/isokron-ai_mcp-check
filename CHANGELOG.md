@@ -2,6 +2,13 @@
 
 All notable changes to `@isokron/mcp-check` and the `isokron-ai/mcp-check` Action. The package follows [semantic versioning](https://semver.org/); the grading rubric has its own version (`rubric_version`), noted with each release.
 
+## 1.3.1 (2026-11-22)
+
+Docs and metadata only; no change to the reader, the engine or the rubric (2.2.0).
+
+- `action.yml`: a shorter description (GitHub Marketplace takes fewer than 125 characters), so the Action can be listed there. The Action's inputs and behaviour are unchanged.
+- README: the Action section no longer gives a Go or Rust server as an example of a source with nothing to grade; since 1.3.0 that is only C#.
+
 ## 1.3.0 (2026-11-21)
 
 ### Reading Go and Rust

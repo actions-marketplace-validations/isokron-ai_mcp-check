@@ -1,9 +1,6 @@
 name: IsoKron MCP check
 description: >-
-  Grades an MCP server's tools/list against the MCP specification, the Claude and ChatGPT directory
-  rules, hidden-instruction patterns and schema quality. Zero-config: with no input it reads the tool
-  definitions from your repository's code and runs nothing (approximate grades; set command for exact
-  ones). Job summary, SARIF, gate, badge, PR comment.
+  Grades an MCP server's tools against the MCP spec and the Claude and ChatGPT directory rules. Zero-config, runs nothing.
 author: IsoKron
 branding:
   icon: check-circle
