@@ -1,0 +1,565 @@
+{
+ "about": "What the live-probe lane's oracle stage runs (corpus/LIVE-PROBE.md, Oracles), pinned. The conformance suite is the official one, by npm version, tarball integrity and the git commit it was built from; its requirement sets are frozen per spec revision, and the lane refuses to run when the installed sets do not hash to these. Each revision lists every server scenario of its frozen set: run (read-only: initialize, ping and the list methods, on the revision's own wire) or not run, with why. Nothing here calls a tool, gets a prompt or reads a resource. The SDK clients are the official TypeScript (1.x and 2.x lines), Python and Go SDKs, each pinned in its own lockfile. Change only by a reviewed commit, with the baselines re-recorded.",
+ "conformance": {
+  "package": "@modelcontextprotocol/conformance",
+  "version": "0.2.0-alpha.12",
+  "integrity": "sha512-eXtZFgmtZiU5SsvXty+RGXGnyIqEVm3GLU/HZmg1wMjtKOocPZZgD9HQKd30oJhio5UB0wFJmsc6r8u48Q+EYA==",
+  "git_commit": "f44482ba17df816d3176962a11cdf36aec9bda00",
+  "repository": "https://github.com/modelcontextprotocol/conformance",
+  "requirement_sets_sha256": {
+   "2025-11-25": "f33a304dfa2cbd999c24026a3453a64f377bba0c8aa80addadaf05862d212371",
+   "2026-07-28": "ae2f4f6210fd729e2e318edd5bbfa31a43cee0bc608e48052fa26dbf1d939b57"
+  },
+  "scenario_timeout_ms": 20000
+ },
+ "revisions": {
+  "2025-11-25": {
+   "requirement_set": "requirements/2025-11-25.yaml",
+   "wire": "stateful",
+   "scenarios": [
+    {
+     "scenario": "server-initialize",
+     "scored": true,
+     "run": true
+    },
+    {
+     "scenario": "logging-set-level",
+     "scored": true,
+     "run": false,
+     "reason": "changes_server_state"
+    },
+    {
+     "scenario": "ping",
+     "scored": true,
+     "run": true
+    },
+    {
+     "scenario": "completion-complete",
+     "scored": true,
+     "run": false,
+     "reason": "needs_fixture_server"
+    },
+    {
+     "scenario": "tools-list",
+     "scored": true,
+     "run": true
+    },
+    {
+     "scenario": "tools-call-simple-text",
+     "scored": true,
+     "run": false,
+     "reason": "calls_tool"
+    },
+    {
+     "scenario": "tools-call-image",
+     "scored": true,
+     "run": false,
+     "reason": "calls_tool"
+    },
+    {
+     "scenario": "tools-call-audio",
+     "scored": true,
+     "run": false,
+     "reason": "calls_tool"
+    },
+    {
+     "scenario": "tools-call-embedded-resource",
+     "scored": true,
+     "run": false,
+     "reason": "calls_tool"
+    },
+    {
+     "scenario": "tools-call-mixed-content",
+     "scored": true,
+     "run": false,
+     "reason": "calls_tool"
+    },
+    {
+     "scenario": "tools-call-with-logging",
+     "scored": true,
+     "run": false,
+     "reason": "calls_tool"
+    },
+    {
+     "scenario": "tools-call-error",
+     "scored": true,
+     "run": false,
+     "reason": "calls_tool"
+    },
+    {
+     "scenario": "tools-call-with-progress",
+     "scored": true,
+     "run": false,
+     "reason": "calls_tool"
+    },
+    {
+     "scenario": "tools-call-sampling",
+     "scored": true,
+     "run": false,
+     "reason": "calls_tool"
+    },
+    {
+     "scenario": "tools-call-elicitation",
+     "scored": true,
+     "run": false,
+     "reason": "calls_tool"
+    },
+    {
+     "scenario": "elicitation-sep1034-defaults",
+     "scored": true,
+     "run": false,
+     "reason": "calls_tool"
+    },
+    {
+     "scenario": "server-sse-multiple-streams",
+     "scored": true,
+     "run": false,
+     "reason": "transport_only"
+    },
+    {
+     "scenario": "elicitation-sep1330-enums",
+     "scored": true,
+     "run": false,
+     "reason": "calls_tool"
+    },
+    {
+     "scenario": "resources-list",
+     "scored": true,
+     "run": true
+    },
+    {
+     "scenario": "resources-read-text",
+     "scored": true,
+     "run": false,
+     "reason": "reads_resource"
+    },
+    {
+     "scenario": "resources-read-binary",
+     "scored": true,
+     "run": false,
+     "reason": "reads_resource"
+    },
+    {
+     "scenario": "resources-templates-read",
+     "scored": true,
+     "run": false,
+     "reason": "reads_resource"
+    },
+    {
+     "scenario": "resources-subscribe",
+     "scored": true,
+     "run": false,
+     "reason": "subscribes"
+    },
+    {
+     "scenario": "resources-unsubscribe",
+     "scored": true,
+     "run": false,
+     "reason": "subscribes"
+    },
+    {
+     "scenario": "prompts-list",
+     "scored": true,
+     "run": true
+    },
+    {
+     "scenario": "prompts-get-simple",
+     "scored": true,
+     "run": false,
+     "reason": "gets_prompt"
+    },
+    {
+     "scenario": "prompts-get-with-args",
+     "scored": true,
+     "run": false,
+     "reason": "gets_prompt"
+    },
+    {
+     "scenario": "prompts-get-embedded-resource",
+     "scored": true,
+     "run": false,
+     "reason": "gets_prompt"
+    },
+    {
+     "scenario": "prompts-get-with-image",
+     "scored": true,
+     "run": false,
+     "reason": "gets_prompt"
+    },
+    {
+     "scenario": "dns-rebinding-protection",
+     "scored": true,
+     "run": false,
+     "reason": "transport_only"
+    },
+    {
+     "scenario": "server-session-lifecycle",
+     "scored": false,
+     "not_scored_reason": "added-after-release",
+     "run": false,
+     "reason": "transport_only"
+    },
+    {
+     "scenario": "json-schema-2020-12",
+     "scored": false,
+     "not_scored_reason": "pending",
+     "run": false,
+     "reason": "needs_fixture_server"
+    },
+    {
+     "scenario": "server-sse-polling",
+     "scored": false,
+     "not_scored_reason": "pending",
+     "run": false,
+     "reason": "transport_only"
+    }
+   ]
+  },
+  "2026-07-28": {
+   "requirement_set": "requirements/2026-07-28.yaml",
+   "wire": "stateless",
+   "scenarios": [
+    {
+     "scenario": "server-stateless",
+     "scored": true,
+     "run": false,
+     "reason": "calls_tool"
+    },
+    {
+     "scenario": "completion-complete",
+     "scored": true,
+     "run": false,
+     "reason": "needs_fixture_server"
+    },
+    {
+     "scenario": "tools-list",
+     "scored": true,
+     "run": true
+    },
+    {
+     "scenario": "tools-call-simple-text",
+     "scored": true,
+     "run": false,
+     "reason": "calls_tool"
+    },
+    {
+     "scenario": "tools-call-image",
+     "scored": true,
+     "run": false,
+     "reason": "calls_tool"
+    },
+    {
+     "scenario": "tools-call-audio",
+     "scored": true,
+     "run": false,
+     "reason": "calls_tool"
+    },
+    {
+     "scenario": "tools-call-embedded-resource",
+     "scored": true,
+     "run": false,
+     "reason": "calls_tool"
+    },
+    {
+     "scenario": "tools-call-mixed-content",
+     "scored": true,
+     "run": false,
+     "reason": "calls_tool"
+    },
+    {
+     "scenario": "tools-call-error",
+     "scored": true,
+     "run": false,
+     "reason": "calls_tool"
+    },
+    {
+     "scenario": "tools-call-with-progress",
+     "scored": true,
+     "run": false,
+     "reason": "calls_tool"
+    },
+    {
+     "scenario": "server-sse-multiple-streams",
+     "scored": true,
+     "run": false,
+     "reason": "transport_only"
+    },
+    {
+     "scenario": "resources-list",
+     "scored": true,
+     "run": true
+    },
+    {
+     "scenario": "resources-read-text",
+     "scored": true,
+     "run": false,
+     "reason": "reads_resource"
+    },
+    {
+     "scenario": "resources-read-binary",
+     "scored": true,
+     "run": false,
+     "reason": "reads_resource"
+    },
+    {
+     "scenario": "resources-templates-read",
+     "scored": true,
+     "run": false,
+     "reason": "reads_resource"
+    },
+    {
+     "scenario": "sep-2164-resource-not-found",
+     "scored": true,
+     "run": false,
+     "reason": "reads_resource"
+    },
+    {
+     "scenario": "prompts-list",
+     "scored": true,
+     "run": true
+    },
+    {
+     "scenario": "prompts-get-simple",
+     "scored": true,
+     "run": false,
+     "reason": "gets_prompt"
+    },
+    {
+     "scenario": "prompts-get-with-args",
+     "scored": true,
+     "run": false,
+     "reason": "gets_prompt"
+    },
+    {
+     "scenario": "prompts-get-embedded-resource",
+     "scored": true,
+     "run": false,
+     "reason": "gets_prompt"
+    },
+    {
+     "scenario": "prompts-get-with-image",
+     "scored": true,
+     "run": false,
+     "reason": "gets_prompt"
+    },
+    {
+     "scenario": "dns-rebinding-protection",
+     "scored": true,
+     "run": false,
+     "reason": "transport_only"
+    },
+    {
+     "scenario": "caching",
+     "scored": true,
+     "run": false,
+     "reason": "reads_resource"
+    },
+    {
+     "scenario": "input-required-result-basic-elicitation",
+     "scored": true,
+     "run": false,
+     "reason": "calls_tool"
+    },
+    {
+     "scenario": "input-required-result-basic-sampling",
+     "scored": true,
+     "run": false,
+     "reason": "calls_tool"
+    },
+    {
+     "scenario": "input-required-result-basic-list-roots",
+     "scored": true,
+     "run": false,
+     "reason": "calls_tool"
+    },
+    {
+     "scenario": "input-required-result-request-state",
+     "scored": true,
+     "run": false,
+     "reason": "calls_tool"
+    },
+    {
+     "scenario": "input-required-result-multiple-input-requests",
+     "scored": true,
+     "run": false,
+     "reason": "calls_tool"
+    },
+    {
+     "scenario": "input-required-result-multi-round",
+     "scored": true,
+     "run": false,
+     "reason": "calls_tool"
+    },
+    {
+     "scenario": "input-required-result-missing-input-response",
+     "scored": true,
+     "run": false,
+     "reason": "calls_tool"
+    },
+    {
+     "scenario": "input-required-result-non-tool-request",
+     "scored": true,
+     "run": false,
+     "reason": "gets_prompt"
+    },
+    {
+     "scenario": "input-required-result-result-type",
+     "scored": true,
+     "run": false,
+     "reason": "calls_tool"
+    },
+    {
+     "scenario": "input-required-result-unsupported-methods",
+     "scored": true,
+     "run": false,
+     "reason": "calls_tool"
+    },
+    {
+     "scenario": "input-required-result-tampered-state",
+     "scored": true,
+     "run": false,
+     "reason": "calls_tool"
+    },
+    {
+     "scenario": "input-required-result-capability-check",
+     "scored": true,
+     "run": false,
+     "reason": "calls_tool"
+    },
+    {
+     "scenario": "input-required-result-ignore-extra-params",
+     "scored": true,
+     "run": false,
+     "reason": "calls_tool"
+    },
+    {
+     "scenario": "input-required-result-validate-input",
+     "scored": true,
+     "run": false,
+     "reason": "calls_tool"
+    },
+    {
+     "scenario": "tasks-lifecycle",
+     "scored": false,
+     "not_scored_reason": "extension",
+     "run": false,
+     "reason": "calls_tool"
+    },
+    {
+     "scenario": "tasks-capability-negotiation",
+     "scored": false,
+     "not_scored_reason": "extension",
+     "run": false,
+     "reason": "calls_tool"
+    },
+    {
+     "scenario": "tasks-wire-fields",
+     "scored": false,
+     "not_scored_reason": "extension",
+     "run": false,
+     "reason": "calls_tool"
+    },
+    {
+     "scenario": "tasks-request-state-removal",
+     "scored": false,
+     "not_scored_reason": "extension",
+     "run": false,
+     "reason": "calls_tool"
+    },
+    {
+     "scenario": "tasks-mrtr-input",
+     "scored": false,
+     "not_scored_reason": "extension",
+     "run": false,
+     "reason": "calls_tool"
+    },
+    {
+     "scenario": "tasks-request-headers",
+     "scored": false,
+     "not_scored_reason": "extension",
+     "run": false,
+     "reason": "calls_tool"
+    },
+    {
+     "scenario": "tasks-dispatch-and-envelope",
+     "scored": false,
+     "not_scored_reason": "extension",
+     "run": false,
+     "reason": "calls_tool"
+    },
+    {
+     "scenario": "tasks-status-notifications",
+     "scored": false,
+     "not_scored_reason": "extension",
+     "run": false,
+     "reason": "calls_tool"
+    },
+    {
+     "scenario": "tasks-required-task-error",
+     "scored": false,
+     "not_scored_reason": "extension",
+     "run": false,
+     "reason": "calls_tool"
+    },
+    {
+     "scenario": "tasks-mrtr-composition",
+     "scored": false,
+     "not_scored_reason": "extension",
+     "run": false,
+     "reason": "calls_tool"
+    },
+    {
+     "scenario": "json-schema-2020-12",
+     "scored": false,
+     "not_scored_reason": "pending",
+     "run": false,
+     "reason": "needs_fixture_server"
+    },
+    {
+     "scenario": "http-header-validation",
+     "scored": false,
+     "not_scored_reason": "pending",
+     "run": false,
+     "reason": "transport_only"
+    },
+    {
+     "scenario": "http-custom-header-server-validation",
+     "scored": false,
+     "not_scored_reason": "pending",
+     "run": false,
+     "reason": "transport_only"
+    }
+   ]
+  }
+ },
+ "bridge_excluded_checks": {
+  "server-session-id-visible-ascii": "the session id is the bridge's own, not the server's (stdio has no session)"
+ },
+ "clients": [
+  {
+   "id": "typescript-v1",
+   "kind": "npm",
+   "sdk": "@modelcontextprotocol/sdk",
+   "version": "1.32.2"
+  },
+  {
+   "id": "typescript-v2",
+   "kind": "npm",
+   "sdk": "@modelcontextprotocol/client",
+   "version": "2.4.0"
+  },
+  {
+   "id": "python",
+   "kind": "pypi",
+   "sdk": "mcp",
+   "version": "2.3.0"
+  },
+  {
+   "id": "go",
+   "kind": "go",
+   "sdk": "github.com/modelcontextprotocol/go-sdk",
+   "version": "v1.8.0"
+  }
+ ],
+ "client_timeout_ms": 30000
+}

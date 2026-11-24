@@ -1,0 +1,12 @@
+{
+  "name": "mcp-check-live-probe-oracles",
+  "private": true,
+  "description": "The oracle clients of the live-probe lane (corpus/LIVE-PROBE.md, Oracles): installed with npm ci from this lockfile, through the allowlist proxy, into the runner's temp folder; never published.",
+  "type": "module",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/client": "2.4.0",
+    "@modelcontextprotocol/conformance": "0.2.0-alpha.12",
+    "@modelcontextprotocol/sdk": "1.32.2"
+  }
+}

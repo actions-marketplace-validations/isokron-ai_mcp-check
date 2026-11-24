@@ -36,6 +36,7 @@ import { InputError } from '../src/limits.js';
 import { parseList } from '../src/tools.js';
 import { analyseList } from '../src/unreadable.js';
 import { VERSION } from '../src/version.js';
+import { baselineProblems, judgeOracles } from './oracles/judge.mjs';
 
 export const LANE = 'live-probe';
 export const FORMAT = 'isokron-mcp-check-live-probe/1';
@@ -59,6 +60,11 @@ export const KNOWN_ANSWER_FILE = join(FIXTURES, 'known-answer.json');
 /** Our server's tools/list, captured as it answers (its docs links included): a test fixture, outside the link-tag scan. */
 export const KNOWN_ANSWER_CAPTURE = join(here, '..', 'test', 'fixtures', 'live-probe', 'known-answer-tools.json');
 export const FORGERY_SERVER = join(FIXTURES, 'forgery-server.js');
+/** The oracle stage's pins (corpus/oracles/pins.json) and the expected oracle results of our own servers. */
+export const ORACLE_PINS_FILE = join(here, 'oracles', 'pins.json');
+export const ORACLE_BASELINE_FILE = join(FIXTURES, 'oracle-baseline.json');
+/** Each target's time limit grows by this much for the oracle stage (corpus/live-probe-driver.mjs ORACLE_BUDGET_MS). */
+export const ORACLE_ALLOWANCE_S = 150;
 
 /**
  * The known-answer control: our own published server, @isokron/mcp-check 1.3.1, installed from npm and started in the
@@ -129,6 +135,15 @@ export const FIELDS = Object.freeze({
   static_vs_live_agreement: 'object', commit_sha: 'string', commit_date: 'timestamp',
 });
 /**
+ * The oracle stage's fields (mcp-results registry, layer protocol and tool_telemetry): written only while
+ * EMIT_ORACLE_FIELDS is on, which needs tool-qa's ingest to pin a registry that has them (INGEST_REF in the workflows).
+ */
+export const EMIT_ORACLE_FIELDS = true;
+export const ORACLE_FIELDS = Object.freeze({
+  oracle_stage: 'object', sdk_client_results: 'array', conformance_suite: 'object', conformance_summary: 'object',
+  conformance_checks: 'array', oracle_disagreements: 'array',
+});
+/**
  * tool_count and tool_list_sha256 (mcp-results f2b16de) are written as fields of their own: tool-qa's ingest pins that
  * registry (tool-qa #14). Off, both values would travel only inside catalog_per_config_state.
  */
@@ -143,6 +158,7 @@ export const SETTINGS = Object.freeze({
   install: 'npm, pypi or oci package from the official MCP Registry entry, else from the seed list; stdio or streamable HTTP',
   sandbox: 'isokron-ai/mcp-surface-corpus bin/run-shard.mjs, lane ci (gVisor, deny-by-default egress, DNS logger)',
   probe: 'initialize, tools/list, prompts/list, resources/list, resources/templates/list; no tool called; with no env, then dummy env',
+  oracles: 'corpus/oracles/pins.json: official SDK clients (TypeScript 1.x and 2.x, Python, Go) list tools; the official conformance suite runs the read-only server scenarios of each frozen requirement set through the stdio bridge; no tool called',
   grading: 'parseList + analyseList of the live tools/list result, as mcp-check -- <server>',
   probe_ms: PROBE_MS, subject_budget_s: SUBJECT_BUDGET_S,
 });
@@ -801,8 +817,8 @@ export function targetLists(plan, { node24Image, forgery = forgeryScript() }) {
   const controls = {
     format: TARGETS_FORMAT, about: 'live-probe controls', defaults: { timeout_s: 300 },
     targets: [
-      { id: KNOWN_ANSWER.id, repo: KNOWN_ANSWER.repo, commit: KNOWN_ANSWER.commit, registry: KNOWN_ANSWER.registry, launch: { ...KNOWN_ANSWER.launch, args: [...KNOWN_ANSWER.launch.args] }, timeout_s: KNOWN_ANSWER.timeout_s },
-      { id: FORGERY.id, repo: FORGERY.repo, commit: FORGERY.commit, launch: { kind: 'docker', image: node24Image, entrypoint: 'node', args: ['-e', forgery, plan.marker] }, timeout_s: FORGERY.timeout_s },
+      { id: KNOWN_ANSWER.id, repo: KNOWN_ANSWER.repo, commit: KNOWN_ANSWER.commit, registry: KNOWN_ANSWER.registry, launch: { ...KNOWN_ANSWER.launch, args: [...KNOWN_ANSWER.launch.args] }, timeout_s: KNOWN_ANSWER.timeout_s + ORACLE_ALLOWANCE_S },
+      { id: FORGERY.id, repo: FORGERY.repo, commit: FORGERY.commit, launch: { kind: 'docker', image: node24Image, entrypoint: 'node', args: ['-e', forgery, plan.marker] }, timeout_s: FORGERY.timeout_s + ORACLE_ALLOWANCE_S },
     ],
   };
   const isOci = (x) => x.target && x.target.launch.kind === 'docker';
@@ -835,7 +851,8 @@ export async function planShard({ inputs, seed = new Map(), fetch: fetchImpl = g
   }
   const runnable = items.filter((x) => x.target).length;
   const timeout = subjectTimeout(runnable);
-  for (const x of items) if (x.target) x.target.timeout_s = timeout;
+  // The oracle stage runs only for stdio targets (corpus/live-probe-driver.mjs): only they get its allowance.
+  for (const x of items) if (x.target) x.target.timeout_s = timeout + ((x.target.launch.transport || 'stdio') === 'stdio' ? ORACLE_ALLOWANCE_S : 0);
   return { format: PLAN_FORMAT, shard_id: inputs.shardId, attempt_id: inputs.attemptId, marker, planned_at: now().toISOString(), subject_timeout_s: timeout, runnable, items };
 }
 
@@ -980,7 +997,7 @@ export function failureDetail(rec, bare, envp, { deadlineHit = false } = {}) {
 
 /** One observations line, checked against FIELDS. A value of the wrong type is written as null with why. */
 export function obs(field, value, why) {
-  const type = FIELDS[field] || (EMIT_TOOL_LIST_FIELDS ? TOOL_LIST_FIELDS[field] : undefined);
+  const type = FIELDS[field] || (EMIT_TOOL_LIST_FIELDS ? TOOL_LIST_FIELDS[field] : undefined) || (EMIT_ORACLE_FIELDS ? ORACLE_FIELDS[field] : undefined);
   if (!type) throw new Error('not a field of this lane: ' + field);
   const ok = value !== null && value !== undefined && checkType(type, value);
   return JSON.stringify(ok ? { field, value, stage: STAGE } : { field, value: null, why: why || (value === null || value === undefined ? 'not observed' : 'not of the registry type'), stage: STAGE });
@@ -1044,6 +1061,59 @@ function resolutionObs(r) {
   return lines;
 }
 
+// ------------------------------------------------------------------ oracles
+
+/** Every tool of a probe's tools/list pages, in order (our reader's list, for the oracle judge). */
+export function toolsOf(rawPages) {
+  return (Array.isArray(rawPages) ? rawPages : []).flatMap((p) => (p && isObj(p.result) && Array.isArray(p.result.tools) ? p.result.tools : []));
+}
+
+/**
+ * The oracle records the driver wrote for a target (corpus/live-probe-driver.mjs): the one judged (the full stage,
+ * else the clients-only one), every record kept for raw/, and their time together. null when there is none.
+ */
+export function oracleRecord(dir) {
+  const all = ['oracles.json', 'oracles-unlisted.json', 'oracles-error.json'].map((f) => ({ file: f, rec: readJson(join(dir, f)) })).filter((x) => x.rec);
+  if (!all.length) return null;
+  return { ...all[0], all, ms: all.reduce((a, x) => a + (int(x.rec.ms) || 0), 0) };
+}
+
+/**
+ * One target's oracle results: the field lines, the raw record, a summary for results/, and the oracle components
+ * for the meta file. reader: our own reader's view of the same target (judge.mjs).
+ */
+export function oracleFor(dir, item, reader, ctx) {
+  const pins = ctx.oraclePins;
+  const found = dir ? oracleRecord(dir) : null;
+  const transport = item.target && item.target.launch ? item.target.launch.transport || 'stdio' : null;
+  const lines = []; const raw = [];
+  if (!pins) return { lines, raw, summary: null, components: [] };
+  const baseline = ctx.oracleBaseline && ctx.oracleBaseline.subjects ? ctx.oracleBaseline.subjects[item.subject] || null : null;
+  const j = judgeOracles(found ? found.rec : null, { reader, pins, baseline });
+  if (!found) {
+    j.why = transport && transport !== 'stdio' ? 'http_transport' : ctx.oracleInstalled === false ? 'not_installed' : 'not_run';
+  }
+  lines.push(obs('oracle_stage', { status: j.status, mode: j.mode, why: j.why, ms: j.ms, record: found ? found.file.replace(/\.json$/, '') : null, probe_listed: !!(reader && reader.listed) }));
+  if (j.status === 'ran') {
+    lines.push(obs('sdk_client_results', j.clients));
+    if (j.conformance) {
+      lines.push(obs('conformance_suite', { ...j.conformance.suite, bridge: j.conformance.bridge }));
+      lines.push(obs('conformance_summary', { problem: j.conformance.problem, revisions: j.conformance.summary }));
+      lines.push(obs('conformance_checks', j.conformance.checks));
+    }
+    lines.push(obs('oracle_disagreements', j.disagreements));
+  }
+  if (found) for (const x of found.all) raw.push(['raw/' + x.file, Buffer.from(json(x.rec))]);
+  const summary = {
+    status: j.status, mode: j.mode, why: j.why, ms: found ? found.ms : j.ms,
+    clients: j.clients.map((c) => ({ client: c.client, outcome: c.outcome, protocol: c.protocol_negotiated, tool_count: c.tool_count })),
+    conformance: j.conformance ? Object.fromEntries(Object.entries(j.conformance.summary).map(([k, v]) => [k, { pass: v.pass, fail: v.fail, expected_fail: v.expected_fail, not_applicable: v.not_applicable, bridge_excluded: v.bridge_excluded, scenarios_run: v.scenarios_run }])) : null,
+    disagreements: j.disagreements.map((d) => d.class + ' ' + d.kind + ' ' + d.oracle_a + ' ' + d.oracle_b),
+    baseline_problems: baseline ? baselineProblems(j, baseline) : null,
+  };
+  return { lines, raw, summary, components: j.components };
+}
+
 // ------------------------------------------------------------------ one item
 
 /** Everything about one item: { status, detail, files, skips, subjectSha }. Never throws on subject data. */
@@ -1055,7 +1125,7 @@ export function buildItem(item, ctx) {
     format: FORMAT, lane: LANE, subject: item.subject, status: null, detail: null, skip_reason: null, retryable: false,
     engine_version: VERSION, rubric_version: M.RUBRIC_VERSION, spec_version: M.SPEC_VERSION,
     install: null, unverified: null, live: null, static_vs_live: null, timing: { resolve_ms: int(item.resolve_ms) }, sandbox: ctx.sandboxSummary,
-    driver: null, raw_truncated: [],
+    driver: null, oracles: null, raw_truncated: [],
   };
   if (r) {
     lines.push(...resolutionObs(r));
@@ -1064,6 +1134,7 @@ export function buildItem(item, ctx) {
     files['raw/resolution.json'] = json({ registry: r.registry, choice: r.choice, candidates: r.candidates, launch: r.launch, subdir: r.subdir, seed_packages: r.seed_packages, invalid: r.invalid ?? null, unverified: r.unverified ?? null });
   }
   let detail = null; let subjectSha = null; let deadlineHit = ctx.deadlineHit;
+  let oracle = { lines: [], raw: [], summary: null, components: [] };
   if (!r || r.status !== 'runnable' || !item.target_id) {
     detail = (r && r.detail) || 'harness_error';
   } else {
@@ -1092,6 +1163,7 @@ export function buildItem(item, ctx) {
       lines.push(obs('observation_coverage', { registry: !!(rec.layers && rec.layers.registry), live: !!(rec.layers && rec.layers.live), static: !!(rec.layers && rec.layers.static), readme: !!(rec.layers && rec.layers.readme), probes: ['bare', 'env'].filter((k) => isObj(rec.probes) && rec.probes[k]) }));
     }
     const primary = listed(envp) ? envp : listed(bare) ? bare : null;
+    let reader = { listed: false };
     if (!primary) {
       detail = ociRun && ociRun.outcome === 'disk_low' ? 'disk_low' : failureDetail(rec, bare, envp, { deadlineHit });
     } else {
@@ -1105,6 +1177,7 @@ export function buildItem(item, ctx) {
       result.timing.grade_ms = Date.now() - g0;
       if (g) {
         result.live = { ...g.summary, config_state: primary === bare ? 'none' : 'dummy', pages: int(primary.lists['tools/list'].pages) };
+        reader = { listed: true, tool_count: g.summary.tool_count, catalog_hash: g.summary.catalog_hash, names: g.names, tools: toolsOf(primary.lists['tools/list'].raw_pages), pages: int(primary.lists['tools/list'].pages), check_ids: Object.keys(g.summary.check_counts), capabilities: isObj(primary.initialize) && isObj(primary.initialize.capabilities) ? primary.initialize.capabilities : null };
         files['raw/report.json'] = json({ findings: g.report.findings, tool_names: g.names });
         const cmp = compareStatic(g, stat);
         result.static_vs_live = cmp.summary;
@@ -1135,6 +1208,16 @@ export function buildItem(item, ctx) {
         lines.push(obs('pagination_behaviour', { pages: int(tl.pages), page_sizes: Array.isArray(tl.page_sizes) ? tl.page_sizes.filter((n) => int(n) !== null).slice(0, 100) : [], paginated: int(tl.pages) > 1 }));
       }
     }
+    oracle = oracleFor(dir, item, reader, ctx);
+    lines.push(...oracle.lines);
+    result.oracles = oracle.summary;
+    // The driver times its probe around the probe option, so its probe_ms holds the oracle stage too (R-ORC-02):
+    // step_telemetry keeps the two apart.
+    const oms = oracle.summary ? int(oracle.summary.ms) : null;
+    if (oms !== null) {
+      result.timing.oracle_ms = oms;
+      if (result.timing.probe_ms !== null) result.timing.probe_ms = Math.max(0, result.timing.probe_ms - oms);
+    }
     // The captured bytes: the tools/list answers, each probe whole, the static read, the registry entry, the logs.
     const raw = [];
     if (primary) raw.push(['raw/tools-list.json', Buffer.from(json(primary.lists['tools/list'].raw_pages))]);
@@ -1144,6 +1227,7 @@ export function buildItem(item, ctx) {
     const tel = telemetryFor(telemetryFile, item.target_id);
     if (tel.lines.length) raw.push(['raw/telemetry.jsonl', Buffer.from(tel.lines.join('\n') + '\n')]);
     lines.push(...networkEvents(tel.records).map((e) => obs('network_event', e)));
+    raw.push(...oracle.raw);
     addRaw(files, raw, result);
   }
   lines.push(obs('step_telemetry', result.timing));
@@ -1156,12 +1240,12 @@ export function buildItem(item, ctx) {
     lines.push(obs('error_taxonomy_code', detail));
     files[RESULT_PATH] = json(result);
     files['observations/live.ndjson'] = lines.join('\n') + '\n';
-    return { status: 'skipped', detail, files, skips: [{ stage, reason, evidence: RESULT_PATH, ...(retryable ? { retryable: true } : {}) }], subjectSha };
+    return { status: 'skipped', detail, files, skips: [{ stage, reason, evidence: RESULT_PATH, ...(retryable ? { retryable: true } : {}) }], subjectSha, components: oracle.components };
   }
   result.status = 'graded';
   files[RESULT_PATH] = json(result);
   files['observations/live.ndjson'] = lines.join('\n') + '\n';
-  return { status: 'graded', detail: null, files, skips: [], subjectSha };
+  return { status: 'graded', detail: null, files, skips: [], subjectSha, components: oracle.components };
 }
 
 /** Raw files, each capped at RAW_FILE_CAP and all at RAW_TOTAL_CAP; what was cut is recorded. */
@@ -1235,6 +1319,30 @@ export function evaluateControls(ctx, { knownFile = KNOWN_ANSWER_FILE } = {}) {
       files: { 'controls/forgery.json': outText, ...(rawText ? { 'raw/control-forgery/probe.json': rawText } : {}) },
     });
   }
+  // the oracle stage on our own server: the clients and the suite give the known answer (only when the stage ran)
+  if (ctx.oraclePins && ctx.oracleInstalled !== false) {
+    const dir = join(ctx.controlsOut, KNOWN_ANSWER.id);
+    const p = [readJson(join(dir, 'probe-env.json')), readJson(join(dir, 'probe-bare.json'))].find(listed) || null;
+    let reader = { listed: false };
+    if (p) {
+      try {
+        const g = gradeList(listText(p.lists['tools/list'].raw_pages));
+        reader = { listed: true, tool_count: g.summary.tool_count, catalog_hash: g.summary.catalog_hash, names: g.names, tools: toolsOf(p.lists['tools/list'].raw_pages), pages: int(p.lists['tools/list'].pages), check_ids: Object.keys(g.summary.check_counts), capabilities: isObj(p.initialize) && isObj(p.initialize.capabilities) ? p.initialize.capabilities : null };
+      } catch { reader = { listed: false }; }
+    }
+    const found = oracleRecord(dir);
+    const expected = ctx.oracleBaseline && ctx.oracleBaseline.controls ? ctx.oracleBaseline.controls.known_good : null;
+    const j = judgeOracles(found ? found.rec : null, { reader, pins: ctx.oraclePins, baseline: expected });
+    const problems = j.status === 'absent' ? ['the oracle stage did not run'] : baselineProblems(j, expected);
+    const observed = !p ? 'not_run' : problems.length ? 'mismatch' : 'match';
+    out.push({
+      control: { kind: 'known_good', expected: 'match', observed, output: 'controls/oracle-known-answer.json' },
+      files: {
+        'controls/oracle-known-answer.json': json({ format: CONTROL_FORMAT, control: 'oracle-known-answer', server: KNOWN_ANSWER.launch.package + '@' + KNOWN_ANSWER.launch.version, match: observed === 'match', problems: problems.slice(0, 50), clients: j.clients, conformance: j.conformance ? j.conformance.summary : null, disagreements: j.disagreements }),
+        ...(found ? { 'raw/control-known-answer/oracles.json': json(found.rec) } : {}),
+      },
+    });
+  }
   // sandbox self test
   {
     const res = readJson(join(ctx.work, 'selftest', 'results.json'));
@@ -1272,7 +1380,7 @@ export function settingsDigest(mscCommit) {
  * Builds every item's bundle from <work>. Throws ControlFailure when a control did not give its expected outcome: then
  * nothing is written and nothing may be uploaded.
  */
-export function bundleShard({ work, now = () => new Date(), log = () => {}, knownFile = KNOWN_ANSWER_FILE }) {
+export function bundleShard({ work, now = () => new Date(), log = () => {}, knownFile = KNOWN_ANSWER_FILE, pinsFile = ORACLE_PINS_FILE, baselineFile = ORACLE_BASELINE_FILE }) {
   const plan = readJson(join(work, 'plan.json'));
   if (!plan || plan.format !== PLAN_FORMAT) throw new ControlFailure('no plan in the work folder');
   const state = readJson(join(work, 'sandbox.json')) || {};
@@ -1288,6 +1396,10 @@ export function bundleShard({ work, now = () => new Date(), log = () => {}, know
     runnerEnv: runner ? { os: safeText(runner.os, /^[a-z]{1,10}$/), arch: safeText(runner.arch, /^[a-z0-9_]{1,10}$/), kernel: safeText(runner.kernel, /^[A-Za-z0-9._+-]{1,60}$/), node: safeText(runner.node, /^v[0-9.]{1,20}$/), docker: safeText(runner.docker, /^[0-9][0-9A-Za-z.+-]{0,30}$/), container_platform: safeText(runner.container_platform, /^[a-z0-9/]{1,30}$/) } : null,
     toolVersions: { mcp_check: VERSION, rubric: M.RUBRIC_VERSION, spec: M.SPEC_VERSION, surface_corpus: mscCommit, worker_kit: safeText(state.worker_kit_ref, /^[0-9a-f]{40}$/), gvisor: safeText(state.gvisor_release, /^[0-9.a-z-]{1,40}$/) },
     sandboxSummary: { runtime: 'runsc', selftest: state.selftest_check_rc === 0 ? 'passed' : 'failed', controls_rc: int(state.controls_rc), subjects_rc: int(state.subjects_rc), swept: state.swept === true },
+    oraclePins: readJson(pinsFile), oracleBaseline: readJson(baselineFile),
+    // false when the oracles were not installed (no clients.json from corpus/oracles/install.mjs): then no oracle
+    // control, and each item says so. A partial install is recorded per client inside the stage's results.
+    oracleInstalled: state.oracles_installed === true,
   };
   const controls = evaluateControls(ctx, { knownFile });
   const bad = controls.filter((c) => c.control.observed !== c.control.expected);
@@ -1309,7 +1421,7 @@ export function bundleShard({ work, now = () => new Date(), log = () => {}, know
     const meta = {
       subject: { id: item.subject, repo: item.repo, sha: b.subjectSha },
       tools: [{ name: '@isokron/mcp-check', version: VERSION }, ...(mscCommit ? [{ name: 'isokron-ai/mcp-surface-corpus', version: mscCommit }] : [])],
-      oracles: [],
+      oracles: [...new Map((b.components || []).map((c) => [c.name + '@' + c.version, c])).values()].filter((c) => /^[A-Za-z0-9@][A-Za-z0-9@/._-]{0,127}$/.test(c.name) && /^[A-Za-z0-9][A-Za-z0-9.+:_-]{0,127}$/.test(String(c.version))),
       settings_manifest_digest: digest,
       started_at: plan.planned_at,
       finished_at: finishedAt,
@@ -1332,6 +1444,22 @@ export function bundleShard({ work, now = () => new Date(), log = () => {}, know
  */
 /** The tool-qa files verify imports, with what they import; the workflows' sparse checkout of tool-qa must hold them. */
 export const TOOL_QA_FILES = Object.freeze(['worker-kit/contract.mjs', 'worker-kit/manifest.schema.json', 'worker-kit/tar.mjs', 'ingest/forgery.mjs', 'ingest/redact.mjs', 'ingest/registry.mjs', 'scripts/lib/yaml-lite.mjs', 'history/seed-v1.json']);
+
+/**
+ * The self test's oracle expectations for one baselined item: the stage ran, matches its baseline, every client
+ * installed and ran (the control tolerates an install outage; the self test does not), and the meta file names the
+ * oracles.
+ */
+export function oracleExpectProblems(res, manifest) {
+  const p = [];
+  const o = res.oracles;
+  if (!o || o.status !== 'ran') p.push({ reason: 'oracles_not_run', got: o ? o.status + (o.why ? ' (' + o.why + ')' : '') : null });
+  else if (!Array.isArray(o.baseline_problems) || o.baseline_problems.length) p.push({ reason: 'oracle_baseline', problems: o.baseline_problems });
+  const off = o && Array.isArray(o.clients) ? o.clients.filter((c) => c.outcome === 'unavailable' || c.outcome === 'skipped').map((c) => c.client) : [];
+  if (off.length) p.push({ reason: 'oracle_client_unavailable', clients: off });
+  if (!manifest || !Array.isArray(manifest.oracles) || !manifest.oracles.length) p.push({ reason: 'oracle_components_missing' });
+  return p;
+}
 
 /** What ingest would check a self test bundle's identity against: the worker kit records GITHUB_WORKFLOW_SHA. */
 export function expectedIdentity(manifest, item, expect, env) {
@@ -1367,13 +1495,17 @@ export async function verifyBundles({ toolQa, ingest = toolQa, tars, expect, env
     const hits = scanFiles(new Map([...files].filter(([k]) => !k.startsWith('raw/'))));
     if (hits.length) problems.push({ tar: t, reason: 'secret_outside_raw', n: hits.length, paths: [...new Set(hits.map((h) => h.path))].slice(0, 5) });
     const res = JSON.parse(files.get(RESULT_PATH).toString('utf8'));
-    results.push({ index: expect.items.indexOf(item), subject: item.subject, status: res.status, detail: res.detail, skip_reason: res.skip_reason, live: res.live ? answerOf2(res.live) : null, skips: manifest.skips, controls: manifest.controls.map((c) => c.kind + ':' + c.observed) });
+    results.push({ index: expect.items.indexOf(item), subject: item.subject, status: res.status, detail: res.detail, skip_reason: res.skip_reason, live: res.live ? answerOf2(res.live) : null, oracles: res.oracles || null, skips: manifest.skips, controls: manifest.controls.map((c) => c.kind + ':' + c.observed) });
     const want = item.expect || {};
     if (want.status && res.status !== want.status) problems.push({ tar: t, reason: 'unexpected_status', want: want.status, got: res.status, detail: res.detail });
     if (want.skip_reason && res.skip_reason !== want.skip_reason) problems.push({ tar: t, reason: 'unexpected_skip_reason', want: want.skip_reason, got: res.skip_reason });
     if (want.catalog_hash && (!res.live || res.live.catalog_hash !== want.catalog_hash)) problems.push({ tar: t, reason: 'unexpected_catalog', want: want.catalog_hash, got: res.live && res.live.catalog_hash });
     if (want.min_tools && (!res.live || !(res.live.tool_count >= want.min_tools))) problems.push({ tar: t, reason: 'too_few_tools', want: want.min_tools, got: res.live && res.live.tool_count });
-    if (manifest.controls.length !== 3) problems.push({ tar: t, reason: 'controls_missing', got: manifest.controls.length });
+    // With the oracle stage, a fourth control: the oracles' known answer on our own server.
+    const oracleRun = expect.items.some((x) => x.expect && x.expect.oracles);
+    if (manifest.controls.length !== (oracleRun ? 4 : 3)) problems.push({ tar: t, reason: 'controls_missing', got: manifest.controls.length });
+    if (oracleRun && !manifest.controls.some((c) => c.kind === 'known_good' && c.output === 'controls/oracle-known-answer.json' && c.observed === 'match')) problems.push({ tar: t, reason: 'oracle_control_missing' });
+    if (want.oracles) for (const p of oracleExpectProblems(res, manifest)) problems.push({ tar: t, ...p });
   }
   if (results.length !== expect.items.length) problems.push({ reason: 'bundle_count', want: expect.items.length, got: results.length });
   return { problems, results };
