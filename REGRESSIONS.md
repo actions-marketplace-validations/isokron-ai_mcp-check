@@ -1,6 +1,6 @@
 # Regressions
 
-Every problem found in the loop workers (`corpus/scan-static.mjs`, rows `R-SS-`; `corpus/live-probe.mjs`, rows `R-LP-`; and their workflows) and in the source reader they run (`src/inputs/`, rows `R-RD-`) is pinned by a named test
+Every problem found in the loop workers (`corpus/scan-static.mjs`, rows `R-SS-`; `corpus/live-probe.mjs`, rows `R-LP-`; its oracle stage, `corpus/oracles/` and `corpus/live-probe-driver.mjs`, rows `R-ORC-`; and their workflows) and in the source reader they run (`src/inputs/`, rows `R-RD-`) is pinned by a named test
 that stays in the suite for good. Tests are named after their row (`R-SS-01: ...`), and
 [`test/regressions.test.mjs`](test/regressions.test.mjs) fails if a row names a test that does not exist, or if
 a test named `R-SS-...` has no row.
