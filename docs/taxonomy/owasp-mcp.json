@@ -1,0 +1,1345 @@
+{
+  "schema": 1,
+  "about": "Mapping of mcp-check checks to OWASP MCP taxonomies. Coverage levels: full (the check does what the test asks), partial (the check does part of the test), related (the check looks at the same area but does not do the test). No check claims full: the tests are written for live, host, client or gateway testing.",
+  "rubric_version": "2.2.0",
+  "taxonomies": {
+    "mstg": {
+      "name": "OWASP MCP Security Testing Guide",
+      "id_format": "MCPSTG-<PREFIX>-<NN> (stored without the MCPSTG- prefix)",
+      "repo": "https://github.com/OWASP/MCP-Security-Testing-Guide",
+      "project_page": "https://owasp.org/www-project-mcp-security-testing-guide/",
+      "version": "no release or version tag; pinned by commit",
+      "commit": "ffb9c6ac307adb553c95f47748130127f6b8f15f",
+      "commit_date": "2026-11-18",
+      "retrieved": "2026-11-24",
+      "status": "OWASP Incubator project",
+      "test_count": 81,
+      "test_list_path": "03. MCP Threats and Attack Patterns/3.01 to 3.19",
+      "repo_license_file": "GPL-3.0 (LICENSE in the repository)",
+      "attribution": "Test IDs and short titles from the OWASP MCP Security Testing Guide, (c) OWASP contributors.",
+      "tests": [
+        {
+          "id": "AUTHN-01",
+          "title": "Test Missing Authentication on MCP Server"
+        },
+        {
+          "id": "AUTHN-02",
+          "title": "Test Weak Token Handling"
+        },
+        {
+          "id": "AUTHN-03",
+          "title": "Test Credential Reuse Across Tools"
+        },
+        {
+          "id": "AUTHN-04",
+          "title": "Test Expired or Revoked Token Acceptance"
+        },
+        {
+          "id": "CONF-01",
+          "title": "Test MCP Server Configuration"
+        },
+        {
+          "id": "CONF-02",
+          "title": "Test Insecure Local Server Exposure"
+        },
+        {
+          "id": "CONF-03",
+          "title": "Test Debug Mode and Verbose Errors"
+        },
+        {
+          "id": "CONF-04",
+          "title": "Test File and Workspace Permissions"
+        },
+        {
+          "id": "CONF-05",
+          "title": "Test Unsafe Transport Configuration"
+        },
+        {
+          "id": "AUTHZ-01",
+          "title": "Test Excessive Tool Permissions"
+        },
+        {
+          "id": "AUTHZ-02",
+          "title": "Test Bypassing User Approval"
+        },
+        {
+          "id": "AUTHZ-03",
+          "title": "Test Cross-User Resource Access"
+        },
+        {
+          "id": "AUTHZ-04",
+          "title": "Test Privilege Escalation Through Tool Chaining"
+        },
+        {
+          "id": "AUTHZ-05",
+          "title": "Test Workspace Boundary Escape"
+        },
+        {
+          "id": "INFO-01",
+          "title": "Identify MCP Servers and Clients"
+        },
+        {
+          "id": "INFO-02",
+          "title": "Enumerate Exposed Tools"
+        },
+        {
+          "id": "INFO-03",
+          "title": "Identify MCP Resources and Data Sources"
+        },
+        {
+          "id": "INFO-04",
+          "title": "Map MCP Trust Boundaries"
+        },
+        {
+          "id": "INFO-05",
+          "title": "Identify Sensitive Context Flows"
+        },
+        {
+          "id": "PRMT-01",
+          "title": "Test Direct Prompt Injection"
+        },
+        {
+          "id": "PRMT-02",
+          "title": "Test Indirect Prompt Injection Through Resources"
+        },
+        {
+          "id": "PRMT-03",
+          "title": "Test Tool Instruction Override"
+        },
+        {
+          "id": "PRMT-04",
+          "title": "Test Hidden Instruction Leakage"
+        },
+        {
+          "id": "PRMT-05",
+          "title": "Test Prompt Template Manipulation"
+        },
+        {
+          "id": "RSRC-01",
+          "title": "Test Sensitive Resource Exposure"
+        },
+        {
+          "id": "RSRC-02",
+          "title": "Test Resource Enumeration"
+        },
+        {
+          "id": "RSRC-03",
+          "title": "Test Cross-Workspace Data Access"
+        },
+        {
+          "id": "RSRC-04",
+          "title": "Test Secret Leakage Through Resources"
+        },
+        {
+          "id": "RSRC-05",
+          "title": "Test Unauthorized File Access"
+        },
+        {
+          "id": "CTX-01",
+          "title": "Test Context Over-Sharing"
+        },
+        {
+          "id": "CTX-02",
+          "title": "Test Memory Poisoning"
+        },
+        {
+          "id": "CTX-03",
+          "title": "Test Sensitive Context Leakage"
+        },
+        {
+          "id": "CTX-04",
+          "title": "Test Cross-Session Context Confusion"
+        },
+        {
+          "id": "CTX-05",
+          "title": "Test Untrusted Context Prioritization"
+        },
+        {
+          "id": "OUTV-01",
+          "title": "Test Unsafe Output Rendering"
+        },
+        {
+          "id": "OUTV-02",
+          "title": "Test Sensitive Data in Tool Output"
+        },
+        {
+          "id": "TOOL-01",
+          "title": "Test Tool Description Poisoning"
+        },
+        {
+          "id": "TOOL-02",
+          "title": "Test Unsafe Tool Execution"
+        },
+        {
+          "id": "TOOL-03",
+          "title": "Test Command Injection in Tool Parameters"
+        },
+        {
+          "id": "TOOL-04",
+          "title": "Test Tool Schema Manipulation"
+        },
+        {
+          "id": "TOOL-05",
+          "title": "Test Dangerous Tool Chaining"
+        },
+        {
+          "id": "TOOL-06",
+          "title": "Test Human Approval for High-Risk Tools"
+        },
+        {
+          "id": "INPV-01",
+          "title": "Test Input Validation for Tool Parameters"
+        },
+        {
+          "id": "INPV-02",
+          "title": "Test Path Traversal in Tool Inputs"
+        },
+        {
+          "id": "INPV-03",
+          "title": "Test JSON and Schema Confusion"
+        },
+        {
+          "id": "TRNS-01",
+          "title": "Test TLS Configuration and Certificate Validation"
+        },
+        {
+          "id": "TRNS-02",
+          "title": "Test Transport Authentication Binding"
+        },
+        {
+          "id": "TRNS-03",
+          "title": "Test Message Size Limits and Timeouts Under Load"
+        },
+        {
+          "id": "AGNT-01",
+          "title": "Test Excessive Agency"
+        },
+        {
+          "id": "AGNT-02",
+          "title": "Test Unsafe Autonomous Actions"
+        },
+        {
+          "id": "AGNT-03",
+          "title": "Test Approval Bypass in Multi-Step Workflows"
+        },
+        {
+          "id": "AGNT-04",
+          "title": "Test Goal Manipulation"
+        },
+        {
+          "id": "AGNT-05",
+          "title": "Test Unsafe Retry and Loop Behavior"
+        },
+        {
+          "id": "LOG-01",
+          "title": "Test Tool Call Logging"
+        },
+        {
+          "id": "LOG-02",
+          "title": "Test User Approval Audit Logs"
+        },
+        {
+          "id": "LOG-03",
+          "title": "Test Detection of Prompt Injection Attempts"
+        },
+        {
+          "id": "LOG-04",
+          "title": "Test Secret Exposure Logging"
+        },
+        {
+          "id": "LOG-05",
+          "title": "Test Incident Reconstruction"
+        },
+        {
+          "id": "GOV-01",
+          "title": "Test MCP Server Inventory"
+        },
+        {
+          "id": "GOV-02",
+          "title": "Test Approved Server Registry"
+        },
+        {
+          "id": "GOV-03",
+          "title": "Test Enterprise Policy Enforcement"
+        },
+        {
+          "id": "GOV-04",
+          "title": "Test Exception Handling"
+        },
+        {
+          "id": "GOV-05",
+          "title": "Test Compliance Evidence Collection"
+        },
+        {
+          "id": "PRVC-01",
+          "title": "Test PII in Resources and Tool Outputs"
+        },
+        {
+          "id": "PRVC-02",
+          "title": "Test Log Retention and Downstream Copying of Sensitive Transcripts"
+        },
+        {
+          "id": "PRVC-03",
+          "title": "Test Tenant and Customer Boundary Labeling in Context"
+        },
+        {
+          "id": "GW-01",
+          "title": "Test Gateway Allowlist Enforcement for Upstream Tool Destinations"
+        },
+        {
+          "id": "GW-02",
+          "title": "Test SSRF Protections for Tool-Mediated HTTP Requests"
+        },
+        {
+          "id": "GW-03",
+          "title": "Test Rate Limiting and Abuse Throttling at the Gateway"
+        },
+        {
+          "id": "GW-04",
+          "title": "Test Authorization Server Discovery Trust"
+        },
+        {
+          "id": "SUPP-01",
+          "title": "Test MCP Server Provenance"
+        },
+        {
+          "id": "SUPP-02",
+          "title": "Test Dependency Vulnerabilities"
+        },
+        {
+          "id": "SUPP-03",
+          "title": "Test Malicious MCP Server Installation"
+        },
+        {
+          "id": "SUPP-04",
+          "title": "Test Registry Trust and Verification"
+        },
+        {
+          "id": "SUPP-05",
+          "title": "Test Unsafe Auto-Updates"
+        },
+        {
+          "id": "SUPP-06",
+          "title": "Test Signed and Publicly Logged Tool-Manifest Revisions"
+        },
+        {
+          "id": "ABUS-01",
+          "title": "Test Tool-Call Storms and Concurrency Limits"
+        },
+        {
+          "id": "ABUS-02",
+          "title": "Test Retry Behavior for Idempotent versus Non-Idempotent Side Effects"
+        },
+        {
+          "id": "SECR-01",
+          "title": "Test Secrets in Server Configuration and Environment Exposure"
+        },
+        {
+          "id": "SECR-02",
+          "title": "Test Token Storage and Rotation Behavior on the Host"
+        },
+        {
+          "id": "SECR-03",
+          "title": "Test Redaction of Secrets in Logs and Traces"
+        }
+      ]
+    },
+    "top10": {
+      "name": "OWASP Top 10 for Model Context Protocol",
+      "repo": "https://github.com/OWASP/www-project-mcp-top-10",
+      "project_page": "https://owasp.org/www-project-mcp-top-10/",
+      "version": "v0.1 (beta, \"2025\" edition)",
+      "commit": "165fe0f78ef104459237b4a8e0f6e78db9b02391",
+      "commit_date": "2026-07-29",
+      "retrieved": "2026-11-24",
+      "license": "CC BY-NC-SA 4.0 (LICENSE.md in the repository)",
+      "attribution": "Item IDs and short titles from the OWASP Top 10 for Model Context Protocol, (c) OWASP contributors.",
+      "items": [
+        {
+          "id": "MCP01",
+          "title": "Token Mismanagement & Secret Exposure"
+        },
+        {
+          "id": "MCP02",
+          "title": "Privilege Escalation via Scope Creep"
+        },
+        {
+          "id": "MCP03",
+          "title": "Tool Poisoning"
+        },
+        {
+          "id": "MCP04",
+          "title": "Software Supply Chain Attacks & Dependency Tampering"
+        },
+        {
+          "id": "MCP05",
+          "title": "Command Injection & Execution"
+        },
+        {
+          "id": "MCP06",
+          "title": "Prompt Injection via Contextual Payloads (file name and index.md: Intent Flow Subversion)"
+        },
+        {
+          "id": "MCP07",
+          "title": "Insufficient Authentication & Authorization"
+        },
+        {
+          "id": "MCP08",
+          "title": "Lack of Audit and Telemetry"
+        },
+        {
+          "id": "MCP09",
+          "title": "Shadow MCP Servers"
+        },
+        {
+          "id": "MCP10",
+          "title": "Context Injection & Over-Sharing"
+        }
+      ]
+    }
+  },
+  "checks": {
+    "spec-tool-shape": {
+      "mstg": [
+        {
+          "id": "INPV-03",
+          "level": "related"
+        }
+      ],
+      "top10": []
+    },
+    "spec-input-schema-missing": {
+      "mstg": [
+        {
+          "id": "INPV-01",
+          "level": "related"
+        },
+        {
+          "id": "INPV-03",
+          "level": "related"
+        }
+      ],
+      "top10": []
+    },
+    "spec-input-schema-field-name": {
+      "mstg": [
+        {
+          "id": "INPV-03",
+          "level": "related"
+        }
+      ],
+      "top10": []
+    },
+    "spec-input-schema-root-object": {
+      "mstg": [
+        {
+          "id": "INPV-03",
+          "level": "related"
+        }
+      ],
+      "top10": []
+    },
+    "spec-schema-valid": {
+      "mstg": [
+        {
+          "id": "INPV-03",
+          "level": "related"
+        },
+        {
+          "id": "TOOL-04",
+          "level": "related"
+        }
+      ],
+      "top10": []
+    },
+    "spec-schema-dialect": {
+      "mstg": [
+        {
+          "id": "INPV-03",
+          "level": "related"
+        }
+      ],
+      "top10": []
+    },
+    "spec-ref-remote": {
+      "mstg": [
+        {
+          "id": "TOOL-04",
+          "level": "related"
+        },
+        {
+          "id": "GW-02",
+          "level": "related"
+        }
+      ],
+      "top10": [
+        {
+          "id": "MCP03",
+          "level": "related"
+        }
+      ]
+    },
+    "spec-composition-bounds": {
+      "mstg": [
+        {
+          "id": "INPV-03",
+          "level": "related"
+        },
+        {
+          "id": "TRNS-03",
+          "level": "related"
+        }
+      ],
+      "top10": []
+    },
+    "spec-name-length": {
+      "mstg": [],
+      "top10": []
+    },
+    "spec-name-charset": {
+      "mstg": [],
+      "top10": []
+    },
+    "spec-name-unique": {
+      "mstg": [
+        {
+          "id": "TOOL-04",
+          "level": "related"
+        }
+      ],
+      "top10": [
+        {
+          "id": "MCP03",
+          "level": "related"
+        }
+      ]
+    },
+    "spec-x-mcp-header": {
+      "mstg": [],
+      "top10": []
+    },
+    "spec-x-mcp-header-sensitive": {
+      "mstg": [
+        {
+          "id": "PRVC-01",
+          "level": "related"
+        },
+        {
+          "id": "LOG-04",
+          "level": "related"
+        }
+      ],
+      "top10": [
+        {
+          "id": "MCP01",
+          "level": "related"
+        }
+      ]
+    },
+    "spec-field-types": {
+      "mstg": [
+        {
+          "id": "INPV-03",
+          "level": "related"
+        }
+      ],
+      "top10": []
+    },
+    "spec-annotation-key-case": {
+      "mstg": [
+        {
+          "id": "TOOL-06",
+          "level": "related"
+        }
+      ],
+      "top10": []
+    },
+    "spec-icon-scheme": {
+      "mstg": [
+        {
+          "id": "TRNS-01",
+          "level": "related"
+        }
+      ],
+      "top10": []
+    },
+    "spec-meta-key": {
+      "mstg": [],
+      "top10": []
+    },
+    "spec-meta-reserved": {
+      "mstg": [],
+      "top10": []
+    },
+    "spec-envelope-result-type": {
+      "mstg": [],
+      "top10": []
+    },
+    "spec-envelope-cache": {
+      "mstg": [
+        {
+          "id": "CTX-04",
+          "level": "related"
+        },
+        {
+          "id": "AUTHZ-03",
+          "level": "related"
+        }
+      ],
+      "top10": [
+        {
+          "id": "MCP10",
+          "level": "related"
+        }
+      ]
+    },
+    "spec-pagination-partial": {
+      "mstg": [],
+      "top10": []
+    },
+    "spec-execution-legacy": {
+      "mstg": [],
+      "top10": []
+    },
+    "anthropic-title": {
+      "mstg": [],
+      "top10": []
+    },
+    "anthropic-hint": {
+      "mstg": [
+        {
+          "id": "TOOL-06",
+          "level": "related"
+        }
+      ],
+      "top10": []
+    },
+    "anthropic-hint-platforms-differ": {
+      "mstg": [
+        {
+          "id": "TOOL-06",
+          "level": "related"
+        }
+      ],
+      "top10": []
+    },
+    "anthropic-name-length": {
+      "mstg": [],
+      "top10": []
+    },
+    "anthropic-read-write-split": {
+      "mstg": [
+        {
+          "id": "AUTHZ-01",
+          "level": "related"
+        }
+      ],
+      "top10": [
+        {
+          "id": "MCP02",
+          "level": "related"
+        }
+      ]
+    },
+    "anthropic-api-docs": {
+      "mstg": [],
+      "top10": []
+    },
+    "anthropic-description": {
+      "mstg": [],
+      "top10": []
+    },
+    "anthropic-conversation-data": {
+      "mstg": [
+        {
+          "id": "CTX-01",
+          "level": "partial"
+        },
+        {
+          "id": "CTX-03",
+          "level": "related"
+        },
+        {
+          "id": "PRVC-01",
+          "level": "related"
+        }
+      ],
+      "top10": [
+        {
+          "id": "MCP10",
+          "level": "partial"
+        }
+      ]
+    },
+    "anthropic-unsupported-use": {
+      "mstg": [
+        {
+          "id": "AGNT-01",
+          "level": "related"
+        }
+      ],
+      "top10": []
+    },
+    "openai-hints-explicit": {
+      "mstg": [
+        {
+          "id": "TOOL-06",
+          "level": "related"
+        }
+      ],
+      "top10": []
+    },
+    "openai-description": {
+      "mstg": [],
+      "top10": []
+    },
+    "openai-name-unique": {
+      "mstg": [
+        {
+          "id": "TOOL-04",
+          "level": "related"
+        }
+      ],
+      "top10": [
+        {
+          "id": "MCP03",
+          "level": "related"
+        }
+      ]
+    },
+    "openai-name-promotional": {
+      "mstg": [],
+      "top10": []
+    },
+    "openai-name-opaque": {
+      "mstg": [],
+      "top10": []
+    },
+    "openai-retry": {
+      "mstg": [
+        {
+          "id": "ABUS-02",
+          "level": "related"
+        },
+        {
+          "id": "AGNT-05",
+          "level": "related"
+        }
+      ],
+      "top10": []
+    },
+    "openai-conversation-input": {
+      "mstg": [
+        {
+          "id": "CTX-01",
+          "level": "partial"
+        },
+        {
+          "id": "PRVC-01",
+          "level": "related"
+        }
+      ],
+      "top10": [
+        {
+          "id": "MCP10",
+          "level": "partial"
+        }
+      ]
+    },
+    "openai-restricted-input": {
+      "mstg": [
+        {
+          "id": "SECR-01",
+          "level": "related"
+        },
+        {
+          "id": "PRVC-01",
+          "level": "related"
+        },
+        {
+          "id": "AUTHN-03",
+          "level": "related"
+        }
+      ],
+      "top10": [
+        {
+          "id": "MCP01",
+          "level": "related"
+        }
+      ]
+    },
+    "openai-precise-location": {
+      "mstg": [
+        {
+          "id": "PRVC-01",
+          "level": "related"
+        }
+      ],
+      "top10": []
+    },
+    "openai-generic-executor": {
+      "mstg": [
+        {
+          "id": "TOOL-02",
+          "level": "partial"
+        },
+        {
+          "id": "TOOL-03",
+          "level": "related"
+        },
+        {
+          "id": "AGNT-01",
+          "level": "related"
+        }
+      ],
+      "top10": [
+        {
+          "id": "MCP05",
+          "level": "partial"
+        },
+        {
+          "id": "MCP02",
+          "level": "related"
+        }
+      ],
+      "note": "Flags the design (a tool that runs arbitrary commands); does not test the execution."
+    },
+    "openai-readonly-starts-job": {
+      "mstg": [
+        {
+          "id": "TOOL-06",
+          "level": "related"
+        }
+      ],
+      "top10": []
+    },
+    "openai-readonly-destructive": {
+      "mstg": [
+        {
+          "id": "TOOL-06",
+          "level": "related"
+        }
+      ],
+      "top10": []
+    },
+    "annot-delete-marked-safe": {
+      "mstg": [
+        {
+          "id": "TOOL-06",
+          "level": "partial"
+        },
+        {
+          "id": "AUTHZ-02",
+          "level": "related"
+        },
+        {
+          "id": "AGNT-03",
+          "level": "related"
+        }
+      ],
+      "top10": [
+        {
+          "id": "MCP07",
+          "level": "related"
+        }
+      ],
+      "note": "Checks the declared hints agree with the tool name; whether the client asks for approval is not tested."
+    },
+    "annot-write-marked-readonly": {
+      "mstg": [
+        {
+          "id": "TOOL-06",
+          "level": "partial"
+        },
+        {
+          "id": "AUTHZ-02",
+          "level": "related"
+        },
+        {
+          "id": "AGNT-03",
+          "level": "related"
+        }
+      ],
+      "top10": [
+        {
+          "id": "MCP07",
+          "level": "related"
+        }
+      ],
+      "note": "Checks the declared hints agree with the tool name; whether the client asks for approval is not tested."
+    },
+    "sec-invisible-encoding": {
+      "mstg": [
+        {
+          "id": "TOOL-01",
+          "level": "partial"
+        },
+        {
+          "id": "PRMT-04",
+          "level": "related"
+        }
+      ],
+      "top10": [
+        {
+          "id": "MCP03",
+          "level": "partial"
+        }
+      ]
+    },
+    "sec-bidi-controls": {
+      "mstg": [
+        {
+          "id": "TOOL-01",
+          "level": "partial"
+        }
+      ],
+      "top10": [
+        {
+          "id": "MCP03",
+          "level": "partial"
+        }
+      ]
+    },
+    "sec-zero-width": {
+      "mstg": [
+        {
+          "id": "TOOL-01",
+          "level": "partial"
+        }
+      ],
+      "top10": [
+        {
+          "id": "MCP03",
+          "level": "partial"
+        }
+      ]
+    },
+    "sec-control-chars": {
+      "mstg": [
+        {
+          "id": "TOOL-01",
+          "level": "related"
+        }
+      ],
+      "top10": [
+        {
+          "id": "MCP03",
+          "level": "related"
+        }
+      ]
+    },
+    "sec-homoglyph": {
+      "mstg": [
+        {
+          "id": "TOOL-01",
+          "level": "related"
+        }
+      ],
+      "top10": [
+        {
+          "id": "MCP03",
+          "level": "related"
+        }
+      ]
+    },
+    "sec-html-comment": {
+      "mstg": [
+        {
+          "id": "TOOL-01",
+          "level": "partial"
+        },
+        {
+          "id": "PRMT-04",
+          "level": "related"
+        }
+      ],
+      "top10": [
+        {
+          "id": "MCP03",
+          "level": "partial"
+        }
+      ]
+    },
+    "sec-instruction-markup": {
+      "mstg": [
+        {
+          "id": "TOOL-01",
+          "level": "partial"
+        },
+        {
+          "id": "PRMT-03",
+          "level": "partial"
+        }
+      ],
+      "top10": [
+        {
+          "id": "MCP03",
+          "level": "partial"
+        },
+        {
+          "id": "MCP06",
+          "level": "related"
+        }
+      ]
+    },
+    "sec-instruction-phrases": {
+      "mstg": [
+        {
+          "id": "TOOL-01",
+          "level": "partial"
+        },
+        {
+          "id": "PRMT-03",
+          "level": "partial"
+        },
+        {
+          "id": "PRMT-04",
+          "level": "related"
+        },
+        {
+          "id": "AUTHZ-02",
+          "level": "related"
+        }
+      ],
+      "top10": [
+        {
+          "id": "MCP03",
+          "level": "partial"
+        },
+        {
+          "id": "MCP06",
+          "level": "related"
+        }
+      ]
+    },
+    "sec-cross-tool-steering": {
+      "mstg": [
+        {
+          "id": "TOOL-01",
+          "level": "partial"
+        },
+        {
+          "id": "TOOL-05",
+          "level": "related"
+        }
+      ],
+      "top10": [
+        {
+          "id": "MCP03",
+          "level": "partial"
+        },
+        {
+          "id": "MCP06",
+          "level": "related"
+        }
+      ]
+    },
+    "sec-encoded-blob": {
+      "mstg": [
+        {
+          "id": "TOOL-01",
+          "level": "related"
+        }
+      ],
+      "top10": [
+        {
+          "id": "MCP03",
+          "level": "related"
+        }
+      ]
+    },
+    "sec-external-instructions": {
+      "mstg": [
+        {
+          "id": "TOOL-01",
+          "level": "partial"
+        },
+        {
+          "id": "PRMT-02",
+          "level": "related"
+        }
+      ],
+      "top10": [
+        {
+          "id": "MCP03",
+          "level": "partial"
+        },
+        {
+          "id": "MCP06",
+          "level": "related"
+        }
+      ]
+    },
+    "sec-secret-seeking": {
+      "mstg": [
+        {
+          "id": "TOOL-01",
+          "level": "partial"
+        },
+        {
+          "id": "RSRC-04",
+          "level": "related"
+        }
+      ],
+      "top10": [
+        {
+          "id": "MCP03",
+          "level": "partial"
+        },
+        {
+          "id": "MCP01",
+          "level": "related"
+        }
+      ]
+    },
+    "sec-shell-url": {
+      "mstg": [
+        {
+          "id": "TOOL-01",
+          "level": "related"
+        },
+        {
+          "id": "TOOL-03",
+          "level": "related"
+        }
+      ],
+      "top10": [
+        {
+          "id": "MCP05",
+          "level": "related"
+        }
+      ],
+      "note": "Reads shell syntax in metadata URLs, not in tool parameters; the CVE-2025-6514 shape."
+    },
+    "schema-param-description": {
+      "mstg": [],
+      "top10": []
+    },
+    "schema-enum-missing": {
+      "mstg": [
+        {
+          "id": "INPV-01",
+          "level": "related"
+        }
+      ],
+      "top10": []
+    },
+    "schema-required-unknown": {
+      "mstg": [
+        {
+          "id": "INPV-01",
+          "level": "related"
+        }
+      ],
+      "top10": []
+    },
+    "schema-additional-properties": {
+      "mstg": [
+        {
+          "id": "INPV-01",
+          "level": "partial"
+        },
+        {
+          "id": "INPV-03",
+          "level": "related"
+        }
+      ],
+      "top10": [
+        {
+          "id": "MCP05",
+          "level": "related"
+        }
+      ]
+    },
+    "schema-vague-param": {
+      "mstg": [],
+      "top10": []
+    },
+    "schema-pagination": {
+      "mstg": [],
+      "top10": []
+    },
+    "schema-response-format": {
+      "mstg": [],
+      "top10": []
+    },
+    "schema-output-schema": {
+      "mstg": [],
+      "top10": []
+    },
+    "schema-oneof-branch-types": {
+      "mstg": [
+        {
+          "id": "INPV-03",
+          "level": "related"
+        }
+      ],
+      "top10": []
+    },
+    "schema-open-object": {
+      "mstg": [
+        {
+          "id": "INPV-01",
+          "level": "related"
+        },
+        {
+          "id": "INPV-03",
+          "level": "related"
+        }
+      ],
+      "top10": []
+    },
+    "design-use-when": {
+      "mstg": [],
+      "top10": []
+    },
+    "design-near-duplicate": {
+      "mstg": [
+        {
+          "id": "TOOL-04",
+          "level": "related"
+        }
+      ],
+      "top10": [
+        {
+          "id": "MCP03",
+          "level": "related"
+        }
+      ]
+    },
+    "design-namespace": {
+      "mstg": [
+        {
+          "id": "TOOL-04",
+          "level": "related"
+        }
+      ],
+      "top10": [
+        {
+          "id": "MCP03",
+          "level": "related"
+        }
+      ]
+    },
+    "design-handle-lifetime": {
+      "mstg": [
+        {
+          "id": "CTX-04",
+          "level": "related"
+        }
+      ],
+      "top10": []
+    },
+    "surface-retry-key": {
+      "mstg": [
+        {
+          "id": "ABUS-02",
+          "level": "related"
+        },
+        {
+          "id": "AGNT-05",
+          "level": "related"
+        }
+      ],
+      "top10": []
+    },
+    "surface-version-guard": {
+      "mstg": [
+        {
+          "id": "AGNT-02",
+          "level": "related"
+        }
+      ],
+      "top10": []
+    },
+    "surface-delete-guard": {
+      "mstg": [
+        {
+          "id": "AGNT-02",
+          "level": "related"
+        },
+        {
+          "id": "TOOL-06",
+          "level": "related"
+        }
+      ],
+      "top10": []
+    },
+    "surface-full-replace": {
+      "mstg": [],
+      "top10": []
+    },
+    "surface-bulk-delete": {
+      "mstg": [
+        {
+          "id": "AGNT-01",
+          "level": "related"
+        },
+        {
+          "id": "AGNT-02",
+          "level": "related"
+        }
+      ],
+      "top10": []
+    }
+  },
+  "other_tools": {
+    "INFO-02": [
+      {
+        "tool": "live-probe",
+        "level": "partial",
+        "note": "Starts a published server in the sandbox and reads tools/list; no tool is called."
+      }
+    ],
+    "INFO-03": [
+      {
+        "tool": "live-probe",
+        "level": "partial",
+        "note": "Reads resources/list and resources/templates/list in the sandbox."
+      }
+    ],
+    "RSRC-02": [
+      {
+        "tool": "live-probe",
+        "level": "related",
+        "note": "Lists resources; does not try to enumerate beyond what the server lists."
+      }
+    ],
+    "AGNT-02": [
+      {
+        "tool": "writecheck",
+        "level": "related",
+        "note": "MWS 0.9 write-safety requirements, run against a live server."
+      }
+    ],
+    "AGNT-05": [
+      {
+        "tool": "writecheck",
+        "level": "partial",
+        "note": "MWS-RETRY-1 to 3: what a retry does."
+      }
+    ],
+    "ABUS-02": [
+      {
+        "tool": "writecheck",
+        "level": "partial",
+        "note": "MWS-RETRY-1 to 3: retries of writes with and without a retry key."
+      }
+    ],
+    "INPV-01": [
+      {
+        "tool": "writecheck",
+        "level": "partial",
+        "note": "MWS-IN-1 to 7: unknown, misspelled and wrongly typed arguments on write tools."
+      }
+    ],
+    "AUTHZ-05": [
+      {
+        "tool": "writecheck",
+        "level": "related",
+        "note": "MWS-TGT-1 to 3: writes that reach the wrong object or scope."
+      }
+    ]
+  },
+  "other_tools_note": "Other IsoKron tools that cover part of a test: live-probe (isokron-ai/mcp-check corpus/live-probe.mjs, in the mcp-surface-corpus sandbox) and writecheck (isokron-ai/mcp-write-safety, MWS 0.9). Release-to-release diffing and sandbox containment are not claimed against any test."
+}
