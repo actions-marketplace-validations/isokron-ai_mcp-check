@@ -347,7 +347,7 @@ export async function scanSubject(subject, { fetch: fetchImpl = globalThis.fetch
     if (u.problem === 'names') throw fail('names_only');
     if (u.problem === 'none') {
       const lang = ((r.hints && r.hints.otherLanguages) || [])[0];
-      if (lang && lang.files >= lang.readFiles && !['Go', 'Rust'].includes(lang.name)) {
+      if (lang && lang.files >= lang.readFiles && !['Go', 'Rust', 'C#'].includes(lang.name)) {
         out.language_hint = typeof lang.name === 'string' && /^[A-Za-z#+]{1,20}$/.test(lang.name) ? lang.name : null;
         throw fail('unsupported_language');
       }

@@ -397,7 +397,7 @@ test('cli: names-only lists are never graded (exit 3, same advice as the Action)
   assert.ok(!/Approximate/.test(cli(['--repo-dir', join(repos, 'catalog-snap')]).stdout));
 });
 
-test('cli: a Go repository with no tool definition exits 3 and names the forms read; a C# one says it is not read yet', () => {
+test('cli: a Go or C# repository with no tool definition exits 3 and names the forms read; a Swift one says it is not read yet', () => {
   const go = mkdtempSync(join(tmpdir(), 'mcpcheck-go-'));
   writeFileSync(join(go, 'main.go'), 'package main\n');
   const r = cli(['--repo-dir', go]);
@@ -407,7 +407,12 @@ test('cli: a Go repository with no tool definition exits 3 and names the forms r
   writeFileSync(join(cs, 'Program.cs'), 'class P {}\n');
   const c = cli(['--repo-dir', cs]);
   assert.equal(c.status, 3);
-  assert.match(c.stderr, /The source here is C# \(1 \.cs file\): C# source is not read yet/);
+  assert.match(c.stderr, /The source here is C# \(1 \.cs file\): no tool definition the reader knows was found in it \(the official C# SDK's \[McpServerTool\] methods/);
+  const sw = mkdtempSync(join(tmpdir(), 'mcpcheck-swift-'));
+  writeFileSync(join(sw, 'main.swift'), 'print("hi")\n');
+  const w = cli(['--repo-dir', sw]);
+  assert.equal(w.status, 3);
+  assert.match(w.stderr, /The source here is Swift \(1 \.swift file\): Swift source is not read yet \(the reader reads TypeScript, JavaScript, Python, Go, Rust and C#\)/);
 });
 
 /** A folder holding the given files (path -> text). */

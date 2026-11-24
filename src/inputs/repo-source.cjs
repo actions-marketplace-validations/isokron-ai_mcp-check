@@ -1,6 +1,6 @@
 // repo-source: find an MCP server's tool list from its source, without running it. Browser and Node.
-// In Node it requires repo-go.cjs and repo-rust.cjs; in a browser, load those two scripts first (they define
-// RepoGo and RepoRust), or Go and Rust are not read.
+// In Node it requires repo-go.cjs, repo-rust.cjs and repo-csharp.cjs; in a browser, load those three scripts first (they
+// define RepoGo, RepoRust and RepoCSharp), or Go, Rust and C# are not read.
 // Every download is size-capped (MAX_FILE per file, MAX_JSON per API answer); nothing fetched is executed.
 //
 //   await RepoSource.fromGitHub('github.com/owner/repo', { fetch })   -> { candidates, best, hints }
@@ -17,15 +17,16 @@
 //            low-level Tool(...). Schemas are close to, not exactly, what the server sends; the report must say so.
 //            Parts that cannot be read statically are marked (publicTools), and the grader skips their checks.
 //            Go (mcp-go, the go-sdk, mcp-golang; repo-go.cjs) and Rust (rmcp, rust-mcp-sdk; repo-rust.cjs) tool
-//            definitions, read the same way, with their schemas as the SDK derives them from Go structs and Rust types.
+//            definitions, read the same way, with their schemas as the SDK derives them from Go structs and Rust types;
+//            C# [McpServerTool] methods of the official C# SDK (repo-csharp.cjs), their schemas from the parameters.
 //   names    an MCPB manifest "tools" array (name and description only)
 // Network: GitHub's REST API (CORS for any origin, 60 requests/hour per user IP without a token) for the file tree,
 // raw.githubusercontent.com for files; data.jsdelivr.com / cdn.jsdelivr.net as the fallback. The registry API at
 // registry.modelcontextprotocol.io sends Access-Control-Allow-Origin: *. Nothing goes to IsoKron.
 (function (root, factory) {
-  if (typeof module === 'object' && module.exports) module.exports = factory(require('./repo-go.cjs'), require('./repo-rust.cjs'));
-  else root.RepoSource = factory(root.RepoGo, root.RepoRust); // in a browser, load repo-go.cjs and repo-rust.cjs first
-})(typeof self !== 'undefined' ? self : this, function (RepoGo, RepoRust) {
+  if (typeof module === 'object' && module.exports) module.exports = factory(require('./repo-go.cjs'), require('./repo-rust.cjs'), require('./repo-csharp.cjs'));
+  else root.RepoSource = factory(root.RepoGo, root.RepoRust, root.RepoCSharp); // in a browser, load repo-go.cjs, repo-rust.cjs and repo-csharp.cjs first
+})(typeof self !== 'undefined' ? self : this, function (RepoGo, RepoRust, RepoCSharp) {
   'use strict';
 
   // ------------------------------------------------------------ tokenizer (JS/TS)
@@ -2475,6 +2476,7 @@
     if (/\.py$/.test(p)) return /\b(?:FastMCP|MCPServer)\s*\(/.test(text) || (/\bServer\s*\(\s*['"]/.test(text) && /\b(?:from|import)\s+mcp\b/.test(text));
     if (/\.go$/.test(p)) return !!RepoGo && RepoGo.constructsServer(text);
     if (/\.rs$/.test(p)) return !!RepoRust && RepoRust.constructsServer(text);
+    if (/\.cs$/.test(p)) return !!RepoCSharp && RepoCSharp.constructsServer(text);
     return false;
   }
   // Which package(s) a repository's tools belong to. paths: the listing (inside `base`); found: the tools read ({ path, literal });
@@ -2544,6 +2546,9 @@
   const goExamplesOf = (p, paths) => { const segs = p.split('/'); for (let k = 0; k < segs.length - 1; k++) { if (/^examples?$/.test(segs[k]) && goModRoots(paths).has(segs.slice(0, k).join('/'))) return segs.slice(0, k + 1).join('/'); } return null; };
   const langScore = (p) => (/(^|\/)(tools?|server|mcp|handlers?)[^/]*$/i.test(p) || /(^|\/)(tools?|mcp|server)\//i.test(p) ? 0 : /tool/i.test(p) ? 1 : 2) + p.split('/').length * 0.01;
   const byScore = (a, b) => langScore(a) - langScore(b) || (a < b ? -1 : a > b ? 1 : 0);
+  const CS_DEP = /(^|\/)(node_modules|bin|obj|\.git|\.vs|packages)\//i;
+  const CS_NOT_READ = /(^|\/)(tests?|benchmarks?|[^/]*\.(?:Unit|Integration|Functional|E2E|Acceptance)?Tests?|[^/]*Tests|[^/]*\.Benchmarks?)\//i;
+  const CS_NOT_READ_DIR = /^(.*?(?:^|\/)(?:tests?|benchmarks?|[^/]*\.(?:Unit|Integration|Functional|E2E|Acceptance)?Tests?|[^/]*Tests|[^/]*\.Benchmarks?))\//i;
   const SYSTEM_LANGS = [
     { name: 'Go', mod: RepoGo, manifest: /(^|\/)go\.mod$/,
       skip: (p, paths) => GO_DEP.test(p) || GO_NOT_READ.test(p) || !!goExamplesOf(p, paths),
@@ -2564,6 +2569,17 @@
       // a server in the crate's own src/ is the crate (suggest ws/a, not ws/a/src); one in a submodule is that module
       rootDir: (p, paths) => { const dir = p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : ''; const m = /^(.*?)(?:^|\/)src$/.exec(dir); if (m) { const crate = dir === 'src' ? '' : dir.slice(0, -4); if (paths.includes((crate ? crate + '/' : '') + 'Cargo.toml')) return crate; } return dir; },
       analyse: (src, man) => RepoRust.analyse(src, { cargo: man }) },
+    // C#: projects (.csproj folders) group the tools like packages; Directory.Packages.props and Directory.Build.props
+    // give the SDK version and the nullable setting. bin, obj and test projects are not read.
+    { name: 'C#', mod: RepoCSharp, manifest: /(^|\/)([^/]+\.csproj|Directory\.Packages\.props|Directory\.Build\.props)$/,
+      skip: (p) => CS_DEP.test(p) || CS_NOT_READ.test(p),
+      plan: (paths) => paths.filter((p) => /\.cs$/.test(p) && !/\.(g|designer|generated)\.cs$/i.test(p) && !CS_DEP.test(p) && !CS_NOT_READ.test(p)).sort(byScore),
+      skippedFolders: (paths) => paths.filter((p) => /\.cs$/.test(p) && !CS_DEP.test(p) && CS_NOT_READ.test(p)).sort(),
+      skippedFolderOf: (p) => { const m = CS_NOT_READ_DIR.exec(p); return m ? m[1] : p.replace(/\/[^/]*$/, ''); },
+      toolHint: /\[\s*(?:[\w.]*\.)?McpServerTool(?:Attribute)?\s*[\](,]/g,
+      serverRoot: () => false,
+      rootDir: (p) => (p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : ''),
+      analyse: (src, man) => RepoCSharp.analyse(src, { manifests: man }) },
   ];
   // Adds the tools a Go or Rust reading found to the analysis `an` (as analyseRepo returns it): names already found are
   // duplicates (several modules with the same names are alternatives, as for the other languages), marks applied.

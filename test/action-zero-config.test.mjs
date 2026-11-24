@@ -111,7 +111,7 @@ test('zero-config: no tool definitions ends neutral (a warning and the fix), or 
   assert.match(act(ws, { 'working-directory': '../x' }).stdout, /working-directory must be a path inside the workspace/);
 });
 
-test('zero-config: a Go server is read from its source and graded (approximate); a C# server is not read yet: neutral, not a red job', () => {
+test('zero-config: a Go server is read from its source and graded (approximate); a Swift server is not read yet: neutral, not a red job', () => {
   const ws = workspace(null);
   mkdirSync(join(ws, 'pkg', 'tools'), { recursive: true });
   writeFileSync(join(ws, 'go.mod'), 'module example.com/notes\n');
@@ -126,13 +126,13 @@ test('zero-config: a Go server is read from its source and graded (approximate);
   assert.match(r.summary, /^## MCP check \(approximate\)\n/);
   assert.match(r.summary, /Derived: reproduced from Go SDK registrations in the source/);
   assert.deepEqual(JSON.parse(readFileSync(join(ws, 'mcp-check-results', 'tools-list.json'), 'utf8')).tools.map((t) => t.name), ['search_notes']);
-  // C# is not read yet: neutral, the summary names the language
+  // Swift is not read yet: neutral, the summary names the language
   const cs = workspace(null);
-  writeFileSync(join(cs, 'Program.cs'), 'class P { static void Main() {} }\n');
+  writeFileSync(join(cs, 'main.swift'), 'print("hi")\n');
   const c = act(cs, { 'min-grade': 'A' });
   assert.equal(c.status, 0, c.stdout + c.stderr);
   assert.equal(c.outputs.passed, '');
-  assert.match(c.summary, /C\\# source is not read yet/);
+  assert.match(c.summary, /Swift source is not read yet/);
 });
 
 test('zero-config: tools of several servers are not merged or picked; the summary lists the folders to choose from', () => {
