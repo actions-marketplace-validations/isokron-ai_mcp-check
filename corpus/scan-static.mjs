@@ -242,6 +242,20 @@ async function ghJson(f, path, token) {
   try { return JSON.parse(await readBody(res, API_CAP)); } catch { throw fail('upstream_error', { status: res.status }); }
 }
 
+/** A RangeError that means the list was too large: a string or a buffer past what the runtime can hold. */
+export const TOO_LARGE_RE = /Invalid string length|allocation failed/i;
+
+/**
+ * What grading a list failed with, as the error scanSubject records: an input refusal is list_rejected with its
+ * code; a list too large to hold (R-SS-11) is list_rejected / too_large. Any other error, other RangeErrors such as
+ * "Maximum call stack size exceeded" included, is returned as it is and recorded as reader_error (R-SS-12).
+ */
+export function gradeError(e) {
+  if (e instanceof InputError) return fail('list_rejected', { listError: e.code });
+  if (e instanceof RangeError && TOO_LARGE_RE.test(String(e.message))) return fail('list_rejected', { listError: 'too_large' });
+  return e;
+}
+
 /**
  * A failure of the reader (RepoSource.fromGitHub), as a detail code. The reader calls any 403 or 429 a rate limit;
  * here a 403 is one only when GitHub said so on a refused answer this subject got (`refused`):
@@ -344,10 +358,7 @@ export async function scanSubject(subject, { fetch: fetchImpl = globalThis.fetch
     const c = u.candidate;
     let g;
     try { g = gradeCandidate(c); } catch (e) {
-      if (e instanceof InputError) throw fail('list_rejected', { listError: e.code });
-      // A list too large to even hold as one string (R-SS-11).
-      if (e instanceof RangeError) throw fail('list_rejected', { listError: 'too_large' });
-      throw e;
+      throw gradeError(e);
     }
     out.grade = g.summary;
     out.list = provenanceOf(c, r, g.summary.tool_count);
