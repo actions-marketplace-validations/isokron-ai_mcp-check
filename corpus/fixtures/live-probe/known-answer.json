@@ -1,0 +1,19 @@
+{
+  "format": "isokron-mcp-check-live-probe-control/1",
+  "control": "known-answer",
+  "server": "@isokron/mcp-check@1.3.1",
+  "rubric_version": "2.2.0",
+  "answer": {
+    "tool_count": 3,
+    "catalog_hash": "3b6986dcdac856b5a8baaf4836be4c726f8076da7bca547fe4e186931cf02919",
+    "grades": {
+      "spec": "A",
+      "anthropic": "A",
+      "openai": "A",
+      "security": "A",
+      "quality": "A",
+      "surface": null
+    },
+    "checks": []
+  }
+}

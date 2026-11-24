@@ -1,0 +1,863 @@
+{
+  "tools": [
+    {
+      "name": "check_tools_list",
+      "title": "Check an MCP tool list",
+      "description": "Grades an MCP server's tools/list answer and returns a report: a letter grade per section (MCP specification, Anthropic directory, OpenAI directory, hidden-instruction scan, schema quality) and the write-surface guard coverage (advice, no grade), each finding with its check id and docs link, and the list with safe fixes applied. Use this before submitting a server to the Claude or ChatGPT directories, or in review of a tool list change. Do not use it to compare two versions of a list; use compare_tools_lists for that. It reads only the JSON passed in; it does not connect to the server.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tools_list": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "array",
+                "items": {}
+              },
+              {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {}
+              }
+            ],
+            "description": "The tool list to grade: the answer to tools/list, as JSON text or as a value. Accepts a JSON-RPC answer, {\"tools\": [...]}, a bare array of tools, or an array of pages. Limit 2 MiB of JSON, 64 levels of nesting and 2000 tools."
+          },
+          "sections": {
+            "description": "Sections to report and to test against min_grade (surface has no grade and is never below it). Default: all six.",
+            "minItems": 1,
+            "maxItems": 6,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "spec",
+                "anthropic",
+                "openai",
+                "security",
+                "quality",
+                "surface"
+              ]
+            }
+          },
+          "min_grade": {
+            "description": "Lowest acceptable grade. When set, passed is false if any reported section grades below it.",
+            "type": "string",
+            "enum": [
+              "A",
+              "B",
+              "C",
+              "D",
+              "F"
+            ]
+          },
+          "limit": {
+            "default": 100,
+            "description": "Most findings to return, blocking first. Grades and counts always cover every finding.",
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500
+          },
+          "include_fixed_list": {
+            "default": true,
+            "description": "Include the whole list with safe fixes applied. Set false for large lists to keep the answer short; the change list is always included.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "tools_list"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "rubric_version": {
+            "type": "string",
+            "description": "Version of the grading rubric."
+          },
+          "report_schema": {
+            "type": "string"
+          },
+          "spec_version": {
+            "type": "string",
+            "description": "MCP specification revision the spec section checks against."
+          },
+          "sources_read": {
+            "type": "string",
+            "description": "Date the Anthropic and OpenAI directory rules were last read."
+          },
+          "input": {
+            "type": "object",
+            "properties": {
+              "tools": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "skipped": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "era": {
+                "type": "string"
+              },
+              "catalog_hash": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "tools",
+              "skipped",
+              "era",
+              "catalog_hash"
+            ],
+            "additionalProperties": false
+          },
+          "sections": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "enum": [
+                    "spec",
+                    "anthropic",
+                    "openai",
+                    "security",
+                    "quality",
+                    "surface"
+                  ]
+                },
+                "name": {
+                  "type": "string"
+                },
+                "grade": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "enum": [
+                        "A",
+                        "B",
+                        "C",
+                        "D",
+                        "F"
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "score": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "ready": {
+                  "type": [
+                    "boolean",
+                    "null"
+                  ]
+                },
+                "counts": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "blocking": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "attention": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "advice": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        }
+                      },
+                      "required": [
+                        "blocking",
+                        "attention",
+                        "advice"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "caps": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "note": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "state": {
+                  "description": "surface only: what the guard coverage says (it has no grade).",
+                  "type": "string",
+                  "enum": [
+                    "coverage",
+                    "not-enough",
+                    "no-opportunities",
+                    "no-writes"
+                  ]
+                },
+                "coverage": {
+                  "description": "surface only: guards offered out of the opportunities, in total and per guard (retry keys, preconditions, delete guards).",
+                  "type": "object",
+                  "properties": {
+                    "opportunities": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "offered": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "retry": {
+                      "type": "object",
+                      "properties": {
+                        "have": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "of": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        }
+                      },
+                      "required": [
+                        "have",
+                        "of"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "version": {
+                      "type": "object",
+                      "properties": {
+                        "have": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "of": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        }
+                      },
+                      "required": [
+                        "have",
+                        "of"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "guard": {
+                      "type": "object",
+                      "properties": {
+                        "have": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "of": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        }
+                      },
+                      "required": [
+                        "have",
+                        "of"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "opportunities",
+                    "offered",
+                    "retry",
+                    "version",
+                    "guard"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "grade",
+                "score",
+                "ready",
+                "counts",
+                "caps",
+                "note"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "min_grade": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "A",
+                  "B",
+                  "C",
+                  "D",
+                  "F"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "passed": {
+            "type": "boolean",
+            "description": "False when a reported section is below min_grade."
+          },
+          "below_min_grade": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "counts": {
+            "type": "object",
+            "properties": {
+              "blocking": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "attention": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "advice": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "blocking",
+              "attention",
+              "advice"
+            ],
+            "additionalProperties": false
+          },
+          "findings": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "description": "Check id; pass it to explain_check."
+                },
+                "severity": {
+                  "type": "string",
+                  "enum": [
+                    "blocking",
+                    "attention",
+                    "advice"
+                  ]
+                },
+                "section": {
+                  "type": "string"
+                },
+                "tool": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "message": {
+                  "type": "string"
+                },
+                "path": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "title": {
+                  "type": "string"
+                },
+                "docs": {
+                  "type": "string",
+                  "description": "https://isokron.ai/mcp-check/checks/<id>"
+                },
+                "fix": {
+                  "type": "string"
+                },
+                "fix_snippet": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "severity",
+                "section",
+                "tool",
+                "message",
+                "path",
+                "title",
+                "docs",
+                "fix",
+                "fix_snippet"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "findings_truncated": {
+            "type": "boolean"
+          },
+          "suggested_fixes": {
+            "type": "object",
+            "properties": {
+              "changes": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "tool": {
+                      "type": "string"
+                    },
+                    "change": {
+                      "type": "string"
+                    },
+                    "review": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "tool",
+                    "change",
+                    "review"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "tools_list": {
+                "description": "The list with the safe fixes applied, in the shape it was given; null when include_fixed_list is false."
+              }
+            },
+            "required": [
+              "changes",
+              "tools_list"
+            ],
+            "additionalProperties": false
+          },
+          "tool_hashes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "sha256": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "sha256"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "rubric_version",
+          "report_schema",
+          "spec_version",
+          "sources_read",
+          "input",
+          "sections",
+          "min_grade",
+          "passed",
+          "below_min_grade",
+          "counts",
+          "findings",
+          "findings_truncated",
+          "suggested_fixes",
+          "tool_hashes"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "explain_check",
+      "title": "Explain a check",
+      "description": "Returns the documentation for one check by its id: severity, the source rule quoted verbatim, what the finding means and how to fix it, with an example where one exists. Use this when a check_tools_list finding needs more detail. Do not use it to grade a list.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "check_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "pattern": "^[a-z0-9-]+$",
+            "description": "Check id from a check_tools_list finding, for example \"anthropic-title\"."
+          }
+        },
+        "required": [
+          "check_id"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "section": {
+            "type": "string"
+          },
+          "affects": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "blocking",
+              "attention",
+              "advice"
+            ]
+          },
+          "source_quote": {
+            "type": "string",
+            "description": "The rule, quoted verbatim from its source."
+          },
+          "source": {
+            "type": "string"
+          },
+          "source_title": {
+            "type": "string"
+          },
+          "explanation": {
+            "type": "string"
+          },
+          "fix": {
+            "type": "string"
+          },
+          "example": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "bad": {
+                    "type": "string"
+                  },
+                  "good": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "bad",
+                  "good"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "docs": {
+            "type": "string"
+          },
+          "rubric_version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "section",
+          "affects",
+          "severity",
+          "source_quote",
+          "source",
+          "source_title",
+          "explanation",
+          "fix",
+          "example",
+          "docs",
+          "rubric_version"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "compare_tools_lists",
+      "title": "Compare two MCP tool lists",
+      "description": "Compares two tools/list answers from the same server by SHA-256 definition hashes and reports tools added, removed and changed, field by field. Flags as high risk any annotation change that lets a client run a tool with less confirmation, the pattern of a rug-pull. Use this when a server updates, before trusting the new list. Do not use it to grade a single list.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "before": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "array",
+                "items": {}
+              },
+              {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {}
+              }
+            ],
+            "description": "The earlier tool list: the answer to tools/list, as JSON text or as a value. Accepts a JSON-RPC answer, {\"tools\": [...]}, a bare array of tools, or an array of pages. Limit 2 MiB of JSON, 64 levels of nesting and 2000 tools."
+          },
+          "after": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "array",
+                "items": {}
+              },
+              {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {}
+              }
+            ],
+            "description": "The newer tool list: the answer to tools/list, as JSON text or as a value. Accepts a JSON-RPC answer, {\"tools\": [...]}, a bare array of tools, or an array of pages. Limit 2 MiB of JSON, 64 levels of nesting and 2000 tools."
+          }
+        },
+        "required": [
+          "before",
+          "after"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "before": {
+            "type": "object",
+            "properties": {
+              "tools": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "catalog_hash": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "tools",
+              "catalog_hash"
+            ],
+            "additionalProperties": false
+          },
+          "after": {
+            "type": "object",
+            "properties": {
+              "tools": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "catalog_hash": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "tools",
+              "catalog_hash"
+            ],
+            "additionalProperties": false
+          },
+          "identical": {
+            "type": "boolean"
+          },
+          "added": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "readOnlyHint": {
+                  "type": [
+                    "boolean",
+                    "null"
+                  ]
+                },
+                "destructiveHint": {
+                  "type": [
+                    "boolean",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "name",
+                "readOnlyHint",
+                "destructiveHint"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "removed": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "changed": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "old_hash": {
+                  "type": "string"
+                },
+                "new_hash": {
+                  "type": "string"
+                },
+                "changes": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "field": {
+                        "type": "string"
+                      },
+                      "risk": {
+                        "type": "string",
+                        "enum": [
+                          "high",
+                          "medium",
+                          "low"
+                        ]
+                      },
+                      "from": {},
+                      "to": {},
+                      "note": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "field",
+                      "risk",
+                      "from",
+                      "to",
+                      "note"
+                    ],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": [
+                "name",
+                "old_hash",
+                "new_hash",
+                "changes"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "unchanged": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "high_risk": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Tools whose annotation change lets a client run them with less confirmation."
+          }
+        },
+        "required": [
+          "before",
+          "after",
+          "identical",
+          "added",
+          "removed",
+          "changed",
+          "unchanged",
+          "high_risk"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    }
+  ]
+}
