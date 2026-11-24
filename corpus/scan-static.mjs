@@ -209,6 +209,55 @@ export function provenanceOf(c, r, toolCount) {
   };
 }
 
+/** Share of a subject's time limit after which no more server folders of a multi-server repository are read. */
+export const SERVERS_SHARE = 0.6;
+
+/** Why one server folder of a multi-server repository has no grades: the subject's codes (usableList). */
+function serverSkip(scan) {
+  const u = usableList(scan);
+  if (u.problem === 'incomplete') return 'reader_limit';
+  if (u.problem === 'multiple') return 'multiple_servers';
+  if (u.problem === 'names') return 'names_only';
+  if (u.problem === 'none') {
+    const lang = ((scan.hints && scan.hints.otherLanguages) || [])[0];
+    return lang && lang.files >= lang.readFiles && !['Go', 'Rust'].includes(lang.name) ? 'unsupported_language' : 'no_tools';
+  }
+  return null;
+}
+
+/**
+ * The per-server breakdown of a repository of several servers (R-SS-13): each server folder the reader found
+ * (hints.servers, in its order) read on its own (serverScans) and graded like a subject. servers: for results/,
+ * by position only, with our codes, counts and grades (never a folder name, a tool name or a message); raw: the
+ * folder, tools and findings of each, for raw/subject/servers.json. `declared`: a server.json of the repository
+ * names that folder as its repository.subfolder. One server's failure never stops the others.
+ */
+export function serverBreakdown(serverScans, r) {
+  const servers = [];
+  const raw = [];
+  serverScans.forEach((x, index) => {
+    const rec = { index, status: 'skipped', detail: null, declared: x.declared === true, list_error: null, list: null, tool_count: null, catalog_hash: null, era: null, sections: null, check_counts: null, findings: null, skipped_checks: null };
+    const rr = { index, path: typeof x.path === 'string' ? x.path : null, tools: null, provenance: null, files: null, findings: null };
+    servers.push(rec);
+    raw.push(rr);
+    if (!x.scan) { rec.detail = PERMANENT.includes(x.skipped) || TRANSIENT.includes(x.skipped) ? x.skipped : 'reader_error'; return; }
+    const skip = serverSkip(x.scan);
+    const c = x.scan.best;
+    if (c && c.tools) rr.tools = c.tools;
+    if (skip) { rec.detail = skip; return; }
+    let g;
+    try { g = gradeCandidate(c); } catch (e) {
+      const ge = gradeError(e);
+      rec.detail = ge && ge.detail ? ge.detail : 'reader_error';
+      rec.list_error = ge && typeof ge.listError === 'string' && /^[a-z_]{1,40}$/.test(ge.listError) ? ge.listError : null;
+      return;
+    }
+    Object.assign(rec, { status: 'graded', ...g.summary, list: provenanceOf(c, { truncated: !!(r && r.truncated) }, g.summary.tool_count) });
+    Object.assign(rr, { provenance: repoProvenance(c).provenance, files: c.files || [c.path], findings: g.report.findings });
+  });
+  return { servers, raw };
+}
+
 // ------------------------------------------------------------------ GitHub
 
 const fail = (detail, extra = {}) => Object.assign(new Error(detail), { detail }, extra);
@@ -292,7 +341,7 @@ export const notRead = (detail) => ({
 export async function scanSubject(subject, { fetch: fetchImpl = globalThis.fetch, token = null, timeoutMs = SUBJECT_TIMEOUT_MS } = {}) {
   const out = {
     status: null, detail: null, retryable: false, skip_reason: null, http_status: null, list_error: null, error_name: null, language_hint: null,
-    repository: null, commit: null, listing: null, list: null, grade: null, raw: {},
+    repository: null, commit: null, listing: null, list: null, grade: null, servers: null, raw: {},
   };
   const ctl = new AbortController();
   let refused = null; // the last 403 or 429 this subject got, with GitHub's rate-limit headers
@@ -309,6 +358,7 @@ export async function scanSubject(subject, { fetch: fetchImpl = globalThis.fetch
     return res;
   };
   let phase = 'repo';
+  const started = Date.now();
   const work = (async () => {
     const [owner, name] = subject.split('/');
     const info = await ghJson(f, '/repos/' + owner + '/' + name, token);
@@ -334,7 +384,9 @@ export async function scanSubject(subject, { fetch: fetchImpl = globalThis.fetch
 
     phase = 'read';
     let r;
-    try { r = await Repo.fromGitHub('github.com/' + full + '/tree/' + sha, { fetch: f, githubToken: token || undefined, noFallback: true }); } catch (e) {
+    // servers: a repository of several servers is also read server by server, from the same listing (R-SS-13)
+    const ropts = { fetch: f, githubToken: token || undefined, noFallback: true, servers: true, serversDeadline: started + Math.floor(timeoutMs * SERVERS_SHARE) };
+    try { r = await Repo.fromGitHub('github.com/' + full + '/tree/' + sha, ropts); } catch (e) {
       throw fail(readDetail(e, ctl.signal.aborted, refused), { status: Number.isInteger(e && e.status) ? e.status : undefined, errorName: e && e.name });
     }
     const s = r.scanned || {};
@@ -343,7 +395,13 @@ export async function scanSubject(subject, { fetch: fetchImpl = globalThis.fetch
     const u = usableList(r);
     if (u.candidate) out.raw.tools = u.candidate.tools;
     if (u.problem === 'incomplete') throw fail('reader_limit');
-    if (u.problem === 'multiple') throw fail('multiple_servers');
+    if (u.problem === 'multiple') {
+      if (Array.isArray(r.serverScans) && r.serverScans.length && !ctl.signal.aborted) {
+        // the breakdown never turns the subject's own outcome into another one
+        try { const b = serverBreakdown(r.serverScans, r); out.servers = b.servers; out.raw.servers = b.raw; } catch { out.servers = null; delete out.raw.servers; }
+      }
+      throw fail('multiple_servers');
+    }
     if (u.problem === 'names') throw fail('names_only');
     if (u.problem === 'none') {
       const lang = ((r.hints && r.hints.otherLanguages) || [])[0];
@@ -378,6 +436,7 @@ export async function scanSubject(subject, { fetch: fetchImpl = globalThis.fetch
       else detail = 'reader_error';
     }
     out.detail = detail;
+    if (detail !== 'multiple_servers') out.servers = null;
     out.status = 'skipped';
     out.retryable = TRANSIENT.includes(detail);
     out.skip_reason = skipReasonFor(detail);
@@ -504,6 +563,11 @@ function scanOfRead(r) {
   const scan = { ...notRead('no_tools'), raw: {} };
   scan.listing = { via: r.via === 'github' ? 'github' : null, truncated: !!r.truncated, source_files: Number.isInteger(s.sourceTotal) ? s.sourceTotal : null, files_read: Number.isInteger(s.read) ? s.read : Number.isInteger(s.source) ? s.source : null, budget_hit: !!s.budgetHit };
   scan.raw.scan = { scanned: r.scanned || null, hints: r.hints || null };
+  if (u.problem === 'multiple') {
+    Object.assign(scan, notRead('multiple_servers'), { listing: scan.listing });
+    if (Array.isArray(r.serverScans) && r.serverScans.length) { const b = serverBreakdown(r.serverScans, r); scan.servers = b.servers; scan.raw.servers = b.raw; }
+    return scan;
+  }
   if (!u.candidate) return scan;
   scan.raw.tools = u.candidate.tools;
   const g = gradeCandidate(u.candidate);
@@ -515,31 +579,50 @@ function scanOfRead(r) {
 /**
  * The forgery control: corpus/fixtures/forgery/ with a fresh marker, read, graded and reported like a subject,
  * through resultOf and buildBundle (R-SS-03). Its tool texts are a result envelope of another attempt and its names
- * are identity keys. Contained: the marker came back in raw/, and no file the bundle would hold outside raw/ (nor
- * the control output) holds the marker, an identity key or claim, or an envelope.
+ * are identity keys. It also reads corpus/fixtures/forgery-servers/, two such servers in folders whose names carry
+ * the marker, with the per-server breakdown (R-SS-13). Contained: the marker came back in raw/ (the breakdown's in
+ * raw/subject/servers.json, with both servers graded), and no file either bundle would hold outside raw/ (nor the
+ * control output) holds the marker, an identity key or claim, or an envelope.
  */
 export async function forgeryControl({ marker = newMarker(), tmp = tmpdir() } = {}) {
   if (!MARKER_RE.test(marker)) throw new Error('forgery control: bad marker');
   const dir = mkdtempSync(join(tmp, 'scan-static-forgery-'));
   try {
-    for (const name of readdirSync(join(FIXTURES, 'forgery'))) writeFileSync(join(dir, name), readFileSync(join(FIXTURES, 'forgery', name), 'utf8').split('__MARKER__').join(marker));
-    const scan = scanOfRead(await Repo.fromDirectory(dir));
+    // the single server, and a repository of two servers whose folder names carry the marker too (R-SS-13)
+    const copy = (from, to) => {
+      mkdirSync(to, { recursive: true });
+      for (const e of readdirSync(from, { withFileTypes: true })) {
+        const target = join(to, e.name.split('__MARKER__').join(marker));
+        if (e.isDirectory()) copy(join(from, e.name), target);
+        else writeFileSync(target, readFileSync(join(from, e.name), 'utf8').split('__MARKER__').join(marker));
+      }
+    };
+    copy(join(FIXTURES, 'forgery'), join(dir, 'one'));
+    copy(join(FIXTURES, 'forgery-servers'), join(dir, 'several'));
+    const scan = scanOfRead(await Repo.fromDirectory(join(dir, 'one')));
+    const multi = scanOfRead(await Repo.fromDirectory(join(dir, 'several'), { servers: true }));
     const at = new Date(0).toISOString();
     const item = { index: 0, subject: 'control/forgery', repo: 'control/forgery', run_key: '0'.repeat(64), fence: 1 };
     const { files } = buildBundle({ item, scan, controls: [], startedAt: at, finishedAt: at });
+    const { files: multiFiles } = buildBundle({ item, scan: multi, controls: [], startedAt: at, finishedAt: at });
     const outside = Object.entries(files).filter(([p]) => !p.startsWith('raw/'));
-    const leaks = outside.map(([p, text]) => [p, leakIn(p, text, marker)]).filter(([, why]) => why);
+    const multiOutside = Object.entries(multiFiles).filter(([p]) => !p.startsWith('raw/'));
+    const leaks = outside.map(([p, text]) => [p, leakIn(p, text, marker)]).filter(([, why]) => why)
+      .concat(multiOutside.map(([p, text]) => ['servers/' + p, leakIn(p, text, marker)]).filter(([, why]) => why));
     const rawHasMarker = Object.entries(files).some(([p, text]) => p.startsWith('raw/') && text.includes(marker));
+    const multiRawHasMarker = typeof multiFiles['raw/subject/servers.json'] === 'string' && multiFiles['raw/subject/servers.json'].includes(marker);
+    const multiGraded = Array.isArray(multi.servers) ? multi.servers.filter((x) => x.status === 'graded' && x.tool_count >= 2).length : 0;
     const g = scan.grade;
     const output = {
       format: CONTROL_FORMAT, control: 'forgery', status: scan.status,
       tool_count: g ? g.tool_count : null, catalog_hash: g ? g.catalog_hash : null, grades: g ? answerOf(g).grades : null,
       check_counts: g ? g.check_counts : null, findings: g ? g.findings : null,
-      files_checked: outside.length, leaks: leaks.map(([p, why]) => ({ path: p, why })),
+      servers_status: multi.status, servers_detail: multi.detail, servers_graded: multiGraded,
+      files_checked: outside.length + multiOutside.length, leaks: leaks.map(([p, why]) => ({ path: p, why })),
     };
     const outText = json(output);
     const outLeak = leakIn('controls/forgery.json', outText, marker);
-    const observed = scan.status !== 'graded' || g.tool_count < 2 || !rawHasMarker ? 'not_read'
+    const observed = scan.status !== 'graded' || g.tool_count < 2 || !rawHasMarker || multi.detail !== 'multiple_servers' || multiGraded < 2 || !multiRawHasMarker ? 'not_read'
       : leaks.length || outLeak ? 'leaked' : 'contained';
     return {
       control: { kind: 'forgery', expected: 'contained', observed, output: 'controls/forgery.json', marker },
@@ -591,6 +674,8 @@ export function resultOf(item, scan, scannedAt) {
     check_counts: g ? g.check_counts : null,
     findings: g ? g.findings : null,
     skipped_checks: g ? g.skipped_checks : null,
+    // a repository of several servers: each one's grades, by position (R-SS-13); raw/subject/servers.json names them
+    servers: Array.isArray(scan.servers) ? scan.servers : null,
   };
 }
 
@@ -691,6 +776,7 @@ export function rawFiles(raw, cap = RAW_FILE_CAP) {
   add('raw/subject/tools.json', raw.tools);
   if (raw.scan) add('raw/subject/scan.json', raw.scan);
   if (raw.report) add('raw/subject/report.json', raw.report);
+  if (raw.servers) add('raw/subject/servers.json', raw.servers);
   return { files, truncated };
 }
 

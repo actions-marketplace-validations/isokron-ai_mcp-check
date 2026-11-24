@@ -14,7 +14,7 @@ import {
   FORMAT, KNOWN_ANSWER_FILE, MARKER_RE, MAX_ITEMS, MAX_ITEMS_CHARS, PERMANENT, RESULT_PATH, SKIP_REASON, TRANSIENT, skipReasonFor,
   InputProblem, buildBundle, forgeryControl, isDateTime, knownAnswerControl, knownAnswerFile, main, observationsOf,
   parseInputs, runShard, scanSubject, settingsDigest,
-  RAW_FILE_CAP, CALLS_PER_SUBJECT, RATE_RESERVE, SUBJECT_HEAP_MB, fixtureFetch, httpDetail, jsonUpTo, knownAnswer, notRead, rawText, readDetail, reportItem, scanInWorker, writeItem,
+  RAW_FILE_CAP, SERVERS_SHARE, serverBreakdown, CALLS_PER_SUBJECT, RATE_RESERVE, SUBJECT_HEAP_MB, fixtureFetch, httpDetail, jsonUpTo, knownAnswer, notRead, rawText, readDetail, reportItem, scanInWorker, writeItem,
 } from '../corpus/scan-static.mjs';
 import * as guard from '../corpus/loop-guard.mjs';
 // tool-qa's own result contract and ingest checks, at the commit WORKER_KIT_REF pins (test/tool-qa/README.md).
@@ -857,4 +857,106 @@ test('R-SS-12: only a RangeError about size is a too-large list; a stack overflo
   try { const f = () => f(); f(); } catch (e) { overflow = e; }
   assert.ok(overflow instanceof RangeError && !/Invalid string length|allocation failed/i.test(overflow.message));
   assert.equal(gradeError(overflow), overflow);
+});
+
+// ------------------------------------------------------------------ R-SS-13: a repository of several servers
+
+const createRequireForReader = (await import('node:module')).createRequire(import.meta.url);
+const Reader = createRequireForReader('../src/inputs/repo-source.cjs');
+/** A TypeScript MCP server package in folder `dir`, with the given tool names. */
+function tsServer(dir, names, { serverJson = null } = {}) {
+  const files = {
+    [dir + '/package.json']: JSON.stringify({ name: dir.replace(/\//g, '-'), dependencies: { '@modelcontextprotocol/sdk': '^1.20.0', zod: '^3.24.0' } }),
+    [dir + '/src/index.ts']: 'import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";\nimport { z } from "zod";\nconst server = new McpServer({ name: "' + dir + '", version: "1.0.0" });\n'
+      + names.map((n) => 'server.registerTool("' + n + '", { title: "' + n + '", description: "Does ' + n + ' for the caller.", inputSchema: { q: z.string().describe("The query.") }, annotations: { readOnlyHint: true, openWorldHint: false } }, async () => ({ content: [] }));\n').join(''),
+  };
+  if (serverJson) files[dir + '/server.json'] = JSON.stringify(serverJson);
+  return files;
+}
+const monorepo = { 'package.json': '{"name":"servers","private":true}', ...tsServer('src/alpha_srv', ['alpha_one', 'alpha_two']), ...tsServer('src/beta_srv', ['beta_one'], { serverJson: { name: 'io.github.o/beta', repository: { url: 'https://github.com/o/r', source: 'github', subfolder: 'src/beta_srv' } } }) };
+
+test('R-SS-13: a repository of several servers stays one skipped result, with each server graded by position and no extra API call', async () => {
+  const calls = [];
+  const s = await scanSubject('o/r', { fetch: fakeGithub({ 'o/r': { files: monorepo } }, calls) });
+  assert.equal(s.status, 'skipped');
+  assert.equal(s.detail, 'multiple_servers');
+  assert.equal(s.retryable, false);
+  assert.equal(s.grade, null);
+  assert.equal(s.servers.length, 2);
+  assert.deepEqual(s.servers.map((x) => [x.index, x.status, x.detail, x.tool_count, x.declared]), [[0, 'graded', null, 2, false], [1, 'graded', null, 1, true]]);
+  for (const x of s.servers) {
+    assert.match(x.catalog_hash, /^[0-9a-f]{64}$/);
+    assert.equal(x.list.tools_listed, x.tool_count);
+    assert.ok(x.sections.spec.grade && x.sections.anthropic.grade);
+    assert.ok(x.findings.every((f) => f.tool_index === null || (f.tool_index >= 0 && f.tool_index < x.tool_count)));
+  }
+  // the same API calls as any subject (repository, branch, tree); each file fetched once
+  assert.deepEqual(calls.filter((c) => c.url.startsWith('https://api.github.com/')).map((c) => c.url), ['https://api.github.com/repos/o/r', 'https://api.github.com/repos/o/r/branches/main', 'https://api.github.com/repos/o/r/git/trees/' + SHA + '?recursive=1']);
+  const rawUrls = calls.filter((c) => c.url.startsWith('https://raw.githubusercontent.com/')).map((c) => c.url);
+  assert.equal(new Set(rawUrls).size, rawUrls.length, 'no file is fetched twice');
+  // subject text only under raw/: folders, tool names
+  assert.ok(!JSON.stringify({ ...s, raw: null }).match(/alpha|beta/), 'no folder or tool name outside raw');
+  assert.deepEqual(s.raw.servers.map((x) => [x.index, x.path, (x.tools || []).map((t) => t.name)]), [[0, 'src/alpha_srv', ['alpha_one', 'alpha_two']], [1, 'src/beta_srv', ['beta_one']]]);
+  // in its own thread, as the shard runs it: the same breakdown, raw/subject/servers.json built (and capped) there
+  const w = await scanInWorker('o/r', { fetch: fakeGithub({ 'o/r': { files: monorepo } }) });
+  assert.equal(w.detail, 'multiple_servers');
+  assert.deepEqual(w.servers, s.servers);
+  assert.ok(w.rawFiles.files['raw/subject/servers.json'].includes('alpha_two'));
+});
+
+test('R-SS-13: the breakdown passes tool-qa\'s worker kit and ingest checks, and a single-server subject is unchanged (servers null)', async () => {
+  const forgery = await forgeryControl({ marker: 'm'.repeat(32) });
+  const known = await knownAnswerControl();
+  const item = { index: 0, subject: 'o/r', repo: 'o/r', run_key: key(0), fence: 10 };
+  const s = await scanSubject('o/r', { fetch: fakeGithub({ 'o/r': { files: monorepo } }) });
+  const { files, meta } = buildBundle({ item, scan: s, controls: [forgery, known], startedAt: DATE, finishedAt: DATE });
+  const { result, obs } = assertBundle(new Map(Object.entries(files)), meta, { subjectText: ['alpha_one', 'beta_one', 'src/alpha_srv', 'src/beta_srv'] });
+  assert.equal(result.status, 'skipped');
+  assert.equal(result.detail, 'multiple_servers');
+  assert.equal(result.servers.length, 2);
+  assert.deepEqual(meta.skips, [{ stage: 'static', reason: 'no_runnable_artifact', evidence: RESULT_PATH, retryable: false }]);
+  assert.ok(files['raw/subject/servers.json'].includes('alpha_one'));
+  assert.deepEqual(obs.find((o) => o.field === 'registration_provenance').value, null);
+  const one = await scanSubject('o/r', { fetch: fakeGithub({ 'o/r': { files: jsLiteral } }) });
+  const single = buildBundle({ item, scan: one, controls: [forgery, known], startedAt: DATE, finishedAt: DATE });
+  assert.equal(JSON.parse(single.files[RESULT_PATH]).servers, null);
+  assert.ok(!('raw/subject/servers.json' in single.files));
+});
+
+test('R-SS-13: server folders past the cap or the time share are not read; a server at the root beside others keeps multiple_servers', async () => {
+  const many = { 'package.json': '{"name":"many","private":true}' };
+  for (let i = 0; i < 26; i++) Object.assign(many, tsServer('pkgs/s' + String(i).padStart(2, '0'), ['tool_' + i]));
+  const f = fakeGithub({ 'o/r': { files: many } });
+  const r = await Reader.fromGitHub('github.com/o/r/tree/' + SHA, { fetch: f, noFallback: true, servers: true });
+  assert.equal(r.serverScans.length, 26);
+  assert.equal(r.serverScans.filter((x) => x.scan).length, 24);
+  assert.deepEqual(r.serverScans.slice(24).map((x) => x.skipped), ['reader_limit', 'reader_limit']);
+  const b = serverBreakdown(r.serverScans, r);
+  assert.equal(b.servers.filter((x) => x.status === 'graded').length, 24);
+  assert.deepEqual(b.servers.slice(24).map((x) => [x.status, x.detail]), [['skipped', 'reader_limit'], ['skipped', 'reader_limit']]);
+  const late = await Reader.fromGitHub('github.com/o/r/tree/' + SHA, { fetch: fakeGithub({ 'o/r': { files: monorepo } }), noFallback: true, servers: true, serversDeadline: Date.now() - 1 });
+  assert.deepEqual(serverBreakdown(late.serverScans, late).servers.map((x) => x.detail), ['timeout', 'timeout']);
+  assert.ok(SERVERS_SHARE > 0 && SERVERS_SHARE < 1);
+  // a server at the repository root beside one in a sub-package: the root cannot be read on its own (it holds both),
+  // so that entry keeps multiple_servers; the other is graded; nothing is merged
+  const rooted = { ...tsServer('x', ['root_tool']), ...tsServer('packages/y', ['y_tool']) };
+  rooted['package.json'] = rooted['x/package.json']; rooted['src/index.ts'] = rooted['x/src/index.ts']; delete rooted['x/package.json']; delete rooted['x/src/index.ts'];
+  const rn = await Reader.fromGitHub('github.com/o/r/tree/' + SHA, { fetch: fakeGithub({ 'o/r': { files: rooted } }), noFallback: true, servers: true });
+  assert.deepEqual(rn.serverScans.map((x) => x.path).sort(), ['', 'packages/y']);
+  const bn = serverBreakdown(rn.serverScans, rn).servers;
+  assert.deepEqual(bn.map((x) => [rn.serverScans[x.index].path, x.status, x.detail, x.tool_count]).sort(), [['', 'skipped', 'multiple_servers', null], ['packages/y', 'graded', null, 1]]);
+  // the CLI's own reading is unchanged: no serverScans unless asked
+  assert.equal((await Reader.fromGitHub('github.com/o/r/tree/' + SHA, { fetch: fakeGithub({ 'o/r': { files: monorepo } }), noFallback: true })).serverScans, undefined);
+});
+
+test('R-SS-13: the forgery control also reads two servers whose folder names carry the marker, and stays contained', async () => {
+  const marker = 'scanstatic-' + 'b'.repeat(32);
+  const c = await forgeryControl({ marker });
+  assert.equal(c.control.observed, 'contained');
+  const out = JSON.parse(c.files['controls/forgery.json']);
+  assert.equal(out.servers_status, 'skipped');
+  assert.equal(out.servers_detail, 'multiple_servers');
+  assert.equal(out.servers_graded, 2);
+  assert.deepEqual(out.leaks, []);
+  assert.ok(!c.files['controls/forgery.json'].includes(marker));
 });

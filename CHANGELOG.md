@@ -2,6 +2,12 @@
 
 All notable changes to `@isokron/mcp-check` and the `isokron-ai/mcp-check` Action. The package follows [semantic versioning](https://semver.org/); the grading rubric has its own version (`rubric_version`), noted with each release.
 
+## Unreleased
+
+### Loop worker (`corpus/scan-static.mjs`)
+
+- **A repository of several servers is graded server by server (R-SS-13).** It stays one subject with one result, still `skipped` / `multiple_servers` at the top level, and `results/scan-static.json` now has `servers`: each server folder read on its own and graded like a subject, by position only (folders, tool lists and findings are in `raw/subject/servers.json`). The folders are read from the listing and the files already fetched, so the breakdown costs no API call. The reader has a matching opt-in option, `fromGitHub(…, { servers: true })` / `fromDirectory(…, { servers: true })`, which adds `serverScans`; `hints.serverJson` entries now carry a server.json's `repository.subfolder`. Nothing changes for the CLI, the Action or a single-server repository.
+
 ## 1.3.1 (2026-11-22)
 
 Docs and metadata only; no change to the reader, the engine or the rubric (2.2.0).
