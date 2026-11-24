@@ -1,0 +1,31 @@
+{
+  "id": "go/build-tag-negated",
+  "language": "go",
+  "idioms": [
+    "conditional"
+  ],
+  "about": "a file under //go:build !nostats is in every default build: its tool is always listed and not conditional",
+  "outcome": "tools",
+  "tools": [
+    "health_check",
+    "runtime_stats"
+  ],
+  "details": {
+    "health_check": {
+      "description": "Reports whether the service is healthy.",
+      "params": [],
+      "required": [],
+      "annotations": {
+        "readOnlyHint": true
+      }
+    },
+    "runtime_stats": {
+      "description": "Returns goroutine and memory counts.",
+      "params": [],
+      "required": [],
+      "annotations": {
+        "readOnlyHint": true
+      }
+    }
+  }
+}

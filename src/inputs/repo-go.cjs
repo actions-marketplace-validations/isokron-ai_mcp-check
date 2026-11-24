@@ -505,7 +505,7 @@
     this.opts = opts || {};
     this.work = { left: this.opts.workBudget || DEFAULT_BUDGET };
     this.files = []; this.pkgs = new Map(); this.byName = new Map(); this.modules = [];
-    (this.opts.goMods || []).forEach(([p, text]) => { const m = /^\s*module\s+("?)([^\s"]+)\1/m.exec(String(text || '')); if (m) this.modules.push({ dir: p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : '', path: m[2] }); });
+    (this.opts.goMods || []).forEach(([p, text]) => { const m = /^[ \t]*module\s+("?)([^\s"]+)\1/m.exec(String(text || '')); if (m) this.modules.push({ dir: p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : '', path: m[2] }); });
     this.modules.sort((a, b) => b.path.length - a.path.length);
     files.forEach(([path, text]) => {
       if (typeof text !== 'string') return;
@@ -560,10 +560,12 @@
     const toks = expr.match(/!|\(|\)|&&|\|\||[\w.]+/g) || [];
     const platforms = Array.from(new Set(toks.filter((x) => PLATFORM.test(x))));
     const tryWith = (set) => { let i = 0; const or = () => { let v = and(); while (toks[i] === '||') { i++; const r = and(); v = v || r; } return v; }; const and = () => { let v = not(); while (toks[i] === '&&') { i++; const r = not(); v = v && r; } return v; }; const not = () => { if (toks[i] === '!') { i++; return !not(); } if (toks[i] === '(') { i++; const v = or(); i++; return v; } const x = toks[i++]; return set.has(x); }; try { return or(); } catch (e) { return true; } };
-    let ok = false;
+    // ok: some platform makes it hold (else the file is excluded); always: every platform does, with no custom tag set
+    // (//go:build !debugtools, go1.21): the file is in every default build and its tools are not conditional (R-RD-18)
+    let ok = false; let always = platforms.length <= 10;
     const n = Math.min(platforms.length, 10);
-    for (let mask = 0; mask < (1 << n) && !ok; mask++) { const set = new Set(); for (let b = 0; b < n; b++) if (mask & (1 << b)) set.add(platforms[b]); if (tryWith(set)) ok = true; }
-    return { expr, excluded: !ok };
+    for (let mask = 0; mask < (1 << n); mask++) { const set = new Set(); for (let b = 0; b < n; b++) if (mask & (1 << b)) set.add(platforms[b]); platforms.forEach((x) => { if (/^go1\.\d+$/.test(x)) set.add(x); }); if (tryWith(set)) ok = true; else always = false; if (ok && !always) break; }
+    return { expr, excluded: !ok, always: ok && always };
   }
 
   // The package an import path names: a folder of the repository (through go.mod's module path, else by suffix).
@@ -2066,7 +2068,8 @@
       if (r.st.ownType && converted.has(r.st.ownType.name)) { r.st.unreadable.add('description'); r.st.unreadable.add('annotations'); }
       const tool = finish(r.st);
       const marks = [];
-      if (f.tag && f.tag.expr) marks.push({ reason: 'conditional-build-tag', detail: f.tag.expr.slice(0, 120), exclude: false });
+      if (f.tag && f.tag.expr && !f.tag.always) marks.push({ reason: 'conditional-build-tag', detail: f.tag.expr.slice(0, 120), exclude: false });
+      if (s.kind !== 'json' && f.t[s.i]) { const gs = this.siteGuards(f, s.i); if (gs.length) marks.push({ reason: 'conditional-branch', detail: gs.map((x) => x.cond).join(' && ').slice(0, 120), exclude: false }); }
       // a tool built in a package-level variable or a plain function that nothing in the repository refers to is
       // not registered (as for literal tool objects in the other languages)
       const holder = this.holderOf(f, s);
@@ -2079,6 +2082,37 @@
       found.push({ path: f.path, line, tool, fidelity: 'derived', literal: s.kind === 'lit' && !(r.st.flavour === 'go-sdk'), marks, language: 'Go' });
     });
     return { found, unresolved, overBudget };
+  };
+
+  // The if / else conditions around token i of a file, outermost first (R-RD-11): a registration under
+  // `if os.Getenv("ADMIN_WRITES") == "1" {` is conditional. [{ kind: 'if' | 'else', cond: source text }]
+  Repo.prototype.siteGuards = function (f, i) {
+    const t = f.t;
+    if (!f.parent) { const par = new Int32Array(t.length).fill(-1); const st = []; for (let k = 0; k < t.length; k++) { if (st.length && st[st.length - 1][1] < k) { while (st.length && st[st.length - 1][1] < k) st.pop(); } par[k] = st.length ? st[st.length - 1][0] : -1; const c = f.close[k]; if (c > k) st.push([k, c]); } f.parent = par; }
+    const out = [];
+    for (let k = f.parent[i], n = 0; k >= 0 && n < 64; k = f.parent[k], n++) {
+      if (!isP(t[k], '{')) continue;
+      if (isId(t[k - 1], 'else')) { out.push({ kind: 'else', cond: 'else' }); continue; }
+      // the statement before the brace: walk back over brackets to its first token; past one `;` when what is before it
+      // starts with `if` (if v := os.Getenv("X"); v == "1" {)
+      const back = (from) => {
+        let h = from; let m = 0;
+        while (h > 0 && m++ < 400) {
+          const x = t[h];
+          if (x.y === 'p' && (x.v === ')' || x.v === ']')) { const o = f.parent[h]; if (o < 0 || o >= h) break; h = o - 1; continue; }
+          if (isP(x, ';') || isP(x, '{') || isP(x, '}') || (x.nl && endsLine(t[h - 1]))) break;
+          h--;
+        }
+        return isP(t[h], ';') || isP(t[h], '{') || isP(t[h], '}') ? h + 1 : h;
+      };
+      let hs = back(k - 1);
+      if (!isId(t[hs], 'if') && !isId(t[hs], 'else') && isP(t[hs - 1], ';') && !t[hs].nl) { const h2 = back(hs - 2); if (isId(t[h2], 'if') || (isId(t[h2], 'else') && isId(t[h2 + 1], 'if'))) hs = h2; }
+      if (isId(t[hs], 'if') || (isId(t[hs], 'else') && isId(t[hs + 1], 'if'))) {
+        let a = isId(t[hs], 'else') ? hs + 2 : hs + 1; for (let q = a; q < k; q++) { if (isP(t[q], ';')) a = q + 1; else if (t[q].y === 'p' && (t[q].v === '(' || t[q].v === '[') && f.close[q] > q) q = f.close[q]; }
+        out.push({ kind: 'if', cond: a < k ? f.text.slice(t[a].s, t[k - 1].e !== undefined ? t[k - 1].e : t[k].s).trim() : 'if' });
+      }
+    }
+    return out.reverse();
   };
 
   // Tool types (a type whose method builds a tool with a fixed name, such as Definition()) that are not registered:

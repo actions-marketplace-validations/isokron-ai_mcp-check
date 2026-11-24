@@ -506,7 +506,7 @@
   function cargoDefaults(text) {
     const sec = /^\[features\]\s*$([\s\S]*?)(?=^\[|(?![\s\S]))/m.exec(text);
     if (!sec) return new Set();
-    const table = new Map(); const re = /^\s*("?)([\w.-]+)\1\s*=\s*\[([\s\S]*?)\]/gm; let m;
+    const table = new Map(); const re = /^[ \t]*("?)([\w.-]+)\1[ \t]*=[ \t]*\[([^\]]{0,8192})\]/gm; let m;
     while ((m = re.exec(sec[1]))) table.set(m[2], (m[3].match(/"([^"]+)"/g) || []).map((x) => x.slice(1, -1)));
     const on = new Set(); const todo = (table.get('default') || []).slice();
     while (todo.length) {
@@ -1259,7 +1259,7 @@
   const EXTRACTOR = /^(RequestContext|Peer|Extension|Meta|CancellationToken|Context|RequestHandlerExtra|State|Arc|ServerContext|ToolContext|Session)$/;
   Repo.prototype.plainArgs = function (fn) {
     const crate = this.crateOf(fn.f.path);
-    if (crate && /^\s*rmcp\s*=|^\s*rmcp\s*\.|"rmcp"/m.test(crate.text)) return null;
+    if (crate && /^[ \t]*rmcp\s*=|^[ \t]*rmcp\s*\.|"rmcp"/m.test(crate.text)) return null;
     const ps = fn.params.filter((p) => !p.self && p.name);
     if (!ps.length || ps.some((p) => { const s0 = lastSeg(p.type); return !s0 || EXTRACTOR.test(s0.name); })) return null;
     return ps;

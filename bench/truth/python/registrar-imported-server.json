@@ -1,0 +1,33 @@
+{
+  "id": "python/registrar-imported-server",
+  "language": "python",
+  "idioms": [
+    "indirection",
+    "decorator"
+  ],
+  "about": "a repository's own registrar decorator that registers on a FastMCP server imported from another module (from app.server import mcp)",
+  "outcome": "tools",
+  "tools": [
+    "find_notes",
+    "count_notes"
+  ],
+  "details": {
+    "find_notes": {
+      "description": "Finds notes whose text matches a query.",
+      "params": [
+        "limit",
+        "query"
+      ],
+      "required": [
+        "query"
+      ],
+      "annotations": {}
+    },
+    "count_notes": {
+      "description": "Counts the notes in the notebook.",
+      "params": [],
+      "required": [],
+      "annotations": {}
+    }
+  }
+}

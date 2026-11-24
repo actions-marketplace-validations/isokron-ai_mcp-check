@@ -470,6 +470,9 @@
   const JOB_V = set('start trigger launch queue enqueue schedule dispatch kick spawn deploy provision');
   // "open" reads (open_nodes, open_file) when its object is something that exists already; open_issue and open_pull_request create.
   const OPEN_READ = set('node nodes file files page pages url urls link links document documents doc docs tab tabs entity entities graph resource resources path paths directory folder');
+  // "resolve" reads when its object is a name to look up (resolve_names, resolve_library_id, resolve_hostname);
+  // resolve_issue, resolve_alert and resolve_thread close something and stay updates.
+  const RESOLVE_READ = set('name names id ids identifier identifiers ref refs reference references alias aliases host hosts hostname hostnames address addresses dns domain domains url urls uri uris path paths symbol symbols handle handles username usernames library libraries type types variable variables location locations coordinates');
   // Operations on two operands (source and target) or one state change: not a replacement of the whole object.
   const REWIRE_V = set('move rename assign unassign transition merge restore sync');
 
@@ -489,6 +492,7 @@
     // create_or_update_file is an upsert: an update that may create, judged by its precondition.
     if (UPSERT_NAME.test(tk.join('_'))) return 'update';
     if (tk[0] === 'open' && tk.length > 1 && OPEN_READ.has(tk[1])) return 'read';
+    if (tk[0] === 'resolve' && tk.length > 1 && RESOLVE_READ.has(tk[1])) return 'read';
     const first = verbClass(tk[0]) || (LEAD_CREATE_V.has(tk[0]) && tk.length > 1 ? 'create' : null);
     if (first) return first;
     // Not when a conjunction follows (cache_get_and_evict, x_get_or_create_user), in a find-and-replace, or over a delete.
