@@ -212,15 +212,18 @@ export function provenanceOf(c, r, toolCount) {
 /** Share of a subject's time limit after which no more server folders of a multi-server repository are read. */
 export const SERVERS_SHARE = 0.6;
 
+/** Languages the reader reads besides TypeScript, JavaScript and Python: a repository mostly in one of them is not
+ * `unsupported_language` (one list for the subject and for each server folder). */
+export const READ_LANGUAGES = Object.freeze(['Go', 'Rust']);
 /** Why one server folder of a multi-server repository has no grades: the subject's codes (usableList). */
-function serverSkip(scan) {
+export function serverSkip(scan) {
   const u = usableList(scan);
   if (u.problem === 'incomplete') return 'reader_limit';
   if (u.problem === 'multiple') return 'multiple_servers';
   if (u.problem === 'names') return 'names_only';
   if (u.problem === 'none') {
     const lang = ((scan.hints && scan.hints.otherLanguages) || [])[0];
-    return lang && lang.files >= lang.readFiles && !['Go', 'Rust'].includes(lang.name) ? 'unsupported_language' : 'no_tools';
+    return lang && lang.files >= lang.readFiles && !READ_LANGUAGES.includes(lang.name) ? 'unsupported_language' : 'no_tools';
   }
   return null;
 }
@@ -405,7 +408,7 @@ export async function scanSubject(subject, { fetch: fetchImpl = globalThis.fetch
     if (u.problem === 'names') throw fail('names_only');
     if (u.problem === 'none') {
       const lang = ((r.hints && r.hints.otherLanguages) || [])[0];
-      if (lang && lang.files >= lang.readFiles && !['Go', 'Rust'].includes(lang.name)) {
+      if (lang && lang.files >= lang.readFiles && !READ_LANGUAGES.includes(lang.name)) {
         out.language_hint = typeof lang.name === 'string' && /^[A-Za-z#+]{1,20}$/.test(lang.name) ? lang.name : null;
         throw fail('unsupported_language');
       }

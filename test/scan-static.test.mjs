@@ -14,7 +14,7 @@ import {
   FORMAT, KNOWN_ANSWER_FILE, MARKER_RE, MAX_ITEMS, MAX_ITEMS_CHARS, PERMANENT, RESULT_PATH, SKIP_REASON, TRANSIENT, skipReasonFor,
   InputProblem, buildBundle, forgeryControl, isDateTime, knownAnswerControl, knownAnswerFile, main, observationsOf,
   parseInputs, runShard, scanSubject, settingsDigest,
-  RAW_FILE_CAP, SERVERS_SHARE, serverBreakdown, CALLS_PER_SUBJECT, RATE_RESERVE, SUBJECT_HEAP_MB, fixtureFetch, httpDetail, jsonUpTo, knownAnswer, notRead, rawText, readDetail, reportItem, scanInWorker, writeItem,
+  RAW_FILE_CAP, READ_LANGUAGES, SERVERS_SHARE, serverBreakdown, serverSkip, CALLS_PER_SUBJECT, RATE_RESERVE, SUBJECT_HEAP_MB, fixtureFetch, httpDetail, jsonUpTo, knownAnswer, notRead, rawText, readDetail, reportItem, scanInWorker, writeItem,
 } from '../corpus/scan-static.mjs';
 import * as guard from '../corpus/loop-guard.mjs';
 // tool-qa's own result contract and ingest checks, at the commit WORKER_KIT_REF pins (test/tool-qa/README.md).
@@ -959,4 +959,13 @@ test('R-SS-13: the forgery control also reads two servers whose folder names car
   assert.equal(out.servers_graded, 2);
   assert.deepEqual(out.leaks, []);
   assert.ok(!c.files['controls/forgery.json'].includes(marker));
+});
+
+test('R-SS-13: a server folder and the whole subject use one list of read languages (unsupported_language agrees)', () => {
+  const none = (lang) => ({ candidates: [], best: null, hints: { otherLanguages: [{ name: lang, files: 5, readFiles: 0 }] } });
+  assert.equal(serverSkip(none('Java')), 'unsupported_language');
+  for (const lang of READ_LANGUAGES) assert.equal(serverSkip(none(lang)), 'no_tools', lang);
+  const src = readFileSync(fileURLToPath(new URL('../corpus/scan-static.mjs', import.meta.url)), 'utf8');
+  assert.equal((src.match(/READ_LANGUAGES\.includes\(lang\.name\)/g) || []).length, 2, 'scanSubject and serverSkip both use READ_LANGUAGES');
+  assert.ok(!/\[\s*'Go',\s*'Rust'[^\]]*\]\.includes/.test(src), 'no second copy of the list');
 });
