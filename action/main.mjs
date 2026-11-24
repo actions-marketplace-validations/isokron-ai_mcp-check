@@ -224,7 +224,7 @@ export async function run() {
     else if (u.problem === 'names') stop = notGraded('Only tool names were found in the source in ' + dir.rel + ' (' + namesOnlyText(u.candidate) + '), which cannot be graded.', LIVE);
     else if (u.problem === 'multiple') {
       const folders = serverFolders(scan).map((f) => (f === '.' ? dir.rel : prefix0 + f));
-      stop = notGraded('Tool definitions of more than one server were found in ' + dir.rel + ': ' + serverChoices(scan) + '. Nothing was merged or picked.', {
+      stop = notGraded('Tool definitions of more than one server were found in ' + dir.rel + ': ' + serverChoices(scan) + '. Nothing was merged or picked.', !folders.length ? LIVE : {
         text: 'Set working-directory to one server\'s folder (' + folders.slice(0, 3).join(', ') + '), or set command or tools-file.',
         md: 'Set `working-directory` to one server\'s folder (' + folders.slice(0, 3).map((f) => mdCode(f)).join(', ') + '), one job or matrix leg per server, or set `command` or `tools-file`: [how](' + ZERO_CONFIG_DOCS + ').',
       });
