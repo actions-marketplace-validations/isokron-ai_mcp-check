@@ -1,16 +1,16 @@
 {
   "source": "https://github.com/isokron-ai/tool-qa",
-  "commit": "b1f25a9b0b7655f45eb353f31562a93d9319d5a4",
+  "commit": "2ffcea16117ec679398f83eefe8c6fa66d38bac6",
   "license": "MIT (Copyright (c) 2026 IsoKron)",
   "note": "Copied byte for byte from tool-qa at this commit, so the scan-static tests judge bundles with tool-qa's own contract and forgery checks. Must be the commit WORKER_KIT_REF names in .github/workflows/scan-static.yml; test/tool-qa.test.mjs checks both.",
   "files": [
     {
       "path": "worker-kit/contract.mjs",
-      "sha256": "74cf597cd6ca32feb897ad7d73742fbc9f1eba5da733e9f21c76a612880d4f47"
+      "sha256": "9cbaf584a26986d3e4727f0a629d8684110c6b8b8c073df09478eb2f7b1ea1c2"
     },
     {
       "path": "worker-kit/manifest.schema.json",
-      "sha256": "772d3fbe83145c09e03d8eaaf7f5a6d5474b8bc0daa72dad91c16c3d3e7867ee"
+      "sha256": "6a3be623f62b0a3601db9cce8b95ed63b72d2c909cf84f5b9116648bd97af1f4"
     },
     {
       "path": "worker-kit/tar.mjs",
