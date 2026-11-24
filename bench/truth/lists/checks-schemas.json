@@ -1,0 +1,65 @@
+{
+  "id": "lists/checks-schemas",
+  "language": "committed-list",
+  "idioms": [
+    "partial-invalid"
+  ],
+  "about": "exact list (a bare array); every check labelled by hand: schema field name, root type, required, enum, vague names, pagination, response format, output schema",
+  "outcome": "tools",
+  "exhaustive": true,
+  "truth_level": "inferred",
+  "tools": [
+    "lookup_record",
+    "resolve_names",
+    "update_zone",
+    "list_zones",
+    "search_records"
+  ],
+  "findings": {
+    "spec-input-schema-field-name": {
+      "lookup_record": "attention"
+    },
+    "schema-additional-properties": {
+      "lookup_record": "advice",
+      "update_zone": "advice"
+    },
+    "schema-output-schema": {
+      "lookup_record": "advice",
+      "resolve_names": "advice",
+      "list_zones": "advice",
+      "search_records": "advice"
+    },
+    "spec-input-schema-root-object": {
+      "resolve_names": "blocking"
+    },
+    "schema-param-description": {
+      "update_zone": "advice"
+    },
+    "schema-enum-missing": {
+      "update_zone": "advice"
+    },
+    "schema-required-unknown": {
+      "update_zone": "attention"
+    },
+    "schema-vague-param": {
+      "update_zone": "advice"
+    },
+    "surface-version-guard": {
+      "update_zone": "advice"
+    },
+    "schema-pagination": {
+      "list_zones": "advice"
+    },
+    "schema-response-format": {
+      "search_records": "advice"
+    },
+    "design-use-when": {
+      "lookup_record": "advice",
+      "resolve_names": "advice",
+      "update_zone": "advice",
+      "list_zones": "advice",
+      "search_records": "advice"
+    },
+    "annot-write-marked-readonly": []
+  }
+}

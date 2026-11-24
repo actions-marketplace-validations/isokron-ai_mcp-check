@@ -1,0 +1,42 @@
+{
+  "id": "go/name-constants",
+  "language": "go",
+  "idioms": [
+    "indirection",
+    "imported"
+  ],
+  "about": "tool names held in package constants in another file",
+  "outcome": "tools",
+  "tools": [
+    "enqueue_job",
+    "peek_queue"
+  ],
+  "details": {
+    "enqueue_job": {
+      "description": "Adds a job to the queue.",
+      "params": [
+        "payload"
+      ],
+      "required": [
+        "payload"
+      ],
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": true
+      }
+    },
+    "peek_queue": {
+      "description": "Shows the next job without removing it.",
+      "params": [],
+      "required": [],
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": true
+      }
+    }
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "id": "typescript/split-tool-modules",
+  "language": "typescript",
+  "idioms": [
+    "imported",
+    "indirection"
+  ],
+  "about": "each tool an exported object in its own module, registered by name and config properties",
+  "outcome": "tools",
+  "tools": [
+    "echo_text",
+    "upper_case"
+  ],
+  "details": {
+    "echo_text": {
+      "description": "Returns the text it is given.",
+      "params": [
+        "text"
+      ],
+      "required": [
+        "text"
+      ],
+      "annotations": {
+        "readOnlyHint": true
+      }
+    },
+    "upper_case": {
+      "description": "Returns the text in upper case.",
+      "params": [
+        "text"
+      ],
+      "required": [
+        "text"
+      ],
+      "annotations": {
+        "readOnlyHint": true
+      }
+    }
+  }
+}

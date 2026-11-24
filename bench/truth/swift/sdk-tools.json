@@ -1,0 +1,13 @@
+{
+  "id": "swift/sdk-tools",
+  "language": "swift",
+  "idioms": [
+    "low-level"
+  ],
+  "about": "the Swift SDK ListTools handler returning Tool values",
+  "outcome": "tools",
+  "tools": [
+    "utc_now",
+    "unix_time"
+  ]
+}

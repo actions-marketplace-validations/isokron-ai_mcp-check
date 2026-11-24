@@ -1,0 +1,14 @@
+{
+  "id": "faulty-oracle/wrong-tool-name",
+  "language": "typescript",
+  "idioms": [
+    "straight-line"
+  ],
+  "about": "a two-tool server",
+  "outcome": "tools",
+  "tools": [
+    "list_label",
+    "rename_label"
+  ],
+  "faulty_oracle": "the first tool is list_labels; the label drops the s"
+}

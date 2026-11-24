@@ -1,0 +1,70 @@
+{
+  "id": "typescript/low-level-list-handler",
+  "language": "typescript",
+  "idioms": [
+    "straight-line",
+    "low-level"
+  ],
+  "about": "the low-level Server with a ListTools handler returning literals",
+  "outcome": "tools",
+  "tools": [
+    "read_text_range",
+    "stat_path"
+  ],
+  "details": {
+    "read_text_range": {
+      "description": "Returns lines start..end of a text file in the workspace.",
+      "params": [
+        "end",
+        "path",
+        "start"
+      ],
+      "required": [
+        "path"
+      ],
+      "annotations": {
+        "readOnlyHint": true
+      }
+    },
+    "stat_path": {
+      "description": "Returns the size and modification time of a path in the workspace.",
+      "params": [
+        "path"
+      ],
+      "required": [
+        "path"
+      ],
+      "annotations": {
+        "readOnlyHint": true
+      }
+    }
+  },
+  "findings": {
+    "anthropic-title": {
+      "read_text_range": "blocking",
+      "stat_path": "blocking"
+    },
+    "design-use-when": {
+      "read_text_range": "advice",
+      "stat_path": "advice"
+    },
+    "openai-hints-explicit": {
+      "read_text_range": "blocking",
+      "stat_path": "blocking"
+    },
+    "schema-output-schema": {
+      "read_text_range": "advice",
+      "stat_path": "advice"
+    },
+    "schema-param-description": {
+      "read_text_range": "advice"
+    }
+  },
+  "exhaustive": true,
+  "not_scored": [
+    "spec-schema-dialect",
+    "spec-execution-legacy",
+    "schema-additional-properties"
+  ],
+  "truth_level": "inferred"
+}

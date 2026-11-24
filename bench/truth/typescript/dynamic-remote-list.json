@@ -1,0 +1,9 @@
+{
+  "id": "typescript/dynamic-remote-list",
+  "language": "typescript",
+  "idioms": [
+    "dynamic"
+  ],
+  "about": "every tool comes from a catalogue fetched at start-up; no tool exists in the source",
+  "outcome": "none"
+}

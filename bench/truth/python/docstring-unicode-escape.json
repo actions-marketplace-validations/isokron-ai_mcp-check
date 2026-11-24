@@ -1,0 +1,41 @@
+{
+  "id": "python/docstring-unicode-escape",
+  "language": "python",
+  "idioms": [
+    "adversarial",
+    "decorator"
+  ],
+  "about": "bidirectional-override characters written as \\\\u escapes inside a docstring: Python decodes them, so the live description carries them",
+  "outcome": "tools",
+  "tools": [
+    "list_folders",
+    "folder_size"
+  ],
+  "findings": {
+    "sec-bidi-controls": {
+      "list_folders": "blocking"
+    }
+  },
+  "details": {
+    "list_folders": {
+      "description": "Lists the folders under a root.\u202eesrever\u202c",
+      "params": [
+        "root"
+      ],
+      "required": [
+        "root"
+      ],
+      "annotations": {}
+    },
+    "folder_size": {
+      "description": "Returns the size of a folder in bytes.",
+      "params": [
+        "path"
+      ],
+      "required": [
+        "path"
+      ],
+      "annotations": {}
+    }
+  }
+}

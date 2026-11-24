@@ -1,0 +1,7098 @@
+{
+ "cases": 75,
+ "faulty_oracle_cases": 5,
+ "checks": {
+  "abstain": {
+   "all": {
+    "tp": 4,
+    "fp": 0,
+    "fn": 1,
+    "tn": 70,
+    "precision": {
+     "k": 4,
+     "n": 4,
+     "p": 1,
+     "lo": 0.5101,
+     "hi": 1
+    },
+    "recall": {
+     "k": 4,
+     "n": 5,
+     "p": 0.8,
+     "lo": 0.3755,
+     "hi": 0.9638
+    }
+   },
+   "by_language": {
+    "committed-list": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 7,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    },
+    "csharp": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 1,
+     "precision": null,
+     "recall": null
+    },
+    "go": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 9,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    },
+    "java": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 1,
+     "precision": null,
+     "recall": null
+    },
+    "javascript": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 4,
+     "precision": null,
+     "recall": null
+    },
+    "kotlin": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 1,
+     "precision": null,
+     "recall": null
+    },
+    "php": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 1,
+     "precision": null,
+     "recall": null
+    },
+    "python": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 13,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    },
+    "ruby": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 1,
+     "precision": null,
+     "recall": null
+    },
+    "rust": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 1,
+     "tn": 7,
+     "precision": null,
+     "recall": {
+      "k": 0,
+      "n": 1,
+      "p": 0,
+      "lo": 0,
+      "hi": 0.7935
+     }
+    },
+    "swift": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 1,
+     "precision": null,
+     "recall": null
+    },
+    "typescript": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 24,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    }
+   }
+  },
+  "annot-delete-marked-safe": {
+   "all": {
+    "tp": 3,
+    "fp": 0,
+    "fn": 0,
+    "tn": 153,
+    "precision": {
+     "k": 3,
+     "n": 3,
+     "p": 1,
+     "lo": 0.4385,
+     "hi": 1
+    },
+    "recall": {
+     "k": 3,
+     "n": 3,
+     "p": 1,
+     "lo": 0.4385,
+     "hi": 1
+    }
+   },
+   "by_language": {
+    "committed-list": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 25,
+     "precision": null,
+     "recall": null
+    },
+    "csharp": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "go": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 17,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    },
+    "java": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "javascript": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 8,
+     "precision": null,
+     "recall": null
+    },
+    "kotlin": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "php": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "python": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 27,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    },
+    "ruby": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "rust": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 13,
+     "precision": null,
+     "recall": null
+    },
+    "swift": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "typescript": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 51,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    }
+   }
+  },
+  "annot-write-marked-readonly": {
+   "all": {
+    "tp": 3,
+    "fp": 1,
+    "fn": 0,
+    "tn": 152,
+    "precision": {
+     "k": 3,
+     "n": 4,
+     "p": 0.75,
+     "lo": 0.3006,
+     "hi": 0.9544
+    },
+    "recall": {
+     "k": 3,
+     "n": 3,
+     "p": 1,
+     "lo": 0.4385,
+     "hi": 1
+    }
+   },
+   "by_language": {
+    "committed-list": {
+     "tp": 0,
+     "fp": 1,
+     "fn": 0,
+     "tn": 24,
+     "precision": {
+      "k": 0,
+      "n": 1,
+      "p": 0,
+      "lo": 0,
+      "hi": 0.7935
+     },
+     "recall": null
+    },
+    "csharp": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "go": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 17,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    },
+    "java": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "javascript": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 8,
+     "precision": null,
+     "recall": null
+    },
+    "kotlin": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "php": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "python": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 27,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    },
+    "ruby": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "rust": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 13,
+     "precision": null,
+     "recall": null
+    },
+    "swift": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "typescript": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 51,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    }
+   }
+  },
+  "anthropic-conversation-data": {
+   "all": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 0,
+    "tn": 6,
+    "precision": {
+     "k": 1,
+     "n": 1,
+     "p": 1,
+     "lo": 0.2065,
+     "hi": 1
+    },
+    "recall": {
+     "k": 1,
+     "n": 1,
+     "p": 1,
+     "lo": 0.2065,
+     "hi": 1
+    }
+   },
+   "by_language": {
+    "committed-list": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 6,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    }
+   }
+  },
+  "anthropic-description": {
+   "all": {
+    "tp": 7,
+    "fp": 0,
+    "fn": 0,
+    "tn": 3,
+    "precision": {
+     "k": 7,
+     "n": 7,
+     "p": 1,
+     "lo": 0.6457,
+     "hi": 1
+    },
+    "recall": {
+     "k": 7,
+     "n": 7,
+     "p": 1,
+     "lo": 0.6457,
+     "hi": 1
+    }
+   },
+   "by_language": {
+    "go": {
+     "tp": 2,
+     "fp": 0,
+     "fn": 0,
+     "tn": 0,
+     "precision": {
+      "k": 2,
+      "n": 2,
+      "p": 1,
+      "lo": 0.3424,
+      "hi": 1
+     },
+     "recall": {
+      "k": 2,
+      "n": 2,
+      "p": 1,
+      "lo": 0.3424,
+      "hi": 1
+     }
+    },
+    "javascript": {
+     "tp": 2,
+     "fp": 0,
+     "fn": 0,
+     "tn": 0,
+     "precision": {
+      "k": 2,
+      "n": 2,
+      "p": 1,
+      "lo": 0.3424,
+      "hi": 1
+     },
+     "recall": {
+      "k": 2,
+      "n": 2,
+      "p": 1,
+      "lo": 0.3424,
+      "hi": 1
+     }
+    },
+    "python": {
+     "tp": 2,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": {
+      "k": 2,
+      "n": 2,
+      "p": 1,
+      "lo": 0.3424,
+      "hi": 1
+     },
+     "recall": {
+      "k": 2,
+      "n": 2,
+      "p": 1,
+      "lo": 0.3424,
+      "hi": 1
+     }
+    },
+    "rust": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 1,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    }
+   }
+  },
+  "anthropic-hint": {
+   "all": {
+    "tp": 6,
+    "fp": 0,
+    "fn": 0,
+    "tn": 2,
+    "precision": {
+     "k": 6,
+     "n": 6,
+     "p": 1,
+     "lo": 0.6097,
+     "hi": 1
+    },
+    "recall": {
+     "k": 6,
+     "n": 6,
+     "p": 1,
+     "lo": 0.6097,
+     "hi": 1
+    }
+   },
+   "by_language": {
+    "go": {
+     "tp": 2,
+     "fp": 0,
+     "fn": 0,
+     "tn": 0,
+     "precision": {
+      "k": 2,
+      "n": 2,
+      "p": 1,
+      "lo": 0.3424,
+      "hi": 1
+     },
+     "recall": {
+      "k": 2,
+      "n": 2,
+      "p": 1,
+      "lo": 0.3424,
+      "hi": 1
+     }
+    },
+    "python": {
+     "tp": 3,
+     "fp": 0,
+     "fn": 0,
+     "tn": 1,
+     "precision": {
+      "k": 3,
+      "n": 3,
+      "p": 1,
+      "lo": 0.4385,
+      "hi": 1
+     },
+     "recall": {
+      "k": 3,
+      "n": 3,
+      "p": 1,
+      "lo": 0.4385,
+      "hi": 1
+     }
+    },
+    "rust": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 1,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    }
+   }
+  },
+  "anthropic-hint-platforms-differ": {
+   "all": {
+    "tp": 3,
+    "fp": 0,
+    "fn": 0,
+    "tn": 6,
+    "precision": {
+     "k": 3,
+     "n": 3,
+     "p": 1,
+     "lo": 0.4385,
+     "hi": 1
+    },
+    "recall": {
+     "k": 3,
+     "n": 3,
+     "p": 1,
+     "lo": 0.4385,
+     "hi": 1
+    }
+   },
+   "by_language": {
+    "committed-list": {
+     "tp": 3,
+     "fp": 0,
+     "fn": 0,
+     "tn": 6,
+     "precision": {
+      "k": 3,
+      "n": 3,
+      "p": 1,
+      "lo": 0.4385,
+      "hi": 1
+     },
+     "recall": {
+      "k": 3,
+      "n": 3,
+      "p": 1,
+      "lo": 0.4385,
+      "hi": 1
+     }
+    }
+   }
+  },
+  "anthropic-title": {
+   "all": {
+    "tp": 14,
+    "fp": 0,
+    "fn": 0,
+    "tn": 0,
+    "precision": {
+     "k": 14,
+     "n": 14,
+     "p": 1,
+     "lo": 0.7847,
+     "hi": 1
+    },
+    "recall": {
+     "k": 14,
+     "n": 14,
+     "p": 1,
+     "lo": 0.7847,
+     "hi": 1
+    }
+   },
+   "by_language": {
+    "go": {
+     "tp": 4,
+     "fp": 0,
+     "fn": 0,
+     "tn": 0,
+     "precision": {
+      "k": 4,
+      "n": 4,
+      "p": 1,
+      "lo": 0.5101,
+      "hi": 1
+     },
+     "recall": {
+      "k": 4,
+      "n": 4,
+      "p": 1,
+      "lo": 0.5101,
+      "hi": 1
+     }
+    },
+    "javascript": {
+     "tp": 2,
+     "fp": 0,
+     "fn": 0,
+     "tn": 0,
+     "precision": {
+      "k": 2,
+      "n": 2,
+      "p": 1,
+      "lo": 0.3424,
+      "hi": 1
+     },
+     "recall": {
+      "k": 2,
+      "n": 2,
+      "p": 1,
+      "lo": 0.3424,
+      "hi": 1
+     }
+    },
+    "python": {
+     "tp": 4,
+     "fp": 0,
+     "fn": 0,
+     "tn": 0,
+     "precision": {
+      "k": 4,
+      "n": 4,
+      "p": 1,
+      "lo": 0.5101,
+      "hi": 1
+     },
+     "recall": {
+      "k": 4,
+      "n": 4,
+      "p": 1,
+      "lo": 0.5101,
+      "hi": 1
+     }
+    },
+    "rust": {
+     "tp": 2,
+     "fp": 0,
+     "fn": 0,
+     "tn": 0,
+     "precision": {
+      "k": 2,
+      "n": 2,
+      "p": 1,
+      "lo": 0.3424,
+      "hi": 1
+     },
+     "recall": {
+      "k": 2,
+      "n": 2,
+      "p": 1,
+      "lo": 0.3424,
+      "hi": 1
+     }
+    },
+    "typescript": {
+     "tp": 2,
+     "fp": 0,
+     "fn": 0,
+     "tn": 0,
+     "precision": {
+      "k": 2,
+      "n": 2,
+      "p": 1,
+      "lo": 0.3424,
+      "hi": 1
+     },
+     "recall": {
+      "k": 2,
+      "n": 2,
+      "p": 1,
+      "lo": 0.3424,
+      "hi": 1
+     }
+    }
+   }
+  },
+  "anthropic-unsupported-use": {
+   "all": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 0,
+    "tn": 6,
+    "precision": {
+     "k": 1,
+     "n": 1,
+     "p": 1,
+     "lo": 0.2065,
+     "hi": 1
+    },
+    "recall": {
+     "k": 1,
+     "n": 1,
+     "p": 1,
+     "lo": 0.2065,
+     "hi": 1
+    }
+   },
+   "by_language": {
+    "committed-list": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 6,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    }
+   }
+  },
+  "design-use-when": {
+   "all": {
+    "tp": 34,
+    "fp": 0,
+    "fn": 0,
+    "tn": 2,
+    "precision": {
+     "k": 34,
+     "n": 34,
+     "p": 1,
+     "lo": 0.8985,
+     "hi": 1
+    },
+    "recall": {
+     "k": 34,
+     "n": 34,
+     "p": 1,
+     "lo": 0.8985,
+     "hi": 1
+    }
+   },
+   "by_language": {
+    "committed-list": {
+     "tp": 17,
+     "fp": 0,
+     "fn": 0,
+     "tn": 0,
+     "precision": {
+      "k": 17,
+      "n": 17,
+      "p": 1,
+      "lo": 0.8157,
+      "hi": 1
+     },
+     "recall": {
+      "k": 17,
+      "n": 17,
+      "p": 1,
+      "lo": 0.8157,
+      "hi": 1
+     }
+    },
+    "go": {
+     "tp": 4,
+     "fp": 0,
+     "fn": 0,
+     "tn": 0,
+     "precision": {
+      "k": 4,
+      "n": 4,
+      "p": 1,
+      "lo": 0.5101,
+      "hi": 1
+     },
+     "recall": {
+      "k": 4,
+      "n": 4,
+      "p": 1,
+      "lo": 0.5101,
+      "hi": 1
+     }
+    },
+    "javascript": {
+     "tp": 2,
+     "fp": 0,
+     "fn": 0,
+     "tn": 0,
+     "precision": {
+      "k": 2,
+      "n": 2,
+      "p": 1,
+      "lo": 0.3424,
+      "hi": 1
+     },
+     "recall": {
+      "k": 2,
+      "n": 2,
+      "p": 1,
+      "lo": 0.3424,
+      "hi": 1
+     }
+    },
+    "python": {
+     "tp": 4,
+     "fp": 0,
+     "fn": 0,
+     "tn": 0,
+     "precision": {
+      "k": 4,
+      "n": 4,
+      "p": 1,
+      "lo": 0.5101,
+      "hi": 1
+     },
+     "recall": {
+      "k": 4,
+      "n": 4,
+      "p": 1,
+      "lo": 0.5101,
+      "hi": 1
+     }
+    },
+    "rust": {
+     "tp": 2,
+     "fp": 0,
+     "fn": 0,
+     "tn": 0,
+     "precision": {
+      "k": 2,
+      "n": 2,
+      "p": 1,
+      "lo": 0.3424,
+      "hi": 1
+     },
+     "recall": {
+      "k": 2,
+      "n": 2,
+      "p": 1,
+      "lo": 0.3424,
+      "hi": 1
+     }
+    },
+    "typescript": {
+     "tp": 5,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": {
+      "k": 5,
+      "n": 5,
+      "p": 1,
+      "lo": 0.5655,
+      "hi": 1
+     },
+     "recall": {
+      "k": 5,
+      "n": 5,
+      "p": 1,
+      "lo": 0.5655,
+      "hi": 1
+     }
+    }
+   }
+  },
+  "gap-shell-injectable-url": {
+   "all": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 1,
+    "tn": 1,
+    "precision": null,
+    "recall": {
+     "k": 0,
+     "n": 1,
+     "p": 0,
+     "lo": 0,
+     "hi": 0.7935
+    }
+   },
+   "by_language": {
+    "typescript": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 1,
+     "tn": 1,
+     "precision": null,
+     "recall": {
+      "k": 0,
+      "n": 1,
+      "p": 0,
+      "lo": 0,
+      "hi": 0.7935
+     }
+    }
+   }
+  },
+  "openai-conversation-input": {
+   "all": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 0,
+    "tn": 6,
+    "precision": {
+     "k": 1,
+     "n": 1,
+     "p": 1,
+     "lo": 0.2065,
+     "hi": 1
+    },
+    "recall": {
+     "k": 1,
+     "n": 1,
+     "p": 1,
+     "lo": 0.2065,
+     "hi": 1
+    }
+   },
+   "by_language": {
+    "committed-list": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 6,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    }
+   }
+  },
+  "openai-generic-executor": {
+   "all": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 0,
+    "tn": 6,
+    "precision": {
+     "k": 1,
+     "n": 1,
+     "p": 1,
+     "lo": 0.2065,
+     "hi": 1
+    },
+    "recall": {
+     "k": 1,
+     "n": 1,
+     "p": 1,
+     "lo": 0.2065,
+     "hi": 1
+    }
+   },
+   "by_language": {
+    "committed-list": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 6,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    }
+   }
+  },
+  "openai-hints-explicit": {
+   "all": {
+    "tp": 14,
+    "fp": 0,
+    "fn": 0,
+    "tn": 8,
+    "precision": {
+     "k": 14,
+     "n": 14,
+     "p": 1,
+     "lo": 0.7847,
+     "hi": 1
+    },
+    "recall": {
+     "k": 14,
+     "n": 14,
+     "p": 1,
+     "lo": 0.7847,
+     "hi": 1
+    }
+   },
+   "by_language": {
+    "committed-list": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 6,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    },
+    "go": {
+     "tp": 2,
+     "fp": 0,
+     "fn": 0,
+     "tn": 0,
+     "precision": {
+      "k": 2,
+      "n": 2,
+      "p": 1,
+      "lo": 0.3424,
+      "hi": 1
+     },
+     "recall": {
+      "k": 2,
+      "n": 2,
+      "p": 1,
+      "lo": 0.3424,
+      "hi": 1
+     }
+    },
+    "javascript": {
+     "tp": 2,
+     "fp": 0,
+     "fn": 0,
+     "tn": 0,
+     "precision": {
+      "k": 2,
+      "n": 2,
+      "p": 1,
+      "lo": 0.3424,
+      "hi": 1
+     },
+     "recall": {
+      "k": 2,
+      "n": 2,
+      "p": 1,
+      "lo": 0.3424,
+      "hi": 1
+     }
+    },
+    "python": {
+     "tp": 4,
+     "fp": 0,
+     "fn": 0,
+     "tn": 0,
+     "precision": {
+      "k": 4,
+      "n": 4,
+      "p": 1,
+      "lo": 0.5101,
+      "hi": 1
+     },
+     "recall": {
+      "k": 4,
+      "n": 4,
+      "p": 1,
+      "lo": 0.5101,
+      "hi": 1
+     }
+    },
+    "rust": {
+     "tp": 2,
+     "fp": 0,
+     "fn": 0,
+     "tn": 0,
+     "precision": {
+      "k": 2,
+      "n": 2,
+      "p": 1,
+      "lo": 0.3424,
+      "hi": 1
+     },
+     "recall": {
+      "k": 2,
+      "n": 2,
+      "p": 1,
+      "lo": 0.3424,
+      "hi": 1
+     }
+    },
+    "typescript": {
+     "tp": 3,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": {
+      "k": 3,
+      "n": 3,
+      "p": 1,
+      "lo": 0.4385,
+      "hi": 1
+     },
+     "recall": {
+      "k": 3,
+      "n": 3,
+      "p": 1,
+      "lo": 0.4385,
+      "hi": 1
+     }
+    }
+   }
+  },
+  "openai-name-promotional": {
+   "all": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 0,
+    "tn": 1,
+    "precision": {
+     "k": 1,
+     "n": 1,
+     "p": 1,
+     "lo": 0.2065,
+     "hi": 1
+    },
+    "recall": {
+     "k": 1,
+     "n": 1,
+     "p": 1,
+     "lo": 0.2065,
+     "hi": 1
+    }
+   },
+   "by_language": {
+    "committed-list": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 1,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    }
+   }
+  },
+  "openai-name-unique": {
+   "all": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 1,
+    "tn": 67,
+    "precision": {
+     "k": 1,
+     "n": 1,
+     "p": 1,
+     "lo": 0.2065,
+     "hi": 1
+    },
+    "recall": {
+     "k": 1,
+     "n": 2,
+     "p": 0.5,
+     "lo": 0.0945,
+     "hi": 0.9055
+    }
+   },
+   "by_language": {
+    "committed-list": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 6,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    },
+    "csharp": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 1,
+     "precision": null,
+     "recall": null
+    },
+    "go": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 9,
+     "precision": null,
+     "recall": null
+    },
+    "java": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 1,
+     "precision": null,
+     "recall": null
+    },
+    "javascript": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 4,
+     "precision": null,
+     "recall": null
+    },
+    "kotlin": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 1,
+     "precision": null,
+     "recall": null
+    },
+    "php": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 1,
+     "precision": null,
+     "recall": null
+    },
+    "python": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 13,
+     "precision": null,
+     "recall": null
+    },
+    "ruby": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 1,
+     "precision": null,
+     "recall": null
+    },
+    "rust": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 7,
+     "precision": null,
+     "recall": null
+    },
+    "swift": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 1,
+     "precision": null,
+     "recall": null
+    },
+    "typescript": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 1,
+     "tn": 22,
+     "precision": null,
+     "recall": {
+      "k": 0,
+      "n": 1,
+      "p": 0,
+      "lo": 0,
+      "hi": 0.7935
+     }
+    }
+   }
+  },
+  "openai-precise-location": {
+   "all": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 0,
+    "tn": 6,
+    "precision": {
+     "k": 1,
+     "n": 1,
+     "p": 1,
+     "lo": 0.2065,
+     "hi": 1
+    },
+    "recall": {
+     "k": 1,
+     "n": 1,
+     "p": 1,
+     "lo": 0.2065,
+     "hi": 1
+    }
+   },
+   "by_language": {
+    "committed-list": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 6,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    }
+   }
+  },
+  "openai-readonly-destructive": {
+   "all": {
+    "tp": 3,
+    "fp": 0,
+    "fn": 0,
+    "tn": 6,
+    "precision": {
+     "k": 3,
+     "n": 3,
+     "p": 1,
+     "lo": 0.4385,
+     "hi": 1
+    },
+    "recall": {
+     "k": 3,
+     "n": 3,
+     "p": 1,
+     "lo": 0.4385,
+     "hi": 1
+    }
+   },
+   "by_language": {
+    "committed-list": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 6,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    },
+    "go": {
+     "tp": 2,
+     "fp": 0,
+     "fn": 0,
+     "tn": 0,
+     "precision": {
+      "k": 2,
+      "n": 2,
+      "p": 1,
+      "lo": 0.3424,
+      "hi": 1
+     },
+     "recall": {
+      "k": 2,
+      "n": 2,
+      "p": 1,
+      "lo": 0.3424,
+      "hi": 1
+     }
+    }
+   }
+  },
+  "openai-restricted-input": {
+   "all": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 0,
+    "tn": 6,
+    "precision": {
+     "k": 1,
+     "n": 1,
+     "p": 1,
+     "lo": 0.2065,
+     "hi": 1
+    },
+    "recall": {
+     "k": 1,
+     "n": 1,
+     "p": 1,
+     "lo": 0.2065,
+     "hi": 1
+    }
+   },
+   "by_language": {
+    "committed-list": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 6,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    }
+   }
+  },
+  "openai-retry": {
+   "all": {
+    "tp": 9,
+    "fp": 0,
+    "fn": 0,
+    "tn": 14,
+    "precision": {
+     "k": 9,
+     "n": 9,
+     "p": 1,
+     "lo": 0.7009,
+     "hi": 1
+    },
+    "recall": {
+     "k": 9,
+     "n": 9,
+     "p": 1,
+     "lo": 0.7009,
+     "hi": 1
+    }
+   },
+   "by_language": {
+    "committed-list": {
+     "tp": 3,
+     "fp": 0,
+     "fn": 0,
+     "tn": 9,
+     "precision": {
+      "k": 3,
+      "n": 3,
+      "p": 1,
+      "lo": 0.4385,
+      "hi": 1
+     },
+     "recall": {
+      "k": 3,
+      "n": 3,
+      "p": 1,
+      "lo": 0.4385,
+      "hi": 1
+     }
+    },
+    "go": {
+     "tp": 2,
+     "fp": 0,
+     "fn": 0,
+     "tn": 0,
+     "precision": {
+      "k": 2,
+      "n": 2,
+      "p": 1,
+      "lo": 0.3424,
+      "hi": 1
+     },
+     "recall": {
+      "k": 2,
+      "n": 2,
+      "p": 1,
+      "lo": 0.3424,
+      "hi": 1
+     }
+    },
+    "javascript": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 1,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    },
+    "python": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 1,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    },
+    "rust": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 1,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    },
+    "typescript": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    }
+   }
+  },
+  "outcome": {
+   "all": {
+    "tp": 64,
+    "fp": 0,
+    "fn": 11,
+    "tn": 0,
+    "precision": {
+     "k": 64,
+     "n": 64,
+     "p": 1,
+     "lo": 0.9434,
+     "hi": 1
+    },
+    "recall": {
+     "k": 64,
+     "n": 75,
+     "p": 0.8533,
+     "lo": 0.7562,
+     "hi": 0.9161
+    }
+   },
+   "by_language": {
+    "committed-list": {
+     "tp": 7,
+     "fp": 0,
+     "fn": 1,
+     "tn": 0,
+     "precision": {
+      "k": 7,
+      "n": 7,
+      "p": 1,
+      "lo": 0.6457,
+      "hi": 1
+     },
+     "recall": {
+      "k": 7,
+      "n": 8,
+      "p": 0.875,
+      "lo": 0.5291,
+      "hi": 0.9776
+     }
+    },
+    "csharp": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 1,
+     "tn": 0,
+     "precision": null,
+     "recall": {
+      "k": 0,
+      "n": 1,
+      "p": 0,
+      "lo": 0,
+      "hi": 0.7935
+     }
+    },
+    "go": {
+     "tp": 10,
+     "fp": 0,
+     "fn": 0,
+     "tn": 0,
+     "precision": {
+      "k": 10,
+      "n": 10,
+      "p": 1,
+      "lo": 0.7225,
+      "hi": 1
+     },
+     "recall": {
+      "k": 10,
+      "n": 10,
+      "p": 1,
+      "lo": 0.7225,
+      "hi": 1
+     }
+    },
+    "java": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 1,
+     "tn": 0,
+     "precision": null,
+     "recall": {
+      "k": 0,
+      "n": 1,
+      "p": 0,
+      "lo": 0,
+      "hi": 0.7935
+     }
+    },
+    "javascript": {
+     "tp": 4,
+     "fp": 0,
+     "fn": 0,
+     "tn": 0,
+     "precision": {
+      "k": 4,
+      "n": 4,
+      "p": 1,
+      "lo": 0.5101,
+      "hi": 1
+     },
+     "recall": {
+      "k": 4,
+      "n": 4,
+      "p": 1,
+      "lo": 0.5101,
+      "hi": 1
+     }
+    },
+    "kotlin": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 1,
+     "tn": 0,
+     "precision": null,
+     "recall": {
+      "k": 0,
+      "n": 1,
+      "p": 0,
+      "lo": 0,
+      "hi": 0.7935
+     }
+    },
+    "php": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 1,
+     "tn": 0,
+     "precision": null,
+     "recall": {
+      "k": 0,
+      "n": 1,
+      "p": 0,
+      "lo": 0,
+      "hi": 0.7935
+     }
+    },
+    "python": {
+     "tp": 12,
+     "fp": 0,
+     "fn": 2,
+     "tn": 0,
+     "precision": {
+      "k": 12,
+      "n": 12,
+      "p": 1,
+      "lo": 0.7575,
+      "hi": 1
+     },
+     "recall": {
+      "k": 12,
+      "n": 14,
+      "p": 0.8571,
+      "lo": 0.6006,
+      "hi": 0.9599
+     }
+    },
+    "ruby": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 1,
+     "tn": 0,
+     "precision": null,
+     "recall": {
+      "k": 0,
+      "n": 1,
+      "p": 0,
+      "lo": 0,
+      "hi": 0.7935
+     }
+    },
+    "rust": {
+     "tp": 7,
+     "fp": 0,
+     "fn": 1,
+     "tn": 0,
+     "precision": {
+      "k": 7,
+      "n": 7,
+      "p": 1,
+      "lo": 0.6457,
+      "hi": 1
+     },
+     "recall": {
+      "k": 7,
+      "n": 8,
+      "p": 0.875,
+      "lo": 0.5291,
+      "hi": 0.9776
+     }
+    },
+    "swift": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 1,
+     "tn": 0,
+     "precision": null,
+     "recall": {
+      "k": 0,
+      "n": 1,
+      "p": 0,
+      "lo": 0,
+      "hi": 0.7935
+     }
+    },
+    "typescript": {
+     "tp": 24,
+     "fp": 0,
+     "fn": 1,
+     "tn": 0,
+     "precision": {
+      "k": 24,
+      "n": 24,
+      "p": 1,
+      "lo": 0.862,
+      "hi": 1
+     },
+     "recall": {
+      "k": 24,
+      "n": 25,
+      "p": 0.96,
+      "lo": 0.8046,
+      "hi": 0.9929
+     }
+    }
+   }
+  },
+  "reader-annotations": {
+   "all": {
+    "tp": 112,
+    "fp": 0,
+    "fn": 2,
+    "tn": 0,
+    "precision": {
+     "k": 112,
+     "n": 112,
+     "p": 1,
+     "lo": 0.9668,
+     "hi": 1
+    },
+    "recall": {
+     "k": 112,
+     "n": 114,
+     "p": 0.9825,
+     "lo": 0.9383,
+     "hi": 0.9952
+    }
+   },
+   "by_language": {
+    "committed-list": {
+     "tp": 4,
+     "fp": 0,
+     "fn": 0,
+     "tn": 0,
+     "precision": {
+      "k": 4,
+      "n": 4,
+      "p": 1,
+      "lo": 0.5101,
+      "hi": 1
+     },
+     "recall": {
+      "k": 4,
+      "n": 4,
+      "p": 1,
+      "lo": 0.5101,
+      "hi": 1
+     }
+    },
+    "go": {
+     "tp": 18,
+     "fp": 0,
+     "fn": 0,
+     "tn": 0,
+     "precision": {
+      "k": 18,
+      "n": 18,
+      "p": 1,
+      "lo": 0.8241,
+      "hi": 1
+     },
+     "recall": {
+      "k": 18,
+      "n": 18,
+      "p": 1,
+      "lo": 0.8241,
+      "hi": 1
+     }
+    },
+    "javascript": {
+     "tp": 8,
+     "fp": 0,
+     "fn": 0,
+     "tn": 0,
+     "precision": {
+      "k": 8,
+      "n": 8,
+      "p": 1,
+      "lo": 0.6756,
+      "hi": 1
+     },
+     "recall": {
+      "k": 8,
+      "n": 8,
+      "p": 1,
+      "lo": 0.6756,
+      "hi": 1
+     }
+    },
+    "python": {
+     "tp": 24,
+     "fp": 0,
+     "fn": 0,
+     "tn": 0,
+     "precision": {
+      "k": 24,
+      "n": 24,
+      "p": 1,
+      "lo": 0.862,
+      "hi": 1
+     },
+     "recall": {
+      "k": 24,
+      "n": 24,
+      "p": 1,
+      "lo": 0.862,
+      "hi": 1
+     }
+    },
+    "rust": {
+     "tp": 13,
+     "fp": 0,
+     "fn": 0,
+     "tn": 0,
+     "precision": {
+      "k": 13,
+      "n": 13,
+      "p": 1,
+      "lo": 0.7719,
+      "hi": 1
+     },
+     "recall": {
+      "k": 13,
+      "n": 13,
+      "p": 1,
+      "lo": 0.7719,
+      "hi": 1
+     }
+    },
+    "typescript": {
+     "tp": 45,
+     "fp": 0,
+     "fn": 2,
+     "tn": 0,
+     "precision": {
+      "k": 45,
+      "n": 45,
+      "p": 1,
+      "lo": 0.9213,
+      "hi": 1
+     },
+     "recall": {
+      "k": 45,
+      "n": 47,
+      "p": 0.9574,
+      "lo": 0.8575,
+      "hi": 0.9883
+     }
+    }
+   }
+  },
+  "reader-conditional": {
+   "all": {
+    "tp": 2,
+    "fp": 0,
+    "fn": 1,
+    "tn": 0,
+    "precision": {
+     "k": 2,
+     "n": 2,
+     "p": 1,
+     "lo": 0.3424,
+     "hi": 1
+    },
+    "recall": {
+     "k": 2,
+     "n": 3,
+     "p": 0.6667,
+     "lo": 0.2077,
+     "hi": 0.9385
+    }
+   },
+   "by_language": {
+    "go": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 1,
+     "tn": 0,
+     "precision": null,
+     "recall": {
+      "k": 0,
+      "n": 1,
+      "p": 0,
+      "lo": 0,
+      "hi": 0.7935
+     }
+    },
+    "python": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 0,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    },
+    "typescript": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 0,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    }
+   }
+  },
+  "reader-description": {
+   "all": {
+    "tp": 113,
+    "fp": 0,
+    "fn": 1,
+    "tn": 0,
+    "precision": {
+     "k": 113,
+     "n": 113,
+     "p": 1,
+     "lo": 0.9671,
+     "hi": 1
+    },
+    "recall": {
+     "k": 113,
+     "n": 114,
+     "p": 0.9912,
+     "lo": 0.952,
+     "hi": 0.9984
+    }
+   },
+   "by_language": {
+    "committed-list": {
+     "tp": 4,
+     "fp": 0,
+     "fn": 0,
+     "tn": 0,
+     "precision": {
+      "k": 4,
+      "n": 4,
+      "p": 1,
+      "lo": 0.5101,
+      "hi": 1
+     },
+     "recall": {
+      "k": 4,
+      "n": 4,
+      "p": 1,
+      "lo": 0.5101,
+      "hi": 1
+     }
+    },
+    "go": {
+     "tp": 18,
+     "fp": 0,
+     "fn": 0,
+     "tn": 0,
+     "precision": {
+      "k": 18,
+      "n": 18,
+      "p": 1,
+      "lo": 0.8241,
+      "hi": 1
+     },
+     "recall": {
+      "k": 18,
+      "n": 18,
+      "p": 1,
+      "lo": 0.8241,
+      "hi": 1
+     }
+    },
+    "javascript": {
+     "tp": 8,
+     "fp": 0,
+     "fn": 0,
+     "tn": 0,
+     "precision": {
+      "k": 8,
+      "n": 8,
+      "p": 1,
+      "lo": 0.6756,
+      "hi": 1
+     },
+     "recall": {
+      "k": 8,
+      "n": 8,
+      "p": 1,
+      "lo": 0.6756,
+      "hi": 1
+     }
+    },
+    "python": {
+     "tp": 23,
+     "fp": 0,
+     "fn": 1,
+     "tn": 0,
+     "precision": {
+      "k": 23,
+      "n": 23,
+      "p": 1,
+      "lo": 0.8569,
+      "hi": 1
+     },
+     "recall": {
+      "k": 23,
+      "n": 24,
+      "p": 0.9583,
+      "lo": 0.7976,
+      "hi": 0.9926
+     }
+    },
+    "rust": {
+     "tp": 13,
+     "fp": 0,
+     "fn": 0,
+     "tn": 0,
+     "precision": {
+      "k": 13,
+      "n": 13,
+      "p": 1,
+      "lo": 0.7719,
+      "hi": 1
+     },
+     "recall": {
+      "k": 13,
+      "n": 13,
+      "p": 1,
+      "lo": 0.7719,
+      "hi": 1
+     }
+    },
+    "typescript": {
+     "tp": 47,
+     "fp": 0,
+     "fn": 0,
+     "tn": 0,
+     "precision": {
+      "k": 47,
+      "n": 47,
+      "p": 1,
+      "lo": 0.9244,
+      "hi": 1
+     },
+     "recall": {
+      "k": 47,
+      "n": 47,
+      "p": 1,
+      "lo": 0.9244,
+      "hi": 1
+     }
+    }
+   }
+  },
+  "reader-params": {
+   "all": {
+    "tp": 112,
+    "fp": 0,
+    "fn": 2,
+    "tn": 0,
+    "precision": {
+     "k": 112,
+     "n": 112,
+     "p": 1,
+     "lo": 0.9668,
+     "hi": 1
+    },
+    "recall": {
+     "k": 112,
+     "n": 114,
+     "p": 0.9825,
+     "lo": 0.9383,
+     "hi": 0.9952
+    }
+   },
+   "by_language": {
+    "committed-list": {
+     "tp": 4,
+     "fp": 0,
+     "fn": 0,
+     "tn": 0,
+     "precision": {
+      "k": 4,
+      "n": 4,
+      "p": 1,
+      "lo": 0.5101,
+      "hi": 1
+     },
+     "recall": {
+      "k": 4,
+      "n": 4,
+      "p": 1,
+      "lo": 0.5101,
+      "hi": 1
+     }
+    },
+    "go": {
+     "tp": 18,
+     "fp": 0,
+     "fn": 0,
+     "tn": 0,
+     "precision": {
+      "k": 18,
+      "n": 18,
+      "p": 1,
+      "lo": 0.8241,
+      "hi": 1
+     },
+     "recall": {
+      "k": 18,
+      "n": 18,
+      "p": 1,
+      "lo": 0.8241,
+      "hi": 1
+     }
+    },
+    "javascript": {
+     "tp": 8,
+     "fp": 0,
+     "fn": 0,
+     "tn": 0,
+     "precision": {
+      "k": 8,
+      "n": 8,
+      "p": 1,
+      "lo": 0.6756,
+      "hi": 1
+     },
+     "recall": {
+      "k": 8,
+      "n": 8,
+      "p": 1,
+      "lo": 0.6756,
+      "hi": 1
+     }
+    },
+    "python": {
+     "tp": 24,
+     "fp": 0,
+     "fn": 0,
+     "tn": 0,
+     "precision": {
+      "k": 24,
+      "n": 24,
+      "p": 1,
+      "lo": 0.862,
+      "hi": 1
+     },
+     "recall": {
+      "k": 24,
+      "n": 24,
+      "p": 1,
+      "lo": 0.862,
+      "hi": 1
+     }
+    },
+    "rust": {
+     "tp": 13,
+     "fp": 0,
+     "fn": 0,
+     "tn": 0,
+     "precision": {
+      "k": 13,
+      "n": 13,
+      "p": 1,
+      "lo": 0.7719,
+      "hi": 1
+     },
+     "recall": {
+      "k": 13,
+      "n": 13,
+      "p": 1,
+      "lo": 0.7719,
+      "hi": 1
+     }
+    },
+    "typescript": {
+     "tp": 45,
+     "fp": 0,
+     "fn": 2,
+     "tn": 0,
+     "precision": {
+      "k": 45,
+      "n": 45,
+      "p": 1,
+      "lo": 0.9213,
+      "hi": 1
+     },
+     "recall": {
+      "k": 45,
+      "n": 47,
+      "p": 0.9574,
+      "lo": 0.8575,
+      "hi": 0.9883
+     }
+    }
+   }
+  },
+  "reader-required": {
+   "all": {
+    "tp": 112,
+    "fp": 0,
+    "fn": 2,
+    "tn": 0,
+    "precision": {
+     "k": 112,
+     "n": 112,
+     "p": 1,
+     "lo": 0.9668,
+     "hi": 1
+    },
+    "recall": {
+     "k": 112,
+     "n": 114,
+     "p": 0.9825,
+     "lo": 0.9383,
+     "hi": 0.9952
+    }
+   },
+   "by_language": {
+    "committed-list": {
+     "tp": 4,
+     "fp": 0,
+     "fn": 0,
+     "tn": 0,
+     "precision": {
+      "k": 4,
+      "n": 4,
+      "p": 1,
+      "lo": 0.5101,
+      "hi": 1
+     },
+     "recall": {
+      "k": 4,
+      "n": 4,
+      "p": 1,
+      "lo": 0.5101,
+      "hi": 1
+     }
+    },
+    "go": {
+     "tp": 18,
+     "fp": 0,
+     "fn": 0,
+     "tn": 0,
+     "precision": {
+      "k": 18,
+      "n": 18,
+      "p": 1,
+      "lo": 0.8241,
+      "hi": 1
+     },
+     "recall": {
+      "k": 18,
+      "n": 18,
+      "p": 1,
+      "lo": 0.8241,
+      "hi": 1
+     }
+    },
+    "javascript": {
+     "tp": 8,
+     "fp": 0,
+     "fn": 0,
+     "tn": 0,
+     "precision": {
+      "k": 8,
+      "n": 8,
+      "p": 1,
+      "lo": 0.6756,
+      "hi": 1
+     },
+     "recall": {
+      "k": 8,
+      "n": 8,
+      "p": 1,
+      "lo": 0.6756,
+      "hi": 1
+     }
+    },
+    "python": {
+     "tp": 24,
+     "fp": 0,
+     "fn": 0,
+     "tn": 0,
+     "precision": {
+      "k": 24,
+      "n": 24,
+      "p": 1,
+      "lo": 0.862,
+      "hi": 1
+     },
+     "recall": {
+      "k": 24,
+      "n": 24,
+      "p": 1,
+      "lo": 0.862,
+      "hi": 1
+     }
+    },
+    "rust": {
+     "tp": 13,
+     "fp": 0,
+     "fn": 0,
+     "tn": 0,
+     "precision": {
+      "k": 13,
+      "n": 13,
+      "p": 1,
+      "lo": 0.7719,
+      "hi": 1
+     },
+     "recall": {
+      "k": 13,
+      "n": 13,
+      "p": 1,
+      "lo": 0.7719,
+      "hi": 1
+     }
+    },
+    "typescript": {
+     "tp": 45,
+     "fp": 0,
+     "fn": 2,
+     "tn": 0,
+     "precision": {
+      "k": 45,
+      "n": 45,
+      "p": 1,
+      "lo": 0.9213,
+      "hi": 1
+     },
+     "recall": {
+      "k": 45,
+      "n": 47,
+      "p": 0.9574,
+      "lo": 0.8575,
+      "hi": 0.9883
+     }
+    }
+   }
+  },
+  "reader-tools": {
+   "all": {
+    "tp": 132,
+    "fp": 2,
+    "fn": 21,
+    "tn": 0,
+    "precision": {
+     "k": 132,
+     "n": 134,
+     "p": 0.9851,
+     "lo": 0.9472,
+     "hi": 0.9959
+    },
+    "recall": {
+     "k": 132,
+     "n": 153,
+     "p": 0.8627,
+     "lo": 0.7993,
+     "hi": 0.9084
+    }
+   },
+   "by_language": {
+    "committed-list": {
+     "tp": 23,
+     "fp": 0,
+     "fn": 2,
+     "tn": 0,
+     "precision": {
+      "k": 23,
+      "n": 23,
+      "p": 1,
+      "lo": 0.8569,
+      "hi": 1
+     },
+     "recall": {
+      "k": 23,
+      "n": 25,
+      "p": 0.92,
+      "lo": 0.7503,
+      "hi": 0.9778
+     }
+    },
+    "csharp": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 2,
+     "tn": 0,
+     "precision": null,
+     "recall": {
+      "k": 0,
+      "n": 2,
+      "p": 0,
+      "lo": 0,
+      "hi": 0.6576
+     }
+    },
+    "go": {
+     "tp": 17,
+     "fp": 0,
+     "fn": 0,
+     "tn": 0,
+     "precision": {
+      "k": 17,
+      "n": 17,
+      "p": 1,
+      "lo": 0.8157,
+      "hi": 1
+     },
+     "recall": {
+      "k": 17,
+      "n": 17,
+      "p": 1,
+      "lo": 0.8157,
+      "hi": 1
+     }
+    },
+    "java": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 2,
+     "tn": 0,
+     "precision": null,
+     "recall": {
+      "k": 0,
+      "n": 2,
+      "p": 0,
+      "lo": 0,
+      "hi": 0.6576
+     }
+    },
+    "javascript": {
+     "tp": 8,
+     "fp": 0,
+     "fn": 0,
+     "tn": 0,
+     "precision": {
+      "k": 8,
+      "n": 8,
+      "p": 1,
+      "lo": 0.6756,
+      "hi": 1
+     },
+     "recall": {
+      "k": 8,
+      "n": 8,
+      "p": 1,
+      "lo": 0.6756,
+      "hi": 1
+     }
+    },
+    "kotlin": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 2,
+     "tn": 0,
+     "precision": null,
+     "recall": {
+      "k": 0,
+      "n": 2,
+      "p": 0,
+      "lo": 0,
+      "hi": 0.6576
+     }
+    },
+    "php": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 2,
+     "tn": 0,
+     "precision": null,
+     "recall": {
+      "k": 0,
+      "n": 2,
+      "p": 0,
+      "lo": 0,
+      "hi": 0.6576
+     }
+    },
+    "python": {
+     "tp": 23,
+     "fp": 0,
+     "fn": 4,
+     "tn": 0,
+     "precision": {
+      "k": 23,
+      "n": 23,
+      "p": 1,
+      "lo": 0.8569,
+      "hi": 1
+     },
+     "recall": {
+      "k": 23,
+      "n": 27,
+      "p": 0.8519,
+      "lo": 0.6752,
+      "hi": 0.9408
+     }
+    },
+    "ruby": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 2,
+     "tn": 0,
+     "precision": null,
+     "recall": {
+      "k": 0,
+      "n": 2,
+      "p": 0,
+      "lo": 0,
+      "hi": 0.6576
+     }
+    },
+    "rust": {
+     "tp": 13,
+     "fp": 2,
+     "fn": 0,
+     "tn": 0,
+     "precision": {
+      "k": 13,
+      "n": 15,
+      "p": 0.8667,
+      "lo": 0.6212,
+      "hi": 0.9626
+     },
+     "recall": {
+      "k": 13,
+      "n": 13,
+      "p": 1,
+      "lo": 0.7719,
+      "hi": 1
+     }
+    },
+    "swift": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 2,
+     "tn": 0,
+     "precision": null,
+     "recall": {
+      "k": 0,
+      "n": 2,
+      "p": 0,
+      "lo": 0,
+      "hi": 0.6576
+     }
+    },
+    "typescript": {
+     "tp": 48,
+     "fp": 0,
+     "fn": 3,
+     "tn": 0,
+     "precision": {
+      "k": 48,
+      "n": 48,
+      "p": 1,
+      "lo": 0.9259,
+      "hi": 1
+     },
+     "recall": {
+      "k": 48,
+      "n": 51,
+      "p": 0.9412,
+      "lo": 0.8408,
+      "hi": 0.9798
+     }
+    }
+   }
+  },
+  "reader-unreadable": {
+   "all": {
+    "tp": 3,
+    "fp": 0,
+    "fn": 0,
+    "tn": 0,
+    "precision": {
+     "k": 3,
+     "n": 3,
+     "p": 1,
+     "lo": 0.4385,
+     "hi": 1
+    },
+    "recall": {
+     "k": 3,
+     "n": 3,
+     "p": 1,
+     "lo": 0.4385,
+     "hi": 1
+    }
+   },
+   "by_language": {
+    "typescript": {
+     "tp": 3,
+     "fp": 0,
+     "fn": 0,
+     "tn": 0,
+     "precision": {
+      "k": 3,
+      "n": 3,
+      "p": 1,
+      "lo": 0.4385,
+      "hi": 1
+     },
+     "recall": {
+      "k": 3,
+      "n": 3,
+      "p": 1,
+      "lo": 0.4385,
+      "hi": 1
+     }
+    }
+   }
+  },
+  "schema-additional-properties": {
+   "all": {
+    "tp": 2,
+    "fp": 0,
+    "fn": 0,
+    "tn": 3,
+    "precision": {
+     "k": 2,
+     "n": 2,
+     "p": 1,
+     "lo": 0.3424,
+     "hi": 1
+    },
+    "recall": {
+     "k": 2,
+     "n": 2,
+     "p": 1,
+     "lo": 0.3424,
+     "hi": 1
+    }
+   },
+   "by_language": {
+    "committed-list": {
+     "tp": 2,
+     "fp": 0,
+     "fn": 0,
+     "tn": 3,
+     "precision": {
+      "k": 2,
+      "n": 2,
+      "p": 1,
+      "lo": 0.3424,
+      "hi": 1
+     },
+     "recall": {
+      "k": 2,
+      "n": 2,
+      "p": 1,
+      "lo": 0.3424,
+      "hi": 1
+     }
+    }
+   }
+  },
+  "schema-enum-missing": {
+   "all": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 0,
+    "tn": 4,
+    "precision": {
+     "k": 1,
+     "n": 1,
+     "p": 1,
+     "lo": 0.2065,
+     "hi": 1
+    },
+    "recall": {
+     "k": 1,
+     "n": 1,
+     "p": 1,
+     "lo": 0.2065,
+     "hi": 1
+    }
+   },
+   "by_language": {
+    "committed-list": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 4,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    }
+   }
+  },
+  "schema-open-object": {
+   "all": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 0,
+    "tn": 1,
+    "precision": {
+     "k": 1,
+     "n": 1,
+     "p": 1,
+     "lo": 0.2065,
+     "hi": 1
+    },
+    "recall": {
+     "k": 1,
+     "n": 1,
+     "p": 1,
+     "lo": 0.2065,
+     "hi": 1
+    }
+   },
+   "by_language": {
+    "committed-list": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 1,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    }
+   }
+  },
+  "schema-output-schema": {
+   "all": {
+    "tp": 13,
+    "fp": 0,
+    "fn": 0,
+    "tn": 7,
+    "precision": {
+     "k": 13,
+     "n": 13,
+     "p": 1,
+     "lo": 0.7719,
+     "hi": 1
+    },
+    "recall": {
+     "k": 13,
+     "n": 13,
+     "p": 1,
+     "lo": 0.7719,
+     "hi": 1
+    }
+   },
+   "by_language": {
+    "committed-list": {
+     "tp": 4,
+     "fp": 0,
+     "fn": 0,
+     "tn": 1,
+     "precision": {
+      "k": 4,
+      "n": 4,
+      "p": 1,
+      "lo": 0.5101,
+      "hi": 1
+     },
+     "recall": {
+      "k": 4,
+      "n": 4,
+      "p": 1,
+      "lo": 0.5101,
+      "hi": 1
+     }
+    },
+    "go": {
+     "tp": 2,
+     "fp": 0,
+     "fn": 0,
+     "tn": 0,
+     "precision": {
+      "k": 2,
+      "n": 2,
+      "p": 1,
+      "lo": 0.3424,
+      "hi": 1
+     },
+     "recall": {
+      "k": 2,
+      "n": 2,
+      "p": 1,
+      "lo": 0.3424,
+      "hi": 1
+     }
+    },
+    "javascript": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 1,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    },
+    "python": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 1,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    },
+    "rust": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 1,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    },
+    "typescript": {
+     "tp": 4,
+     "fp": 0,
+     "fn": 0,
+     "tn": 3,
+     "precision": {
+      "k": 4,
+      "n": 4,
+      "p": 1,
+      "lo": 0.5101,
+      "hi": 1
+     },
+     "recall": {
+      "k": 4,
+      "n": 4,
+      "p": 1,
+      "lo": 0.5101,
+      "hi": 1
+     }
+    }
+   }
+  },
+  "schema-pagination": {
+   "all": {
+    "tp": 2,
+    "fp": 0,
+    "fn": 0,
+    "tn": 5,
+    "precision": {
+     "k": 2,
+     "n": 2,
+     "p": 1,
+     "lo": 0.3424,
+     "hi": 1
+    },
+    "recall": {
+     "k": 2,
+     "n": 2,
+     "p": 1,
+     "lo": 0.3424,
+     "hi": 1
+    }
+   },
+   "by_language": {
+    "committed-list": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 4,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    },
+    "javascript": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 1,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    }
+   }
+  },
+  "schema-param-description": {
+   "all": {
+    "tp": 5,
+    "fp": 0,
+    "fn": 0,
+    "tn": 6,
+    "precision": {
+     "k": 5,
+     "n": 5,
+     "p": 1,
+     "lo": 0.5655,
+     "hi": 1
+    },
+    "recall": {
+     "k": 5,
+     "n": 5,
+     "p": 1,
+     "lo": 0.5655,
+     "hi": 1
+    }
+   },
+   "by_language": {
+    "committed-list": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 4,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    },
+    "python": {
+     "tp": 3,
+     "fp": 0,
+     "fn": 0,
+     "tn": 1,
+     "precision": {
+      "k": 3,
+      "n": 3,
+      "p": 1,
+      "lo": 0.4385,
+      "hi": 1
+     },
+     "recall": {
+      "k": 3,
+      "n": 3,
+      "p": 1,
+      "lo": 0.4385,
+      "hi": 1
+     }
+    },
+    "typescript": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 1,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    }
+   }
+  },
+  "schema-required-unknown": {
+   "all": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 0,
+    "tn": 4,
+    "precision": {
+     "k": 1,
+     "n": 1,
+     "p": 1,
+     "lo": 0.2065,
+     "hi": 1
+    },
+    "recall": {
+     "k": 1,
+     "n": 1,
+     "p": 1,
+     "lo": 0.2065,
+     "hi": 1
+    }
+   },
+   "by_language": {
+    "committed-list": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 4,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    }
+   }
+  },
+  "schema-response-format": {
+   "all": {
+    "tp": 2,
+    "fp": 0,
+    "fn": 0,
+    "tn": 5,
+    "precision": {
+     "k": 2,
+     "n": 2,
+     "p": 1,
+     "lo": 0.3424,
+     "hi": 1
+    },
+    "recall": {
+     "k": 2,
+     "n": 2,
+     "p": 1,
+     "lo": 0.3424,
+     "hi": 1
+    }
+   },
+   "by_language": {
+    "committed-list": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 4,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    },
+    "python": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 1,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    }
+   }
+  },
+  "schema-vague-param": {
+   "all": {
+    "tp": 3,
+    "fp": 0,
+    "fn": 0,
+    "tn": 7,
+    "precision": {
+     "k": 3,
+     "n": 3,
+     "p": 1,
+     "lo": 0.4385,
+     "hi": 1
+    },
+    "recall": {
+     "k": 3,
+     "n": 3,
+     "p": 1,
+     "lo": 0.4385,
+     "hi": 1
+    }
+   },
+   "by_language": {
+    "committed-list": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 4,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    },
+    "javascript": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 1,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    },
+    "typescript": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    }
+   }
+  },
+  "sec-bidi-controls": {
+   "all": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 1,
+    "tn": 154,
+    "precision": {
+     "k": 1,
+     "n": 1,
+     "p": 1,
+     "lo": 0.2065,
+     "hi": 1
+    },
+    "recall": {
+     "k": 1,
+     "n": 2,
+     "p": 0.5,
+     "lo": 0.0945,
+     "hi": 0.9055
+    }
+   },
+   "by_language": {
+    "committed-list": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 25,
+     "precision": null,
+     "recall": null
+    },
+    "csharp": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "go": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 18,
+     "precision": null,
+     "recall": null
+    },
+    "java": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "javascript": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 8,
+     "precision": null,
+     "recall": null
+    },
+    "kotlin": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "php": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "python": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 1,
+     "tn": 27,
+     "precision": null,
+     "recall": {
+      "k": 0,
+      "n": 1,
+      "p": 0,
+      "lo": 0,
+      "hi": 0.7935
+     }
+    },
+    "ruby": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "rust": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 13,
+     "precision": null,
+     "recall": null
+    },
+    "swift": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "typescript": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 51,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    }
+   }
+  },
+  "sec-control-chars": {
+   "all": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "tn": 156,
+    "precision": null,
+    "recall": null
+   },
+   "by_language": {
+    "committed-list": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 25,
+     "precision": null,
+     "recall": null
+    },
+    "csharp": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "go": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 18,
+     "precision": null,
+     "recall": null
+    },
+    "java": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "javascript": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 8,
+     "precision": null,
+     "recall": null
+    },
+    "kotlin": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "php": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "python": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 28,
+     "precision": null,
+     "recall": null
+    },
+    "ruby": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "rust": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 13,
+     "precision": null,
+     "recall": null
+    },
+    "swift": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "typescript": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 52,
+     "precision": null,
+     "recall": null
+    }
+   }
+  },
+  "sec-cross-tool-steering": {
+   "all": {
+    "tp": 3,
+    "fp": 0,
+    "fn": 0,
+    "tn": 153,
+    "precision": {
+     "k": 3,
+     "n": 3,
+     "p": 1,
+     "lo": 0.4385,
+     "hi": 1
+    },
+    "recall": {
+     "k": 3,
+     "n": 3,
+     "p": 1,
+     "lo": 0.4385,
+     "hi": 1
+    }
+   },
+   "by_language": {
+    "committed-list": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 25,
+     "precision": null,
+     "recall": null
+    },
+    "csharp": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "go": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 17,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    },
+    "java": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "javascript": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 7,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    },
+    "kotlin": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "php": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "python": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 28,
+     "precision": null,
+     "recall": null
+    },
+    "ruby": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "rust": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 13,
+     "precision": null,
+     "recall": null
+    },
+    "swift": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "typescript": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 51,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    }
+   }
+  },
+  "sec-encoded-blob": {
+   "all": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 0,
+    "tn": 155,
+    "precision": {
+     "k": 1,
+     "n": 1,
+     "p": 1,
+     "lo": 0.2065,
+     "hi": 1
+    },
+    "recall": {
+     "k": 1,
+     "n": 1,
+     "p": 1,
+     "lo": 0.2065,
+     "hi": 1
+    }
+   },
+   "by_language": {
+    "committed-list": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 25,
+     "precision": null,
+     "recall": null
+    },
+    "csharp": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "go": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 18,
+     "precision": null,
+     "recall": null
+    },
+    "java": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "javascript": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 8,
+     "precision": null,
+     "recall": null
+    },
+    "kotlin": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "php": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "python": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 28,
+     "precision": null,
+     "recall": null
+    },
+    "ruby": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "rust": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 13,
+     "precision": null,
+     "recall": null
+    },
+    "swift": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "typescript": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 51,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    }
+   }
+  },
+  "sec-external-instructions": {
+   "all": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 0,
+    "tn": 155,
+    "precision": {
+     "k": 1,
+     "n": 1,
+     "p": 1,
+     "lo": 0.2065,
+     "hi": 1
+    },
+    "recall": {
+     "k": 1,
+     "n": 1,
+     "p": 1,
+     "lo": 0.2065,
+     "hi": 1
+    }
+   },
+   "by_language": {
+    "committed-list": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 25,
+     "precision": null,
+     "recall": null
+    },
+    "csharp": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "go": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 18,
+     "precision": null,
+     "recall": null
+    },
+    "java": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "javascript": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 8,
+     "precision": null,
+     "recall": null
+    },
+    "kotlin": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "php": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "python": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 28,
+     "precision": null,
+     "recall": null
+    },
+    "ruby": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "rust": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 13,
+     "precision": null,
+     "recall": null
+    },
+    "swift": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "typescript": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 51,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    }
+   }
+  },
+  "sec-homoglyph": {
+   "all": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "tn": 156,
+    "precision": null,
+    "recall": null
+   },
+   "by_language": {
+    "committed-list": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 25,
+     "precision": null,
+     "recall": null
+    },
+    "csharp": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "go": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 18,
+     "precision": null,
+     "recall": null
+    },
+    "java": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "javascript": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 8,
+     "precision": null,
+     "recall": null
+    },
+    "kotlin": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "php": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "python": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 28,
+     "precision": null,
+     "recall": null
+    },
+    "ruby": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "rust": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 13,
+     "precision": null,
+     "recall": null
+    },
+    "swift": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "typescript": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 52,
+     "precision": null,
+     "recall": null
+    }
+   }
+  },
+  "sec-html-comment": {
+   "all": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 0,
+    "tn": 155,
+    "precision": {
+     "k": 1,
+     "n": 1,
+     "p": 1,
+     "lo": 0.2065,
+     "hi": 1
+    },
+    "recall": {
+     "k": 1,
+     "n": 1,
+     "p": 1,
+     "lo": 0.2065,
+     "hi": 1
+    }
+   },
+   "by_language": {
+    "committed-list": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 25,
+     "precision": null,
+     "recall": null
+    },
+    "csharp": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "go": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 18,
+     "precision": null,
+     "recall": null
+    },
+    "java": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "javascript": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 8,
+     "precision": null,
+     "recall": null
+    },
+    "kotlin": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "php": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "python": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 28,
+     "precision": null,
+     "recall": null
+    },
+    "ruby": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "rust": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 13,
+     "precision": null,
+     "recall": null
+    },
+    "swift": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "typescript": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 51,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    }
+   }
+  },
+  "sec-instruction-markup": {
+   "all": {
+    "tp": 3,
+    "fp": 0,
+    "fn": 0,
+    "tn": 153,
+    "precision": {
+     "k": 3,
+     "n": 3,
+     "p": 1,
+     "lo": 0.4385,
+     "hi": 1
+    },
+    "recall": {
+     "k": 3,
+     "n": 3,
+     "p": 1,
+     "lo": 0.4385,
+     "hi": 1
+    }
+   },
+   "by_language": {
+    "committed-list": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 25,
+     "precision": null,
+     "recall": null
+    },
+    "csharp": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "go": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 18,
+     "precision": null,
+     "recall": null
+    },
+    "java": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "javascript": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 8,
+     "precision": null,
+     "recall": null
+    },
+    "kotlin": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "php": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "python": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 27,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    },
+    "ruby": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "rust": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 12,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    },
+    "swift": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "typescript": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 51,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    }
+   }
+  },
+  "sec-instruction-phrases": {
+   "all": {
+    "tp": 7,
+    "fp": 0,
+    "fn": 0,
+    "tn": 149,
+    "precision": {
+     "k": 7,
+     "n": 7,
+     "p": 1,
+     "lo": 0.6457,
+     "hi": 1
+    },
+    "recall": {
+     "k": 7,
+     "n": 7,
+     "p": 1,
+     "lo": 0.6457,
+     "hi": 1
+    }
+   },
+   "by_language": {
+    "committed-list": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 24,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    },
+    "csharp": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "go": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 17,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    },
+    "java": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "javascript": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 8,
+     "precision": null,
+     "recall": null
+    },
+    "kotlin": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "php": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "python": {
+     "tp": 2,
+     "fp": 0,
+     "fn": 0,
+     "tn": 26,
+     "precision": {
+      "k": 2,
+      "n": 2,
+      "p": 1,
+      "lo": 0.3424,
+      "hi": 1
+     },
+     "recall": {
+      "k": 2,
+      "n": 2,
+      "p": 1,
+      "lo": 0.3424,
+      "hi": 1
+     }
+    },
+    "ruby": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "rust": {
+     "tp": 2,
+     "fp": 0,
+     "fn": 0,
+     "tn": 11,
+     "precision": {
+      "k": 2,
+      "n": 2,
+      "p": 1,
+      "lo": 0.3424,
+      "hi": 1
+     },
+     "recall": {
+      "k": 2,
+      "n": 2,
+      "p": 1,
+      "lo": 0.3424,
+      "hi": 1
+     }
+    },
+    "swift": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "typescript": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 51,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    }
+   }
+  },
+  "sec-invisible-encoding": {
+   "all": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "tn": 156,
+    "precision": null,
+    "recall": null
+   },
+   "by_language": {
+    "committed-list": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 25,
+     "precision": null,
+     "recall": null
+    },
+    "csharp": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "go": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 18,
+     "precision": null,
+     "recall": null
+    },
+    "java": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "javascript": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 8,
+     "precision": null,
+     "recall": null
+    },
+    "kotlin": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "php": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "python": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 28,
+     "precision": null,
+     "recall": null
+    },
+    "ruby": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "rust": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 13,
+     "precision": null,
+     "recall": null
+    },
+    "swift": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "typescript": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 52,
+     "precision": null,
+     "recall": null
+    }
+   }
+  },
+  "sec-secret-seeking": {
+   "all": {
+    "tp": 2,
+    "fp": 0,
+    "fn": 0,
+    "tn": 154,
+    "precision": {
+     "k": 2,
+     "n": 2,
+     "p": 1,
+     "lo": 0.3424,
+     "hi": 1
+    },
+    "recall": {
+     "k": 2,
+     "n": 2,
+     "p": 1,
+     "lo": 0.3424,
+     "hi": 1
+    }
+   },
+   "by_language": {
+    "committed-list": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 25,
+     "precision": null,
+     "recall": null
+    },
+    "csharp": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "go": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 18,
+     "precision": null,
+     "recall": null
+    },
+    "java": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "javascript": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 8,
+     "precision": null,
+     "recall": null
+    },
+    "kotlin": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "php": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "python": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 27,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    },
+    "ruby": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "rust": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 13,
+     "precision": null,
+     "recall": null
+    },
+    "swift": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "typescript": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 51,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    }
+   }
+  },
+  "sec-zero-width": {
+   "all": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 0,
+    "tn": 155,
+    "precision": {
+     "k": 1,
+     "n": 1,
+     "p": 1,
+     "lo": 0.2065,
+     "hi": 1
+    },
+    "recall": {
+     "k": 1,
+     "n": 1,
+     "p": 1,
+     "lo": 0.2065,
+     "hi": 1
+    }
+   },
+   "by_language": {
+    "committed-list": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 25,
+     "precision": null,
+     "recall": null
+    },
+    "csharp": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "go": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 18,
+     "precision": null,
+     "recall": null
+    },
+    "java": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "javascript": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 8,
+     "precision": null,
+     "recall": null
+    },
+    "kotlin": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "php": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "python": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 28,
+     "precision": null,
+     "recall": null
+    },
+    "ruby": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "rust": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 13,
+     "precision": null,
+     "recall": null
+    },
+    "swift": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "typescript": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 51,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    }
+   }
+  },
+  "security-cap": {
+   "all": {
+    "tp": 10,
+    "fp": 0,
+    "fn": 1,
+    "tn": 48,
+    "precision": {
+     "k": 10,
+     "n": 10,
+     "p": 1,
+     "lo": 0.7225,
+     "hi": 1
+    },
+    "recall": {
+     "k": 10,
+     "n": 11,
+     "p": 0.9091,
+     "lo": 0.6226,
+     "hi": 0.9838
+    }
+   },
+   "by_language": {
+    "committed-list": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 5,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    },
+    "go": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 8,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    },
+    "javascript": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 4,
+     "precision": null,
+     "recall": null
+    },
+    "python": {
+     "tp": 2,
+     "fp": 0,
+     "fn": 1,
+     "tn": 8,
+     "precision": {
+      "k": 2,
+      "n": 2,
+      "p": 1,
+      "lo": 0.3424,
+      "hi": 1
+     },
+     "recall": {
+      "k": 2,
+      "n": 3,
+      "p": 0.6667,
+      "lo": 0.2077,
+      "hi": 0.9385
+     }
+    },
+    "rust": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 6,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    },
+    "typescript": {
+     "tp": 5,
+     "fp": 0,
+     "fn": 0,
+     "tn": 17,
+     "precision": {
+      "k": 5,
+      "n": 5,
+      "p": 1,
+      "lo": 0.5655,
+      "hi": 1
+     },
+     "recall": {
+      "k": 5,
+      "n": 5,
+      "p": 1,
+      "lo": 0.5655,
+      "hi": 1
+     }
+    }
+   }
+  },
+  "severity": {
+   "all": {
+    "tp": 170,
+    "fp": 0,
+    "fn": 0,
+    "tn": 0,
+    "precision": {
+     "k": 170,
+     "n": 170,
+     "p": 1,
+     "lo": 0.9779,
+     "hi": 1
+    },
+    "recall": {
+     "k": 170,
+     "n": 170,
+     "p": 1,
+     "lo": 0.9779,
+     "hi": 1
+    }
+   },
+   "by_language": {
+    "committed-list": {
+     "tp": 58,
+     "fp": 0,
+     "fn": 0,
+     "tn": 0,
+     "precision": {
+      "k": 58,
+      "n": 58,
+      "p": 1,
+      "lo": 0.9379,
+      "hi": 1
+     },
+     "recall": {
+      "k": 58,
+      "n": 58,
+      "p": 1,
+      "lo": 0.9379,
+      "hi": 1
+     }
+    },
+    "go": {
+     "tp": 24,
+     "fp": 0,
+     "fn": 0,
+     "tn": 0,
+     "precision": {
+      "k": 24,
+      "n": 24,
+      "p": 1,
+      "lo": 0.862,
+      "hi": 1
+     },
+     "recall": {
+      "k": 24,
+      "n": 24,
+      "p": 1,
+      "lo": 0.862,
+      "hi": 1
+     }
+    },
+    "javascript": {
+     "tp": 15,
+     "fp": 0,
+     "fn": 0,
+     "tn": 0,
+     "precision": {
+      "k": 15,
+      "n": 15,
+      "p": 1,
+      "lo": 0.7961,
+      "hi": 1
+     },
+     "recall": {
+      "k": 15,
+      "n": 15,
+      "p": 1,
+      "lo": 0.7961,
+      "hi": 1
+     }
+    },
+    "python": {
+     "tp": 29,
+     "fp": 0,
+     "fn": 0,
+     "tn": 0,
+     "precision": {
+      "k": 29,
+      "n": 29,
+      "p": 1,
+      "lo": 0.883,
+      "hi": 1
+     },
+     "recall": {
+      "k": 29,
+      "n": 29,
+      "p": 1,
+      "lo": 0.883,
+      "hi": 1
+     }
+    },
+    "rust": {
+     "tp": 13,
+     "fp": 0,
+     "fn": 0,
+     "tn": 0,
+     "precision": {
+      "k": 13,
+      "n": 13,
+      "p": 1,
+      "lo": 0.7719,
+      "hi": 1
+     },
+     "recall": {
+      "k": 13,
+      "n": 13,
+      "p": 1,
+      "lo": 0.7719,
+      "hi": 1
+     }
+    },
+    "typescript": {
+     "tp": 31,
+     "fp": 0,
+     "fn": 0,
+     "tn": 0,
+     "precision": {
+      "k": 31,
+      "n": 31,
+      "p": 1,
+      "lo": 0.8897,
+      "hi": 1
+     },
+     "recall": {
+      "k": 31,
+      "n": 31,
+      "p": 1,
+      "lo": 0.8897,
+      "hi": 1
+     }
+    }
+   }
+  },
+  "spec-input-schema-field-name": {
+   "all": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 0,
+    "tn": 4,
+    "precision": {
+     "k": 1,
+     "n": 1,
+     "p": 1,
+     "lo": 0.2065,
+     "hi": 1
+    },
+    "recall": {
+     "k": 1,
+     "n": 1,
+     "p": 1,
+     "lo": 0.2065,
+     "hi": 1
+    }
+   },
+   "by_language": {
+    "committed-list": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 4,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    }
+   }
+  },
+  "spec-input-schema-missing": {
+   "all": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 1,
+    "tn": 1,
+    "precision": null,
+    "recall": {
+     "k": 0,
+     "n": 1,
+     "p": 0,
+     "lo": 0,
+     "hi": 0.7935
+    }
+   },
+   "by_language": {
+    "committed-list": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 1,
+     "tn": 1,
+     "precision": null,
+     "recall": {
+      "k": 0,
+      "n": 1,
+      "p": 0,
+      "lo": 0,
+      "hi": 0.7935
+     }
+    }
+   }
+  },
+  "spec-input-schema-root-object": {
+   "all": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 0,
+    "tn": 4,
+    "precision": {
+     "k": 1,
+     "n": 1,
+     "p": 1,
+     "lo": 0.2065,
+     "hi": 1
+    },
+    "recall": {
+     "k": 1,
+     "n": 1,
+     "p": 1,
+     "lo": 0.2065,
+     "hi": 1
+    }
+   },
+   "by_language": {
+    "committed-list": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 4,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    }
+   }
+  },
+  "spec-meta-key": {
+   "all": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 0,
+    "tn": 1,
+    "precision": {
+     "k": 1,
+     "n": 1,
+     "p": 1,
+     "lo": 0.2065,
+     "hi": 1
+    },
+    "recall": {
+     "k": 1,
+     "n": 1,
+     "p": 1,
+     "lo": 0.2065,
+     "hi": 1
+    }
+   },
+   "by_language": {
+    "committed-list": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 1,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    }
+   }
+  },
+  "spec-meta-reserved": {
+   "all": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 0,
+    "tn": 1,
+    "precision": {
+     "k": 1,
+     "n": 1,
+     "p": 1,
+     "lo": 0.2065,
+     "hi": 1
+    },
+    "recall": {
+     "k": 1,
+     "n": 1,
+     "p": 1,
+     "lo": 0.2065,
+     "hi": 1
+    }
+   },
+   "by_language": {
+    "committed-list": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 1,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    }
+   }
+  },
+  "spec-name-charset": {
+   "all": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 0,
+    "tn": 155,
+    "precision": {
+     "k": 1,
+     "n": 1,
+     "p": 1,
+     "lo": 0.2065,
+     "hi": 1
+    },
+    "recall": {
+     "k": 1,
+     "n": 1,
+     "p": 1,
+     "lo": 0.2065,
+     "hi": 1
+    }
+   },
+   "by_language": {
+    "committed-list": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 25,
+     "precision": null,
+     "recall": null
+    },
+    "csharp": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "go": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 18,
+     "precision": null,
+     "recall": null
+    },
+    "java": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "javascript": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 8,
+     "precision": null,
+     "recall": null
+    },
+    "kotlin": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "php": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "python": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 28,
+     "precision": null,
+     "recall": null
+    },
+    "ruby": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "rust": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 13,
+     "precision": null,
+     "recall": null
+    },
+    "swift": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "typescript": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 51,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    }
+   }
+  },
+  "spec-name-length": {
+   "all": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "tn": 156,
+    "precision": null,
+    "recall": null
+   },
+   "by_language": {
+    "committed-list": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 25,
+     "precision": null,
+     "recall": null
+    },
+    "csharp": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "go": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 18,
+     "precision": null,
+     "recall": null
+    },
+    "java": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "javascript": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 8,
+     "precision": null,
+     "recall": null
+    },
+    "kotlin": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "php": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "python": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 28,
+     "precision": null,
+     "recall": null
+    },
+    "ruby": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "rust": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 13,
+     "precision": null,
+     "recall": null
+    },
+    "swift": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "typescript": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 52,
+     "precision": null,
+     "recall": null
+    }
+   }
+  },
+  "spec-name-unique": {
+   "all": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 1,
+    "tn": 67,
+    "precision": {
+     "k": 1,
+     "n": 1,
+     "p": 1,
+     "lo": 0.2065,
+     "hi": 1
+    },
+    "recall": {
+     "k": 1,
+     "n": 2,
+     "p": 0.5,
+     "lo": 0.0945,
+     "hi": 0.9055
+    }
+   },
+   "by_language": {
+    "committed-list": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 6,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    },
+    "csharp": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 1,
+     "precision": null,
+     "recall": null
+    },
+    "go": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 9,
+     "precision": null,
+     "recall": null
+    },
+    "java": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 1,
+     "precision": null,
+     "recall": null
+    },
+    "javascript": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 4,
+     "precision": null,
+     "recall": null
+    },
+    "kotlin": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 1,
+     "precision": null,
+     "recall": null
+    },
+    "php": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 1,
+     "precision": null,
+     "recall": null
+    },
+    "python": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 13,
+     "precision": null,
+     "recall": null
+    },
+    "ruby": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 1,
+     "precision": null,
+     "recall": null
+    },
+    "rust": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 7,
+     "precision": null,
+     "recall": null
+    },
+    "swift": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 1,
+     "precision": null,
+     "recall": null
+    },
+    "typescript": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 1,
+     "tn": 22,
+     "precision": null,
+     "recall": {
+      "k": 0,
+      "n": 1,
+      "p": 0,
+      "lo": 0,
+      "hi": 0.7935
+     }
+    }
+   }
+  },
+  "surface-delete-guard": {
+   "all": {
+    "tp": 2,
+    "fp": 0,
+    "fn": 0,
+    "tn": 5,
+    "precision": {
+     "k": 2,
+     "n": 2,
+     "p": 1,
+     "lo": 0.3424,
+     "hi": 1
+    },
+    "recall": {
+     "k": 2,
+     "n": 2,
+     "p": 1,
+     "lo": 0.3424,
+     "hi": 1
+    }
+   },
+   "by_language": {
+    "committed-list": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 4,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    },
+    "javascript": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 1,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    }
+   }
+  },
+  "surface-retry-key": {
+   "all": {
+    "tp": 3,
+    "fp": 0,
+    "fn": 0,
+    "tn": 12,
+    "precision": {
+     "k": 3,
+     "n": 3,
+     "p": 1,
+     "lo": 0.4385,
+     "hi": 1
+    },
+    "recall": {
+     "k": 3,
+     "n": 3,
+     "p": 1,
+     "lo": 0.4385,
+     "hi": 1
+    }
+   },
+   "by_language": {
+    "committed-list": {
+     "tp": 2,
+     "fp": 0,
+     "fn": 0,
+     "tn": 10,
+     "precision": {
+      "k": 2,
+      "n": 2,
+      "p": 1,
+      "lo": 0.3424,
+      "hi": 1
+     },
+     "recall": {
+      "k": 2,
+      "n": 2,
+      "p": 1,
+      "lo": 0.3424,
+      "hi": 1
+     }
+    },
+    "typescript": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    }
+   }
+  },
+  "surface-version-guard": {
+   "all": {
+    "tp": 5,
+    "fp": 0,
+    "fn": 0,
+    "tn": 10,
+    "precision": {
+     "k": 5,
+     "n": 5,
+     "p": 1,
+     "lo": 0.5655,
+     "hi": 1
+    },
+    "recall": {
+     "k": 5,
+     "n": 5,
+     "p": 1,
+     "lo": 0.5655,
+     "hi": 1
+    }
+   },
+   "by_language": {
+    "committed-list": {
+     "tp": 3,
+     "fp": 0,
+     "fn": 0,
+     "tn": 7,
+     "precision": {
+      "k": 3,
+      "n": 3,
+      "p": 1,
+      "lo": 0.4385,
+      "hi": 1
+     },
+     "recall": {
+      "k": 3,
+      "n": 3,
+      "p": 1,
+      "lo": 0.4385,
+      "hi": 1
+     }
+    },
+    "javascript": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 1,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    },
+    "typescript": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    }
+   }
+  }
+ },
+ "reader_tools_by_idiom": {
+  "adversarial": {
+   "tp": 33,
+   "fp": 0,
+   "fn": 0,
+   "tn": 0,
+   "precision": {
+    "k": 33,
+    "n": 33,
+    "p": 1,
+    "lo": 0.8957,
+    "hi": 1
+   },
+   "recall": {
+    "k": 33,
+    "n": 33,
+    "p": 1,
+    "lo": 0.8957,
+    "hi": 1
+   }
+  },
+  "aliasing": {
+   "tp": 3,
+   "fp": 0,
+   "fn": 1,
+   "tn": 0,
+   "precision": {
+    "k": 3,
+    "n": 3,
+    "p": 1,
+    "lo": 0.4385,
+    "hi": 1
+   },
+   "recall": {
+    "k": 3,
+    "n": 4,
+    "p": 0.75,
+    "lo": 0.3006,
+    "hi": 0.9544
+   }
+  },
+  "conditional": {
+   "tp": 5,
+   "fp": 0,
+   "fn": 0,
+   "tn": 0,
+   "precision": {
+    "k": 5,
+    "n": 5,
+    "p": 1,
+    "lo": 0.5655,
+    "hi": 1
+   },
+   "recall": {
+    "k": 5,
+    "n": 5,
+    "p": 1,
+    "lo": 0.5655,
+    "hi": 1
+   }
+  },
+  "decorator": {
+   "tp": 17,
+   "fp": 0,
+   "fn": 6,
+   "tn": 0,
+   "precision": {
+    "k": 17,
+    "n": 17,
+    "p": 1,
+    "lo": 0.8157,
+    "hi": 1
+   },
+   "recall": {
+    "k": 17,
+    "n": 23,
+    "p": 0.7391,
+    "lo": 0.5353,
+    "hi": 0.8745
+   }
+  },
+  "dynamic": {
+   "tp": 2,
+   "fp": 0,
+   "fn": 0,
+   "tn": 0,
+   "precision": {
+    "k": 2,
+    "n": 2,
+    "p": 1,
+    "lo": 0.3424,
+    "hi": 1
+   },
+   "recall": {
+    "k": 2,
+    "n": 2,
+    "p": 1,
+    "lo": 0.3424,
+    "hi": 1
+   }
+  },
+  "explicit-registration": {
+   "tp": 2,
+   "fp": 0,
+   "fn": 4,
+   "tn": 0,
+   "precision": {
+    "k": 2,
+    "n": 2,
+    "p": 1,
+    "lo": 0.3424,
+    "hi": 1
+   },
+   "recall": {
+    "k": 2,
+    "n": 6,
+    "p": 0.3333,
+    "lo": 0.0968,
+    "hi": 0.7
+   }
+  },
+  "generated": {
+   "tp": 4,
+   "fp": 0,
+   "fn": 4,
+   "tn": 0,
+   "precision": {
+    "k": 4,
+    "n": 4,
+    "p": 1,
+    "lo": 0.5101,
+    "hi": 1
+   },
+   "recall": {
+    "k": 4,
+    "n": 8,
+    "p": 0.5,
+    "lo": 0.2152,
+    "hi": 0.7848
+   }
+  },
+  "imported": {
+   "tp": 8,
+   "fp": 0,
+   "fn": 0,
+   "tn": 0,
+   "precision": {
+    "k": 8,
+    "n": 8,
+    "p": 1,
+    "lo": 0.6756,
+    "hi": 1
+   },
+   "recall": {
+    "k": 8,
+    "n": 8,
+    "p": 1,
+    "lo": 0.6756,
+    "hi": 1
+   }
+  },
+  "indirection": {
+   "tp": 18,
+   "fp": 0,
+   "fn": 0,
+   "tn": 0,
+   "precision": {
+    "k": 18,
+    "n": 18,
+    "p": 1,
+    "lo": 0.8241,
+    "hi": 1
+   },
+   "recall": {
+    "k": 18,
+    "n": 18,
+    "p": 1,
+    "lo": 0.8241,
+    "hi": 1
+   }
+  },
+  "low-level": {
+   "tp": 9,
+   "fp": 0,
+   "fn": 2,
+   "tn": 0,
+   "precision": {
+    "k": 9,
+    "n": 9,
+    "p": 1,
+    "lo": 0.7009,
+    "hi": 1
+   },
+   "recall": {
+    "k": 9,
+    "n": 11,
+    "p": 0.8182,
+    "lo": 0.523,
+    "hi": 0.9486
+   }
+  },
+  "macro": {
+   "tp": 11,
+   "fp": 2,
+   "fn": 0,
+   "tn": 0,
+   "precision": {
+    "k": 11,
+    "n": 13,
+    "p": 0.8462,
+    "lo": 0.5777,
+    "hi": 0.9567
+   },
+   "recall": {
+    "k": 11,
+    "n": 11,
+    "p": 1,
+    "lo": 0.7412,
+    "hi": 1
+   }
+  },
+  "misleading-names": {
+   "tp": 12,
+   "fp": 0,
+   "fn": 0,
+   "tn": 0,
+   "precision": {
+    "k": 12,
+    "n": 12,
+    "p": 1,
+    "lo": 0.7575,
+    "hi": 1
+   },
+   "recall": {
+    "k": 12,
+    "n": 12,
+    "p": 1,
+    "lo": 0.7575,
+    "hi": 1
+   }
+  },
+  "monorepo": {
+   "tp": 0,
+   "fp": 2,
+   "fn": 0,
+   "tn": 0,
+   "precision": {
+    "k": 0,
+    "n": 2,
+    "p": 0,
+    "lo": 0,
+    "hi": 0.6576
+   },
+   "recall": null
+  },
+  "partial-invalid": {
+   "tp": 10,
+   "fp": 0,
+   "fn": 2,
+   "tn": 0,
+   "precision": {
+    "k": 10,
+    "n": 10,
+    "p": 1,
+    "lo": 0.7225,
+    "hi": 1
+   },
+   "recall": {
+    "k": 10,
+    "n": 12,
+    "p": 0.8333,
+    "lo": 0.552,
+    "hi": 0.953
+   }
+  },
+  "straight-line": {
+   "tp": 40,
+   "fp": 0,
+   "fn": 0,
+   "tn": 0,
+   "precision": {
+    "k": 40,
+    "n": 40,
+    "p": 1,
+    "lo": 0.9124,
+    "hi": 1
+   },
+   "recall": {
+    "k": 40,
+    "n": 40,
+    "p": 1,
+    "lo": 0.9124,
+    "hi": 1
+   }
+  },
+  "wrapper": {
+   "tp": 8,
+   "fp": 0,
+   "fn": 4,
+   "tn": 0,
+   "precision": {
+    "k": 8,
+    "n": 8,
+    "p": 1,
+    "lo": 0.6756,
+    "hi": 1
+   },
+   "recall": {
+    "k": 8,
+    "n": 12,
+    "p": 0.6667,
+    "lo": 0.3906,
+    "hi": 0.8619
+   }
+  }
+ },
+ "languages": {
+  "committed-list": {
+   "cases": 8,
+   "expected_abstain": 1,
+   "expected_unsupported": 0,
+   "abstention": {
+    "k": 1,
+    "n": 8,
+    "p": 0.125,
+    "lo": 0.0224,
+    "hi": 0.4709
+   },
+   "unsupported": {
+    "k": 1,
+    "n": 8,
+    "p": 0.125,
+    "lo": 0.0224,
+    "hi": 0.4709
+   },
+   "outcome_accuracy": {
+    "k": 7,
+    "n": 8,
+    "p": 0.875,
+    "lo": 0.5291,
+    "hi": 0.9776
+   }
+  },
+  "csharp": {
+   "cases": 1,
+   "expected_abstain": 0,
+   "expected_unsupported": 0,
+   "abstention": {
+    "k": 0,
+    "n": 1,
+    "p": 0,
+    "lo": 0,
+    "hi": 0.7935
+   },
+   "unsupported": {
+    "k": 1,
+    "n": 1,
+    "p": 1,
+    "lo": 0.2065,
+    "hi": 1
+   },
+   "outcome_accuracy": {
+    "k": 0,
+    "n": 1,
+    "p": 0,
+    "lo": 0,
+    "hi": 0.7935
+   }
+  },
+  "go": {
+   "cases": 10,
+   "expected_abstain": 1,
+   "expected_unsupported": 0,
+   "abstention": {
+    "k": 1,
+    "n": 10,
+    "p": 0.1,
+    "lo": 0.0179,
+    "hi": 0.4042
+   },
+   "unsupported": {
+    "k": 0,
+    "n": 10,
+    "p": 0,
+    "lo": 0,
+    "hi": 0.2775
+   },
+   "outcome_accuracy": {
+    "k": 10,
+    "n": 10,
+    "p": 1,
+    "lo": 0.7225,
+    "hi": 1
+   }
+  },
+  "java": {
+   "cases": 1,
+   "expected_abstain": 0,
+   "expected_unsupported": 0,
+   "abstention": {
+    "k": 0,
+    "n": 1,
+    "p": 0,
+    "lo": 0,
+    "hi": 0.7935
+   },
+   "unsupported": {
+    "k": 1,
+    "n": 1,
+    "p": 1,
+    "lo": 0.2065,
+    "hi": 1
+   },
+   "outcome_accuracy": {
+    "k": 0,
+    "n": 1,
+    "p": 0,
+    "lo": 0,
+    "hi": 0.7935
+   }
+  },
+  "javascript": {
+   "cases": 4,
+   "expected_abstain": 0,
+   "expected_unsupported": 0,
+   "abstention": {
+    "k": 0,
+    "n": 4,
+    "p": 0,
+    "lo": 0,
+    "hi": 0.4899
+   },
+   "unsupported": {
+    "k": 0,
+    "n": 4,
+    "p": 0,
+    "lo": 0,
+    "hi": 0.4899
+   },
+   "outcome_accuracy": {
+    "k": 4,
+    "n": 4,
+    "p": 1,
+    "lo": 0.5101,
+    "hi": 1
+   }
+  },
+  "kotlin": {
+   "cases": 1,
+   "expected_abstain": 0,
+   "expected_unsupported": 0,
+   "abstention": {
+    "k": 0,
+    "n": 1,
+    "p": 0,
+    "lo": 0,
+    "hi": 0.7935
+   },
+   "unsupported": {
+    "k": 1,
+    "n": 1,
+    "p": 1,
+    "lo": 0.2065,
+    "hi": 1
+   },
+   "outcome_accuracy": {
+    "k": 0,
+    "n": 1,
+    "p": 0,
+    "lo": 0,
+    "hi": 0.7935
+   }
+  },
+  "php": {
+   "cases": 1,
+   "expected_abstain": 0,
+   "expected_unsupported": 0,
+   "abstention": {
+    "k": 0,
+    "n": 1,
+    "p": 0,
+    "lo": 0,
+    "hi": 0.7935
+   },
+   "unsupported": {
+    "k": 1,
+    "n": 1,
+    "p": 1,
+    "lo": 0.2065,
+    "hi": 1
+   },
+   "outcome_accuracy": {
+    "k": 0,
+    "n": 1,
+    "p": 0,
+    "lo": 0,
+    "hi": 0.7935
+   }
+  },
+  "python": {
+   "cases": 14,
+   "expected_abstain": 1,
+   "expected_unsupported": 0,
+   "abstention": {
+    "k": 1,
+    "n": 14,
+    "p": 0.0714,
+    "lo": 0.0127,
+    "hi": 0.3147
+   },
+   "unsupported": {
+    "k": 2,
+    "n": 14,
+    "p": 0.1429,
+    "lo": 0.0401,
+    "hi": 0.3994
+   },
+   "outcome_accuracy": {
+    "k": 12,
+    "n": 14,
+    "p": 0.8571,
+    "lo": 0.6006,
+    "hi": 0.9599
+   }
+  },
+  "ruby": {
+   "cases": 1,
+   "expected_abstain": 0,
+   "expected_unsupported": 0,
+   "abstention": {
+    "k": 0,
+    "n": 1,
+    "p": 0,
+    "lo": 0,
+    "hi": 0.7935
+   },
+   "unsupported": {
+    "k": 1,
+    "n": 1,
+    "p": 1,
+    "lo": 0.2065,
+    "hi": 1
+   },
+   "outcome_accuracy": {
+    "k": 0,
+    "n": 1,
+    "p": 0,
+    "lo": 0,
+    "hi": 0.7935
+   }
+  },
+  "rust": {
+   "cases": 8,
+   "expected_abstain": 1,
+   "expected_unsupported": 0,
+   "abstention": {
+    "k": 0,
+    "n": 8,
+    "p": 0,
+    "lo": 0,
+    "hi": 0.3244
+   },
+   "unsupported": {
+    "k": 0,
+    "n": 8,
+    "p": 0,
+    "lo": 0,
+    "hi": 0.3244
+   },
+   "outcome_accuracy": {
+    "k": 7,
+    "n": 8,
+    "p": 0.875,
+    "lo": 0.5291,
+    "hi": 0.9776
+   }
+  },
+  "swift": {
+   "cases": 1,
+   "expected_abstain": 0,
+   "expected_unsupported": 0,
+   "abstention": {
+    "k": 0,
+    "n": 1,
+    "p": 0,
+    "lo": 0,
+    "hi": 0.7935
+   },
+   "unsupported": {
+    "k": 1,
+    "n": 1,
+    "p": 1,
+    "lo": 0.2065,
+    "hi": 1
+   },
+   "outcome_accuracy": {
+    "k": 0,
+    "n": 1,
+    "p": 0,
+    "lo": 0,
+    "hi": 0.7935
+   }
+  },
+  "typescript": {
+   "cases": 25,
+   "expected_abstain": 1,
+   "expected_unsupported": 1,
+   "abstention": {
+    "k": 1,
+    "n": 25,
+    "p": 0.04,
+    "lo": 0.0071,
+    "hi": 0.1954
+   },
+   "unsupported": {
+    "k": 2,
+    "n": 25,
+    "p": 0.08,
+    "lo": 0.0222,
+    "hi": 0.2497
+   },
+   "outcome_accuracy": {
+    "k": 24,
+    "n": 25,
+    "p": 0.96,
+    "lo": 0.8046,
+    "hi": 0.9929
+   }
+  }
+ },
+ "faulty_oracle": [
+  {
+   "id": "faulty-oracle/extra-tool-label",
+   "label_is_wrong_because": "the list has only lookup_word; the label adds random_word",
+   "caught": true,
+   "disagreements": [
+    "missed tool random_word"
+   ]
+  },
+  {
+   "id": "faulty-oracle/missed-poison-label",
+   "label_is_wrong_because": "summarise says \"Ignore all previous instructions\"; the label claims no tool has the phrase",
+   "caught": true,
+   "disagreements": [
+    "sec-instruction-phrases raised on summarise (truth: not this check)",
+    "grades capped at F with no blocking security finding labelled (security F, anthropic F, openai F)"
+   ]
+  },
+  {
+   "id": "faulty-oracle/phantom-finding-label",
+   "label_is_wrong_because": "no description has an HTML comment; the label claims get_value has one",
+   "caught": true,
+   "disagreements": [
+    "sec-html-comment missed on get_value"
+   ]
+  },
+  {
+   "id": "faulty-oracle/wrong-outcome",
+   "label_is_wrong_because": "there is only one server; the label claims several",
+   "caught": true,
+   "disagreements": [
+    "outcome: expected multiple, got tools",
+    "phantom tool single_status"
+   ]
+  },
+  {
+   "id": "faulty-oracle/wrong-tool-name",
+   "label_is_wrong_because": "the first tool is list_labels; the label drops the s",
+   "caught": true,
+   "disagreements": [
+    "missed tool list_label",
+    "phantom tool list_labels"
+   ]
+  }
+ ],
+ "known_gaps": [
+  {
+   "id": "real-world/cve-2025-6514-shape",
+   "gap": "mcp-check grades the tools/list only. The vulnerable value in CVE-2025-6514 is the OAuth authorization_endpoint the server advertises, which is not part of any tool, so no check can see it statically. The same shell syntax placed in a tool description is the part mcp-check could see; no current check flags a URL with shell command substitution ($(...), backticks, ;, |) in metadata (the planned \"shell-injectable URL\" check, loop upgrade 19). gap-shell-injectable-url is that missing check; its misses are the gap, not a pass.",
+   "reproduces": "CVE-2025-6514 (mcp-remote OS command injection via a crafted authorization_endpoint), static shape only",
+   "disagreements": [
+    "gap-shell-injectable-url missed on connect_account"
+   ],
+   "observed": {
+    "outcome": "tools",
+    "tools": [
+     "connect_account",
+     "list_accounts"
+    ],
+    "findings": {
+     "connect_account": {
+      "anthropic-hint-platforms-differ": "attention",
+      "anthropic-title": "blocking",
+      "design-use-when": "advice",
+      "schema-additional-properties": "advice",
+      "spec-execution-legacy": "advice",
+      "spec-schema-dialect": "attention"
+     },
+     "list_accounts": {
+      "anthropic-description": "attention",
+      "anthropic-title": "blocking",
+      "design-use-when": "advice",
+      "openai-hints-explicit": "blocking",
+      "schema-additional-properties": "advice",
+      "schema-output-schema": "advice",
+      "schema-pagination": "advice",
+      "spec-execution-legacy": "advice",
+      "spec-schema-dialect": "attention"
+     }
+    }
+   }
+  }
+ ],
+ "disagreements": {
+  "csharp/attribute-tools": [
+   "outcome: expected tools, got unsupported (mcp-check: no tool definitions found in <case> (scanned 0 of 0 source files, and the committed tool lists and MCPB manifests). Grade the live list instead: star)",
+   "missed tool echo_text",
+   "missed tool reverse_text"
+  ],
+  "go/conditional-env": [
+   "suspend_tenant is registered under a condition but not marked conditional"
+  ],
+  "java/spring-tool-methods": [
+   "outcome: expected tools, got none (mcp-check: no tool definitions found in <case> (scanned 0 of 0 source files, and the committed tool lists and MCPB manifests). Grade the live list instead: star)",
+   "missed tool city_temperature",
+   "missed tool city_humidity"
+  ],
+  "kotlin/sdk-add-tool": [
+   "outcome: expected tools, got unsupported (mcp-check: no tool definitions found in <case> (scanned 0 of 0 source files, and the committed tool lists and MCPB manifests). Grade the live list instead: star)",
+   "missed tool roll_die",
+   "missed tool flip_coin"
+  ],
+  "lists/checks-schemas": [
+   "annot-write-marked-readonly raised on resolve_names (truth: not this check)"
+  ],
+  "lists/malformed-entry": [
+   "outcome: expected tools, got none (mcp-check: no tool definitions found in <case> (scanned 0 of 0 source files, and the committed tool lists and MCPB manifests). Grade the live list instead: star)",
+   "missed tool ping_host",
+   "missed tool traceroute_host",
+   "spec-input-schema-missing missed on ping_host"
+  ],
+  "php/attribute-tools": [
+   "outcome: expected tools, got unsupported (mcp-check: no tool definitions found in <case> (scanned 0 of 0 source files, and the committed tool lists and MCPB manifests). Grade the live list instead: star)",
+   "missed tool add_integers",
+   "missed tool subtract_integers"
+  ],
+  "python/class-methods": [
+   "outcome: expected tools, got none (mcp-check: no tool definitions found in <case> (scanned 1 of 1 source files, and the committed tool lists and MCPB manifests). Grade the live list instead: star)",
+   "missed tool distance_km",
+   "missed tool bearing_deg"
+  ],
+  "python/docstring-unicode-escape": [
+   "sec-bidi-controls missed on list_folders",
+   "blocking security finding labelled, but the grades are not capped at F (security A, anthropic F, openai D)",
+   "reader description of list_folders: expected \"Lists the folders under a root.\u202eesrever\u202c\", got \"Lists the folders under a root.u202eesreveru202c\""
+  ],
+  "python/generated-loop": [
+   "outcome: expected tools, got none (mcp-check: no tool definitions found in <case> (scanned 1 of 1 source files, and the committed tool lists and MCPB manifests). Grade the live list instead: star)",
+   "missed tool to_celsius",
+   "missed tool to_fahrenheit"
+  ],
+  "real-world/cve-2025-6514-shape": [
+   "gap-shell-injectable-url missed on connect_account"
+  ],
+  "ruby/tool-classes": [
+   "outcome: expected tools, got unsupported (mcp-check: no tool definitions found in <case> (scanned 0 of 0 source files, and the committed tool lists and MCPB manifests). Grade the live list instead: star)",
+   "missed tool ping_host",
+   "missed tool host_uptime"
+  ],
+  "rust/two-handlers": [
+   "outcome: expected multiple, got tools",
+   "phantom tool alpha_status",
+   "phantom tool beta_status"
+  ],
+  "swift/sdk-tools": [
+   "outcome: expected tools, got unsupported (mcp-check: no tool definitions found in <case> (scanned 0 of 0 source files, and the committed tool lists and MCPB manifests). Grade the live list instead: star)",
+   "missed tool utc_now",
+   "missed tool unix_time"
+  ],
+  "typescript/alias-server-variable": [
+   "missed tool ping_service"
+  ],
+  "typescript/duplicate-and-bad-names": [
+   "openai-name-unique missed on the list",
+   "spec-name-unique missed on the list"
+  ],
+  "typescript/factory-function": [
+   "reader params of get_key: expected [\"key\"], got []",
+   "reader required of get_key: expected [\"key\"], got []",
+   "reader annotations of get_key: expected {\"readOnlyHint\":true}, got {}",
+   "reader params of touch_key: expected [\"key\"], got []",
+   "reader required of touch_key: expected [\"key\"], got []",
+   "reader annotations of touch_key: expected {\"readOnlyHint\":false}, got {}"
+  ],
+  "typescript/generated-template-names": [
+   "outcome: expected tools, got none (mcp-check: no tool definitions found in <case> (scanned 1 of 1 source files, and the committed tool lists and MCPB manifests). Grade the live list instead: star)",
+   "missed tool list_invoices",
+   "missed tool list_customers"
+  ]
+ }
+}

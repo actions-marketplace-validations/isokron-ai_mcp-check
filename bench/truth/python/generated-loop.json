@@ -1,0 +1,35 @@
+{
+  "id": "python/generated-loop",
+  "language": "python",
+  "idioms": [
+    "generated"
+  ],
+  "about": "add_tool in a loop with f-string names",
+  "outcome": "tools",
+  "tools": [
+    "to_celsius",
+    "to_fahrenheit"
+  ],
+  "details": {
+    "to_celsius": {
+      "description": "Converts a temperature to celsius.",
+      "params": [
+        "value"
+      ],
+      "required": [
+        "value"
+      ],
+      "annotations": {}
+    },
+    "to_fahrenheit": {
+      "description": "Converts a temperature to fahrenheit.",
+      "params": [
+        "value"
+      ],
+      "required": [
+        "value"
+      ],
+      "annotations": {}
+    }
+  }
+}

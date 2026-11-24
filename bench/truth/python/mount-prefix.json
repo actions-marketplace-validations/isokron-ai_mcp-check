@@ -1,0 +1,32 @@
+{
+  "id": "python/mount-prefix",
+  "language": "python",
+  "idioms": [
+    "wrapper",
+    "decorator"
+  ],
+  "about": "FastMCP 2 mount with a prefix renames the mounted tools",
+  "outcome": "tools",
+  "tools": [
+    "status",
+    "weather_forecast"
+  ],
+  "details": {
+    "status": {
+      "description": "Returns the status of the service.",
+      "params": [],
+      "required": [],
+      "annotations": {}
+    },
+    "weather_forecast": {
+      "description": "Returns tomorrow's forecast for a city.",
+      "params": [
+        "city"
+      ],
+      "required": [
+        "city"
+      ],
+      "annotations": {}
+    }
+  }
+}

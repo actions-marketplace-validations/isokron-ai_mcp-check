@@ -1,0 +1,40 @@
+{
+  "id": "typescript/name-constants-imported",
+  "language": "typescript",
+  "idioms": [
+    "imported",
+    "indirection"
+  ],
+  "about": "tool names in an object of constants imported from another module",
+  "outcome": "tools",
+  "tools": [
+    "search_docs",
+    "fetch_doc"
+  ],
+  "details": {
+    "search_docs": {
+      "description": "Searches the documentation and returns matching page paths.",
+      "params": [
+        "query"
+      ],
+      "required": [
+        "query"
+      ],
+      "annotations": {
+        "readOnlyHint": true
+      }
+    },
+    "fetch_doc": {
+      "description": "Returns the text of one documentation page.",
+      "params": [
+        "path"
+      ],
+      "required": [
+        "path"
+      ],
+      "annotations": {
+        "readOnlyHint": true
+      }
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "id": "ruby/tool-classes",
+  "language": "ruby",
+  "idioms": [
+    "wrapper"
+  ],
+  "about": "MCP::Tool subclasses with tool_name",
+  "outcome": "tools",
+  "tools": [
+    "ping_host",
+    "host_uptime"
+  ]
+}

@@ -1,0 +1,39 @@
+{
+  "id": "typescript/spread-shared-config",
+  "language": "typescript",
+  "idioms": [
+    "indirection"
+  ],
+  "about": "annotations spread into each config from a shared object",
+  "outcome": "tools",
+  "tools": [
+    "query_metric",
+    "list_metrics"
+  ],
+  "details": {
+    "query_metric": {
+      "description": "Returns the values of one metric over a time range.",
+      "params": [
+        "from",
+        "metric"
+      ],
+      "required": [
+        "from",
+        "metric"
+      ],
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false
+      }
+    },
+    "list_metrics": {
+      "description": "Lists metric names.",
+      "params": [],
+      "required": [],
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false
+      }
+    }
+  }
+}

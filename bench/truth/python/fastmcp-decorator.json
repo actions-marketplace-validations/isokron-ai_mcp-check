@@ -1,0 +1,72 @@
+{
+  "id": "python/fastmcp-decorator",
+  "language": "python",
+  "idioms": [
+    "decorator",
+    "straight-line"
+  ],
+  "about": "FastMCP @mcp.tool() with docstrings",
+  "outcome": "tools",
+  "tools": [
+    "search_books",
+    "get_book"
+  ],
+  "details": {
+    "search_books": {
+      "description": "Searches the catalogue by title or author and returns matching book ids.",
+      "params": [
+        "limit",
+        "query"
+      ],
+      "required": [
+        "query"
+      ],
+      "annotations": {}
+    },
+    "get_book": {
+      "description": "Returns the details of one book.",
+      "params": [
+        "book_id"
+      ],
+      "required": [
+        "book_id"
+      ],
+      "annotations": {}
+    }
+  },
+  "findings": {
+    "anthropic-hint": {
+      "search_books": "blocking",
+      "get_book": "blocking"
+    },
+    "anthropic-title": {
+      "search_books": "blocking",
+      "get_book": "blocking"
+    },
+    "design-use-when": {
+      "search_books": "advice",
+      "get_book": "advice"
+    },
+    "openai-hints-explicit": {
+      "search_books": "blocking",
+      "get_book": "blocking"
+    },
+    "schema-param-description": {
+      "search_books": "advice",
+      "get_book": "advice"
+    },
+    "schema-response-format": {
+      "search_books": "advice"
+    },
+    "anthropic-description": {
+      "get_book": "attention"
+    }
+  },
+  "exhaustive": true,
+  "not_scored": [
+    "spec-schema-dialect",
+    "spec-execution-legacy",
+    "schema-additional-properties"
+  ],
+  "truth_level": "inferred"
+}

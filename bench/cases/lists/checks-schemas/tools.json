@@ -1,0 +1,113 @@
+[
+  {
+    "name": "lookup_record",
+    "title": "Look up a DNS record",
+    "description": "Returns the DNS records of one name and type, as the resolver sees them now.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Domain name"
+        }
+      }
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "resolve_names",
+    "title": "Resolve names",
+    "description": "Resolves a batch of host names to their addresses, in the order given.",
+    "inputSchema": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "update_zone",
+    "title": "Update a zone",
+    "description": "Replaces one record of a DNS zone with new data. Safe to retry: the same data gives the same zone.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "zone": {
+          "type": "string",
+          "description": "Zone name"
+        },
+        "data": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "description": "Record status"
+        }
+      },
+      "required": [
+        "zone",
+        "data",
+        "ttl"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": true,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "list_zones",
+    "title": "List zones",
+    "description": "Lists the DNS zones of the account, sorted by name, with their record counts.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "search_records",
+    "title": "Search records",
+    "description": "Searches every zone for records whose name or value contains the text.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string",
+          "description": "Text to look for"
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "description": "Most records to return"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "openWorldHint": true
+    }
+  }
+]

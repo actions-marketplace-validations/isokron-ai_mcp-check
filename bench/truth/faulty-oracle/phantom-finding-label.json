@@ -1,0 +1,19 @@
+{
+  "id": "faulty-oracle/phantom-finding-label",
+  "language": "rust",
+  "idioms": [
+    "macro"
+  ],
+  "about": "a clean rmcp counter",
+  "outcome": "tools",
+  "tools": [
+    "increment",
+    "get_value"
+  ],
+  "findings": {
+    "sec-html-comment": [
+      "get_value"
+    ]
+  },
+  "faulty_oracle": "no description has an HTML comment; the label claims get_value has one"
+}

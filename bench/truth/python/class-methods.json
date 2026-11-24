@@ -1,0 +1,48 @@
+{
+  "id": "python/class-methods",
+  "language": "python",
+  "idioms": [
+    "explicit-registration",
+    "wrapper"
+  ],
+  "about": "bound methods of an instance passed to add_tool",
+  "outcome": "tools",
+  "tools": [
+    "distance_km",
+    "bearing_deg"
+  ],
+  "details": {
+    "distance_km": {
+      "description": "Great-circle distance between two points in kilometres.",
+      "params": [
+        "lat1",
+        "lat2",
+        "lon1",
+        "lon2"
+      ],
+      "required": [
+        "lat1",
+        "lat2",
+        "lon1",
+        "lon2"
+      ],
+      "annotations": {}
+    },
+    "bearing_deg": {
+      "description": "Initial bearing from the first point to the second, in degrees.",
+      "params": [
+        "lat1",
+        "lat2",
+        "lon1",
+        "lon2"
+      ],
+      "required": [
+        "lat1",
+        "lat2",
+        "lon1",
+        "lon2"
+      ],
+      "annotations": {}
+    }
+  }
+}

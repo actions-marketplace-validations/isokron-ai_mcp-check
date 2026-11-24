@@ -1,0 +1,25 @@
+{
+  "id": "go/build-tag-excluded",
+  "language": "go",
+  "idioms": [
+    "conditional"
+  ],
+  "about": "a tool in a file behind a build tag the default build does not set",
+  "outcome": "tools",
+  "tools": [
+    "health_check"
+  ],
+  "details": {
+    "health_check": {
+      "description": "Reports whether the service is healthy.",
+      "params": [],
+      "required": [],
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": true
+      }
+    }
+  }
+}

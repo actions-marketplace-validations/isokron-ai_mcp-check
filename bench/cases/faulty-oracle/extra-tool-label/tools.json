@@ -1,0 +1,26 @@
+{
+  "tools": [
+    {
+      "name": "lookup_word",
+      "description": "Returns the definitions of an English word.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "word": {
+            "type": "string",
+            "description": "The word to look up"
+          }
+        },
+        "required": [
+          "word"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    }
+  ]
+}

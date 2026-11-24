@@ -1,0 +1,27 @@
+{
+  "tools": [
+    {
+      "name": "best_flight_search",
+      "title": "Search flights",
+      "description": "Searches flights between two airports on one date. Use this when the user asks for flight options.",
+      "inputSchema": { "type": "object", "properties": { "from": { "type": "string", "description": "Departure airport code" }, "to": { "type": "string", "description": "Arrival airport code" }, "date": { "type": "string", "description": "Date, YYYY-MM-DD" }, "limit": { "type": "integer", "description": "Most flights to return" }, "response_format": { "type": "string", "enum": ["concise", "detailed"], "description": "How much detail to return" } }, "required": ["from", "to", "date"], "additionalProperties": false },
+      "outputSchema": { "type": "object", "properties": { "flights": { "type": "array" } } },
+      "annotations": { "readOnlyHint": true, "destructiveHint": false, "openWorldHint": true }
+    },
+    {
+      "name": "book_seat",
+      "title": "Book a seat",
+      "description": "Books a seat on a flight. Use this when the user has chosen a flight and a seat. Safe to retry with the same request_id.",
+      "inputSchema": { "type": "object", "properties": { "flight": { "type": "string", "description": "Flight id from best_flight_search" }, "seat": { "type": "string", "description": "Seat such as 14C" }, "request_id": { "type": "string", "description": "Retry key: the same key books once" }, "preferences": { "type": "object", "description": "Meal and assistance preferences" } }, "required": ["flight", "seat", "request_id"], "additionalProperties": false },
+      "annotations": { "readOnlyHint": false, "destructiveHint": false, "idempotentHint": true, "openWorldHint": true },
+      "_meta": { "bad key!": true, "io.modelcontextprotocol/ui": { "x": 1 } }
+    },
+    {
+      "name": "book_seat",
+      "title": "Book a seat (v2)",
+      "description": "Books a seat on a flight, with fare class. Use this when the user has chosen a flight, a seat and a fare. Safe to retry with the same request_id.",
+      "inputSchema": { "type": "object", "properties": { "flight": { "type": "string", "description": "Flight id" }, "seat": { "type": "string", "description": "Seat such as 14C" }, "fare_class": { "type": "string", "enum": ["economy", "business"], "description": "Fare class" }, "request_id": { "type": "string", "description": "Retry key: the same key books once" } }, "required": ["flight", "seat", "fare_class", "request_id"], "additionalProperties": false },
+      "annotations": { "readOnlyHint": false, "destructiveHint": false, "idempotentHint": true, "openWorldHint": true }
+    }
+  ]
+}

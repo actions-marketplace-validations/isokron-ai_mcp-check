@@ -1,0 +1,50 @@
+{
+  "id": "typescript/computed-parts",
+  "language": "typescript",
+  "idioms": [
+    "dynamic",
+    "indirection"
+  ],
+  "about": "a description, schema and annotations built at run time from a config module: the reader must mark them unreadable and skip their checks, never grade them as empty",
+  "outcome": "tools",
+  "tools": [
+    "render_chart",
+    "chart_types"
+  ],
+  "details": {
+    "chart_types": {
+      "description": "Lists the chart types this server can render, with the arguments each one takes.",
+      "params": [
+        "verbose"
+      ],
+      "required": [],
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    }
+  },
+  "findings": {
+    "design-use-when": {
+      "chart_types": "advice"
+    },
+    "schema-output-schema": {
+      "chart_types": "advice"
+    }
+  },
+  "exhaustive": true,
+  "not_scored": [
+    "spec-schema-dialect",
+    "spec-execution-legacy",
+    "schema-additional-properties"
+  ],
+  "truth_level": "inferred",
+  "unreadable": {
+    "render_chart": [
+      "description",
+      "inputSchema",
+      "annotations"
+    ]
+  }
+}

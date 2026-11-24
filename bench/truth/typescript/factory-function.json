@@ -1,0 +1,40 @@
+{
+  "id": "typescript/factory-function",
+  "language": "typescript",
+  "idioms": [
+    "indirection",
+    "wrapper"
+  ],
+  "about": "tools built by a local factory function inside the ListTools handler",
+  "outcome": "tools",
+  "tools": [
+    "get_key",
+    "touch_key"
+  ],
+  "details": {
+    "get_key": {
+      "description": "Returns the value stored under a key.",
+      "params": [
+        "key"
+      ],
+      "required": [
+        "key"
+      ],
+      "annotations": {
+        "readOnlyHint": true
+      }
+    },
+    "touch_key": {
+      "description": "Refreshes the expiry time of a key.",
+      "params": [
+        "key"
+      ],
+      "required": [
+        "key"
+      ],
+      "annotations": {
+        "readOnlyHint": false
+      }
+    }
+  }
+}

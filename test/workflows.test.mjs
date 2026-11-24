@@ -9,7 +9,7 @@ const dir = fileURLToPath(new URL('../.github/workflows/', import.meta.url));
 const wf = Object.fromEntries(readdirSync(dir).filter((f) => f.endsWith('.yml')).map((f) => [f, readFileSync(join(dir, f), 'utf8')]));
 
 test('workflows: every third-party action pinned by full SHA; read-only default token; no pull_request_target', () => {
-  assert.deepEqual(Object.keys(wf).sort(), ['ci.yml', 'corpus.yml', 'live-probe-selftest.yml', 'live-probe.yml', 'release.yml', 'scan-static.yml']);
+  assert.deepEqual(Object.keys(wf).sort(), ['bench-mutants.yml', 'ci.yml', 'corpus.yml', 'live-probe-selftest.yml', 'live-probe.yml', 'release.yml', 'scan-static.yml']);
   for (const [f, y] of Object.entries(wf)) {
     for (const m of y.replace(/^\s*#.*$/gm, '').matchAll(/uses:\s*(\S+)/g)) if (m[1] !== './') assert.match(m[1], /^[\w.-]+\/[\w./-]+@[0-9a-f]{40}$/, f + ': ' + m[1]);
     // The loop workers grant nothing at the top; each of their jobs asks for contents: read.
@@ -59,8 +59,8 @@ test('ci: the zero-config job runs the Action with no inputs, after a plain chec
   assert.match(job, /- name: The zero-config workflow\n        id: zero\n        uses: \.\/\n      - name:/, 'uses: ./ with no with: block');
   assert.ok(!/setup-node|npm (ci|install)/.test(job), 'no setup-node or install, as in the documented workflow');
   assert.match(job, /\[ "\$SOURCE" = repo-static \]/);
-  assert.match(y, /needs: \[test, action, zero-config\]/);
-  assert.match(y, /\[ "\$n" -eq 3 \]/);
+  assert.match(y, /needs: \[test, action, zero-config, bench\]/);
+  assert.match(y, /\[ "\$n" -eq 4 \]/);
 });
 
 test('scan-static: dispatch only, the pump\'s three inputs, kill switch first, inputs checked whole, one pinned worker-kit step per item', () => {

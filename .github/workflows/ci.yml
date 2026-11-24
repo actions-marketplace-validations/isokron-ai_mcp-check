@@ -7,6 +7,8 @@
 #               SARIF upload and no badge
 #   zero-config the Action with no inputs on this repository, exactly as the docs show it: it reads the
 #               tool definitions from src/server.js, runs nothing, and needs no setup-node or install
+#   bench       the adversarial benchmark (bench/README.md): scores every case and fails when a check's false
+#               negatives rise or its recall falls below the baseline interval, or a faulty-oracle case is not caught
 #   ci-ok       passes only if every job above succeeded: the one required status check
 #
 # No secrets, read-only token, no pull_request_target: a pull request from a fork runs with the same
@@ -90,6 +92,24 @@ jobs:
           [ "$FILE_PASSED" = true ] && [ "$SERVER_PASSED" = true ] && [ "$SERVER_ANTHROPIC" = A ] \
             || { echo "::error::unexpected outputs: $FILE_PASSED $SERVER_PASSED $SERVER_ANTHROPIC"; exit 1; }
 
+  bench:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Score every case
+        run: node bench/run.mjs --json bench-score.json --md bench-score.md
+      - name: The score in the job summary
+        run: cat bench-score.md >> "$GITHUB_STEP_SUMMARY"
+      - name: The gate against bench/baseline.json
+        run: node bench/gate.mjs --score bench-score.json
+
   zero-config:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -114,7 +134,7 @@ jobs:
 
   # The required status check (branch protection names this job, not the others).
   ci-ok:
-    needs: [test, action, zero-config]
+    needs: [test, action, zero-config, bench]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -129,4 +149,4 @@ jobs:
             n=$((n + 1))
             [ "$r" = success ] || { echo "::error::a required job ended $r"; exit 1; }
           done
-          [ "$n" -eq 3 ] || { echo "::error::expected 3 job results, got $n"; exit 1; }
+          [ "$n" -eq 4 ] || { echo "::error::expected 4 job results, got $n"; exit 1; }

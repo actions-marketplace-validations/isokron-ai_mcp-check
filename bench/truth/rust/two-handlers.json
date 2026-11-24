@@ -1,0 +1,10 @@
+{
+  "id": "rust/two-handlers",
+  "language": "rust",
+  "idioms": [
+    "monorepo",
+    "macro"
+  ],
+  "about": "two modules each implementing ServerHandler",
+  "outcome": "multiple"
+}

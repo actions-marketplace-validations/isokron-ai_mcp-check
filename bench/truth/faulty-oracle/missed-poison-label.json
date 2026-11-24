@@ -1,0 +1,18 @@
+{
+  "id": "faulty-oracle/missed-poison-label",
+  "language": "python",
+  "idioms": [
+    "adversarial",
+    "decorator"
+  ],
+  "about": "a docstring with an instruction override",
+  "outcome": "tools",
+  "tools": [
+    "summarise",
+    "word_count"
+  ],
+  "findings": {
+    "sec-instruction-phrases": []
+  },
+  "faulty_oracle": "summarise says \"Ignore all previous instructions\"; the label claims no tool has the phrase"
+}

@@ -1,0 +1,53 @@
+{
+  "id": "go/misleading-annotations",
+  "language": "go",
+  "idioms": [
+    "misleading-names"
+  ],
+  "about": "a delete with destructive hint false and a create marked read-only",
+  "outcome": "tools",
+  "tools": [
+    "delete_bucket",
+    "create_bucket"
+  ],
+  "findings": {
+    "annot-delete-marked-safe": {
+      "delete_bucket": "blocking"
+    },
+    "annot-write-marked-readonly": {
+      "create_bucket": "attention"
+    }
+  },
+  "details": {
+    "delete_bucket": {
+      "description": "Deletes an empty bucket.",
+      "params": [
+        "bucket"
+      ],
+      "required": [
+        "bucket"
+      ],
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": true
+      }
+    },
+    "create_bucket": {
+      "description": "Creates a bucket.",
+      "params": [
+        "bucket"
+      ],
+      "required": [
+        "bucket"
+      ],
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": true
+      }
+    }
+  }
+}

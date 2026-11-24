@@ -1,0 +1,13 @@
+{
+  "id": "kotlin/sdk-add-tool",
+  "language": "kotlin",
+  "idioms": [
+    "explicit-registration"
+  ],
+  "about": "the Kotlin SDK server.addTool",
+  "outcome": "tools",
+  "tools": [
+    "roll_die",
+    "flip_coin"
+  ]
+}

@@ -1,0 +1,66 @@
+{
+  "id": "lists/checks-hints",
+  "language": "committed-list",
+  "idioms": [
+    "straight-line"
+  ],
+  "about": "exact list; every check labelled by hand: annotation hints, retries, executors, money, conversation, credentials, location",
+  "outcome": "tools",
+  "exhaustive": true,
+  "truth_level": "inferred",
+  "tools": [
+    "send_invoice",
+    "get_report",
+    "run_command",
+    "transfer_funds",
+    "summarize_thread",
+    "login_account",
+    "find_nearby_shops"
+  ],
+  "findings": {
+    "anthropic-hint-platforms-differ": {
+      "send_invoice": "attention",
+      "login_account": "attention"
+    },
+    "openai-hints-explicit": {
+      "send_invoice": "blocking"
+    },
+    "openai-retry": {
+      "send_invoice": "attention",
+      "run_command": "attention"
+    },
+    "surface-retry-key": {
+      "send_invoice": "advice"
+    },
+    "openai-readonly-destructive": {
+      "get_report": "attention"
+    },
+    "openai-generic-executor": {
+      "run_command": "blocking"
+    },
+    "anthropic-unsupported-use": {
+      "transfer_funds": "attention"
+    },
+    "anthropic-conversation-data": {
+      "summarize_thread": "blocking"
+    },
+    "openai-conversation-input": {
+      "summarize_thread": "blocking"
+    },
+    "openai-restricted-input": {
+      "login_account": "blocking"
+    },
+    "openai-precise-location": {
+      "find_nearby_shops": "blocking"
+    },
+    "design-use-when": {
+      "send_invoice": "advice",
+      "get_report": "advice",
+      "run_command": "advice",
+      "transfer_funds": "advice",
+      "summarize_thread": "advice",
+      "login_account": "advice",
+      "find_nearby_shops": "advice"
+    }
+  }
+}

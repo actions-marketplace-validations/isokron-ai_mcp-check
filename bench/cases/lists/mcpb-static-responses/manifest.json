@@ -1,0 +1,21 @@
+{
+  "manifest_version": "0.3",
+  "name": "bench-static-responses",
+  "version": "1.0.0",
+  "description": "A bundle that ships its exact tools/list answer.",
+  "author": { "name": "Benchmark" },
+  "server": { "type": "node", "entry_point": "server/index.js", "mcp_config": { "command": "node", "args": ["${__dirname}/server/index.js"] } },
+  "tools": [ { "name": "convert_case" }, { "name": "count_words" } ],
+  "_meta": {
+    "com.example.bench": {
+      "static_responses": {
+        "tools/list": {
+          "tools": [
+            { "name": "convert_case", "description": "Converts text to upper, lower or title case.", "inputSchema": { "type": "object", "properties": { "text": { "type": "string" }, "to": { "type": "string", "enum": ["upper", "lower", "title"] } }, "required": ["text", "to"] }, "annotations": { "readOnlyHint": true } },
+            { "name": "count_words", "description": "Counts the words in a text.", "inputSchema": { "type": "object", "properties": { "text": { "type": "string" } }, "required": ["text"] }, "annotations": { "readOnlyHint": true } }
+          ]
+        }
+      }
+    }
+  }
+}

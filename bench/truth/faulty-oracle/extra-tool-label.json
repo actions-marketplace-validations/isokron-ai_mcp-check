@@ -1,0 +1,14 @@
+{
+  "id": "faulty-oracle/extra-tool-label",
+  "language": "committed-list",
+  "idioms": [
+    "straight-line"
+  ],
+  "about": "a committed tools.json with one tool",
+  "outcome": "tools",
+  "tools": [
+    "lookup_word",
+    "random_word"
+  ],
+  "faulty_oracle": "the list has only lookup_word; the label adds random_word"
+}

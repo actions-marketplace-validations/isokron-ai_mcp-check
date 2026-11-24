@@ -1,0 +1,40 @@
+{
+  "id": "typescript/alias-server-variable",
+  "language": "typescript",
+  "idioms": [
+    "aliasing"
+  ],
+  "about": "the server held in a second variable, and registerTool bound to a local name",
+  "outcome": "tools",
+  "tools": [
+    "ping_service",
+    "restart_service"
+  ],
+  "details": {
+    "ping_service": {
+      "description": "Checks whether a service answers on its health endpoint.",
+      "params": [
+        "service"
+      ],
+      "required": [
+        "service"
+      ],
+      "annotations": {
+        "readOnlyHint": true
+      }
+    },
+    "restart_service": {
+      "description": "Restarts a service. Requests in flight are dropped.",
+      "params": [
+        "service"
+      ],
+      "required": [
+        "service"
+      ],
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true
+      }
+    }
+  }
+}

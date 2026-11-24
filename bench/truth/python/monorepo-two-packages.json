@@ -1,0 +1,9 @@
+{
+  "id": "python/monorepo-two-packages",
+  "language": "python",
+  "idioms": [
+    "monorepo"
+  ],
+  "about": "two Python packages, each its own server",
+  "outcome": "multiple"
+}

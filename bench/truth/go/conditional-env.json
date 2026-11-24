@@ -1,0 +1,43 @@
+{
+  "id": "go/conditional-env",
+  "language": "go",
+  "idioms": [
+    "conditional"
+  ],
+  "about": "a tool added only when an environment variable is set",
+  "outcome": "tools",
+  "tools": [
+    "list_tenants"
+  ],
+  "optional_tools": [
+    "suspend_tenant"
+  ],
+  "details": {
+    "list_tenants": {
+      "description": "Lists tenants.",
+      "params": [],
+      "required": [],
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": true
+      }
+    },
+    "suspend_tenant": {
+      "description": "Suspends a tenant until it is resumed.",
+      "params": [
+        "tenant"
+      ],
+      "required": [
+        "tenant"
+      ],
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": true
+      }
+    }
+  }
+}
