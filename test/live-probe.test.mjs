@@ -212,14 +212,12 @@ test('R-LP-08: a registry entry that names the repository but not from its owner
   assert.deepEqual(LP.DETAILS.unverified_registry_entry.slice(0, 2), ['no_runnable_artifact', false]);
   // A package that does not exist on npm: refused.
   assert.equal((await LP.resolveSubject({ subject: 'acme/victim', repo: 'acme/victim' }, { fetch: fakeFetch([spoof([npmPkg('nowhere')])]) })).detail, 'unverified_registry_entry');
-  // npm metadata that points back (shorthand or URL): accepted, and results say how.
-  const b = await LP.resolveSubject({ subject: 'acme/victim', repo: 'acme/victim' }, { fetch: fakeFetch([spoof([npmPkg('victim-mcp')])], { npm: { 'victim-mcp': { repository: 'github:acme/victim' } } }) });
-  assert.equal(b.status, 'runnable');
-  assert.equal(b.choice.matched_by, 'repository');
-  assert.equal(b.choice.verified_by, 'package_metadata');
-  // PyPI project_urls with a path under the repository.
-  const c = await LP.resolveSubject({ subject: 'acme/victim', repo: 'acme/victim' }, { fetch: fakeFetch([spoof([{ registryType: 'pypi', identifier: 'victim-mcp', version: '1.0', transport: { type: 'stdio' } }])], { pypi: { 'victim-mcp': { info: { project_urls: { Source: 'https://github.com/acme/victim/tree/main/server' } } } } }) });
-  assert.equal(c.choice.verified_by, 'package_metadata');
+  // R-LP-15: package metadata the publisher writes (npm repository, PyPI project_urls) no longer counts: the attacker
+  // writes the package too. Only provenance the registry vouches for does (the R-LP-15 test).
+  const b = await LP.resolveSubject({ subject: 'acme/victim', repo: 'acme/victim' }, { fetch: fakeFetch([spoof([npmPkg('victim-mcp')])], { npm: { 'victim-mcp': { name: 'victim-mcp', version: '1.2.3', repository: 'github:acme/victim', dist: { integrity: 'sha512-' + Buffer.alloc(64).toString('base64') } } } }) });
+  assert.equal(b.detail, 'unverified_registry_entry');
+  const c = await LP.resolveSubject({ subject: 'acme/victim', repo: 'acme/victim' }, { fetch: fakeFetch([spoof([{ registryType: 'pypi', identifier: 'victim-mcp', version: '1.0', transport: { type: 'stdio' } }])], { pypi: { 'victim-mcp': { info: { version: '1.0', project_urls: { Source: 'https://github.com/acme/victim/tree/main/server' } }, urls: [] } } }) });
+  assert.equal(c.detail, 'unverified_registry_entry');
   // A remote-only claim is not the subject's either.
   assert.equal((await LP.resolveSubject({ subject: 'acme/victim', repo: 'acme/victim' }, { fetch: fakeFetch([spoof([], { remotes: [{ type: 'streamable-http', url: 'https://x.example/mcp' }] })]) })).detail, 'unverified_registry_entry');
   // The owner's namespace (case-insensitive) is verified by the registry itself.
@@ -233,6 +231,104 @@ test('R-LP-08: a registry entry that names the repository but not from its owner
   assert.equal(r.install.verified_by, 'seed');
   assert.equal(LP.repoOfMetadataUrl('git@github.com:Acme/Victim.git'), 'acme/victim');
   assert.equal(LP.repoOfMetadataUrl('https://gitlab.com/acme/victim'), null);
+});
+
+/** A fetch that answers from a map of exact URLs (JSON bodies), 404 otherwise. */
+const urlFetch = (map, calls = []) => async (url) => { calls.push(String(url)); return String(url) in map ? res(200, map[String(url)]) : res(404, {}); };
+const PROV = join(FX, 'provenance');
+const pj = (f) => JSON.parse(readFileSync(join(PROV, f), 'utf8'));
+function npmProvenanceMap({ version = pj('npm-mcp-check-1.3.1.json'), att = pj('npm-mcp-check-1.3.1-attestations.json') } = {}) {
+  return { 'https://registry.npmjs.org/@isokron%2fmcp-check/1.3.1': version, 'https://registry.npmjs.org/-/npm/v1/attestations/@isokron%2fmcp-check@1.3.1': att };
+}
+function pypiProvenanceMap({ rel = pj('pypi-mcp-server-time-2026.11.18.json'), prov = pj('pypi-mcp-server-time-2026.11.18-wheel-provenance.json') } = {}) {
+  return { 'https://pypi.org/pypi/mcp-server-time/2026.11.18/json': rel, 'https://pypi.org/integrity/mcp-server-time/2026.11.18/mcp_server_time-2026.11.18-py3-none-any.whl/provenance': prov };
+}
+
+test('R-LP-15: a repository-only registry match counts only with signed build provenance from the registry (npm, PyPI) for that repository', async () => {
+  const npm = { registryType: 'npm', identifier: '@isokron/mcp-check', version: '1.3.1' };
+  const pypi = { registryType: 'pypi', identifier: 'mcp-server-time', version: '2026.11.18' };
+  // Real attestations, saved from the registries: they verify for their own repository and no other.
+  assert.equal(await LP.packageVerifiedBy(npm, 'isokron-ai/mcp-check', { fetch: urlFetch(npmProvenanceMap()) }), 'npm_provenance');
+  assert.equal(await LP.packageVerifiedBy(pypi, 'modelcontextprotocol/servers', { fetch: urlFetch(pypiProvenanceMap()) }), 'pypi_provenance');
+  const why = async (pkg, subj, map) => { const out = {}; await LP.packageVerifiedBy(pkg, subj, { fetch: urlFetch(map), out }); return out.why; };
+  assert.equal(await why(npm, 'acme/victim', npmProvenanceMap()), 'provenance_other_repository');
+  assert.equal(await why(pypi, 'acme/victim', pypiProvenanceMap()), 'provenance_other_repository');
+  // No attestation at all (the package.json may say anything): no.
+  const bare = { ...pj('npm-mcp-check-1.3.1.json') }; bare.dist = { ...bare.dist }; delete bare.dist.attestations;
+  assert.equal(await why(npm, 'isokron-ai/mcp-check', npmProvenanceMap({ version: bare })), 'no_provenance');
+  // The tarball is not the one attested: no.
+  const other = { ...pj('npm-mcp-check-1.3.1.json') }; other.dist = { ...other.dist, integrity: 'sha512-' + Buffer.alloc(64, 7).toString('base64') };
+  assert.equal(await why(npm, 'isokron-ai/mcp-check', npmProvenanceMap({ version: other })), 'provenance_other_artifact');
+  // The statement changed to name another repository (the signature no longer matches), or the certificate changed.
+  const att = pj('npm-mcp-check-1.3.1-attestations.json');
+  const slsa = att.attestations.find((a) => a.predicateType === 'https://slsa.dev/provenance/v1');
+  const st = JSON.parse(Buffer.from(slsa.bundle.dsseEnvelope.payload, 'base64').toString('utf8'));
+  st.predicate.buildDefinition.externalParameters.workflow.repository = 'https://github.com/acme/victim';
+  slsa.bundle.dsseEnvelope.payload = Buffer.from(JSON.stringify(st)).toString('base64');
+  assert.equal(await why(npm, 'acme/victim', npmProvenanceMap({ att })), 'certificate_other_repository', 'the certificate still names the real repository');
+  const forged = JSON.parse(JSON.stringify(att));
+  st.predicate.buildDefinition.externalParameters.workflow.repository = 'https://github.com/isokron-ai/mcp-check';
+  st.predicate.runDetails = { forged: true };
+  forged.attestations.find((a) => a.predicateType === 'https://slsa.dev/provenance/v1').bundle.dsseEnvelope.payload = Buffer.from(JSON.stringify(st)).toString('base64');
+  assert.equal(await why(npm, 'isokron-ai/mcp-check', npmProvenanceMap({ att: forged })), 'signature_invalid');
+  // A certificate that does not chain to the pinned Fulcio authority.
+  const out = {};
+  const wrongCa = join(mkdtempSync(join(tmpdir(), 'lp-ca-')), 'ca.json');
+  const real = JSON.parse(readFileSync(LP.SIGSTORE_CA_FILE, 'utf8'));
+  writeFileSync(wrongCa, JSON.stringify({ ...real, certificate_authorities: [{ ...real.certificate_authorities[0], chain: [real.certificate_authorities[0].chain[1]] }] }));
+  await LP.packageVerifiedBy(npm, 'isokron-ai/mcp-check', { fetch: urlFetch(npmProvenanceMap()), chains: LP.sigstoreChains(wrongCa), out });
+  assert.equal(out.why, 'certificate_not_from_fulcio');
+  // The Fulcio extensions are read from the certificate itself.
+  const der = Buffer.from(pj('npm-mcp-check-1.3.1-attestations.json').attestations.find((a) => a.predicateType === 'https://slsa.dev/provenance/v1').bundle.verificationMaterial.certificate.rawBytes, 'base64');
+  assert.equal(LP.fulcioExtension(der, 12), 'https://github.com/isokron-ai/mcp-check');
+  assert.equal(LP.fulcioExtension(der, 8), 'https://token.actions.githubusercontent.com');
+  // Through resolveSubject: a repository-only entry whose npm package has provenance for the subject.
+  const reg = fakeFetch([server('io.github.someone-else/mcp-check', 'isokron-ai/mcp-check', [npmPkg('@isokron/mcp-check', { version: '1.3.1' })])]);
+  const both = async (url, init) => (String(url).startsWith('https://registry.npmjs.org/') ? urlFetch(npmProvenanceMap())(url, init) : reg(url, init));
+  const r = await LP.resolveSubject({ subject: 'isokron-ai/mcp-check', repo: 'isokron-ai/mcp-check' }, { fetch: both });
+  assert.equal(r.status, 'runnable');
+  assert.equal(r.choice.verified_by, 'npm_provenance');
+  assert.equal(r.choice.matched_by, 'repository');
+});
+
+test('R-LP-16: OCI subjects run one at a time, each only with about 4x its image size free; past that, a retryable skip', async () => {
+  // The plan puts OCI subjects in lists of their own, with their declared size.
+  const digest = 'sha256:' + 'e'.repeat(64);
+  const plan = { marker: MARKER, subject_timeout_s: 147, items: [
+    { index: 0, target: { id: 's001', repo: 'a/b', ref: 'HEAD', launch: { kind: 'npm', package: 'x', version: '1.0.0' } }, resolution: { choice: {} } },
+    { index: 1, target: { id: 's002', repo: 'a/c', ref: 'HEAD', launch: { kind: 'docker', image: 'ghcr.io/a/c:1@' + digest } }, resolution: { choice: { oci_bytes: 123456 } } },
+  ] };
+  const lists = LP.targetLists(plan, { node24Image: NODE24 });
+  assert.deepEqual(lists.subjects.targets.map((t) => t.id), ['s001']);
+  assert.deepEqual(lists.oci.map((o) => [o.id, o.image, o.bytes, o.list.targets[0].id]), [['s002', 'ghcr.io/a/c:1@' + digest, 123456, 's002']]);
+  // The bundle reads each OCI subject from its own run; one stopped for disk is a retryable skip.
+  const rk = (c) => c.repeat(64);
+  const res = (ociBytes) => ({ status: 'runnable', detail: null, registry: null, choice: { type: 'oci', identifier: 'ghcr.io/a/c:1', version: '1', transport: 'stdio', runtime_hint: null, args_n: 0, args_unfilled: 0, env_names: [], oci_digest: 'e'.repeat(64), oci_bytes: ociBytes, purl: null, matched_by: 'repository+namespace', verified_by: 'namespace' }, candidates: [], launch: null, subdir: null, seed_packages: 0 });
+  const its = [
+    { index: 0, subject: 'acme/box', repo: 'acme/box', run_key: rk('1'), fence: 1, target_id: 's001', target: { id: 's001', launch: { kind: 'docker', image: 'ghcr.io/acme/box:1@' + digest } }, resolution: res(1000), resolve_ms: 1 },
+    { index: 1, subject: 'acme/huge', repo: 'acme/huge', run_key: rk('2'), fence: 2, target_id: 's002', target: { id: 's002', launch: { kind: 'docker', image: 'ghcr.io/acme/huge:1@' + digest } }, resolution: res(2 * 1024 ** 3), resolve_ms: 1 },
+    { index: 2, subject: 'acme/later', repo: 'acme/later', run_key: rk('3'), fence: 3, target_id: 's003', target: { id: 's003', launch: { kind: 'docker', image: 'ghcr.io/acme/later:1@' + digest } }, resolution: res(1000), resolve_ms: 1 },
+  ];
+  const w = workFolder({ items: its });
+  mkdirSync(join(w, 'driver-oci', 's001', 's001'), { recursive: true });
+  mkdirSync(join(w, 'driver-oci', 's001', '_shard'), { recursive: true });
+  writeFileSync(join(w, 'driver-oci', 's001', 's001', 'record.json'), fx('record-ok.json'));
+  writeFileSync(join(w, 'driver-oci', 's001', 's001', 'probe-bare.json'), fx('probe-known.json'));
+  writeFileSync(join(w, 'driver-oci', 's001', '_shard', 'telemetry.jsonl'), fx('telemetry.jsonl'));
+  writeFileSync(join(w, 'oci-runs.jsonl'), [{ id: 's001', outcome: 'ran', rc: 0, avail: 9e9, need: 4000 }, { id: 's002', outcome: 'disk_low', avail: 5e9, need: 8 * 1024 ** 3 }, { id: 's003', outcome: 'disk_low' }].map((x) => JSON.stringify(x)).join('\n') + '\n');
+  const summary = LP.bundleShard({ work: w });
+  assert.deepEqual(summary.map((x) => [x.status, x.detail]), [['graded', null], ['skipped', 'disk_low'], ['skipped', 'disk_low']]);
+  assert.deepEqual(LP.DETAILS.disk_low.slice(0, 2), ['upstream_unavailable', true]);
+  const meta = JSON.parse(readFileSync(join(w, 'out', '1', 'meta.json'), 'utf8'));
+  assert.deepEqual(meta.skips, [{ stage: 'install', reason: 'upstream_unavailable', evidence: LP.RESULT_PATH, retryable: true }]);
+  assert.match(readFileSync(join(w, 'out', '0', 'bundle', 'raw', 'telemetry.jsonl'), 'utf8'), /registry\.npmjs\.org/, 'its own run\'s telemetry');
+  // The script: free space against four times the declared size, before each image, and the image removed after.
+  const sh = readFileSync(join(root, 'corpus', 'live-probe-sandbox.sh'), 'utf8');
+  assert.match(sh, /need=\$\(\( bytes \* 4 \)\)/);
+  assert.match(sh, /df -B1 --output=avail "\$docker_root"/);
+  assert.match(sh, /stop=disk_low/);
+  assert.match(sh, /docker image rm -f "\$image"/);
+  assert.ok(sh.indexOf('need=$(( bytes * 4 ))') < sh.indexOf('drive "$work/oci/$id.json"'));
 });
 
 test('R-LP-12: npm installs run their install scripts, in the sandbox, so native modules can be built', async () => {
@@ -384,6 +480,9 @@ test('live-probe bundle: the live grade, the static comparison and the field rec
   }
   const by = (f) => recs.filter((o) => o.field === f).map((o) => o.value);
   for (const [f, t] of Object.entries(LP.FIELDS)) assert.equal(reg.get(f) && reg.get(f).type, t, f);
+  // tool_count and tool_list_sha256 wait for tool-qa's registry pin (EMIT_TOOL_LIST_FIELDS).
+  assert.equal(LP.EMIT_TOOL_LIST_FIELDS, false);
+  assert.ok(!recs.some((x) => x.field in LP.TOOL_LIST_FIELDS) && !reg.has('tool_count'), 'not written while the pinned registry lacks them');
   assert.deepEqual(by('subject_id'), ['isokron-ai/mcp-check']);
   assert.deepEqual(by('registry_package_identifier'), ['@isokron/mcp-check']);
   assert.deepEqual(by('package_purl'), ['pkg:npm/%40isokron/mcp-check@1.3.1']);

@@ -27,7 +27,7 @@
 // Subject text (tool names, descriptions, schemas, server info, package names, host names a server looked up, install
 // logs) goes under raw/ only. results/, controls/, observations/ and logs/ hold our own codes, counts, hashes and
 // grades, and a subject's own strings only where a strict pattern shows they cannot carry an attempt identity.
-import { createHash, randomBytes } from 'node:crypto';
+import { X509Certificate, createHash, createVerify, randomBytes } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -112,6 +112,7 @@ export const DETAILS = Object.freeze({
   harness_error: ['upstream_unavailable', true, 'start'],
   shard_deadline: ['upstream_unavailable', true, 'start'],
   sandbox_evidence_missing: ['trace_unavailable', true, 'start'],
+  disk_low: ['upstream_unavailable', true, 'install'],
 });
 
 /** The fields this lane writes, with their types in mcp-results fields/registry.yaml (at tool-qa's pinned commit). */
@@ -127,6 +128,13 @@ export const FIELDS = Object.freeze({
   observation_coverage: 'object', install_phase_behaviour: 'object', network_event: 'object', error_taxonomy_code: 'enum',
   static_vs_live_agreement: 'object', commit_sha: 'string', commit_date: 'timestamp',
 });
+/**
+ * tool_count and tool_list_sha256 (mcp-results f2b16de) are written as fields of their own only once tool-qa's ingest
+ * pins a registry that has them (ingest/registry.mjs REGISTRY_COMMIT); until then an undeclared field would reject the
+ * bundle, and both values travel inside catalog_per_config_state. Turn this on together with that pin.
+ */
+export const EMIT_TOOL_LIST_FIELDS = false;
+export const TOOL_LIST_FIELDS = Object.freeze({ tool_count: 'integer', tool_list_sha256: 'hash' });
 const ENUM_RE = /^[A-Za-z0-9][A-Za-z0-9._:/+-]{0,127}$/;
 const DATE_TIME_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(\.\d{1,9})?(Z|[+-](\d{2}):(\d{2}))$/;
 
@@ -382,31 +390,152 @@ export async function resolveOciImage(ref, { fetch: fetchImpl = globalThis.fetch
   return { digest: top.digest, bytes };
 }
 
+// ------------------------------------------------------------------ provenance
+
+export const SIGSTORE_CA_FILE = join(FIXTURES, 'sigstore-fulcio.json');
+let sigstoreCas = null;
+/** The pinned Fulcio certificate chains (intermediate first, root last), as X509Certificate lists. */
+export function sigstoreChains(file = SIGSTORE_CA_FILE) {
+  if (file === SIGSTORE_CA_FILE && sigstoreCas) return sigstoreCas;
+  const d = JSON.parse(readFileSync(file, 'utf8'));
+  const chains = d.certificate_authorities.map((ca) => ca.chain.map((b) => new X509Certificate(Buffer.from(b, 'base64'))));
+  if (file === SIGSTORE_CA_FILE) sigstoreCas = chains;
+  return chains;
+}
+
+/** DER length at `i`: [length, header bytes], or null. */
+function derLen(buf, i) {
+  const b = buf[i];
+  if (b === undefined) return null;
+  if (b < 0x80) return [b, 1];
+  const n = b & 0x7f;
+  if (n < 1 || n > 3 || i + n >= buf.length) return null;
+  let len = 0;
+  for (let k = 1; k <= n; k++) len = len * 256 + buf[i + k];
+  return [len, 1 + n];
+}
+const FULCIO_OID = (arc) => Buffer.from([0x06, 0x0a, 0x2b, 0x06, 0x01, 0x04, 0x01, 0x83, 0xbf, 0x30, 0x01, arc]);
 /**
- * Whether a package's own metadata names the subject's repository: npm's repository, homepage and bugs URLs of that
- * version; PyPI's project_urls, home page and download URL; an image on ghcr.io under the subject's owner. A missing
- * package is no; a registry that fails throws upstream_error or rate_limited.
+ * The value of one Fulcio certificate extension (OID 1.3.6.1.4.1.57264.1.<arc>) as text, or null: the OCTET STRING
+ * after the OID (an optional critical flag between), holding a DER UTF8String (arcs 8 and later) or raw text (arc 1).
  */
-export async function packagePointsTo(pkg, subject, { fetch: fetchImpl = globalThis.fetch } = {}) {
+export function fulcioExtension(der, arc) {
+  const oid = FULCIO_OID(arc);
+  const at = der.indexOf(oid);
+  if (at < 0) return null;
+  let i = at + oid.length;
+  if (der[i] === 0x01 && der[i + 1] === 0x01) i += 3;
+  if (der[i] !== 0x04) return null;
+  const ol = derLen(der, i + 1);
+  if (!ol) return null;
+  const start = i + 1 + ol[1]; const end = start + ol[0];
+  if (end > der.length) return null;
+  const inner = der.subarray(start, end);
+  if (inner[0] === 0x0c) { const l = derLen(inner, 1); if (!l || 1 + l[1] + l[0] !== inner.length) return null; return inner.subarray(1 + l[1]).toString('utf8'); }
+  return inner.toString('utf8');
+}
+
+/**
+ * Checks one Sigstore-signed DSSE statement: the leaf certificate chains to the pinned Fulcio authority, it was issued
+ * to a GitHub Actions workflow of `repo` (the OIDC issuer and Source Repository URI extensions, and the SAN), and the
+ * envelope's signature over the statement verifies with it. Returns null when all hold, else the first reason.
+ * Not checked here: the transparency log (Rekor) entry and that the signing time fell inside the certificate's
+ * ten-minute validity; the registry checked those when it accepted the attestation, and serves it.
+ */
+export function sigstoreProblem({ certDer, payloadType, body, signature, repo, chains = sigstoreChains() }) {
+  let leaf;
+  try { leaf = new X509Certificate(certDer); } catch { return 'certificate_unreadable'; }
+  const chain = chains.find((c) => c.length && leaf.checkIssued(c[0]) && leaf.verify(c[0].publicKey) && c.every((x, k) => (k + 1 < c.length ? x.checkIssued(c[k + 1]) && x.verify(c[k + 1].publicKey) : x.verify(x.publicKey))));
+  if (!chain) return 'certificate_not_from_fulcio';
+  const issuer = fulcioExtension(certDer, 8) || fulcioExtension(certDer, 1);
+  if (issuer !== 'https://token.actions.githubusercontent.com') return 'not_github_actions';
+  const want = 'https://github.com/' + repo.toLowerCase();
+  const source = fulcioExtension(certDer, 12);
+  if (!source || source.toLowerCase() !== want) return 'certificate_other_repository';
+  if (!String(leaf.subjectAltName || '').toLowerCase().startsWith('uri:' + want + '/')) return 'certificate_other_repository';
+  const pae = Buffer.concat([Buffer.from('DSSEv1 ' + Buffer.byteLength(payloadType) + ' ' + payloadType + ' ' + body.length + ' '), body]);
+  try { if (!createVerify('sha256').update(pae).verify(leaf.publicKey, signature)) return 'signature_invalid'; } catch { return 'signature_invalid'; }
+  return null;
+}
+
+/**
+ * npm: the build provenance the registry serves for this version (dist.attestations, SLSA v1 in a Sigstore bundle).
+ * Its statement must name this package and version with the tarball's own sha512 (dist.integrity), its signed
+ * workflow repository must be the subject, and sigstoreProblem must pass for the subject. package.json fields
+ * (repository, homepage, bugs) are the publisher's own words and count for nothing. Returns null or a reason.
+ */
+export async function npmProvenanceProblem(id, version, subject, { fetch: fetchImpl = globalThis.fetch, chains } = {}) {
+  const v = await getJson(fetchImpl, 'https://registry.npmjs.org/' + id.replace('/', '%2f') + '/' + (version && version !== 'latest' ? encodeURIComponent(version) : 'latest'));
+  if (!isObj(v) || !isObj(v.dist)) return 'package_missing';
+  const m = /^sha512-([A-Za-z0-9+/]{86}==)$/.exec(String(v.dist.integrity || ''));
+  if (!m) return 'no_integrity';
+  const tarSha512 = Buffer.from(m[1], 'base64').toString('hex');
+  const url = isObj(v.dist.attestations) && typeof v.dist.attestations.url === 'string' ? v.dist.attestations.url : null;
+  if (!url || !url.startsWith('https://registry.npmjs.org/-/npm/v1/attestations/')) return 'no_provenance';
+  const att = await getJson(fetchImpl, url);
+  const prov = (isObj(att) && Array.isArray(att.attestations) ? att.attestations : []).find((x) => isObj(x) && x.predicateType === 'https://slsa.dev/provenance/v1' && isObj(x.bundle));
+  if (!prov) return 'no_provenance';
+  const env = prov.bundle.dsseEnvelope; const vm = prov.bundle.verificationMaterial;
+  const certB64 = isObj(vm) && isObj(vm.certificate) ? vm.certificate.rawBytes : isObj(vm) && isObj(vm.x509CertificateChain) && Array.isArray(vm.x509CertificateChain.certificates) && isObj(vm.x509CertificateChain.certificates[0]) ? vm.x509CertificateChain.certificates[0].rawBytes : null;
+  if (!isObj(env) || typeof env.payload !== 'string' || env.payloadType !== 'application/vnd.in-toto+json' || !Array.isArray(env.signatures) || !env.signatures[0] || typeof certB64 !== 'string') return 'provenance_unreadable';
+  const body = Buffer.from(env.payload, 'base64');
+  let st; try { st = JSON.parse(body.toString('utf8')); } catch { return 'provenance_unreadable'; }
+  const purl = 'pkg:npm/' + String(v.name || id).replace(/^@/, '%40') + '@' + String(v.version);
+  if (!(Array.isArray(st.subject) && st.subject.some((x) => isObj(x) && x.name === purl && isObj(x.digest) && x.digest.sha512 === tarSha512))) return 'provenance_other_artifact';
+  const wf = st.predicate && st.predicate.buildDefinition && st.predicate.buildDefinition.externalParameters && st.predicate.buildDefinition.externalParameters.workflow;
+  if (!isObj(wf) || String(wf.repository || '').toLowerCase() !== 'https://github.com/' + subject.toLowerCase()) return 'provenance_other_repository';
+  return sigstoreProblem({ certDer: Buffer.from(certB64, 'base64'), payloadType: env.payloadType, body, signature: Buffer.from(env.signatures[0].sig, 'base64'), repo: subject, ...(chains ? { chains } : {}) });
+}
+
+/**
+ * PyPI: a PEP 740 attestation from PyPI's integrity API for a file of this release, published by a GitHub Trusted
+ * Publisher whose repository is the subject. The statement must name the file with its sha256 as PyPI lists it, and
+ * sigstoreProblem must pass for the subject. project_urls and the home page count for nothing. Returns null or a reason.
+ */
+export async function pypiProvenanceProblem(id, version, subject, { fetch: fetchImpl = globalThis.fetch, chains } = {}) {
+  const rel = await getJson(fetchImpl, 'https://pypi.org/pypi/' + encodeURIComponent(id) + '/' + (version && version !== 'latest' ? encodeURIComponent(version) + '/' : '') + 'json');
+  if (!isObj(rel) || !isObj(rel.info) || !Array.isArray(rel.urls)) return 'package_missing';
+  const ver = String(rel.info.version || version || '');
+  const files = rel.urls.filter((u) => isObj(u) && typeof u.filename === 'string' && /^[A-Za-z0-9._+-]{1,200}$/.test(u.filename) && isObj(u.digests) && /^[0-9a-f]{64}$/.test(String(u.digests.sha256))).sort((x, y) => (x.packagetype === 'bdist_wheel' ? 0 : 1) - (y.packagetype === 'bdist_wheel' ? 0 : 1)).slice(0, 3);
+  if (!files.length) return 'package_missing';
+  let why = 'no_provenance';
+  for (const f of files) {
+    const d = await getJson(fetchImpl, 'https://pypi.org/integrity/' + encodeURIComponent(id) + '/' + encodeURIComponent(ver) + '/' + encodeURIComponent(f.filename) + '/provenance');
+    for (const b of isObj(d) && Array.isArray(d.attestation_bundles) ? d.attestation_bundles : []) {
+      const pub = isObj(b) && isObj(b.publisher) ? b.publisher : null;
+      if (!pub || pub.kind !== 'GitHub' || String(pub.repository || '').toLowerCase() !== subject.toLowerCase()) { why = 'provenance_other_repository'; continue; }
+      for (const a of Array.isArray(b.attestations) ? b.attestations : []) {
+        if (!isObj(a) || !isObj(a.envelope) || !isObj(a.verification_material) || typeof a.envelope.statement !== 'string' || typeof a.envelope.signature !== 'string' || typeof a.verification_material.certificate !== 'string') { why = 'provenance_unreadable'; continue; }
+        const body = Buffer.from(a.envelope.statement, 'base64');
+        let st; try { st = JSON.parse(body.toString('utf8')); } catch { why = 'provenance_unreadable'; continue; }
+        if (!(Array.isArray(st.subject) && st.subject.some((x) => isObj(x) && x.name === f.filename && isObj(x.digest) && x.digest.sha256 === f.digests.sha256))) { why = 'provenance_other_artifact'; continue; }
+        const p = sigstoreProblem({ certDer: Buffer.from(a.verification_material.certificate, 'base64'), payloadType: 'application/vnd.in-toto+json', body, signature: Buffer.from(a.envelope.signature, 'base64'), repo: subject, ...(chains ? { chains } : {}) });
+        if (!p) return null;
+        why = p;
+      }
+    }
+  }
+  return why;
+}
+
+/**
+ * How a package that came with a repository-only registry match is tied to the subject: 'npm_provenance',
+ * 'pypi_provenance' or 'ghcr_owner', or null with the reason in `out.why`. Only what a registry vouches for counts:
+ * signed build provenance it serves, or the owner of the ghcr.io namespace. A missing package or attestation is no; a
+ * registry that fails throws upstream_error or rate_limited.
+ */
+export async function packageVerifiedBy(pkg, subject, { fetch: fetchImpl = globalThis.fetch, chains, out = {} } = {}) {
   const type = String(pkg.registryType || pkg.registry || '').toLowerCase();
   const id = typeof pkg.identifier === 'string' ? pkg.identifier.trim() : '';
-  const want = subject.toLowerCase();
   const version = typeof pkg.version === 'string' && SEMVER.test(pkg.version) ? pkg.version : null;
-  const urls = [];
-  if (type === 'npm' && NPM_NAME.test(id)) {
-    const j = await getJson(fetchImpl, 'https://registry.npmjs.org/' + id.replace('/', '%2f') + '/' + (version ? encodeURIComponent(version) : 'latest'));
-    if (!isObj(j)) return false;
-    urls.push(typeof j.repository === 'string' ? j.repository : isObj(j.repository) ? j.repository.url : null, j.homepage, isObj(j.bugs) ? j.bugs.url : j.bugs);
-  } else if (type === 'pypi' && PYPI_NAME.test(id)) {
-    const j = await getJson(fetchImpl, 'https://pypi.org/pypi/' + encodeURIComponent(id) + '/' + (version ? encodeURIComponent(version) + '/' : '') + 'json');
-    const info = isObj(j) && isObj(j.info) ? j.info : null;
-    if (!info) return false;
-    urls.push(...(isObj(info.project_urls) ? Object.values(info.project_urls) : []), info.home_page, info.download_url);
-  } else if (type === 'oci') {
+  if (type === 'npm' && NPM_NAME.test(id)) { out.why = await npmProvenanceProblem(id, version, subject, { fetch: fetchImpl, chains }); return out.why ? null : 'npm_provenance'; }
+  if (type === 'pypi' && PYPI_NAME.test(id)) { out.why = await pypiProvenanceProblem(id, version, subject, { fetch: fetchImpl, chains }); return out.why ? null : 'pypi_provenance'; }
+  if (type === 'oci') {
     const ref = parseOciRef(id);
-    return !!(ref && ref.host === 'ghcr.io' && ref.path.split('/')[0] === want.split('/')[0]);
+    if (ref && ref.host === 'ghcr.io' && ref.path.split('/')[0] === subject.toLowerCase().split('/')[0]) return 'ghcr_owner';
+    out.why = 'image_other_owner'; return null;
   }
-  return urls.some((u) => repoOfMetadataUrl(u) === want);
+  out.why = 'unsupported_package'; return null;
 }
 
 /** Arguments from a registry package's packageArguments: values and defaults only, never a value we would invent. */
@@ -527,7 +656,7 @@ const DETAIL_ORDER = ['unverified_registry_entry', 'image_too_large', 'oci_host_
  * How to run one subject: { status: 'runnable', launch, choice, registry, subdir } or { status: 'skipped', detail }.
  * Never throws; a fetch that failed gives rate_limited or upstream_error (retryable).
  */
-export async function resolveSubject(item, { seed = new Map(), fetch: fetchImpl = globalThis.fetch, base = REGISTRY_BASE } = {}) {
+export async function resolveSubject(item, { seed = new Map(), fetch: fetchImpl = globalThis.fetch, base = REGISTRY_BASE, chains } = {}) {
   const out = { status: 'skipped', detail: null, registry: null, choice: null, launch: null, subdir: null, seed_packages: 0, candidates: [] };
   if (!item.repo) { out.detail = 'bad_subject'; return out; }
   const seedPkgs = seed.get(item.repo.toLowerCase()) || [];
@@ -552,8 +681,9 @@ export async function resolveSubject(item, { seed = new Map(), fetch: fetchImpl 
       // An entry that matched on its repository URL alone is anyone's claim: its package must point back to the repo.
       let verifiedBy = !c.entry ? 'seed' : c.entry.seed ? 'seed' : c.entry.namespace ? 'namespace' : null;
       if (!verifiedBy) {
-        if (await packagePointsTo(c.pkg, item.repo, { fetch: fetchImpl })) verifiedBy = String(c.pkg.registryType).toLowerCase() === 'oci' ? 'ghcr_owner' : 'package_metadata';
-        else { details.push('unverified_registry_entry'); continue; }
+        const why = {};
+        verifiedBy = await packageVerifiedBy(c.pkg, item.repo, { fetch: fetchImpl, chains, out: why });
+        if (!verifiedBy) { details.push('unverified_registry_entry'); out.unverified = [...(out.unverified || []), { identifier: String(c.pkg.identifier || '').slice(0, 200), why: why.why || null }].slice(0, 8); continue; }
       }
       const s = c.server;
       out.status = 'runnable'; out.launch = r.launch; out.choice = { ...r.choice, matched_by: c.by, verified_by: verifiedBy };
@@ -597,8 +727,11 @@ export function targetLists(plan, { node24Image, forgery = forgeryScript() }) {
       { id: FORGERY.id, repo: FORGERY.repo, commit: FORGERY.commit, launch: { kind: 'docker', image: node24Image, entrypoint: 'node', args: ['-e', forgery, plan.marker] }, timeout_s: FORGERY.timeout_s },
     ],
   };
-  const subjects = { format: TARGETS_FORMAT, about: 'live-probe subjects', defaults: { timeout_s: plan.subject_timeout_s }, targets: plan.items.filter((x) => x.target).map((x) => x.target) };
-  return { controls, subjects };
+  const isOci = (x) => x.target && x.target.launch.kind === 'docker';
+  const subjects = { format: TARGETS_FORMAT, about: 'live-probe subjects', defaults: { timeout_s: plan.subject_timeout_s }, targets: plan.items.filter((x) => x.target && !isOci(x)).map((x) => x.target) };
+  // OCI subjects run one at a time after the others, each only when the disk has room for its image (corpus/live-probe-sandbox.sh).
+  const oci = plan.items.filter(isOci).map((x) => ({ id: x.target.id, image: x.target.launch.image, bytes: Number.isSafeInteger(x.resolution.choice && x.resolution.choice.oci_bytes) ? x.resolution.choice.oci_bytes : OCI_MAX_BYTES, list: { format: TARGETS_FORMAT, about: 'live-probe OCI subject', defaults: { timeout_s: plan.subject_timeout_s }, targets: [x.target] } }));
+  return { controls, subjects, oci };
 }
 
 /** Each subject's time limit: the subject budget shared out, within bounds. */
@@ -769,7 +902,7 @@ export function failureDetail(rec, bare, envp, { deadlineHit = false } = {}) {
 
 /** One observations line, checked against FIELDS. A value of the wrong type is written as null with why. */
 export function obs(field, value, why) {
-  const type = FIELDS[field];
+  const type = FIELDS[field] || (EMIT_TOOL_LIST_FIELDS ? TOOL_LIST_FIELDS[field] : undefined);
   if (!type) throw new Error('not a field of this lane: ' + field);
   const ok = value !== null && value !== undefined && checkType(type, value);
   return JSON.stringify(ok ? { field, value, stage: STAGE } : { field, value: null, why: why || (value === null || value === undefined ? 'not observed' : 'not of the registry type'), stage: STAGE });
@@ -843,19 +976,24 @@ export function buildItem(item, ctx) {
   const result = {
     format: FORMAT, lane: LANE, subject: item.subject, status: null, detail: null, skip_reason: null, retryable: false,
     engine_version: VERSION, rubric_version: M.RUBRIC_VERSION, spec_version: M.SPEC_VERSION,
-    install: null, live: null, static_vs_live: null, timing: { resolve_ms: int(item.resolve_ms) }, sandbox: ctx.sandboxSummary,
+    install: null, unverified: null, live: null, static_vs_live: null, timing: { resolve_ms: int(item.resolve_ms) }, sandbox: ctx.sandboxSummary,
     driver: null, raw_truncated: [],
   };
   if (r) {
     lines.push(...resolutionObs(r));
     result.install = r.choice ? { method: r.choice.type, matched_by: safeText(r.choice.matched_by, /^[a-z+-]{1,40}$/), verified_by: safeText(r.choice.verified_by, /^[a-z_]{1,20}$/), oci_bytes: int(r.choice.oci_bytes), transport: r.choice.transport, version_requested: safeText(r.choice.version, SAFE_VERSION), args: r.choice.args_n, args_unfilled: r.choice.args_unfilled, env_declared: r.choice.env_names.length, registry_entries: r.registry ? r.registry.entries : 0 } : null;
-    files['raw/resolution.json'] = json({ registry: r.registry, choice: r.choice, candidates: r.candidates, launch: r.launch, subdir: r.subdir, seed_packages: r.seed_packages, invalid: r.invalid ?? null });
+    if (Array.isArray(r.unverified)) result.unverified = r.unverified.map((u) => safeText(u.why, /^[a-z_]{1,40}$/));
+    files['raw/resolution.json'] = json({ registry: r.registry, choice: r.choice, candidates: r.candidates, launch: r.launch, subdir: r.subdir, seed_packages: r.seed_packages, invalid: r.invalid ?? null, unverified: r.unverified ?? null });
   }
   let detail = null; let subjectSha = null; let deadlineHit = ctx.deadlineHit;
   if (!r || r.status !== 'runnable' || !item.target_id) {
     detail = (r && r.detail) || 'harness_error';
   } else {
-    const dir = join(ctx.subjectsOut, item.target_id);
+    const oci = item.target && item.target.launch && item.target.launch.kind === 'docker' && ctx.ociOut;
+    const dir = oci ? join(ctx.ociOut, item.target_id, item.target_id) : join(ctx.subjectsOut, item.target_id);
+    const telemetryFile = oci ? join(ctx.ociOut, item.target_id, '_shard', 'telemetry.jsonl') : ctx.subjectsTelemetry;
+    const ociRun = oci ? (ctx.ociRuns || {})[item.target_id] : null;
+    if (oci) deadlineHit = !ociRun || ociRun.outcome === 'deadline' || ociRun.rc === 124 || ociRun.rc === 137;
     const rec = readJson(join(dir, 'record.json'));
     const bare = readJson(join(dir, 'probe-bare.json'));
     const envp = readJson(join(dir, 'probe-env.json'));
@@ -877,7 +1015,7 @@ export function buildItem(item, ctx) {
     }
     const primary = listed(envp) ? envp : listed(bare) ? bare : null;
     if (!primary) {
-      detail = failureDetail(rec, bare, envp, { deadlineHit });
+      detail = ociRun && ociRun.outcome === 'disk_low' ? 'disk_low' : failureDetail(rec, bare, envp, { deadlineHit });
     } else {
       const text = listText(primary.lists['tools/list'].raw_pages);
       let g = null;
@@ -894,6 +1032,7 @@ export function buildItem(item, ctx) {
         result.static_vs_live = cmp.summary;
         if (cmp.raw) files['raw/static-compare.json'] = json(cmp.raw);
         lines.push(obs('static_vs_live_agreement', cmp.summary));
+        if (EMIT_TOOL_LIST_FIELDS) { lines.push(obs('tool_count', g.summary.tool_count)); lines.push(obs('tool_list_sha256', g.summary.catalog_hash)); }
         const init = isObj(primary.initialize) ? primary.initialize : null;
         lines.push(obs('protocol_era', primary.era === 'modern' ? 'modern' : 'legacy'));
         lines.push(obs('client_version', safeText(primary.protocol_offered, /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/)));
@@ -924,7 +1063,7 @@ export function buildItem(item, ctx) {
     for (const [k, p] of [['bare', bare], ['env', envp]]) if (p) raw.push(['raw/probe-' + k + '.json', Buffer.from(json(p))]);
     if (rec) raw.push(['raw/record.json', Buffer.from(json(rec))]);
     for (const f of ['registry.json', 'static.json', 'analysis.json', 'steps.log']) { const b = readText(join(dir, f)); if (b) raw.push(['raw/' + f.replace(/\.log$/, '.txt'), b]); }
-    const tel = telemetryFor(ctx.subjectsTelemetry, item.target_id);
+    const tel = telemetryFor(telemetryFile, item.target_id);
     if (tel.lines.length) raw.push(['raw/telemetry.jsonl', Buffer.from(tel.lines.join('\n') + '\n')]);
     lines.push(...networkEvents(tel.records).map((e) => obs('network_event', e)));
     addRaw(files, raw, result);
@@ -1033,6 +1172,18 @@ export function evaluateControls(ctx, { knownFile = KNOWN_ANSWER_FILE } = {}) {
 
 // ------------------------------------------------------------------ the shard
 
+/** What happened to each OCI subject (corpus/live-probe-sandbox.sh): { id: { outcome: ran|disk_low|deadline, rc, avail, need } }. */
+export function ociRuns(file) {
+  const out = {};
+  let text = '';
+  try { text = readFileSync(file, 'utf8'); } catch { return out; }
+  for (const l of text.split('\n')) {
+    let r; try { r = JSON.parse(l); } catch { continue; }
+    if (isObj(r) && typeof r.id === 'string' && /^s[0-9]{3}$/.test(r.id) && ['ran', 'disk_low', 'deadline'].includes(r.outcome)) out[r.id] = { outcome: r.outcome, rc: Number.isInteger(r.rc) ? r.rc : null, avail: int(r.avail), need: int(r.need) };
+  }
+  return out;
+}
+
 /** The settings digest: SETTINGS, our version and the sandbox commit. */
 export function settingsDigest(mscCommit) {
   const s = { ...SETTINGS, engine_version: VERSION, rubric_version: M.RUBRIC_VERSION, spec_version: M.SPEC_VERSION, surface_corpus: mscCommit || null };
@@ -1055,6 +1206,7 @@ export function bundleShard({ work, now = () => new Date(), log = () => {}, know
     controlsOut: join(work, 'driver-controls'), controlsTelemetry: join(work, 'driver-controls', '_shard', 'telemetry.jsonl'),
     subjectsOut: join(work, 'driver-subjects'), subjectsTelemetry: join(work, 'driver-subjects', '_shard', 'telemetry.jsonl'),
     deadlineHit: state.subjects_rc === 124 || state.subjects_rc === 137,
+    ociOut: join(work, 'driver-oci'), ociRuns: ociRuns(join(work, 'oci-runs.jsonl')),
     runnerEnv: runner ? { os: safeText(runner.os, /^[a-z]{1,10}$/), arch: safeText(runner.arch, /^[a-z0-9_]{1,10}$/), kernel: safeText(runner.kernel, /^[A-Za-z0-9._+-]{1,60}$/), node: safeText(runner.node, /^v[0-9.]{1,20}$/), docker: safeText(runner.docker, /^[0-9][0-9A-Za-z.+-]{0,30}$/), container_platform: safeText(runner.container_platform, /^[a-z0-9/]{1,30}$/) } : null,
     toolVersions: { mcp_check: VERSION, rubric: M.RUBRIC_VERSION, spec: M.SPEC_VERSION, surface_corpus: mscCommit, worker_kit: safeText(state.worker_kit_ref, /^[0-9a-f]{40}$/), gvisor: safeText(state.gvisor_release, /^[0-9.a-z-]{1,40}$/) },
     sandboxSummary: { runtime: 'runsc', selftest: state.selftest_check_rc === 0 ? 'passed' : 'failed', controls_rc: int(state.controls_rc), subjects_rc: int(state.subjects_rc), swept: state.swept === true },
@@ -1177,6 +1329,9 @@ export async function main(argv, { env = process.env, stdout = process.stdout, s
     writeFileSync(join(work, 'plan.json'), json(plan));
     writeFileSync(join(work, 'targets-controls.json'), json(lists.controls));
     writeFileSync(join(work, 'targets-subjects.json'), json(lists.subjects));
+    mkdirSync(join(work, 'oci'), { recursive: true });
+    for (const o of lists.oci) writeFileSync(join(work, 'oci', o.id + '.json'), json(o.list));
+    writeFileSync(join(work, 'oci.json'), json(lists.oci.map((o) => ({ id: o.id, image: o.image, bytes: o.bytes }))));
     const lines = ['subject_timeout_s=' + plan.subject_timeout_s, 'runnable=' + plan.runnable];
     for (const it of plan.items) lines.push('has_' + it.index + '=true', 'fence_' + it.index + '=' + it.fence, 'run_key_' + it.index + '=' + it.run_key);
     output(env, lines, stdout);

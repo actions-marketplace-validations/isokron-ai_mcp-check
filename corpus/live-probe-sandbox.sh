@@ -96,6 +96,39 @@ else
   subjects_rc=0
 fi
 
+# 4b. OCI subjects, one at a time. An image's 2 GB cap counts compressed bytes, so each runs only when the Docker
+#     disk has about four times its declared size free; otherwise this one and every later one stop here (a
+#     retryable skip, disk_low). After each, its image is removed.
+: >"$work/oci-runs.jsonl"
+docker_root=$(docker info -f '{{.DockerRootDir}}' 2>/dev/null || echo /var/lib/docker)
+oci_lines=$(node -e '
+  const l = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+  for (const o of l) if (/^s[0-9]{3}$/.test(o.id) && Number.isSafeInteger(o.bytes) && o.bytes >= 0) process.stdout.write(o.id + " " + o.bytes + "\n");
+' "$work/oci.json" 2>/dev/null || true)
+stop=""
+while read -r id bytes; do
+  [ -n "$id" ] || continue
+  image=$(node -e 'const l = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")); const o = l.find((x) => x.id === process.argv[2]); process.stdout.write(o ? o.image : "")' "$work/oci.json" "$id")
+  left=$(( deadline - $(date +%s) ))
+  if [ -n "$stop" ] || [ "$left" -le 60 ]; then
+    echo "{\"id\":\"$id\",\"outcome\":\"${stop:-deadline}\"}" >>"$work/oci-runs.jsonl"; continue
+  fi
+  avail=$(df -B1 --output=avail "$docker_root" 2>/dev/null | tail -n 1 | tr -d ' ')
+  [[ "$avail" =~ ^[0-9]+$ ]] || avail=$(sudo -n df -B1 --output=avail "$docker_root" 2>/dev/null | tail -n 1 | tr -d ' ')
+  [[ "$avail" =~ ^[0-9]+$ ]] || avail=0
+  need=$(( bytes * 4 ))
+  if [ "$avail" -lt "$need" ]; then
+    echo "::warning title=live-probe::not enough disk for the next image ($avail bytes free, $need needed); the OCI subjects left stop here"
+    stop=disk_low
+    echo "{\"id\":\"$id\",\"outcome\":\"disk_low\",\"avail\":$avail,\"need\":$need}" >>"$work/oci-runs.jsonl"; continue
+  fi
+  echo "subject (image, at most ${left}s):"
+  drive "$work/oci/$id.json" "$work/driver-oci/$id" "$left" </dev/null; rc=$?
+  echo "{\"id\":\"$id\",\"outcome\":\"ran\",\"rc\":$rc,\"avail\":$avail,\"need\":$need}" >>"$work/oci-runs.jsonl"
+  sweep >>"$work/sweep.log" 2>&1 || true
+  [ -z "$image" ] || docker image rm -f "$image" >>"$work/sweep.log" 2>&1 || true
+done <<<"$oci_lines"
+
 # 5. Nothing of a target may outlive this step: no container or volume at all (labelled or not), no labelled
 #    network, no host process running as the sandbox user (65534), and no runsc or containerd-shim-runsc process.
 #    A process that got out some other way (another user, another name) is not seen here: corpus/LIVE-PROBE.md.

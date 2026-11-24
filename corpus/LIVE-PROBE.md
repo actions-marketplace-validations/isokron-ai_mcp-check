@@ -30,17 +30,33 @@ The run is named `shard <shard_id>`.
    wins: packages named in the seed list first, then stdio before streamable HTTP, then npm, PyPI, OCI. Arguments and
    env come from the entry's declared values and defaults; a required env value is a dummy, never a credential.
    Building from source is the build-probe lane's work, not this one.
-   - **Whose entry it is.** Anyone can publish a registry entry whose repository URL names someone else's repository.
-     An entry counts as the subject's only when it carries a package of the seed list (`seed`), its name is in the
-     owner's namespace, `io.github.<owner>/...`, which the registry verifies (`namespace`), or the package's own
-     metadata points back to the repository: npm `repository`, `homepage` or `bugs`, PyPI `project_urls`, home page or
-     download URL, or an image on `ghcr.io/<owner>/` (`package_metadata`, `ghcr_owner`). Otherwise the item is skipped
-     as `unverified_registry_entry`. `results/live-probe.json` records `install.matched_by` and
-     `install.verified_by`.
+   - **Whose entry it is.** Anyone can publish a registry entry whose repository URL names someone else's repository,
+     and the package behind it too, so what a package says about itself (npm `repository`, PyPI `project_urls`)
+     proves nothing. An entry counts as the subject's only when one of these holds, and `results/live-probe.json`
+     records which (`install.matched_by`, `install.verified_by`):
+     - `seed`: it carries a package of the seed list;
+     - `namespace`: its name is in the owner's namespace, `io.github.<owner>/...`, which the registry verifies;
+     - `ghcr_owner`: the image is under `ghcr.io/<owner>/`;
+     - `npm_provenance`: the npm registry serves a build provenance attestation for that exact version (SLSA v1 in
+       a Sigstore bundle, `dist.attestations`) whose statement names the package, version and the tarball's own
+       sha512 (`dist.integrity`), and whose signed workflow repository is the subject;
+     - `pypi_provenance`: PyPI's integrity API serves a PEP 740 attestation for a file of that release, from a
+       GitHub Trusted Publisher whose repository is the subject, naming the file and its sha256.
+
+     For both provenance kinds the lane itself checks the signature: the leaf certificate chains to Sigstore's
+     public Fulcio authority (pinned in `corpus/fixtures/live-probe/sigstore-fulcio.json`), was issued to GitHub
+     Actions (OIDC issuer extension) for the subject's repository (Source Repository URI extension and the SAN), and
+     the DSSE signature over the statement verifies with it. Not checked here: the transparency log (Rekor) entry,
+     that the signing time fell inside the certificate's ten-minute validity, and the freshness of the pinned root
+     (no TUF update); the registry checked the first two when it accepted the attestation. Anything else is
+     skipped as `unverified_registry_entry`, with the reason in `results/live-probe.json` (`unverified`).
    - **OCI images** come only from docker.io, ghcr.io, quay.io, public.ecr.aws, mcr.microsoft.com and
      registry.gitlab.com, and their token services only from those hosts (auth.docker.io and gitlab.com included);
      never an IP literal. The tag is pinned to its digest, and the linux/amd64 image's manifest is read: one whose
-     config and layers add up to more than 2 GB is not pulled (`image_too_large`).
+     config and layers add up to more than 2 GB is not pulled (`image_too_large`). Those are compressed bytes, so
+     OCI subjects run one at a time after the others, each only when the Docker disk has about four times its
+     declared size free, and its image is removed after it; when there is not enough, that subject and every later
+     one are a retryable skip (`disk_low`).
    - **npm install scripts run**, inside the sandbox's install container: gVisor with syscall tracing, egress only
      through the allowlist proxy to the npm registry. What they did is in the bundle (the install container's trace
      summary and every proxy request in `raw/telemetry.jsonl`, the counts in `install_phase_behaviour`). A native
@@ -105,7 +121,7 @@ A subject that cannot be installed, started or listed is a skip, never a failed 
 | `start_failed`, `start_timeout`, `list_failed` | `timeout_start` | no |
 | `list_rejected` (the engine refused the list) | `no_runnable_artifact` | no |
 | `rate_limited` | `rate_limited` | yes |
-| `upstream_error`, `harness_error`, `shard_deadline` | `upstream_unavailable` | yes |
+| `upstream_error`, `harness_error`, `shard_deadline`, `disk_low` | `upstream_unavailable` | yes |
 | `sandbox_evidence_missing` (no syscall trace or firewall log for it) | `trace_unavailable` | yes |
 
 ## Controls
