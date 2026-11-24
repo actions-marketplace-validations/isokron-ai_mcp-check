@@ -141,3 +141,28 @@ test('R-RD-02: a function of the same name defined twice in the repository is no
   const an = read({ 'pyproject.toml': '[project]\nname = "x"\n', 'x/a.py': a, 'x/b.py': b });
   assert.deepEqual(names(an), []);
 });
+
+test('R-RD-02: a bare registrar on something that is not an MCP server (pydantic-ai agent.tool, tracer.tool) makes no tool', () => {
+  const agent = 'from pydantic_ai import Agent\nagent = Agent("model")\n\ndef agent_tool(fn):\n    return agent.tool(fn)\n\n@agent_tool\ndef lookup(q: str) -> str:\n    """Looks up."""\n    return q\n';
+  const tracer = 'from opentelemetry import trace\ntracer = trace.get_tracer("x")\n\ndef traced(name):\n    def deco(fn):\n        tracer.tool(name)\n        return fn\n    return deco\n\n@traced("work")\ndef work() -> None:\n    """Works."""\n';
+  assert.deepEqual(names(read({ 'pyproject.toml': '[project]\nname = "x"\n', 'x/agent.py': agent })), []);
+  assert.deepEqual(names(read({ 'pyproject.toml': '[project]\nname = "x"\n', 'x/obs.py': tracer })), []);
+});
+
+test("R-RD-02: @tool imported from fastmcp is the SDK's decorator, even when the repository has its own tool() factory", () => {
+  const own = 'def tool(name, description):\n    return {"name": name, "description": description, "inputSchema": {"type": "object"}}\n';
+  const sdk = 'from fastmcp import FastMCP\nfrom fastmcp.tools import tool\nmcp = FastMCP("x")\n\n@tool(name="search")\ndef search(q: str) -> str:\n    """Searches the index."""\n    return q\n';
+  const an = read({ 'pyproject.toml': '[project]\nname = "x"\ndependencies = ["fastmcp>=3"]\n', 'x/helpers.py': own, 'x/server.py': sdk });
+  const t = tool(an, 'search');
+  assert.equal(t.description, 'Searches the index.');
+  assert.deepEqual(Object.keys(t.inputSchema.properties), ['q']);
+});
+
+test('R-RD-02: many factory calls in one long logical line are read in linear time', () => {
+  const src = 'def tool(name, description):\n    return {"name": name, "description": description, "inputSchema": {"type": "object"}}\n\nTOOLS = [\n' + Array.from({ length: 4000 }, (_, i) => '    tool("t' + i + '", "Tool ' + i + '."),\n').join('') + ']\n';
+  const t0 = performance.now();
+  const an = read({ 'pyproject.toml': '[project]\nname = "x"\n', 'x/server.py': src });
+  assert.equal(an.tools.length, 4000);
+  assert.equal(an.tools.find((x) => x.tool.name === 't3999').line, 4004);
+  assert.ok(performance.now() - t0 < 5000, Math.round(performance.now() - t0) + ' ms');
+});

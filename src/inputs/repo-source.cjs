@@ -1515,7 +1515,10 @@
     PYC = {}; Object.keys(fc.consts).forEach((k) => { const v = fc.consts[k]; if (v === null || typeof v !== 'object') PYC[k] = v; });
     const usesMcp = /^\s*(?:from|import)\s+(?:mcp|fastmcp)\b/m.test(clean) || /\bFastMCP\b|\bMCPServer\b/.test(clean);
     const registrars = opts.pyRegistrars || new Set();
-    const templates = opts.pyTemplates || new Map();
+    let templates = opts.pyTemplates || new Map();
+    // a name this file imports from mcp or fastmcp (from fastmcp.tools import tool) is the SDK's, not a factory of the repository
+    const sdkNames = new Set(); { const re = /^\s*from\s+(?:mcp|fastmcp)(?:\.[\w.]+)?\s+import\s+\(?([^\n)]+)/gm; let im; while ((im = re.exec(clean))) im[1].split(',').forEach((x) => { const q = x.trim().split(/\s+as\s+/); if (q[0]) sdkNames.add((q[1] || q[0]).trim()); }); }
+    sdkNames.forEach((n) => { if (templates.has(n)) { templates = new Map(templates); templates.delete(n); } });
     const tplCall = templates.size ? new RegExp('(?:^|[^\\w.])(?:' + Array.from(templates.keys()).join('|') + ')\\s*\\(') : null;
     const tools = []; const seen = new Set(); const unresolved = []; const overBudget = [];
     const add = (tool, line, extra) => {
@@ -1722,11 +1725,13 @@
       // calls of a repository function that builds the tool dict: TOOLS = [tool("a", "…", {…}), …] (R-RD-02)
       if (tplCall && tplCall.test(l.text)) {
         let t; try { t = pyTokenize(l.text); } catch (e) { t = []; }
+        let nls = null;
         for (let i = 0; i < t.length; i++) {
           if (t[i].type !== 'id' || !templates.has(t[i].value) || !isP(t[i + 1], '(') || isP(t[i - 1], '.') || (t[i - 1] && t[i - 1].type === 'id' && t[i - 1].value === 'def')) continue;
           const close = pyMatch(t, i + 1); if (close >= t.length) continue;
-          let ln = l.line; for (let q = 0; q < t[i].s; q++) if (l.text.charCodeAt(q) === 10) ln++;
-          fromTemplate(templates.get(t[i].value), l.text.slice(t[i + 1].s, t[close].e), ln);
+          if (!nls) { nls = []; for (let q = 0; q < l.text.length; q++) if (l.text.charCodeAt(q) === 10) nls.push(q); }
+          let lo = 0; let hi = nls.length; while (lo < hi) { const mid = (lo + hi) >> 1; if (nls[mid] < t[i].s) lo = mid + 1; else hi = mid; }
+          fromTemplate(templates.get(t[i].value), l.text.slice(t[i + 1].s, t[close].e), l.line + lo);
           i = close;
         }
       }
@@ -1807,12 +1812,16 @@
     const bodies = new Map(); const top = new Map(); const dupTop = new Set();
     files.forEach(([p, text]) => {
       if (!/\.py$/.test(p) || typeof text !== 'string') return;
-      const L = pyLogicalLines(pyStripComments(text));
+      const clean = pyStripComments(text); const L = pyLogicalLines(clean);
+      // the MCP server objects of the file: x = FastMCP(…) / MCPServer(…) / Server(…) (the SDK's, in a file that imports it)
+      const sdkFile = /^\s*(?:from|import)\s+(?:mcp|fastmcp)\b/m.test(clean);
+      const servers = new Set(); let sm; const sre = /^([A-Za-z_]\w*)\s*(?::[^=\n]+)?=\s*(?:[\w.]+\.)?(FastMCP|MCPServer|Server)\s*\(/gm;
+      while ((sm = sre.exec(clean))) if (sm[2] !== 'Server' || sdkFile) servers.add(sm[1]);
       L.forEach((l, k) => {
         const m = /^(?:async\s+)?def\s+(\w+)\s*\(/.exec(l.text); if (!m || /^(__\w+__|main|run|register|setup|create_app|create_server|serve)$/.test(m[1])) return;
         let body = ''; for (let j = k + 1; j < L.length && L[j].indent > l.indent; j++) body += L[j].text + '\n';
         bodies.set(m[1], (bodies.get(m[1]) || '') + body);
-        if (l.indent === 0) { if (top.has(m[1])) dupTop.add(m[1]); else top.set(m[1], { params: pyParams(l.text), body }); }
+        if (l.indent === 0) { if (top.has(m[1])) dupTop.add(m[1]); else top.set(m[1], { params: pyParams(l.text), body, servers, sdkFile }); }
       });
     });
     const out = new Set();
@@ -1828,6 +1837,11 @@
     const bare = new Map();
     top.forEach((info, n) => {
       if (!out.has(n) || dupTop.has(n)) return;
+      // only a registration on an MCP server object of the registrar's file (mcp.tool(fn), mcp.local_provider.add_tool(fn)),
+      // or Tool.from_function in a file that imports the SDK: agent.tool(fn) (pydantic-ai) or tracer.tool(span) is not one
+      const target = /(?:^|[^\w.])([A-Za-z_]\w*)(?:\.[A-Za-z_]\w*)*\.(?:tool|add_tool)\s*\(/g; let tm; let onServer = false;
+      while ((tm = target.exec(info.body))) if (info.servers.has(tm[1])) { onServer = true; break; }
+      if (!onServer && !(info.sdkFile && /\bTool\.from_function\s*\(/.test(info.body))) return;
       const call = /(?:\.tool|\badd_tool|Tool\.from_function)\s*\(([^()]*(?:\([^()]*\)[^()]*)*)\)/.exec(info.body);
       const kwOf = (key) => { const m = call && new RegExp('\\b' + key + '\\s*=\\s*(\\w+)\\s*(?:,|$)').exec(call[1]); return m && info.params.some((x) => x.name === m[1]) ? m[1] : null; };
       bare.set(n, { params: info.params, nameParam: kwOf('name'), descriptionParam: kwOf('description') });
