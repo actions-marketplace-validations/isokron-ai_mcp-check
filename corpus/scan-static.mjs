@@ -345,6 +345,8 @@ export async function scanSubject(subject, { fetch: fetchImpl = globalThis.fetch
     let g;
     try { g = gradeCandidate(c); } catch (e) {
       if (e instanceof InputError) throw fail('list_rejected', { listError: e.code });
+      // A list too large to even hold as one string (R-SS-11).
+      if (e instanceof RangeError) throw fail('list_rejected', { listError: 'too_large' });
       throw e;
     }
     out.grade = g.summary;
