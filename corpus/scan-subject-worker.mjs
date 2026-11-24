@@ -2,7 +2,7 @@
 // terminates the thread when the subject runs past its time limit, which also stops synchronous work its own timer
 // cannot. The thread has no network: its requests go to the parent, which makes them and passes the answers back.
 import { parentPort, workerData } from 'node:worker_threads';
-import { scanSubject } from './scan-static.mjs';
+import { RAW_FILE_CAP, rawFiles, scanSubject } from './scan-static.mjs';
 
 const pending = new Map();
 let next = 0;
@@ -40,6 +40,10 @@ function proxyFetch(url, init = {}) {
   });
 }
 
-const { subject, token, timeoutMs } = workerData;
-const out = await scanSubject(subject, { fetch: proxyFetch, token, timeoutMs });
-parentPort.postMessage({ type: 'done', out });
+// No token here: the parent adds it to api.github.com requests (it holds the token; R-SS-10).
+const { subject, timeoutMs } = workerData;
+const out = await scanSubject(subject, { fetch: proxyFetch, token: null, timeoutMs });
+// The raw/ texts are built (and capped) here, so the uncapped value never crosses to the parent: a list that
+// expands to gigabytes would be cloned whole otherwise (R-SS-08).
+const { raw, ...rest } = out;
+parentPort.postMessage({ type: 'done', out: { ...rest, raw: {}, rawFiles: rawFiles(raw || {}, RAW_FILE_CAP) } });

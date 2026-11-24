@@ -136,11 +136,13 @@ says whether it is `retryable`.
   private or blocked), `repo_empty`, `no_tools`, `unsupported_language`, `names_only`, `multiple_servers`,
   `reader_limit`, `list_rejected`, `listing_too_large`, `reader_error`, or `bundle_error` (the full bundle could
   not be built or written, for example over tool-qa's size caps; a minimal one was: results, observations, logs
-  and controls, no subject `raw/`). A 403 counts as `repo_unavailable` unless GitHub marks it as a rate limit
-  (`x-ratelimit-remaining: 0` or `retry-after`).
+  and controls, no subject `raw/`). A 403 on the repository itself counts as `repo_unavailable` unless GitHub marks
+  it as a rate limit (`x-ratelimit-remaining: 0`, `retry-after`, or "rate limit" in the answer); a 403 while
+  reading the tree or a file that GitHub does not explain is `upstream_error` (retryable, so tool-qa's bounded
+  retries decide).
 - `rate_limited`, retryable: a GitHub rate limit. After one, the rest of the shard is not read and reports it
-  too. The shard also stops early, before a subject starts, when GitHub says fewer than three API calls per
-  subject still to read are left.
+  too. The shard also stops early, before a subject starts, when GitHub says fewer than 13 API calls are left
+  (the three one subject takes, plus a reserve of ten).
 - `upstream_unavailable`, retryable: the source could not be read this time. `upstream_error` (5xx or an
   unreadable answer), `read_failed`, `timeout` (90 seconds per subject) or `shard_deadline` (no subject is
   started after 32 minutes; slow upstream calls are what use the budget up).
@@ -149,7 +151,9 @@ The exact code is in `results/scan-static.json`. When every skip of an item is r
 `retry_later` and sends it out again after a backoff (at most three times; then it keeps the skip).
 
 A subject that fails never fails the run. Each subject runs in its own worker thread, stopped after 90 seconds
-plus 5 of grace whatever it is doing (its requests go through the main thread). Each item's step outputs
+plus 5 of grace whatever it is doing, with a 1,536 MB heap limit. The thread builds and caps its `raw/` texts
+before handing them over, holds no token, and can reach only `api.github.com` and `raw.githubusercontent.com`:
+its requests go through the main thread, which adds the token to API requests only. Each item's step outputs
 (`has_<i>`, `fence_<i>`, `run_key_<i>`) are written as soon as its bundle is, after `controls_ok=true`; the scan
 step has its own 37-minute limit, and the upload steps need `controls_ok` and no `controls_failed`, not the scan
 step's success. So a scan step that is stopped still uploads every bundle it finished. The run fails only on a

