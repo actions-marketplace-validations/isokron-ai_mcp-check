@@ -1,0 +1,18 @@
+{
+  "id": "lists/tools-input-schema-key",
+  "language": "committed-list",
+  "idioms": [
+    "partial-invalid"
+  ],
+  "about": "a committed {tools: [...]} list where one entry spells the schema key input_schema: read like the bare-array form, and the key flagged",
+  "outcome": "tools",
+  "tools": [
+    "convert_units",
+    "list_units"
+  ],
+  "findings": {
+    "spec-input-schema-field-name": {
+      "convert_units": "attention"
+    }
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "id": "typescript/class-based",
+  "language": "typescript",
+  "idioms": [
+    "wrapper"
+  ],
+  "about": "tools registered by a method of a class",
+  "outcome": "tools",
+  "tools": [
+    "current_conditions",
+    "weather_alerts"
+  ],
+  "details": {
+    "current_conditions": {
+      "description": "Current temperature, wind and sky for a place.",
+      "params": [
+        "place"
+      ],
+      "required": [
+        "place"
+      ],
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true
+      }
+    },
+    "weather_alerts": {
+      "description": "Active weather alerts for a region.",
+      "params": [
+        "region"
+      ],
+      "required": [
+        "region"
+      ],
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true
+      }
+    }
+  }
+}

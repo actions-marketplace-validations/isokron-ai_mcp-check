@@ -1,0 +1,35 @@
+{
+  "id": "go/mcp-golang-register",
+  "language": "go",
+  "idioms": [
+    "straight-line"
+  ],
+  "about": "mcp-golang RegisterTool with an argument struct",
+  "outcome": "tools",
+  "tools": [
+    "say_hello",
+    "say_goodbye"
+  ],
+  "details": {
+    "say_hello": {
+      "description": "Says hello to someone.",
+      "params": [
+        "name"
+      ],
+      "required": [
+        "name"
+      ],
+      "annotations": {}
+    },
+    "say_goodbye": {
+      "description": "Says goodbye to someone.",
+      "params": [
+        "name"
+      ],
+      "required": [
+        "name"
+      ],
+      "annotations": {}
+    }
+  }
+}

@@ -1,0 +1,4 @@
+[project]
+name = "bench-notes-registrar"
+version = "0.1.0"
+dependencies = ["fastmcp>=3"]

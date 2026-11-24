@@ -1,0 +1,40 @@
+{
+  "id": "lists/checks-surface",
+  "language": "committed-list",
+  "idioms": [
+    "straight-line"
+  ],
+  "about": "exact list; every check labelled by hand: retry keys, version preconditions, delete guards",
+  "outcome": "tools",
+  "exhaustive": true,
+  "truth_level": "inferred",
+  "tools": [
+    "create_page",
+    "update_page",
+    "delete_page",
+    "delete_space",
+    "get_page"
+  ],
+  "findings": {
+    "openai-retry": {
+      "create_page": "attention"
+    },
+    "surface-retry-key": {
+      "create_page": "advice"
+    },
+    "surface-version-guard": {
+      "update_page": "advice",
+      "delete_page": "advice"
+    },
+    "surface-delete-guard": {
+      "delete_page": "advice"
+    },
+    "design-use-when": {
+      "create_page": "advice",
+      "update_page": "advice",
+      "delete_page": "advice",
+      "delete_space": "advice",
+      "get_page": "advice"
+    }
+  }
+}

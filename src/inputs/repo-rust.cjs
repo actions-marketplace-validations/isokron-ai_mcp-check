@@ -506,7 +506,7 @@
   function cargoDefaults(text) {
     const sec = /^\[features\]\s*$([\s\S]*?)(?=^\[|(?![\s\S]))/m.exec(text);
     if (!sec) return new Set();
-    const table = new Map(); const re = /^\s*("?)([\w.-]+)\1\s*=\s*\[([\s\S]*?)\]/gm; let m;
+    const table = new Map(); const re = /^[ \t]*("?)([\w.-]+)\1[ \t]*=[ \t]*\[([^\]]{0,8192})\]/gm; let m;
     while ((m = re.exec(sec[1]))) table.set(m[2], (m[3].match(/"([^"]+)"/g) || []).map((x) => x.slice(1, -1)));
     const on = new Set(); const todo = (table.get('default') || []).slice();
     while (todo.length) {
@@ -1189,6 +1189,17 @@
     if (part) st.unreadable.add(part);
     return undefined;
   };
+  // A tool written as JSON (json!({ "name": …, "inputSchema": { … } }), the evaluated value) as the reader's tool record.
+  function jsonTool(v) {
+    const st = newTool(); st.name = v.name;
+    if ('description' in v) st.description = strOf(v.description, st, 'description');
+    if ('title' in v) st.title = strOf(v.title, st, null);
+    const c = { unk: false, lost: [] }; const j = toJson(v.inputSchema, c); st.lost.push(...c.lost);
+    if (j && typeof j === 'object' && (!c.unk || (j.properties && Object.keys(j.properties).length))) st.input = j; else st.unreadable.add('inputSchema');
+    if (v.annotations !== undefined) { const c2 = { unk: false, lost: [] }; const a2 = toJson(v.annotations, c2); if (a2 && typeof a2 === 'object') st.annotations = a2; if (c2.unk) st.unreadable.add('annotations'); }
+    if (v.outputSchema !== undefined) { const c3 = { unk: false, lost: [] }; const o = toJson(v.outputSchema, c3); if (o && typeof o === 'object' && !c3.unk) st.output = o; }
+    return st;
+  }
   // rmcp: #[tool(…)] on a function.
   Repo.prototype.rmcpTool = function (fn, at) {
     const f = fn.f; const st = newTool(); const ms = at.form === 'list' ? metaList(f, at.a, at.b) : [];
@@ -1248,7 +1259,7 @@
   const EXTRACTOR = /^(RequestContext|Peer|Extension|Meta|CancellationToken|Context|RequestHandlerExtra|State|Arc|ServerContext|ToolContext|Session)$/;
   Repo.prototype.plainArgs = function (fn) {
     const crate = this.crateOf(fn.f.path);
-    if (crate && /^\s*rmcp\s*=|^\s*rmcp\s*\.|"rmcp"/m.test(crate.text)) return null;
+    if (crate && /^[ \t]*rmcp\s*=|^[ \t]*rmcp\s*\.|"rmcp"/m.test(crate.text)) return null;
     const ps = fn.params.filter((p) => !p.self && p.name);
     if (!ps.length || ps.some((p) => { const s0 = lastSeg(p.type); return !s0 || EXTRACTOR.test(s0.name); })) return null;
     return ps;
@@ -1465,17 +1476,13 @@
             let inJson = false; for (let q = stack.length - 1; q >= 0; q--) { const o = stack[q]; if (isP(t[o - 1], '!') && isId(t[o - 2], 'json')) { inJson = true; break; } }
             if (!inJson) continue;
             const fn = fnAt(f, open);
-            const env = fn ? { selfName: fn.impl && fn.impl.selfName, locals: this.localsOf(fn, {}), vars: {} } : null;
+            const env = fn ? { selfName: fn.impl && fn.impl.selfName, vars: {} } : null;
+            // the function's parameters: a tool whose name is one is built by a helper, read where it is called (R-RD-03)
+            if (fn) { fn.params.filter((p) => !p.self && p.name).forEach((p) => { env.vars[p.name] = PARAM(fn, p.name); }); env.locals = this.localsOf(fn, env.vars); }
             let v; try { v = this.json(f, open, f.close[open] + 1, env, 0); } catch (e) { if (e instanceof OverBudget) throw e; v = UNK(); }
             if (!isPlain(v)) continue;
-            const st = newTool(); st.name = v.name;
-            if ('description' in v) st.description = strOf(v.description, st, 'description');
-            if ('title' in v) st.title = strOf(v.title, st, null);
-            const c = { unk: false, lost: [] }; const j = toJson(v.inputSchema, c); st.lost.push(...c.lost);
-            if (j && typeof j === 'object' && (!c.unk || (j.properties && Object.keys(j.properties).length))) st.input = j; else st.unreadable.add('inputSchema');
-            if (v.annotations !== undefined) { const c2 = { unk: false, lost: [] }; const a2 = toJson(v.annotations, c2); if (a2 && typeof a2 === 'object') st.annotations = a2; if (c2.unk) st.unreadable.add('annotations'); }
-            if (v.outputSchema !== undefined) { const c3 = { unk: false, lost: [] }; const o = toJson(v.outputSchema, c3); if (o && typeof o === 'object' && !c3.unk) st.output = o; }
-            push(st, f, t[open].s, fn || null, 'hand');
+            if (fn && isParamOf(v.name, fn)) { wrappers.add(fn.name); continue; }
+            push(jsonTool(v), f, t[open].s, fn || null, 'hand');
           }
         }
         // Tool::new(…) and Tool { name, … } by hand, in function bodies and constants
@@ -1544,16 +1551,18 @@
           // a call of a helper that gives no tool the reader can read: refused as incomplete when the chain of helpers is
           // longer than followed (the evaluation went too deep); when it passes the enclosing function's parameters on,
           // that function is followed to its callers (the text may come from there); otherwise counted, its text scanned
-          if (!v || (!v.__tool && !v.__struct)) {
+          // a helper returning json!({ "name": …, "inputSchema": … }) (a hand-written tool, R-RD-03) gives a plain value
+          if (isPlain(v) && 'name' in v && 'inputSchema' in v) { /* read below as a JSON tool */ }
+          else if (!v || (!v.__tool && !v.__struct)) {
             if (this.depthHit) { overBudget.push({ path: f.path, line: lineAt(f, t[k].s), why: WHY_CHAIN }); return; }
             const passesParams = !!fn && fn.params.some((p) => p.name && !p.self && t.slice(k + 2, c).some((x) => x.y === 'id' && x.v === p.name));
             if (passesParams) { next.add(fn.name); if (!pending.has(fn.name)) pending.set(fn.name, []); pending.get(fn.name).push({ path: f.path, line: lineAt(f, t[k].s), lost: literalsIn(f, k, c).slice(0, 200) }); continue; }
             unresolved.push({ path: f.path, line: lineAt(f, t[k].s), lost: literalsIn(f, k, c).slice(0, 200) }); continue;
           }
-          const nm = v.__tool ? v.name : v.f.name;
+          const nm = v.__tool ? v.name : v.__struct ? v.f.name : v.name;
           if (fn && isParamOf(nm, fn)) { next.add(fn.name); if (!pending.has(fn.name)) pending.set(fn.name, []); pending.get(fn.name).push({ path: f.path, line: lineAt(f, t[k].s), lost: literalsIn(f, k, c).slice(0, 200) }); continue; }
           if (found.length + unresolved.length > MAX_RESULTS) { overBudget.push({ path: f.path, line: null, why: WHY_MANY }); return; }
-          push(this.handTool(v), f, t[k].s, fn || null, 'hand');
+          push(v.__tool || v.__struct ? this.handTool(v) : jsonTool(v), f, t[k].s, fn || null, 'hand');
         }
       });
       next.forEach((n) => wrappers.add(n));

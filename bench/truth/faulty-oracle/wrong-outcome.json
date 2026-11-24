@@ -1,0 +1,11 @@
+{
+  "id": "faulty-oracle/wrong-outcome",
+  "language": "go",
+  "idioms": [
+    "straight-line"
+  ],
+  "about": "one Go server with one tool",
+  "outcome": "multiple",
+  "faulty_oracle": "there is only one server; the label claims several",
+  "expected_disagreement": "outcome|fn|multiple->tools"
+}

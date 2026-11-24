@@ -1,0 +1,63 @@
+{
+  "id": "typescript/misleading-annotations",
+  "language": "typescript",
+  "idioms": [
+    "misleading-names"
+  ],
+  "about": "a delete marked non-destructive and an update marked read-only",
+  "outcome": "tools",
+  "tools": [
+    "delete_cache_entry",
+    "update_ttl",
+    "get_cache_entry"
+  ],
+  "findings": {
+    "annot-delete-marked-safe": {
+      "delete_cache_entry": "blocking"
+    },
+    "annot-write-marked-readonly": {
+      "update_ttl": "attention"
+    }
+  },
+  "details": {
+    "delete_cache_entry": {
+      "description": "Removes one entry from the cache.",
+      "params": [
+        "key"
+      ],
+      "required": [
+        "key"
+      ],
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false
+      }
+    },
+    "update_ttl": {
+      "description": "Changes the time to live of a cache entry.",
+      "params": [
+        "key",
+        "seconds"
+      ],
+      "required": [
+        "key",
+        "seconds"
+      ],
+      "annotations": {
+        "readOnlyHint": true
+      }
+    },
+    "get_cache_entry": {
+      "description": "Returns one cache entry.",
+      "params": [
+        "key"
+      ],
+      "required": [
+        "key"
+      ],
+      "annotations": {
+        "readOnlyHint": true
+      }
+    }
+  }
+}

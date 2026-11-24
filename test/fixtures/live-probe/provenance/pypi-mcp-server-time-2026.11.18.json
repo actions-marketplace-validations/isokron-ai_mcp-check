@@ -1,0 +1,26 @@
+{
+ "info": {
+  "name": "mcp-server-time",
+  "version": "2026.11.18",
+  "project_urls": {
+   "Issues": "https://github.com/modelcontextprotocol/servers/issues",
+   "Repository": "https://github.com/modelcontextprotocol/servers/tree/main/src/time"
+  }
+ },
+ "urls": [
+  {
+   "filename": "mcp_server_time-2026.11.18-py3-none-any.whl",
+   "packagetype": "bdist_wheel",
+   "digests": {
+    "sha256": "acb3ba2e0faf812ce49989fbe74d363501cf7720c8d7a103debef9815e838a34"
+   }
+  },
+  {
+   "filename": "mcp_server_time-2026.11.18.tar.gz",
+   "packagetype": "sdist",
+   "digests": {
+    "sha256": "5d278328ca4b38fa4f33268d0189efca29803263e44d6576eb045e3b48ec1445"
+   }
+  }
+ ]
+}

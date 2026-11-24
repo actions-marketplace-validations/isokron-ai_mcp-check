@@ -1,0 +1,27 @@
+{
+  "id": "typescript/evals-package-ignored",
+  "language": "typescript",
+  "idioms": [
+    "adversarial",
+    "monorepo"
+  ],
+  "about": "a stand-in server in packages/mcp-server-evals (an eval suite's mock) must not be read as a second server",
+  "outcome": "tools",
+  "tools": [
+    "search_docs"
+  ],
+  "details": {
+    "search_docs": {
+      "description": "Searches the product documentation and returns matching pages.",
+      "params": [
+        "query"
+      ],
+      "required": [
+        "query"
+      ],
+      "annotations": {
+        "readOnlyHint": true
+      }
+    }
+  }
+}

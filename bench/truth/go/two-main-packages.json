@@ -1,0 +1,9 @@
+{
+  "id": "go/two-main-packages",
+  "language": "go",
+  "idioms": [
+    "monorepo"
+  ],
+  "about": "two main packages in one module, each constructing a server",
+  "outcome": "multiple"
+}

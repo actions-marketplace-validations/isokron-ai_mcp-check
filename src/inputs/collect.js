@@ -188,14 +188,16 @@ export function serverChoices(r) {
 /** The folders to choose from, for the advice: package folders, or the folders of the committed lists. */
 export function serverFolders(r) {
   const h = r.hints || {};
-  if (h.servers) return h.servers.map((x) => x.path || '.');
+  // a module file of one Rust crate (R-RD-10) is a server, but no folder holds it alone: it is not offered as a folder
+  if (h.servers) return h.servers.filter((x) => !/\.rs$/.test(x.path || '')).map((x) => x.path || '.');
   return Array.from(new Set((h.lists || []).map((x) => (x.path.includes('/') ? x.path.slice(0, x.path.lastIndexOf('/')) : '.'))));
 }
 
-/** The Go and Rust SDK forms the reader knows, for the message when none was found. */
+/** The Go, Rust and C# SDK forms the reader knows, for the message when none was found. */
 const READ_LANGS = {
   Go: 'mark3labs/mcp-go NewTool and options, the official go-sdk AddTool with mcp.Tool, mcp-golang RegisterTool, and helpers that build them',
   Rust: 'rmcp #[tool] methods, rust-mcp-sdk #[mcp_tool] structs, and Tool::new or Tool { … } built by hand',
+  'C#': 'the official C# SDK\'s [McpServerTool] methods in [McpServerToolType] classes or classes given to WithTools<T>()',
 };
 
 /** Why nothing usable was found, beyond "no tool definitions": languages not read, folders set aside, lists not used. */
@@ -205,9 +207,11 @@ export function whyNothing(r) {
   const lang = (h.otherLanguages || [])[0];
   const ext = (n) => '.' + ({ Go: 'go', Rust: 'rs', 'C#': 'cs', Java: 'java', Kotlin: 'kt', Ruby: 'rb', PHP: 'php', Swift: 'swift' }[n] || n);
   if (lang && lang.files >= lang.readFiles && READ_LANGS[lang.name]) s += ' The source here is ' + lang.name + ' (' + plural(lang.files, ext(lang.name) + ' file') + '): no tool definition the reader knows was found in it (' + READ_LANGS[lang.name] + ').';
-  else if (lang && lang.files >= lang.readFiles) s += ' The source here is ' + lang.name + ' (' + plural(lang.files, ext(lang.name) + ' file') + '): ' + lang.name + ' source is not read yet (the reader reads TypeScript, JavaScript, Python, Go and Rust).';
+  else if (lang && lang.files >= lang.readFiles) s += ' The source here is ' + lang.name + ' (' + plural(lang.files, ext(lang.name) + ' file') + '): ' + lang.name + ' source is not read yet (the reader reads TypeScript, JavaScript, Python, Go, Rust and C#).';
   const ign = (h.ignoredFolders || []).filter((x) => x.tools);
   if (ign.length) s += ' Tool definitions were found only in folders that look like admin, console, docs, examples, evaluation or test code, which are not graded from a parent folder: ' + ign.map((x) => line(x.path, 200) + ' (' + plural(x.tools, 'tool') + ')').join(', ') + '; if one of them is the server, point the check at that folder.';
+  const host = (h.hostPlugins || []).filter((x) => x.tools);
+  if (host.length) s += ' Tool definitions for another agent host\'s plugin API were found (not MCP tools, so not graded): ' + host.slice(0, 5).map((x) => line(x.path, 200) + ' (' + line(x.module, 60) + ', ' + plural(x.tools, 'tool') + ')').join(', ') + (host.length > 5 ? ' and ' + (host.length - 5) + ' more' : '') + '.';
   if (h.serverWithoutTools) s += ' A server is constructed in ' + line(h.serverWithoutTools || '.', 200) + ', but none of its tools could be read.';
   if (h.unresolvedNames) s += ' ' + plural(h.unresolvedNames, 'tool registration') + ' had a name the reader could not resolve (computed at run time).';
   if (h.lists) s += ' Not used: ' + plural(h.lists.length, 'committed tool list') + ' in different places (' + h.lists.map((x) => line(x.path, 200)).join(', ') + '); grade one by giving the file itself.';
@@ -233,8 +237,9 @@ function cliUsable(r, where, pick) {
   if (u.problem === 'none') throw new InputFailure(noToolsMessage(where, r) + whyNothing(r), 'unreachable');
   if (u.problem === 'names') throw new InputFailure('only tool names were found in ' + where + ' (' + namesOnlyText(u.candidate) + '), which cannot be graded. ' + LIVE_ADVICE, 'unreachable');
   if (u.problem === 'multiple') {
+    const folders = serverFolders(r); const live = LIVE_ADVICE.charAt(0).toLowerCase() + LIVE_ADVICE.slice(1);
     throw new InputFailure('found tool definitions of more than one server in ' + where + ': ' + serverChoices(r) + '. Nothing was merged or picked. '
-      + 'Check one server at a time (' + serverFolders(r).slice(0, 3).map((f) => pick(f)).join(', ') + '), or ' + LIVE_ADVICE.charAt(0).toLowerCase() + LIVE_ADVICE.slice(1), 'unreachable');
+      + (folders.length ? 'Check one server at a time (' + folders.slice(0, 3).map((f) => pick(f)).join(', ') + '), or ' + live : 'They are modules of one crate, so no folder holds one alone: ' + live), 'unreachable');
   }
   return u.candidate;
 }

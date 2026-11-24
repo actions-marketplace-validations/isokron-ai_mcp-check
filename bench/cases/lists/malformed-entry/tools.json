@@ -1,0 +1,32 @@
+{
+  "tools": [
+    {
+      "name": "ping_host",
+      "title": "Ping a host",
+      "description": "Sends one ICMP echo to a host and returns the round-trip time in milliseconds."
+    },
+    {
+      "name": "traceroute_host",
+      "title": "Trace a route",
+      "description": "Lists the network hops between this machine and a host, with the time to each hop.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "host": {
+            "type": "string",
+            "description": "Host name or address"
+          }
+        },
+        "required": [
+          "host"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": true
+      }
+    }
+  ]
+}

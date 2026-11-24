@@ -1,0 +1,35 @@
+{
+  "id": "python/explicit-add-tool",
+  "language": "python",
+  "idioms": [
+    "explicit-registration"
+  ],
+  "about": "mcp.add_tool(fn) and add_tool(fn, name=...) rather than a decorator",
+  "outcome": "tools",
+  "tools": [
+    "convert_currency",
+    "supported_currencies"
+  ],
+  "details": {
+    "convert_currency": {
+      "description": "Converts an amount between two currencies at today's rate.",
+      "params": [
+        "amount",
+        "source",
+        "target"
+      ],
+      "required": [
+        "amount",
+        "source",
+        "target"
+      ],
+      "annotations": {}
+    },
+    "supported_currencies": {
+      "description": "Lists the supported currency codes.",
+      "params": [],
+      "required": [],
+      "annotations": {}
+    }
+  }
+}

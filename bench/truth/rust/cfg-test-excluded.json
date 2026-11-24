@@ -1,0 +1,23 @@
+{
+  "id": "rust/cfg-test-excluded",
+  "language": "rust",
+  "idioms": [
+    "macro",
+    "adversarial"
+  ],
+  "about": "a second tool router inside #[cfg(test)] must not be read",
+  "outcome": "tools",
+  "tools": [
+    "balance"
+  ],
+  "details": {
+    "balance": {
+      "description": "Returns the ledger balance.",
+      "params": [],
+      "required": [],
+      "annotations": {
+        "readOnlyHint": true
+      }
+    }
+  }
+}

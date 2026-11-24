@@ -1,0 +1,9 @@
+{
+  "id": "typescript/monorepo-two-servers",
+  "language": "typescript",
+  "idioms": [
+    "monorepo"
+  ],
+  "about": "two workspace packages, each its own server: grading must refuse rather than merge",
+  "outcome": "multiple"
+}

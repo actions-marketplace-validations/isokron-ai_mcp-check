@@ -1,0 +1,23 @@
+{
+  "id": "typescript/test-folder-ignored",
+  "language": "typescript",
+  "idioms": [
+    "adversarial",
+    "straight-line"
+  ],
+  "about": "a stand-in server in test/ must not be read as the real server",
+  "outcome": "tools",
+  "tools": [
+    "current_time"
+  ],
+  "details": {
+    "current_time": {
+      "description": "Returns the current time in UTC.",
+      "params": [],
+      "required": [],
+      "annotations": {
+        "readOnlyHint": true
+      }
+    }
+  }
+}

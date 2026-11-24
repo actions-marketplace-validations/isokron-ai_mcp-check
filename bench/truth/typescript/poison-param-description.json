@@ -1,0 +1,47 @@
+{
+  "id": "typescript/poison-param-description",
+  "language": "typescript",
+  "idioms": [
+    "adversarial"
+  ],
+  "about": "hard cross-tool steering inside a parameter description",
+  "outcome": "tools",
+  "tools": [
+    "web_search",
+    "page_summary"
+  ],
+  "findings": {
+    "sec-cross-tool-steering": {
+      "web_search": "blocking"
+    }
+  },
+  "details": {
+    "web_search": {
+      "description": "Searches the web and returns the top results.",
+      "params": [
+        "count",
+        "query"
+      ],
+      "required": [
+        "query"
+      ],
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true
+      }
+    },
+    "page_summary": {
+      "description": "Summarises a web page.",
+      "params": [
+        "url"
+      ],
+      "required": [
+        "url"
+      ],
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true
+      }
+    }
+  }
+}

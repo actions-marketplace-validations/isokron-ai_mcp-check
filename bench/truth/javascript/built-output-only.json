@@ -1,0 +1,43 @@
+{
+  "id": "javascript/built-output-only",
+  "language": "javascript",
+  "idioms": [
+    "generated"
+  ],
+  "about": "only compiled output (dist/) exists; it must be read when no source defines a tool",
+  "outcome": "tools",
+  "tools": [
+    "hex_to_rgb",
+    "rgb_to_hex"
+  ],
+  "details": {
+    "hex_to_rgb": {
+      "description": "Converts a hex colour to red, green and blue values.",
+      "params": [
+        "hex"
+      ],
+      "required": [
+        "hex"
+      ],
+      "annotations": {
+        "readOnlyHint": true
+      }
+    },
+    "rgb_to_hex": {
+      "description": "Converts red, green and blue values to a hex colour.",
+      "params": [
+        "b",
+        "g",
+        "r"
+      ],
+      "required": [
+        "b",
+        "g",
+        "r"
+      ],
+      "annotations": {
+        "readOnlyHint": true
+      }
+    }
+  }
+}

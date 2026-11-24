@@ -1,0 +1,37 @@
+{
+  "id": "typescript/legacy-server-tool",
+  "language": "typescript",
+  "idioms": [
+    "straight-line"
+  ],
+  "about": "the older server.tool(name, description, shape, handler) form",
+  "outcome": "tools",
+  "tools": [
+    "get_weather",
+    "get_forecast"
+  ],
+  "details": {
+    "get_weather": {
+      "description": "Current weather for a city.",
+      "params": [
+        "city"
+      ],
+      "required": [
+        "city"
+      ],
+      "annotations": {}
+    },
+    "get_forecast": {
+      "description": "Five-day forecast for a city.",
+      "params": [
+        "city",
+        "days"
+      ],
+      "required": [
+        "city",
+        "days"
+      ],
+      "annotations": {}
+    }
+  }
+}

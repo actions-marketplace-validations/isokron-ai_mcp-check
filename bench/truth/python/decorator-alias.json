@@ -1,0 +1,36 @@
+{
+  "id": "python/decorator-alias",
+  "language": "python",
+  "idioms": [
+    "decorator",
+    "aliasing"
+  ],
+  "about": "the decorator held in a local name (tool = app.tool)",
+  "outcome": "tools",
+  "tools": [
+    "to_metres",
+    "to_feet"
+  ],
+  "details": {
+    "to_metres": {
+      "description": "Converts feet to metres.",
+      "params": [
+        "feet"
+      ],
+      "required": [
+        "feet"
+      ],
+      "annotations": {}
+    },
+    "to_feet": {
+      "description": "Converts metres to feet.",
+      "params": [
+        "metres"
+      ],
+      "required": [
+        "metres"
+      ],
+      "annotations": {}
+    }
+  }
+}

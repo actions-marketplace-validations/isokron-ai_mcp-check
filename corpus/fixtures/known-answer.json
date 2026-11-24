@@ -1,0 +1,27 @@
+{
+  "format": "isokron-mcp-check-scan-static-control/1",
+  "control": "known-answer",
+  "rubric_version": "2.2.0",
+  "answer": {
+    "tool_count": 2,
+    "catalog_hash": "840c0ab9c34a34fb824f0bb8e9304c52a0c869ad88bce244975b28d39287a2a6",
+    "grades": {
+      "spec": "A",
+      "anthropic": "F",
+      "openai": "F",
+      "security": "F",
+      "quality": "A",
+      "surface": null
+    },
+    "checks": [
+      "anthropic-hint-platforms-differ",
+      "design-use-when",
+      "openai-retry",
+      "schema-vague-param",
+      "sec-instruction-markup",
+      "sec-instruction-phrases",
+      "sec-secret-seeking",
+      "surface-retry-key"
+    ]
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "id": "lists/mcpb-names-only",
+  "language": "committed-list",
+  "idioms": [
+    "partial-invalid"
+  ],
+  "about": "an MCPB manifest with tool names only: nothing to grade",
+  "outcome": "names"
+}

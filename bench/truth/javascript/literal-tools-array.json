@@ -1,0 +1,82 @@
+{
+  "id": "javascript/literal-tools-array",
+  "language": "javascript",
+  "idioms": [
+    "straight-line",
+    "low-level"
+  ],
+  "about": "a constant array of tool literals returned by the ListTools handler",
+  "outcome": "tools",
+  "tools": [
+    "list_bookmarks",
+    "remove_bookmark"
+  ],
+  "details": {
+    "list_bookmarks": {
+      "description": "Lists saved bookmarks.",
+      "params": [
+        "tag"
+      ],
+      "required": [],
+      "annotations": {
+        "readOnlyHint": true
+      }
+    },
+    "remove_bookmark": {
+      "description": "Removes a bookmark.",
+      "params": [
+        "id"
+      ],
+      "required": [
+        "id"
+      ],
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true
+      }
+    }
+  },
+  "findings": {
+    "anthropic-description": {
+      "list_bookmarks": "attention",
+      "remove_bookmark": "attention"
+    },
+    "anthropic-title": {
+      "list_bookmarks": "blocking",
+      "remove_bookmark": "blocking"
+    },
+    "design-use-when": {
+      "list_bookmarks": "advice",
+      "remove_bookmark": "advice"
+    },
+    "openai-hints-explicit": {
+      "list_bookmarks": "blocking",
+      "remove_bookmark": "blocking"
+    },
+    "schema-output-schema": {
+      "list_bookmarks": "advice"
+    },
+    "schema-pagination": {
+      "list_bookmarks": "advice"
+    },
+    "openai-retry": {
+      "remove_bookmark": "attention"
+    },
+    "schema-vague-param": {
+      "remove_bookmark": "advice"
+    },
+    "surface-delete-guard": {
+      "remove_bookmark": "advice"
+    },
+    "surface-version-guard": {
+      "remove_bookmark": "advice"
+    }
+  },
+  "exhaustive": true,
+  "not_scored": [
+    "spec-schema-dialect",
+    "spec-execution-legacy",
+    "schema-additional-properties"
+  ],
+  "truth_level": "inferred"
+}

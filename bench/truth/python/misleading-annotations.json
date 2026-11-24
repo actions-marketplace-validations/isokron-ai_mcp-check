@@ -1,0 +1,64 @@
+{
+  "id": "python/misleading-annotations",
+  "language": "python",
+  "idioms": [
+    "misleading-names",
+    "decorator"
+  ],
+  "about": "a delete marked read-only and a remove marked non-destructive, via ToolAnnotations",
+  "outcome": "tools",
+  "tools": [
+    "delete_user",
+    "remove_member",
+    "list_members"
+  ],
+  "findings": {
+    "annot-write-marked-readonly": {
+      "delete_user": "attention"
+    },
+    "annot-delete-marked-safe": {
+      "remove_member": "blocking"
+    }
+  },
+  "details": {
+    "delete_user": {
+      "description": "Deletes a user account.",
+      "params": [
+        "user_id"
+      ],
+      "required": [
+        "user_id"
+      ],
+      "annotations": {
+        "readOnlyHint": true
+      }
+    },
+    "remove_member": {
+      "description": "Removes a user from a team.",
+      "params": [
+        "team_id",
+        "user_id"
+      ],
+      "required": [
+        "team_id",
+        "user_id"
+      ],
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false
+      }
+    },
+    "list_members": {
+      "description": "Lists the members of a team.",
+      "params": [
+        "team_id"
+      ],
+      "required": [
+        "team_id"
+      ],
+      "annotations": {
+        "readOnlyHint": true
+      }
+    }
+  }
+}

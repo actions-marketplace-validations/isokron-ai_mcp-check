@@ -1,0 +1,38 @@
+{
+  "id": "python/conditional-env",
+  "language": "python",
+  "idioms": [
+    "conditional",
+    "decorator"
+  ],
+  "about": "a decorated tool defined only when an environment variable is set",
+  "outcome": "tools",
+  "tools": [
+    "get_account"
+  ],
+  "optional_tools": [
+    "close_account"
+  ],
+  "details": {
+    "get_account": {
+      "description": "Returns one account.",
+      "params": [
+        "account_id"
+      ],
+      "required": [
+        "account_id"
+      ],
+      "annotations": {}
+    },
+    "close_account": {
+      "description": "Closes an account. Its data is kept for 30 days.",
+      "params": [
+        "account_id"
+      ],
+      "required": [
+        "account_id"
+      ],
+      "annotations": {}
+    }
+  }
+}
