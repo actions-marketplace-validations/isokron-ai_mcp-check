@@ -123,7 +123,8 @@ clients only, after the first probe that got none (a client that lists where our
 reader bug). It never runs past the target's time limit less 75 s (kept for the driver's second probe and its
 analysis), at most 150 s; each target's limit grows by 150 s for it (`ORACLE_ALLOWANCE_S`). Streamable HTTP targets
 are probed inside the sandbox by a helper container, so the stage does not run for them (`oracle_stage.why`:
-`http_transport`).
+`http_transport`). The stage runs inside the driver's probe call: `step_telemetry` gives `oracle_ms` and `probe_ms`
+without it (R-ORC-02), but the driver's own container record of that probe (in `raw/telemetry.jsonl`) spans both.
 
 **Install** (`corpus/oracles/install.mjs`, a step before the sandbox guard and before any target): `npm ci
 --ignore-scripts` from `corpus/oracles/package-lock.json`, `pip install --require-hashes --only-binary=:all:
