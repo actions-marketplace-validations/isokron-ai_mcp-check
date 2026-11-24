@@ -528,7 +528,7 @@
     let name = method;
     if (isAsync && name.endsWith('Async') && name.length > 5) name = name.slice(0, -5);
     if (!snake) return name;
-    name = name.replace(/[^A-Za-z0-9]/g, '_').replace(/^_+|_+$/g, '');
+    name = name.replace(/[^0-9A-Za-z]+/g, '_').replace(/^_+|_+$/g, '');
     if (!name.length) name = method;
     return snakeLower(name);
   }

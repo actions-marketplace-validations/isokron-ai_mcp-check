@@ -249,3 +249,9 @@ test('R-RD-06: linear time on a large hostile C# file', () => {
   assert.equal(r.found.filter((x) => /^t\d+$/.test(x.tool.name)).length, 4000);
   assert.ok(performance.now() - t0 < 5000, 'took ' + (performance.now() - t0) + ' ms');
 });
+
+test('R-RD-06: a run of characters that are not letters or digits becomes one underscore, as the SDK replaces [^0-9A-Za-z]+', () => {
+  assert.equal(CS.deriveName('Get__Weather', false, true), 'get_weather');
+  assert.equal(CS.deriveName('Get_-_WeatherAsync', true, true), 'get_weather');
+  assert.equal(CS.deriveName('GetWeather', false, true), 'get_weather');
+});
