@@ -1,13 +1,17 @@
 {
- "cases": 75,
+ "case_set_hash": "2e4a0fe1f46bb99a7f8ae2430601015bb387921884d2d2c92844008935cd222d",
+ "cases": 80,
  "faulty_oracle_cases": 5,
  "checks": {
   "abstain": {
+   "labels": "hand",
+   "positives_hand": 5,
+   "positives_inferred": 0,
    "all": {
     "tp": 4,
     "fp": 0,
     "fn": 1,
-    "tn": 70,
+    "tn": 75,
     "precision": {
      "k": 4,
      "n": 4,
@@ -28,7 +32,7 @@
      "tp": 1,
      "fp": 0,
      "fn": 0,
-     "tn": 7,
+     "tn": 8,
      "precision": {
       "k": 1,
       "n": 1,
@@ -56,7 +60,7 @@
      "tp": 1,
      "fp": 0,
      "fn": 0,
-     "tn": 9,
+     "tn": 10,
      "precision": {
       "k": 1,
       "n": 1,
@@ -84,7 +88,7 @@
      "tp": 0,
      "fp": 0,
      "fn": 0,
-     "tn": 4,
+     "tn": 5,
      "precision": null,
      "recall": null
     },
@@ -108,7 +112,7 @@
      "tp": 1,
      "fp": 0,
      "fn": 0,
-     "tn": 13,
+     "tn": 14,
      "precision": {
       "k": 1,
       "n": 1,
@@ -136,7 +140,7 @@
      "tp": 0,
      "fp": 0,
      "fn": 1,
-     "tn": 7,
+     "tn": 8,
      "precision": null,
      "recall": {
       "k": 0,
@@ -177,11 +181,14 @@
    }
   },
   "annot-delete-marked-safe": {
+   "labels": "hand",
+   "positives_hand": 3,
+   "positives_inferred": 0,
    "all": {
     "tp": 3,
     "fp": 0,
     "fn": 0,
-    "tn": 153,
+    "tn": 203,
     "precision": {
      "k": 3,
      "n": 3,
@@ -202,7 +209,7 @@
      "tp": 0,
      "fp": 0,
      "fn": 0,
-     "tn": 25,
+     "tn": 36,
      "precision": null,
      "recall": null
     },
@@ -218,7 +225,7 @@
      "tp": 1,
      "fp": 0,
      "fn": 0,
-     "tn": 17,
+     "tn": 27,
      "precision": {
       "k": 1,
       "n": 1,
@@ -246,7 +253,7 @@
      "tp": 0,
      "fp": 0,
      "fn": 0,
-     "tn": 8,
+     "tn": 18,
      "precision": null,
      "recall": null
     },
@@ -270,7 +277,7 @@
      "tp": 1,
      "fp": 0,
      "fn": 0,
-     "tn": 27,
+     "tn": 37,
      "precision": {
       "k": 1,
       "n": 1,
@@ -298,7 +305,7 @@
      "tp": 0,
      "fp": 0,
      "fn": 0,
-     "tn": 13,
+     "tn": 22,
      "precision": null,
      "recall": null
     },
@@ -333,11 +340,14 @@
    }
   },
   "annot-write-marked-readonly": {
+   "labels": "hand",
+   "positives_hand": 3,
+   "positives_inferred": 0,
    "all": {
     "tp": 3,
     "fp": 1,
     "fn": 0,
-    "tn": 152,
+    "tn": 202,
     "precision": {
      "k": 3,
      "n": 4,
@@ -358,7 +368,7 @@
      "tp": 0,
      "fp": 1,
      "fn": 0,
-     "tn": 24,
+     "tn": 35,
      "precision": {
       "k": 0,
       "n": 1,
@@ -380,7 +390,7 @@
      "tp": 1,
      "fp": 0,
      "fn": 0,
-     "tn": 17,
+     "tn": 27,
      "precision": {
       "k": 1,
       "n": 1,
@@ -408,7 +418,7 @@
      "tp": 0,
      "fp": 0,
      "fn": 0,
-     "tn": 8,
+     "tn": 18,
      "precision": null,
      "recall": null
     },
@@ -432,7 +442,7 @@
      "tp": 1,
      "fp": 0,
      "fn": 0,
-     "tn": 27,
+     "tn": 37,
      "precision": {
       "k": 1,
       "n": 1,
@@ -460,7 +470,7 @@
      "tp": 0,
      "fp": 0,
      "fn": 0,
-     "tn": 13,
+     "tn": 22,
      "precision": null,
      "recall": null
     },
@@ -495,6 +505,9 @@
    }
   },
   "anthropic-conversation-data": {
+   "labels": "inferred-only",
+   "positives_hand": 0,
+   "positives_inferred": 1,
    "all": {
     "tp": 1,
     "fp": 0,
@@ -539,6 +552,9 @@
    }
   },
   "anthropic-description": {
+   "labels": "inferred-only",
+   "positives_hand": 0,
+   "positives_inferred": 7,
    "all": {
     "tp": 7,
     "fp": 0,
@@ -643,6 +659,9 @@
    }
   },
   "anthropic-hint": {
+   "labels": "inferred-only",
+   "positives_hand": 0,
+   "positives_inferred": 6,
    "all": {
     "tp": 6,
     "fp": 0,
@@ -727,6 +746,9 @@
    }
   },
   "anthropic-hint-platforms-differ": {
+   "labels": "inferred-only",
+   "positives_hand": 0,
+   "positives_inferred": 3,
    "all": {
     "tp": 3,
     "fp": 0,
@@ -771,6 +793,9 @@
    }
   },
   "anthropic-title": {
+   "labels": "inferred-only",
+   "positives_hand": 0,
+   "positives_inferred": 14,
    "all": {
     "tp": 14,
     "fp": 0,
@@ -895,6 +920,9 @@
    }
   },
   "anthropic-unsupported-use": {
+   "labels": "inferred-only",
+   "positives_hand": 0,
+   "positives_inferred": 1,
    "all": {
     "tp": 1,
     "fp": 0,
@@ -939,6 +967,9 @@
    }
   },
   "design-use-when": {
+   "labels": "inferred-only",
+   "positives_hand": 0,
+   "positives_inferred": 34,
    "all": {
     "tp": 34,
     "fp": 0,
@@ -1083,6 +1114,9 @@
    }
   },
   "gap-shell-injectable-url": {
+   "labels": "hand",
+   "positives_hand": 1,
+   "positives_inferred": 0,
    "all": {
     "tp": 0,
     "fp": 0,
@@ -1115,6 +1149,9 @@
    }
   },
   "openai-conversation-input": {
+   "labels": "inferred-only",
+   "positives_hand": 0,
+   "positives_inferred": 1,
    "all": {
     "tp": 1,
     "fp": 0,
@@ -1159,6 +1196,9 @@
    }
   },
   "openai-generic-executor": {
+   "labels": "inferred-only",
+   "positives_hand": 0,
+   "positives_inferred": 1,
    "all": {
     "tp": 1,
     "fp": 0,
@@ -1203,6 +1243,9 @@
    }
   },
   "openai-hints-explicit": {
+   "labels": "inferred-only",
+   "positives_hand": 0,
+   "positives_inferred": 14,
    "all": {
     "tp": 14,
     "fp": 0,
@@ -1347,6 +1390,9 @@
    }
   },
   "openai-name-promotional": {
+   "labels": "inferred-only",
+   "positives_hand": 0,
+   "positives_inferred": 1,
    "all": {
     "tp": 1,
     "fp": 0,
@@ -1391,11 +1437,14 @@
    }
   },
   "openai-name-unique": {
+   "labels": "mixed",
+   "positives_hand": 1,
+   "positives_inferred": 1,
    "all": {
     "tp": 1,
     "fp": 0,
     "fn": 1,
-    "tn": 67,
+    "tn": 72,
     "precision": {
      "k": 1,
      "n": 1,
@@ -1416,7 +1465,7 @@
      "tp": 1,
      "fp": 0,
      "fn": 0,
-     "tn": 6,
+     "tn": 7,
      "precision": {
       "k": 1,
       "n": 1,
@@ -1444,7 +1493,7 @@
      "tp": 0,
      "fp": 0,
      "fn": 0,
-     "tn": 9,
+     "tn": 10,
      "precision": null,
      "recall": null
     },
@@ -1460,7 +1509,7 @@
      "tp": 0,
      "fp": 0,
      "fn": 0,
-     "tn": 4,
+     "tn": 5,
      "precision": null,
      "recall": null
     },
@@ -1484,7 +1533,7 @@
      "tp": 0,
      "fp": 0,
      "fn": 0,
-     "tn": 13,
+     "tn": 14,
      "precision": null,
      "recall": null
     },
@@ -1500,7 +1549,7 @@
      "tp": 0,
      "fp": 0,
      "fn": 0,
-     "tn": 7,
+     "tn": 8,
      "precision": null,
      "recall": null
     },
@@ -1529,6 +1578,9 @@
    }
   },
   "openai-precise-location": {
+   "labels": "inferred-only",
+   "positives_hand": 0,
+   "positives_inferred": 1,
    "all": {
     "tp": 1,
     "fp": 0,
@@ -1573,6 +1625,9 @@
    }
   },
   "openai-readonly-destructive": {
+   "labels": "inferred-only",
+   "positives_hand": 0,
+   "positives_inferred": 3,
    "all": {
     "tp": 3,
     "fp": 0,
@@ -1637,6 +1692,9 @@
    }
   },
   "openai-restricted-input": {
+   "labels": "inferred-only",
+   "positives_hand": 0,
+   "positives_inferred": 1,
    "all": {
     "tp": 1,
     "fp": 0,
@@ -1681,6 +1739,9 @@
    }
   },
   "openai-retry": {
+   "labels": "inferred-only",
+   "positives_hand": 0,
+   "positives_inferred": 9,
    "all": {
     "tp": 9,
     "fp": 0,
@@ -1825,45 +1886,48 @@
    }
   },
   "outcome": {
+   "labels": "mixed",
+   "positives_hand": 67,
+   "positives_inferred": 13,
    "all": {
-    "tp": 64,
+    "tp": 69,
     "fp": 0,
     "fn": 11,
     "tn": 0,
     "precision": {
-     "k": 64,
-     "n": 64,
+     "k": 69,
+     "n": 69,
      "p": 1,
-     "lo": 0.9434,
+     "lo": 0.9473,
      "hi": 1
     },
     "recall": {
-     "k": 64,
-     "n": 75,
-     "p": 0.8533,
-     "lo": 0.7562,
-     "hi": 0.9161
+     "k": 69,
+     "n": 80,
+     "p": 0.8625,
+     "lo": 0.7703,
+     "hi": 0.9215
     }
    },
    "by_language": {
     "committed-list": {
-     "tp": 7,
+     "tp": 8,
      "fp": 0,
      "fn": 1,
      "tn": 0,
      "precision": {
-      "k": 7,
-      "n": 7,
+      "k": 8,
+      "n": 8,
       "p": 1,
-      "lo": 0.6457,
+      "lo": 0.6756,
       "hi": 1
      },
      "recall": {
-      "k": 7,
-      "n": 8,
-      "p": 0.875,
-      "lo": 0.5291,
-      "hi": 0.9776
+      "k": 8,
+      "n": 9,
+      "p": 0.8889,
+      "lo": 0.565,
+      "hi": 0.9801
      }
     },
     "csharp": {
@@ -1881,22 +1945,22 @@
      }
     },
     "go": {
-     "tp": 10,
+     "tp": 11,
      "fp": 0,
      "fn": 0,
      "tn": 0,
      "precision": {
-      "k": 10,
-      "n": 10,
+      "k": 11,
+      "n": 11,
       "p": 1,
-      "lo": 0.7225,
+      "lo": 0.7412,
       "hi": 1
      },
      "recall": {
-      "k": 10,
-      "n": 10,
+      "k": 11,
+      "n": 11,
       "p": 1,
-      "lo": 0.7225,
+      "lo": 0.7412,
       "hi": 1
      }
     },
@@ -1915,22 +1979,22 @@
      }
     },
     "javascript": {
-     "tp": 4,
+     "tp": 5,
      "fp": 0,
      "fn": 0,
      "tn": 0,
      "precision": {
-      "k": 4,
-      "n": 4,
+      "k": 5,
+      "n": 5,
       "p": 1,
-      "lo": 0.5101,
+      "lo": 0.5655,
       "hi": 1
      },
      "recall": {
-      "k": 4,
-      "n": 4,
+      "k": 5,
+      "n": 5,
       "p": 1,
-      "lo": 0.5101,
+      "lo": 0.5655,
       "hi": 1
      }
     },
@@ -1963,23 +2027,23 @@
      }
     },
     "python": {
-     "tp": 12,
+     "tp": 13,
      "fp": 0,
      "fn": 2,
      "tn": 0,
      "precision": {
-      "k": 12,
-      "n": 12,
+      "k": 13,
+      "n": 13,
       "p": 1,
-      "lo": 0.7575,
+      "lo": 0.7719,
       "hi": 1
      },
      "recall": {
-      "k": 12,
-      "n": 14,
-      "p": 0.8571,
-      "lo": 0.6006,
-      "hi": 0.9599
+      "k": 13,
+      "n": 15,
+      "p": 0.8667,
+      "lo": 0.6212,
+      "hi": 0.9626
      }
     },
     "ruby": {
@@ -1997,23 +2061,23 @@
      }
     },
     "rust": {
-     "tp": 7,
+     "tp": 8,
      "fp": 0,
      "fn": 1,
      "tn": 0,
      "precision": {
-      "k": 7,
-      "n": 7,
+      "k": 8,
+      "n": 8,
       "p": 1,
-      "lo": 0.6457,
+      "lo": 0.6756,
       "hi": 1
      },
      "recall": {
-      "k": 7,
-      "n": 8,
-      "p": 0.875,
-      "lo": 0.5291,
-      "hi": 0.9776
+      "k": 8,
+      "n": 9,
+      "p": 0.8889,
+      "lo": 0.565,
+      "hi": 0.9801
      }
     },
     "swift": {
@@ -2053,6 +2117,9 @@
    }
   },
   "reader-annotations": {
+   "labels": "mixed",
+   "positives_hand": 96,
+   "positives_inferred": 18,
    "all": {
     "tp": 112,
     "fp": 0,
@@ -2197,6 +2264,9 @@
    }
   },
   "reader-conditional": {
+   "labels": "hand",
+   "positives_hand": 3,
+   "positives_inferred": 0,
    "all": {
     "tp": 2,
     "fp": 0,
@@ -2275,6 +2345,9 @@
    }
   },
   "reader-description": {
+   "labels": "mixed",
+   "positives_hand": 96,
+   "positives_inferred": 18,
    "all": {
     "tp": 113,
     "fp": 0,
@@ -2419,6 +2492,9 @@
    }
   },
   "reader-params": {
+   "labels": "mixed",
+   "positives_hand": 96,
+   "positives_inferred": 18,
    "all": {
     "tp": 112,
     "fp": 0,
@@ -2563,6 +2639,9 @@
    }
   },
   "reader-required": {
+   "labels": "mixed",
+   "positives_hand": 96,
+   "positives_inferred": 18,
    "all": {
     "tp": 112,
     "fp": 0,
@@ -2707,45 +2786,48 @@
    }
   },
   "reader-tools": {
+   "labels": "mixed",
+   "positives_hand": 165,
+   "positives_inferred": 38,
    "all": {
-    "tp": 132,
-    "fp": 2,
-    "fn": 21,
+    "tp": 181,
+    "fp": 3,
+    "fn": 22,
     "tn": 0,
     "precision": {
-     "k": 132,
-     "n": 134,
-     "p": 0.9851,
-     "lo": 0.9472,
-     "hi": 0.9959
+     "k": 181,
+     "n": 184,
+     "p": 0.9837,
+     "lo": 0.9532,
+     "hi": 0.9944
     },
     "recall": {
-     "k": 132,
-     "n": 153,
-     "p": 0.8627,
-     "lo": 0.7993,
-     "hi": 0.9084
+     "k": 181,
+     "n": 203,
+     "p": 0.8916,
+     "lo": 0.8414,
+     "hi": 0.9273
     }
    },
    "by_language": {
     "committed-list": {
-     "tp": 23,
+     "tp": 34,
      "fp": 0,
      "fn": 2,
      "tn": 0,
      "precision": {
-      "k": 23,
-      "n": 23,
+      "k": 34,
+      "n": 34,
       "p": 1,
-      "lo": 0.8569,
+      "lo": 0.8985,
       "hi": 1
      },
      "recall": {
-      "k": 23,
-      "n": 25,
-      "p": 0.92,
-      "lo": 0.7503,
-      "hi": 0.9778
+      "k": 34,
+      "n": 36,
+      "p": 0.9444,
+      "lo": 0.8186,
+      "hi": 0.9846
      }
     },
     "csharp": {
@@ -2763,22 +2845,22 @@
      }
     },
     "go": {
-     "tp": 17,
+     "tp": 27,
      "fp": 0,
      "fn": 0,
      "tn": 0,
      "precision": {
-      "k": 17,
-      "n": 17,
+      "k": 27,
+      "n": 27,
       "p": 1,
-      "lo": 0.8157,
+      "lo": 0.8754,
       "hi": 1
      },
      "recall": {
-      "k": 17,
-      "n": 17,
+      "k": 27,
+      "n": 27,
       "p": 1,
-      "lo": 0.8157,
+      "lo": 0.8754,
       "hi": 1
      }
     },
@@ -2797,22 +2879,22 @@
      }
     },
     "javascript": {
-     "tp": 8,
+     "tp": 18,
      "fp": 0,
      "fn": 0,
      "tn": 0,
      "precision": {
-      "k": 8,
-      "n": 8,
+      "k": 18,
+      "n": 18,
       "p": 1,
-      "lo": 0.6756,
+      "lo": 0.8241,
       "hi": 1
      },
      "recall": {
-      "k": 8,
-      "n": 8,
+      "k": 18,
+      "n": 18,
       "p": 1,
-      "lo": 0.6756,
+      "lo": 0.8241,
       "hi": 1
      }
     },
@@ -2845,23 +2927,23 @@
      }
     },
     "python": {
-     "tp": 23,
-     "fp": 0,
-     "fn": 4,
+     "tp": 32,
+     "fp": 1,
+     "fn": 5,
      "tn": 0,
      "precision": {
-      "k": 23,
-      "n": 23,
-      "p": 1,
-      "lo": 0.8569,
-      "hi": 1
+      "k": 32,
+      "n": 33,
+      "p": 0.9697,
+      "lo": 0.8468,
+      "hi": 0.9946
      },
      "recall": {
-      "k": 23,
-      "n": 27,
-      "p": 0.8519,
-      "lo": 0.6752,
-      "hi": 0.9408
+      "k": 32,
+      "n": 37,
+      "p": 0.8649,
+      "lo": 0.7202,
+      "hi": 0.9409
      }
     },
     "ruby": {
@@ -2879,22 +2961,22 @@
      }
     },
     "rust": {
-     "tp": 13,
+     "tp": 22,
      "fp": 2,
      "fn": 0,
      "tn": 0,
      "precision": {
-      "k": 13,
-      "n": 15,
-      "p": 0.8667,
-      "lo": 0.6212,
-      "hi": 0.9626
+      "k": 22,
+      "n": 24,
+      "p": 0.9167,
+      "lo": 0.7415,
+      "hi": 0.9768
      },
      "recall": {
-      "k": 13,
-      "n": 13,
+      "k": 22,
+      "n": 22,
       "p": 1,
-      "lo": 0.7719,
+      "lo": 0.8513,
       "hi": 1
      }
     },
@@ -2935,6 +3017,9 @@
    }
   },
   "reader-unreadable": {
+   "labels": "inferred-only",
+   "positives_hand": 0,
+   "positives_inferred": 3,
    "all": {
     "tp": 3,
     "fp": 0,
@@ -2979,6 +3064,9 @@
    }
   },
   "schema-additional-properties": {
+   "labels": "inferred-only",
+   "positives_hand": 0,
+   "positives_inferred": 2,
    "all": {
     "tp": 2,
     "fp": 0,
@@ -3023,6 +3111,9 @@
    }
   },
   "schema-enum-missing": {
+   "labels": "inferred-only",
+   "positives_hand": 0,
+   "positives_inferred": 1,
    "all": {
     "tp": 1,
     "fp": 0,
@@ -3067,6 +3158,9 @@
    }
   },
   "schema-open-object": {
+   "labels": "inferred-only",
+   "positives_hand": 0,
+   "positives_inferred": 1,
    "all": {
     "tp": 1,
     "fp": 0,
@@ -3111,6 +3205,9 @@
    }
   },
   "schema-output-schema": {
+   "labels": "inferred-only",
+   "positives_hand": 0,
+   "positives_inferred": 13,
    "all": {
     "tp": 13,
     "fp": 0,
@@ -3255,6 +3352,9 @@
    }
   },
   "schema-pagination": {
+   "labels": "inferred-only",
+   "positives_hand": 0,
+   "positives_inferred": 2,
    "all": {
     "tp": 2,
     "fp": 0,
@@ -3319,6 +3419,9 @@
    }
   },
   "schema-param-description": {
+   "labels": "inferred-only",
+   "positives_hand": 0,
+   "positives_inferred": 5,
    "all": {
     "tp": 5,
     "fp": 0,
@@ -3403,6 +3506,9 @@
    }
   },
   "schema-required-unknown": {
+   "labels": "inferred-only",
+   "positives_hand": 0,
+   "positives_inferred": 1,
    "all": {
     "tp": 1,
     "fp": 0,
@@ -3447,6 +3553,9 @@
    }
   },
   "schema-response-format": {
+   "labels": "inferred-only",
+   "positives_hand": 0,
+   "positives_inferred": 2,
    "all": {
     "tp": 2,
     "fp": 0,
@@ -3511,6 +3620,9 @@
    }
   },
   "schema-vague-param": {
+   "labels": "inferred-only",
+   "positives_hand": 0,
+   "positives_inferred": 3,
    "all": {
     "tp": 3,
     "fp": 0,
@@ -3595,34 +3707,49 @@
    }
   },
   "sec-bidi-controls": {
+   "labels": "hand",
+   "positives_hand": 7,
+   "positives_inferred": 0,
    "all": {
-    "tp": 1,
+    "tp": 6,
     "fp": 0,
     "fn": 1,
-    "tn": 154,
+    "tn": 199,
     "precision": {
-     "k": 1,
-     "n": 1,
+     "k": 6,
+     "n": 6,
      "p": 1,
-     "lo": 0.2065,
+     "lo": 0.6097,
      "hi": 1
     },
     "recall": {
-     "k": 1,
-     "n": 2,
-     "p": 0.5,
-     "lo": 0.0945,
-     "hi": 0.9055
+     "k": 6,
+     "n": 7,
+     "p": 0.8571,
+     "lo": 0.4869,
+     "hi": 0.9743
     }
    },
    "by_language": {
     "committed-list": {
-     "tp": 0,
+     "tp": 1,
      "fp": 0,
      "fn": 0,
-     "tn": 25,
-     "precision": null,
-     "recall": null
+     "tn": 35,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
     },
     "csharp": {
      "tp": 0,
@@ -3633,12 +3760,24 @@
      "recall": null
     },
     "go": {
-     "tp": 0,
+     "tp": 1,
      "fp": 0,
      "fn": 0,
-     "tn": 18,
-     "precision": null,
-     "recall": null
+     "tn": 27,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
     },
     "java": {
      "tp": 0,
@@ -3649,12 +3788,24 @@
      "recall": null
     },
     "javascript": {
-     "tp": 0,
+     "tp": 1,
      "fp": 0,
      "fn": 0,
-     "tn": 8,
-     "precision": null,
-     "recall": null
+     "tn": 17,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
     },
     "kotlin": {
      "tp": 0,
@@ -3673,17 +3824,23 @@
      "recall": null
     },
     "python": {
-     "tp": 0,
+     "tp": 1,
      "fp": 0,
      "fn": 1,
-     "tn": 27,
-     "precision": null,
-     "recall": {
-      "k": 0,
+     "tn": 36,
+     "precision": {
+      "k": 1,
       "n": 1,
-      "p": 0,
-      "lo": 0,
-      "hi": 0.7935
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 2,
+      "p": 0.5,
+      "lo": 0.0945,
+      "hi": 0.9055
      }
     },
     "ruby": {
@@ -3695,12 +3852,24 @@
      "recall": null
     },
     "rust": {
-     "tp": 0,
+     "tp": 1,
      "fp": 0,
      "fn": 0,
-     "tn": 13,
-     "precision": null,
-     "recall": null
+     "tn": 21,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
     },
     "swift": {
      "tp": 0,
@@ -3733,22 +3902,49 @@
    }
   },
   "sec-control-chars": {
+   "labels": "hand",
+   "positives_hand": 5,
+   "positives_inferred": 0,
    "all": {
-    "tp": 0,
-    "fp": 0,
-    "fn": 0,
-    "tn": 156,
-    "precision": null,
-    "recall": null
+    "tp": 3,
+    "fp": 1,
+    "fn": 2,
+    "tn": 200,
+    "precision": {
+     "k": 3,
+     "n": 4,
+     "p": 0.75,
+     "lo": 0.3006,
+     "hi": 0.9544
+    },
+    "recall": {
+     "k": 3,
+     "n": 5,
+     "p": 0.6,
+     "lo": 0.2307,
+     "hi": 0.8824
+    }
    },
    "by_language": {
     "committed-list": {
-     "tp": 0,
+     "tp": 1,
      "fp": 0,
      "fn": 0,
-     "tn": 25,
-     "precision": null,
-     "recall": null
+     "tn": 35,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
     },
     "csharp": {
      "tp": 0,
@@ -3759,12 +3955,24 @@
      "recall": null
     },
     "go": {
-     "tp": 0,
+     "tp": 1,
      "fp": 0,
      "fn": 0,
-     "tn": 18,
-     "precision": null,
-     "recall": null
+     "tn": 27,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
     },
     "java": {
      "tp": 0,
@@ -3776,11 +3984,23 @@
     },
     "javascript": {
      "tp": 0,
-     "fp": 0,
-     "fn": 0,
-     "tn": 8,
-     "precision": null,
-     "recall": null
+     "fp": 1,
+     "fn": 1,
+     "tn": 16,
+     "precision": {
+      "k": 0,
+      "n": 1,
+      "p": 0,
+      "lo": 0,
+      "hi": 0.7935
+     },
+     "recall": {
+      "k": 0,
+      "n": 1,
+      "p": 0,
+      "lo": 0,
+      "hi": 0.7935
+     }
     },
     "kotlin": {
      "tp": 0,
@@ -3801,10 +4021,16 @@
     "python": {
      "tp": 0,
      "fp": 0,
-     "fn": 0,
-     "tn": 28,
+     "fn": 1,
+     "tn": 37,
      "precision": null,
-     "recall": null
+     "recall": {
+      "k": 0,
+      "n": 1,
+      "p": 0,
+      "lo": 0,
+      "hi": 0.7935
+     }
     },
     "ruby": {
      "tp": 0,
@@ -3815,12 +4041,24 @@
      "recall": null
     },
     "rust": {
-     "tp": 0,
+     "tp": 1,
      "fp": 0,
      "fn": 0,
-     "tn": 13,
-     "precision": null,
-     "recall": null
+     "tn": 21,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
     },
     "swift": {
      "tp": 0,
@@ -3841,11 +4079,14 @@
    }
   },
   "sec-cross-tool-steering": {
+   "labels": "hand",
+   "positives_hand": 3,
+   "positives_inferred": 0,
    "all": {
     "tp": 3,
     "fp": 0,
     "fn": 0,
-    "tn": 153,
+    "tn": 203,
     "precision": {
      "k": 3,
      "n": 3,
@@ -3866,7 +4107,7 @@
      "tp": 0,
      "fp": 0,
      "fn": 0,
-     "tn": 25,
+     "tn": 36,
      "precision": null,
      "recall": null
     },
@@ -3882,7 +4123,7 @@
      "tp": 1,
      "fp": 0,
      "fn": 0,
-     "tn": 17,
+     "tn": 27,
      "precision": {
       "k": 1,
       "n": 1,
@@ -3910,7 +4151,7 @@
      "tp": 1,
      "fp": 0,
      "fn": 0,
-     "tn": 7,
+     "tn": 17,
      "precision": {
       "k": 1,
       "n": 1,
@@ -3946,7 +4187,7 @@
      "tp": 0,
      "fp": 0,
      "fn": 0,
-     "tn": 28,
+     "tn": 38,
      "precision": null,
      "recall": null
     },
@@ -3962,7 +4203,7 @@
      "tp": 0,
      "fp": 0,
      "fn": 0,
-     "tn": 13,
+     "tn": 22,
      "precision": null,
      "recall": null
     },
@@ -3997,34 +4238,49 @@
    }
   },
   "sec-encoded-blob": {
+   "labels": "hand",
+   "positives_hand": 6,
+   "positives_inferred": 0,
    "all": {
-    "tp": 1,
+    "tp": 6,
     "fp": 0,
     "fn": 0,
-    "tn": 155,
+    "tn": 200,
     "precision": {
-     "k": 1,
-     "n": 1,
+     "k": 6,
+     "n": 6,
      "p": 1,
-     "lo": 0.2065,
+     "lo": 0.6097,
      "hi": 1
     },
     "recall": {
-     "k": 1,
-     "n": 1,
+     "k": 6,
+     "n": 6,
      "p": 1,
-     "lo": 0.2065,
+     "lo": 0.6097,
      "hi": 1
     }
    },
    "by_language": {
     "committed-list": {
-     "tp": 0,
+     "tp": 1,
      "fp": 0,
      "fn": 0,
-     "tn": 25,
-     "precision": null,
-     "recall": null
+     "tn": 35,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
     },
     "csharp": {
      "tp": 0,
@@ -4035,12 +4291,24 @@
      "recall": null
     },
     "go": {
-     "tp": 0,
+     "tp": 1,
      "fp": 0,
      "fn": 0,
-     "tn": 18,
-     "precision": null,
-     "recall": null
+     "tn": 27,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
     },
     "java": {
      "tp": 0,
@@ -4051,12 +4319,24 @@
      "recall": null
     },
     "javascript": {
-     "tp": 0,
+     "tp": 1,
      "fp": 0,
      "fn": 0,
-     "tn": 8,
-     "precision": null,
-     "recall": null
+     "tn": 17,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
     },
     "kotlin": {
      "tp": 0,
@@ -4075,12 +4355,24 @@
      "recall": null
     },
     "python": {
-     "tp": 0,
+     "tp": 1,
      "fp": 0,
      "fn": 0,
-     "tn": 28,
-     "precision": null,
-     "recall": null
+     "tn": 37,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
     },
     "ruby": {
      "tp": 0,
@@ -4091,12 +4383,24 @@
      "recall": null
     },
     "rust": {
-     "tp": 0,
+     "tp": 1,
      "fp": 0,
      "fn": 0,
-     "tn": 13,
-     "precision": null,
-     "recall": null
+     "tn": 21,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
     },
     "swift": {
      "tp": 0,
@@ -4129,34 +4433,49 @@
    }
   },
   "sec-external-instructions": {
+   "labels": "hand",
+   "positives_hand": 6,
+   "positives_inferred": 0,
    "all": {
-    "tp": 1,
+    "tp": 6,
     "fp": 0,
     "fn": 0,
-    "tn": 155,
+    "tn": 200,
     "precision": {
-     "k": 1,
-     "n": 1,
+     "k": 6,
+     "n": 6,
      "p": 1,
-     "lo": 0.2065,
+     "lo": 0.6097,
      "hi": 1
     },
     "recall": {
-     "k": 1,
-     "n": 1,
+     "k": 6,
+     "n": 6,
      "p": 1,
-     "lo": 0.2065,
+     "lo": 0.6097,
      "hi": 1
     }
    },
    "by_language": {
     "committed-list": {
-     "tp": 0,
+     "tp": 1,
      "fp": 0,
      "fn": 0,
-     "tn": 25,
-     "precision": null,
-     "recall": null
+     "tn": 35,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
     },
     "csharp": {
      "tp": 0,
@@ -4167,12 +4486,24 @@
      "recall": null
     },
     "go": {
-     "tp": 0,
+     "tp": 1,
      "fp": 0,
      "fn": 0,
-     "tn": 18,
-     "precision": null,
-     "recall": null
+     "tn": 27,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
     },
     "java": {
      "tp": 0,
@@ -4183,12 +4514,24 @@
      "recall": null
     },
     "javascript": {
-     "tp": 0,
+     "tp": 1,
      "fp": 0,
      "fn": 0,
-     "tn": 8,
-     "precision": null,
-     "recall": null
+     "tn": 17,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
     },
     "kotlin": {
      "tp": 0,
@@ -4207,12 +4550,24 @@
      "recall": null
     },
     "python": {
-     "tp": 0,
+     "tp": 1,
      "fp": 0,
      "fn": 0,
-     "tn": 28,
-     "precision": null,
-     "recall": null
+     "tn": 37,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
     },
     "ruby": {
      "tp": 0,
@@ -4223,12 +4578,24 @@
      "recall": null
     },
     "rust": {
-     "tp": 0,
+     "tp": 1,
      "fp": 0,
      "fn": 0,
-     "tn": 13,
-     "precision": null,
-     "recall": null
+     "tn": 21,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
     },
     "swift": {
      "tp": 0,
@@ -4261,22 +4628,49 @@
    }
   },
   "sec-homoglyph": {
+   "labels": "hand",
+   "positives_hand": 8,
+   "positives_inferred": 0,
    "all": {
-    "tp": 0,
+    "tp": 7,
     "fp": 0,
-    "fn": 0,
-    "tn": 156,
-    "precision": null,
-    "recall": null
+    "fn": 1,
+    "tn": 198,
+    "precision": {
+     "k": 7,
+     "n": 7,
+     "p": 1,
+     "lo": 0.6457,
+     "hi": 1
+    },
+    "recall": {
+     "k": 7,
+     "n": 8,
+     "p": 0.875,
+     "lo": 0.5291,
+     "hi": 0.9776
+    }
    },
    "by_language": {
     "committed-list": {
-     "tp": 0,
+     "tp": 2,
      "fp": 0,
      "fn": 0,
-     "tn": 25,
-     "precision": null,
-     "recall": null
+     "tn": 34,
+     "precision": {
+      "k": 2,
+      "n": 2,
+      "p": 1,
+      "lo": 0.3424,
+      "hi": 1
+     },
+     "recall": {
+      "k": 2,
+      "n": 2,
+      "p": 1,
+      "lo": 0.3424,
+      "hi": 1
+     }
     },
     "csharp": {
      "tp": 0,
@@ -4287,12 +4681,24 @@
      "recall": null
     },
     "go": {
-     "tp": 0,
+     "tp": 2,
      "fp": 0,
      "fn": 0,
-     "tn": 18,
-     "precision": null,
-     "recall": null
+     "tn": 26,
+     "precision": {
+      "k": 2,
+      "n": 2,
+      "p": 1,
+      "lo": 0.3424,
+      "hi": 1
+     },
+     "recall": {
+      "k": 2,
+      "n": 2,
+      "p": 1,
+      "lo": 0.3424,
+      "hi": 1
+     }
     },
     "java": {
      "tp": 0,
@@ -4303,12 +4709,24 @@
      "recall": null
     },
     "javascript": {
-     "tp": 0,
+     "tp": 1,
      "fp": 0,
      "fn": 0,
-     "tn": 8,
-     "precision": null,
-     "recall": null
+     "tn": 17,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
     },
     "kotlin": {
      "tp": 0,
@@ -4327,12 +4745,24 @@
      "recall": null
     },
     "python": {
-     "tp": 0,
+     "tp": 1,
      "fp": 0,
-     "fn": 0,
-     "tn": 28,
-     "precision": null,
-     "recall": null
+     "fn": 1,
+     "tn": 36,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 2,
+      "p": 0.5,
+      "lo": 0.0945,
+      "hi": 0.9055
+     }
     },
     "ruby": {
      "tp": 0,
@@ -4343,12 +4773,24 @@
      "recall": null
     },
     "rust": {
-     "tp": 0,
+     "tp": 1,
      "fp": 0,
      "fn": 0,
-     "tn": 13,
-     "precision": null,
-     "recall": null
+     "tn": 21,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
     },
     "swift": {
      "tp": 0,
@@ -4369,34 +4811,49 @@
    }
   },
   "sec-html-comment": {
+   "labels": "hand",
+   "positives_hand": 6,
+   "positives_inferred": 0,
    "all": {
-    "tp": 1,
+    "tp": 6,
     "fp": 0,
     "fn": 0,
-    "tn": 155,
+    "tn": 200,
     "precision": {
-     "k": 1,
-     "n": 1,
+     "k": 6,
+     "n": 6,
      "p": 1,
-     "lo": 0.2065,
+     "lo": 0.6097,
      "hi": 1
     },
     "recall": {
-     "k": 1,
-     "n": 1,
+     "k": 6,
+     "n": 6,
      "p": 1,
-     "lo": 0.2065,
+     "lo": 0.6097,
      "hi": 1
     }
    },
    "by_language": {
     "committed-list": {
-     "tp": 0,
+     "tp": 1,
      "fp": 0,
      "fn": 0,
-     "tn": 25,
-     "precision": null,
-     "recall": null
+     "tn": 35,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
     },
     "csharp": {
      "tp": 0,
@@ -4407,12 +4864,24 @@
      "recall": null
     },
     "go": {
-     "tp": 0,
+     "tp": 1,
      "fp": 0,
      "fn": 0,
-     "tn": 18,
-     "precision": null,
-     "recall": null
+     "tn": 27,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
     },
     "java": {
      "tp": 0,
@@ -4423,12 +4892,24 @@
      "recall": null
     },
     "javascript": {
-     "tp": 0,
+     "tp": 1,
      "fp": 0,
      "fn": 0,
-     "tn": 8,
-     "precision": null,
-     "recall": null
+     "tn": 17,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
     },
     "kotlin": {
      "tp": 0,
@@ -4447,12 +4928,24 @@
      "recall": null
     },
     "python": {
-     "tp": 0,
+     "tp": 1,
      "fp": 0,
      "fn": 0,
-     "tn": 28,
-     "precision": null,
-     "recall": null
+     "tn": 37,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
     },
     "ruby": {
      "tp": 0,
@@ -4463,12 +4956,24 @@
      "recall": null
     },
     "rust": {
-     "tp": 0,
+     "tp": 1,
      "fp": 0,
      "fn": 0,
-     "tn": 13,
-     "precision": null,
-     "recall": null
+     "tn": 21,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
     },
     "swift": {
      "tp": 0,
@@ -4501,11 +5006,14 @@
    }
   },
   "sec-instruction-markup": {
+   "labels": "hand",
+   "positives_hand": 3,
+   "positives_inferred": 0,
    "all": {
     "tp": 3,
     "fp": 0,
     "fn": 0,
-    "tn": 153,
+    "tn": 203,
     "precision": {
      "k": 3,
      "n": 3,
@@ -4526,7 +5034,7 @@
      "tp": 0,
      "fp": 0,
      "fn": 0,
-     "tn": 25,
+     "tn": 36,
      "precision": null,
      "recall": null
     },
@@ -4542,7 +5050,7 @@
      "tp": 0,
      "fp": 0,
      "fn": 0,
-     "tn": 18,
+     "tn": 28,
      "precision": null,
      "recall": null
     },
@@ -4558,7 +5066,7 @@
      "tp": 0,
      "fp": 0,
      "fn": 0,
-     "tn": 8,
+     "tn": 18,
      "precision": null,
      "recall": null
     },
@@ -4582,7 +5090,7 @@
      "tp": 1,
      "fp": 0,
      "fn": 0,
-     "tn": 27,
+     "tn": 37,
      "precision": {
       "k": 1,
       "n": 1,
@@ -4610,7 +5118,7 @@
      "tp": 1,
      "fp": 0,
      "fn": 0,
-     "tn": 12,
+     "tn": 21,
      "precision": {
       "k": 1,
       "n": 1,
@@ -4657,11 +5165,14 @@
    }
   },
   "sec-instruction-phrases": {
+   "labels": "hand",
+   "positives_hand": 7,
+   "positives_inferred": 0,
    "all": {
     "tp": 7,
     "fp": 0,
     "fn": 0,
-    "tn": 149,
+    "tn": 199,
     "precision": {
      "k": 7,
      "n": 7,
@@ -4682,7 +5193,7 @@
      "tp": 1,
      "fp": 0,
      "fn": 0,
-     "tn": 24,
+     "tn": 35,
      "precision": {
       "k": 1,
       "n": 1,
@@ -4710,7 +5221,7 @@
      "tp": 1,
      "fp": 0,
      "fn": 0,
-     "tn": 17,
+     "tn": 27,
      "precision": {
       "k": 1,
       "n": 1,
@@ -4738,7 +5249,7 @@
      "tp": 0,
      "fp": 0,
      "fn": 0,
-     "tn": 8,
+     "tn": 18,
      "precision": null,
      "recall": null
     },
@@ -4762,7 +5273,7 @@
      "tp": 2,
      "fp": 0,
      "fn": 0,
-     "tn": 26,
+     "tn": 36,
      "precision": {
       "k": 2,
       "n": 2,
@@ -4790,7 +5301,7 @@
      "tp": 2,
      "fp": 0,
      "fn": 0,
-     "tn": 11,
+     "tn": 20,
      "precision": {
       "k": 2,
       "n": 2,
@@ -4837,22 +5348,49 @@
    }
   },
   "sec-invisible-encoding": {
+   "labels": "hand",
+   "positives_hand": 5,
+   "positives_inferred": 0,
    "all": {
-    "tp": 0,
+    "tp": 3,
     "fp": 0,
-    "fn": 0,
-    "tn": 156,
-    "precision": null,
-    "recall": null
+    "fn": 2,
+    "tn": 201,
+    "precision": {
+     "k": 3,
+     "n": 3,
+     "p": 1,
+     "lo": 0.4385,
+     "hi": 1
+    },
+    "recall": {
+     "k": 3,
+     "n": 5,
+     "p": 0.6,
+     "lo": 0.2307,
+     "hi": 0.8824
+    }
    },
    "by_language": {
     "committed-list": {
-     "tp": 0,
+     "tp": 1,
      "fp": 0,
      "fn": 0,
-     "tn": 25,
-     "precision": null,
-     "recall": null
+     "tn": 35,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
     },
     "csharp": {
      "tp": 0,
@@ -4863,12 +5401,24 @@
      "recall": null
     },
     "go": {
-     "tp": 0,
+     "tp": 1,
      "fp": 0,
      "fn": 0,
-     "tn": 18,
-     "precision": null,
-     "recall": null
+     "tn": 27,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
     },
     "java": {
      "tp": 0,
@@ -4881,10 +5431,16 @@
     "javascript": {
      "tp": 0,
      "fp": 0,
-     "fn": 0,
-     "tn": 8,
+     "fn": 1,
+     "tn": 17,
      "precision": null,
-     "recall": null
+     "recall": {
+      "k": 0,
+      "n": 1,
+      "p": 0,
+      "lo": 0,
+      "hi": 0.7935
+     }
     },
     "kotlin": {
      "tp": 0,
@@ -4905,10 +5461,16 @@
     "python": {
      "tp": 0,
      "fp": 0,
-     "fn": 0,
-     "tn": 28,
+     "fn": 1,
+     "tn": 37,
      "precision": null,
-     "recall": null
+     "recall": {
+      "k": 0,
+      "n": 1,
+      "p": 0,
+      "lo": 0,
+      "hi": 0.7935
+     }
     },
     "ruby": {
      "tp": 0,
@@ -4919,12 +5481,24 @@
      "recall": null
     },
     "rust": {
-     "tp": 0,
+     "tp": 1,
      "fp": 0,
      "fn": 0,
-     "tn": 13,
-     "precision": null,
-     "recall": null
+     "tn": 21,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
     },
     "swift": {
      "tp": 0,
@@ -4945,34 +5519,49 @@
    }
   },
   "sec-secret-seeking": {
+   "labels": "hand",
+   "positives_hand": 7,
+   "positives_inferred": 0,
    "all": {
-    "tp": 2,
+    "tp": 7,
     "fp": 0,
     "fn": 0,
-    "tn": 154,
+    "tn": 199,
     "precision": {
-     "k": 2,
-     "n": 2,
+     "k": 7,
+     "n": 7,
      "p": 1,
-     "lo": 0.3424,
+     "lo": 0.6457,
      "hi": 1
     },
     "recall": {
-     "k": 2,
-     "n": 2,
+     "k": 7,
+     "n": 7,
      "p": 1,
-     "lo": 0.3424,
+     "lo": 0.6457,
      "hi": 1
     }
    },
    "by_language": {
     "committed-list": {
-     "tp": 0,
+     "tp": 1,
      "fp": 0,
      "fn": 0,
-     "tn": 25,
-     "precision": null,
-     "recall": null
+     "tn": 35,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
     },
     "csharp": {
      "tp": 0,
@@ -4983,46 +5572,6 @@
      "recall": null
     },
     "go": {
-     "tp": 0,
-     "fp": 0,
-     "fn": 0,
-     "tn": 18,
-     "precision": null,
-     "recall": null
-    },
-    "java": {
-     "tp": 0,
-     "fp": 0,
-     "fn": 0,
-     "tn": 2,
-     "precision": null,
-     "recall": null
-    },
-    "javascript": {
-     "tp": 0,
-     "fp": 0,
-     "fn": 0,
-     "tn": 8,
-     "precision": null,
-     "recall": null
-    },
-    "kotlin": {
-     "tp": 0,
-     "fp": 0,
-     "fn": 0,
-     "tn": 2,
-     "precision": null,
-     "recall": null
-    },
-    "php": {
-     "tp": 0,
-     "fp": 0,
-     "fn": 0,
-     "tn": 2,
-     "precision": null,
-     "recall": null
-    },
-    "python": {
      "tp": 1,
      "fp": 0,
      "fn": 0,
@@ -5042,6 +5591,70 @@
       "hi": 1
      }
     },
+    "java": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "javascript": {
+     "tp": 1,
+     "fp": 0,
+     "fn": 0,
+     "tn": 17,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
+    },
+    "kotlin": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "php": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 2,
+     "precision": null,
+     "recall": null
+    },
+    "python": {
+     "tp": 2,
+     "fp": 0,
+     "fn": 0,
+     "tn": 36,
+     "precision": {
+      "k": 2,
+      "n": 2,
+      "p": 1,
+      "lo": 0.3424,
+      "hi": 1
+     },
+     "recall": {
+      "k": 2,
+      "n": 2,
+      "p": 1,
+      "lo": 0.3424,
+      "hi": 1
+     }
+    },
     "ruby": {
      "tp": 0,
      "fp": 0,
@@ -5051,12 +5664,24 @@
      "recall": null
     },
     "rust": {
-     "tp": 0,
+     "tp": 1,
      "fp": 0,
      "fn": 0,
-     "tn": 13,
-     "precision": null,
-     "recall": null
+     "tn": 21,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
     },
     "swift": {
      "tp": 0,
@@ -5089,34 +5714,49 @@
    }
   },
   "sec-zero-width": {
+   "labels": "hand",
+   "positives_hand": 6,
+   "positives_inferred": 0,
    "all": {
-    "tp": 1,
+    "tp": 6,
     "fp": 0,
     "fn": 0,
-    "tn": 155,
+    "tn": 200,
     "precision": {
-     "k": 1,
-     "n": 1,
+     "k": 6,
+     "n": 6,
      "p": 1,
-     "lo": 0.2065,
+     "lo": 0.6097,
      "hi": 1
     },
     "recall": {
-     "k": 1,
-     "n": 1,
+     "k": 6,
+     "n": 6,
      "p": 1,
-     "lo": 0.2065,
+     "lo": 0.6097,
      "hi": 1
     }
    },
    "by_language": {
     "committed-list": {
-     "tp": 0,
+     "tp": 1,
      "fp": 0,
      "fn": 0,
-     "tn": 25,
-     "precision": null,
-     "recall": null
+     "tn": 35,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
     },
     "csharp": {
      "tp": 0,
@@ -5127,12 +5767,24 @@
      "recall": null
     },
     "go": {
-     "tp": 0,
+     "tp": 1,
      "fp": 0,
      "fn": 0,
-     "tn": 18,
-     "precision": null,
-     "recall": null
+     "tn": 27,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
     },
     "java": {
      "tp": 0,
@@ -5143,12 +5795,24 @@
      "recall": null
     },
     "javascript": {
-     "tp": 0,
+     "tp": 1,
      "fp": 0,
      "fn": 0,
-     "tn": 8,
-     "precision": null,
-     "recall": null
+     "tn": 17,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
     },
     "kotlin": {
      "tp": 0,
@@ -5167,12 +5831,24 @@
      "recall": null
     },
     "python": {
-     "tp": 0,
+     "tp": 1,
      "fp": 0,
      "fn": 0,
-     "tn": 28,
-     "precision": null,
-     "recall": null
+     "tn": 37,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
     },
     "ruby": {
      "tp": 0,
@@ -5183,12 +5859,24 @@
      "recall": null
     },
     "rust": {
-     "tp": 0,
+     "tp": 1,
      "fp": 0,
      "fn": 0,
-     "tn": 13,
-     "precision": null,
-     "recall": null
+     "tn": 21,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
     },
     "swift": {
      "tp": 0,
@@ -5221,79 +5909,54 @@
    }
   },
   "security-cap": {
+   "labels": "hand",
+   "positives_hand": 16,
+   "positives_inferred": 0,
    "all": {
-    "tp": 10,
+    "tp": 15,
     "fp": 0,
     "fn": 1,
     "tn": 48,
     "precision": {
-     "k": 10,
-     "n": 10,
+     "k": 15,
+     "n": 15,
      "p": 1,
-     "lo": 0.7225,
+     "lo": 0.7961,
      "hi": 1
     },
     "recall": {
-     "k": 10,
-     "n": 11,
-     "p": 0.9091,
-     "lo": 0.6226,
-     "hi": 0.9838
+     "k": 15,
+     "n": 16,
+     "p": 0.9375,
+     "lo": 0.7167,
+     "hi": 0.9889
     }
    },
    "by_language": {
     "committed-list": {
-     "tp": 1,
+     "tp": 2,
      "fp": 0,
      "fn": 0,
      "tn": 5,
      "precision": {
-      "k": 1,
-      "n": 1,
+      "k": 2,
+      "n": 2,
       "p": 1,
-      "lo": 0.2065,
+      "lo": 0.3424,
       "hi": 1
      },
      "recall": {
-      "k": 1,
-      "n": 1,
+      "k": 2,
+      "n": 2,
       "p": 1,
-      "lo": 0.2065,
+      "lo": 0.3424,
       "hi": 1
      }
     },
     "go": {
-     "tp": 1,
-     "fp": 0,
-     "fn": 0,
-     "tn": 8,
-     "precision": {
-      "k": 1,
-      "n": 1,
-      "p": 1,
-      "lo": 0.2065,
-      "hi": 1
-     },
-     "recall": {
-      "k": 1,
-      "n": 1,
-      "p": 1,
-      "lo": 0.2065,
-      "hi": 1
-     }
-    },
-    "javascript": {
-     "tp": 0,
-     "fp": 0,
-     "fn": 0,
-     "tn": 4,
-     "precision": null,
-     "recall": null
-    },
-    "python": {
      "tp": 2,
      "fp": 0,
-     "fn": 1,
+     "fn": 0,
      "tn": 8,
      "precision": {
       "k": 2,
@@ -5304,17 +5967,17 @@
      },
      "recall": {
       "k": 2,
-      "n": 3,
-      "p": 0.6667,
-      "lo": 0.2077,
-      "hi": 0.9385
+      "n": 2,
+      "p": 1,
+      "lo": 0.3424,
+      "hi": 1
      }
     },
-    "rust": {
+    "javascript": {
      "tp": 1,
      "fp": 0,
      "fn": 0,
-     "tn": 6,
+     "tn": 4,
      "precision": {
       "k": 1,
       "n": 1,
@@ -5327,6 +5990,46 @@
       "n": 1,
       "p": 1,
       "lo": 0.2065,
+      "hi": 1
+     }
+    },
+    "python": {
+     "tp": 3,
+     "fp": 0,
+     "fn": 1,
+     "tn": 8,
+     "precision": {
+      "k": 3,
+      "n": 3,
+      "p": 1,
+      "lo": 0.4385,
+      "hi": 1
+     },
+     "recall": {
+      "k": 3,
+      "n": 4,
+      "p": 0.75,
+      "lo": 0.3006,
+      "hi": 0.9544
+     }
+    },
+    "rust": {
+     "tp": 2,
+     "fp": 0,
+     "fn": 0,
+     "tn": 6,
+     "precision": {
+      "k": 2,
+      "n": 2,
+      "p": 1,
+      "lo": 0.3424,
+      "hi": 1
+     },
+     "recall": {
+      "k": 2,
+      "n": 2,
+      "p": 1,
+      "lo": 0.3424,
       "hi": 1
      }
     },
@@ -5353,124 +6056,127 @@
    }
   },
   "severity": {
+   "labels": "mixed",
+   "positives_hand": 74,
+   "positives_inferred": 143,
    "all": {
-    "tp": 170,
+    "tp": 217,
     "fp": 0,
     "fn": 0,
     "tn": 0,
     "precision": {
-     "k": 170,
-     "n": 170,
+     "k": 217,
+     "n": 217,
      "p": 1,
-     "lo": 0.9779,
+     "lo": 0.9826,
      "hi": 1
     },
     "recall": {
-     "k": 170,
-     "n": 170,
+     "k": 217,
+     "n": 217,
      "p": 1,
-     "lo": 0.9779,
+     "lo": 0.9826,
      "hi": 1
     }
    },
    "by_language": {
     "committed-list": {
-     "tp": 58,
+     "tp": 70,
      "fp": 0,
      "fn": 0,
      "tn": 0,
      "precision": {
-      "k": 58,
-      "n": 58,
+      "k": 70,
+      "n": 70,
       "p": 1,
-      "lo": 0.9379,
+      "lo": 0.948,
       "hi": 1
      },
      "recall": {
-      "k": 58,
-      "n": 58,
+      "k": 70,
+      "n": 70,
       "p": 1,
-      "lo": 0.9379,
+      "lo": 0.948,
       "hi": 1
      }
     },
     "go": {
-     "tp": 24,
+     "tp": 35,
      "fp": 0,
      "fn": 0,
      "tn": 0,
      "precision": {
-      "k": 24,
-      "n": 24,
+      "k": 35,
+      "n": 35,
       "p": 1,
-      "lo": 0.862,
+      "lo": 0.9011,
       "hi": 1
      },
      "recall": {
-      "k": 24,
-      "n": 24,
+      "k": 35,
+      "n": 35,
       "p": 1,
-      "lo": 0.862,
+      "lo": 0.9011,
       "hi": 1
      }
     },
     "javascript": {
-     "tp": 15,
+     "tp": 23,
      "fp": 0,
      "fn": 0,
      "tn": 0,
      "precision": {
-      "k": 15,
-      "n": 15,
+      "k": 23,
+      "n": 23,
       "p": 1,
-      "lo": 0.7961,
+      "lo": 0.8569,
       "hi": 1
      },
      "recall": {
-      "k": 15,
-      "n": 15,
+      "k": 23,
+      "n": 23,
       "p": 1,
-      "lo": 0.7961,
+      "lo": 0.8569,
       "hi": 1
      }
     },
     "python": {
-     "tp": 29,
+     "tp": 36,
      "fp": 0,
      "fn": 0,
      "tn": 0,
      "precision": {
-      "k": 29,
-      "n": 29,
+      "k": 36,
+      "n": 36,
       "p": 1,
-      "lo": 0.883,
+      "lo": 0.9036,
       "hi": 1
      },
      "recall": {
-      "k": 29,
-      "n": 29,
+      "k": 36,
+      "n": 36,
       "p": 1,
-      "lo": 0.883,
+      "lo": 0.9036,
       "hi": 1
      }
     },
     "rust": {
-     "tp": 13,
+     "tp": 22,
      "fp": 0,
      "fn": 0,
      "tn": 0,
      "precision": {
-      "k": 13,
-      "n": 13,
+      "k": 22,
+      "n": 22,
       "p": 1,
-      "lo": 0.7719,
+      "lo": 0.8513,
       "hi": 1
      },
      "recall": {
-      "k": 13,
-      "n": 13,
+      "k": 22,
+      "n": 22,
       "p": 1,
-      "lo": 0.7719,
+      "lo": 0.8513,
       "hi": 1
      }
     },
@@ -5497,6 +6203,9 @@
    }
   },
   "spec-input-schema-field-name": {
+   "labels": "inferred-only",
+   "positives_hand": 0,
+   "positives_inferred": 1,
    "all": {
     "tp": 1,
     "fp": 0,
@@ -5541,6 +6250,9 @@
    }
   },
   "spec-input-schema-missing": {
+   "labels": "hand",
+   "positives_hand": 1,
+   "positives_inferred": 0,
    "all": {
     "tp": 0,
     "fp": 0,
@@ -5573,6 +6285,9 @@
    }
   },
   "spec-input-schema-root-object": {
+   "labels": "inferred-only",
+   "positives_hand": 0,
+   "positives_inferred": 1,
    "all": {
     "tp": 1,
     "fp": 0,
@@ -5617,6 +6332,9 @@
    }
   },
   "spec-meta-key": {
+   "labels": "inferred-only",
+   "positives_hand": 0,
+   "positives_inferred": 1,
    "all": {
     "tp": 1,
     "fp": 0,
@@ -5661,6 +6379,9 @@
    }
   },
   "spec-meta-reserved": {
+   "labels": "inferred-only",
+   "positives_hand": 0,
+   "positives_inferred": 1,
    "all": {
     "tp": 1,
     "fp": 0,
@@ -5705,34 +6426,49 @@
    }
   },
   "spec-name-charset": {
+   "labels": "hand",
+   "positives_hand": 4,
+   "positives_inferred": 0,
    "all": {
-    "tp": 1,
+    "tp": 3,
     "fp": 0,
-    "fn": 0,
-    "tn": 155,
+    "fn": 1,
+    "tn": 202,
     "precision": {
-     "k": 1,
-     "n": 1,
+     "k": 3,
+     "n": 3,
      "p": 1,
-     "lo": 0.2065,
+     "lo": 0.4385,
      "hi": 1
     },
     "recall": {
-     "k": 1,
-     "n": 1,
-     "p": 1,
-     "lo": 0.2065,
-     "hi": 1
+     "k": 3,
+     "n": 4,
+     "p": 0.75,
+     "lo": 0.3006,
+     "hi": 0.9544
     }
    },
    "by_language": {
     "committed-list": {
-     "tp": 0,
+     "tp": 1,
      "fp": 0,
      "fn": 0,
-     "tn": 25,
-     "precision": null,
-     "recall": null
+     "tn": 35,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
     },
     "csharp": {
      "tp": 0,
@@ -5743,12 +6479,24 @@
      "recall": null
     },
     "go": {
-     "tp": 0,
+     "tp": 1,
      "fp": 0,
      "fn": 0,
-     "tn": 18,
-     "precision": null,
-     "recall": null
+     "tn": 27,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
     },
     "java": {
      "tp": 0,
@@ -5762,7 +6510,7 @@
      "tp": 0,
      "fp": 0,
      "fn": 0,
-     "tn": 8,
+     "tn": 18,
      "precision": null,
      "recall": null
     },
@@ -5785,10 +6533,16 @@
     "python": {
      "tp": 0,
      "fp": 0,
-     "fn": 0,
-     "tn": 28,
+     "fn": 1,
+     "tn": 37,
      "precision": null,
-     "recall": null
+     "recall": {
+      "k": 0,
+      "n": 1,
+      "p": 0,
+      "lo": 0,
+      "hi": 0.7935
+     }
     },
     "ruby": {
      "tp": 0,
@@ -5802,7 +6556,7 @@
      "tp": 0,
      "fp": 0,
      "fn": 0,
-     "tn": 13,
+     "tn": 22,
      "precision": null,
      "recall": null
     },
@@ -5837,22 +6591,49 @@
    }
   },
   "spec-name-length": {
+   "labels": "hand",
+   "positives_hand": 2,
+   "positives_inferred": 0,
    "all": {
-    "tp": 0,
+    "tp": 2,
     "fp": 0,
     "fn": 0,
-    "tn": 156,
-    "precision": null,
-    "recall": null
+    "tn": 204,
+    "precision": {
+     "k": 2,
+     "n": 2,
+     "p": 1,
+     "lo": 0.3424,
+     "hi": 1
+    },
+    "recall": {
+     "k": 2,
+     "n": 2,
+     "p": 1,
+     "lo": 0.3424,
+     "hi": 1
+    }
    },
    "by_language": {
     "committed-list": {
-     "tp": 0,
+     "tp": 1,
      "fp": 0,
      "fn": 0,
-     "tn": 25,
-     "precision": null,
-     "recall": null
+     "tn": 35,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
     },
     "csharp": {
      "tp": 0,
@@ -5866,7 +6647,7 @@
      "tp": 0,
      "fp": 0,
      "fn": 0,
-     "tn": 18,
+     "tn": 28,
      "precision": null,
      "recall": null
     },
@@ -5879,12 +6660,24 @@
      "recall": null
     },
     "javascript": {
-     "tp": 0,
+     "tp": 1,
      "fp": 0,
      "fn": 0,
-     "tn": 8,
-     "precision": null,
-     "recall": null
+     "tn": 17,
+     "precision": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     }
     },
     "kotlin": {
      "tp": 0,
@@ -5906,7 +6699,7 @@
      "tp": 0,
      "fp": 0,
      "fn": 0,
-     "tn": 28,
+     "tn": 38,
      "precision": null,
      "recall": null
     },
@@ -5922,7 +6715,7 @@
      "tp": 0,
      "fp": 0,
      "fn": 0,
-     "tn": 13,
+     "tn": 22,
      "precision": null,
      "recall": null
     },
@@ -5945,11 +6738,14 @@
    }
   },
   "spec-name-unique": {
+   "labels": "mixed",
+   "positives_hand": 1,
+   "positives_inferred": 1,
    "all": {
     "tp": 1,
     "fp": 0,
     "fn": 1,
-    "tn": 67,
+    "tn": 72,
     "precision": {
      "k": 1,
      "n": 1,
@@ -5970,7 +6766,7 @@
      "tp": 1,
      "fp": 0,
      "fn": 0,
-     "tn": 6,
+     "tn": 7,
      "precision": {
       "k": 1,
       "n": 1,
@@ -5998,7 +6794,7 @@
      "tp": 0,
      "fp": 0,
      "fn": 0,
-     "tn": 9,
+     "tn": 10,
      "precision": null,
      "recall": null
     },
@@ -6014,7 +6810,7 @@
      "tp": 0,
      "fp": 0,
      "fn": 0,
-     "tn": 4,
+     "tn": 5,
      "precision": null,
      "recall": null
     },
@@ -6038,7 +6834,7 @@
      "tp": 0,
      "fp": 0,
      "fn": 0,
-     "tn": 13,
+     "tn": 14,
      "precision": null,
      "recall": null
     },
@@ -6054,7 +6850,7 @@
      "tp": 0,
      "fp": 0,
      "fn": 0,
-     "tn": 7,
+     "tn": 8,
      "precision": null,
      "recall": null
     },
@@ -6083,6 +6879,9 @@
    }
   },
   "surface-delete-guard": {
+   "labels": "inferred-only",
+   "positives_hand": 0,
+   "positives_inferred": 2,
    "all": {
     "tp": 2,
     "fp": 0,
@@ -6147,6 +6946,9 @@
    }
   },
   "surface-retry-key": {
+   "labels": "inferred-only",
+   "positives_hand": 0,
+   "positives_inferred": 3,
    "all": {
     "tp": 3,
     "fp": 0,
@@ -6211,6 +7013,9 @@
    }
   },
   "surface-version-guard": {
+   "labels": "inferred-only",
+   "positives_hand": 0,
+   "positives_inferred": 5,
    "all": {
     "tp": 5,
     "fp": 0,
@@ -6297,23 +7102,23 @@
  },
  "reader_tools_by_idiom": {
   "adversarial": {
-   "tp": 33,
-   "fp": 0,
-   "fn": 0,
+   "tp": 82,
+   "fp": 1,
+   "fn": 1,
    "tn": 0,
    "precision": {
-    "k": 33,
-    "n": 33,
-    "p": 1,
-    "lo": 0.8957,
-    "hi": 1
+    "k": 82,
+    "n": 83,
+    "p": 0.988,
+    "lo": 0.9349,
+    "hi": 0.9979
    },
    "recall": {
-    "k": 33,
-    "n": 33,
-    "p": 1,
-    "lo": 0.8957,
-    "hi": 1
+    "k": 82,
+    "n": 83,
+    "p": 0.988,
+    "lo": 0.9349,
+    "hi": 0.9979
    }
   },
   "aliasing": {
@@ -6613,29 +7418,29 @@
  },
  "languages": {
   "committed-list": {
-   "cases": 8,
+   "cases": 9,
    "expected_abstain": 1,
    "expected_unsupported": 0,
    "abstention": {
     "k": 1,
-    "n": 8,
-    "p": 0.125,
-    "lo": 0.0224,
-    "hi": 0.4709
+    "n": 9,
+    "p": 0.1111,
+    "lo": 0.0199,
+    "hi": 0.435
    },
    "unsupported": {
     "k": 1,
-    "n": 8,
-    "p": 0.125,
-    "lo": 0.0224,
-    "hi": 0.4709
+    "n": 9,
+    "p": 0.1111,
+    "lo": 0.0199,
+    "hi": 0.435
    },
    "outcome_accuracy": {
-    "k": 7,
-    "n": 8,
-    "p": 0.875,
-    "lo": 0.5291,
-    "hi": 0.9776
+    "k": 8,
+    "n": 9,
+    "p": 0.8889,
+    "lo": 0.565,
+    "hi": 0.9801
    }
   },
   "csharp": {
@@ -6665,28 +7470,28 @@
    }
   },
   "go": {
-   "cases": 10,
+   "cases": 11,
    "expected_abstain": 1,
    "expected_unsupported": 0,
    "abstention": {
     "k": 1,
-    "n": 10,
-    "p": 0.1,
-    "lo": 0.0179,
-    "hi": 0.4042
+    "n": 11,
+    "p": 0.0909,
+    "lo": 0.0162,
+    "hi": 0.3774
    },
    "unsupported": {
     "k": 0,
-    "n": 10,
+    "n": 11,
     "p": 0,
     "lo": 0,
-    "hi": 0.2775
+    "hi": 0.2588
    },
    "outcome_accuracy": {
-    "k": 10,
-    "n": 10,
+    "k": 11,
+    "n": 11,
     "p": 1,
-    "lo": 0.7225,
+    "lo": 0.7412,
     "hi": 1
    }
   },
@@ -6717,28 +7522,28 @@
    }
   },
   "javascript": {
-   "cases": 4,
+   "cases": 5,
    "expected_abstain": 0,
    "expected_unsupported": 0,
    "abstention": {
     "k": 0,
-    "n": 4,
+    "n": 5,
     "p": 0,
     "lo": 0,
-    "hi": 0.4899
+    "hi": 0.4345
    },
    "unsupported": {
     "k": 0,
-    "n": 4,
+    "n": 5,
     "p": 0,
     "lo": 0,
-    "hi": 0.4899
+    "hi": 0.4345
    },
    "outcome_accuracy": {
-    "k": 4,
-    "n": 4,
+    "k": 5,
+    "n": 5,
     "p": 1,
-    "lo": 0.5101,
+    "lo": 0.5655,
     "hi": 1
    }
   },
@@ -6795,29 +7600,29 @@
    }
   },
   "python": {
-   "cases": 14,
+   "cases": 15,
    "expected_abstain": 1,
    "expected_unsupported": 0,
    "abstention": {
     "k": 1,
-    "n": 14,
-    "p": 0.0714,
-    "lo": 0.0127,
-    "hi": 0.3147
+    "n": 15,
+    "p": 0.0667,
+    "lo": 0.0119,
+    "hi": 0.2982
    },
    "unsupported": {
     "k": 2,
-    "n": 14,
-    "p": 0.1429,
-    "lo": 0.0401,
-    "hi": 0.3994
+    "n": 15,
+    "p": 0.1333,
+    "lo": 0.0374,
+    "hi": 0.3788
    },
    "outcome_accuracy": {
-    "k": 12,
-    "n": 14,
-    "p": 0.8571,
-    "lo": 0.6006,
-    "hi": 0.9599
+    "k": 13,
+    "n": 15,
+    "p": 0.8667,
+    "lo": 0.6212,
+    "hi": 0.9626
    }
   },
   "ruby": {
@@ -6847,29 +7652,29 @@
    }
   },
   "rust": {
-   "cases": 8,
+   "cases": 9,
    "expected_abstain": 1,
    "expected_unsupported": 0,
    "abstention": {
     "k": 0,
-    "n": 8,
+    "n": 9,
     "p": 0,
     "lo": 0,
-    "hi": 0.3244
+    "hi": 0.2991
    },
    "unsupported": {
     "k": 0,
-    "n": 8,
+    "n": 9,
     "p": 0,
     "lo": 0,
-    "hi": 0.3244
+    "hi": 0.2991
    },
    "outcome_accuracy": {
-    "k": 7,
-    "n": 8,
-    "p": 0.875,
-    "lo": 0.5291,
-    "hi": 0.9776
+    "k": 8,
+    "n": 9,
+    "p": 0.8889,
+    "lo": 0.565,
+    "hi": 0.9801
    }
   },
   "swift": {
@@ -6929,44 +7734,67 @@
   {
    "id": "faulty-oracle/extra-tool-label",
    "label_is_wrong_because": "the list has only lookup_word; the label adds random_word",
+   "expected_disagreement": "reader-tools|fn|random_word",
    "caught": true,
    "disagreements": [
     "missed tool random_word"
+   ],
+   "keys": [
+    "reader-tools|fn|random_word"
    ]
   },
   {
    "id": "faulty-oracle/missed-poison-label",
    "label_is_wrong_because": "summarise says \"Ignore all previous instructions\"; the label claims no tool has the phrase",
+   "expected_disagreement": "sec-instruction-phrases|fp|summarise",
    "caught": true,
    "disagreements": [
     "sec-instruction-phrases raised on summarise (truth: not this check)",
     "grades capped at F with no blocking security finding labelled (security F, anthropic F, openai F)"
+   ],
+   "keys": [
+    "sec-instruction-phrases|fp|summarise",
+    "security-cap|fp|grades"
    ]
   },
   {
    "id": "faulty-oracle/phantom-finding-label",
    "label_is_wrong_because": "no description has an HTML comment; the label claims get_value has one",
+   "expected_disagreement": "sec-html-comment|fn|get_value",
    "caught": true,
    "disagreements": [
     "sec-html-comment missed on get_value"
+   ],
+   "keys": [
+    "sec-html-comment|fn|get_value"
    ]
   },
   {
    "id": "faulty-oracle/wrong-outcome",
    "label_is_wrong_because": "there is only one server; the label claims several",
+   "expected_disagreement": "outcome|fn|multiple->tools",
    "caught": true,
    "disagreements": [
     "outcome: expected multiple, got tools",
     "phantom tool single_status"
+   ],
+   "keys": [
+    "outcome|fn|multiple->tools",
+    "reader-tools|fp|single_status"
    ]
   },
   {
    "id": "faulty-oracle/wrong-tool-name",
    "label_is_wrong_because": "the first tool is list_labels; the label drops the s",
+   "expected_disagreement": "reader-tools|fn|list_label",
    "caught": true,
    "disagreements": [
     "missed tool list_label",
     "phantom tool list_labels"
+   ],
+   "keys": [
+    "reader-tools|fn|list_label",
+    "reader-tools|fp|list_labels"
    ]
   }
  ],
@@ -7022,6 +7850,11 @@
    "missed tool city_temperature",
    "missed tool city_humidity"
   ],
+  "javascript/poison-escapes": [
+   "sec-control-chars raised on title_case (truth: not this check)",
+   "sec-control-chars missed on color_text",
+   "sec-invisible-encoding missed on title_case"
+  ],
   "kotlin/sdk-add-tool": [
    "outcome: expected tools, got unsupported (mcp-check: no tool definitions found in <case> (scanned 0 of 0 source files, and the committed tool lists and MCPB manifests). Grade the live list instead: star)",
    "missed tool roll_die",
@@ -7055,6 +7888,14 @@
    "outcome: expected tools, got none (mcp-check: no tool definitions found in <case> (scanned 1 of 1 source files, and the committed tool lists and MCPB manifests). Grade the live list instead: star)",
    "missed tool to_celsius",
    "missed tool to_fahrenheit"
+  ],
+  "python/poison-escapes": [
+   "missed tool lookup_аccount",
+   "phantom tool lookup_u0430ccount",
+   "sec-control-chars missed on color_text",
+   "sec-homoglyph missed on lookup_аccount",
+   "sec-invisible-encoding missed on title_case",
+   "spec-name-charset missed on lookup_аccount"
   ],
   "real-world/cve-2025-6514-shape": [
    "gap-shell-injectable-url missed on connect_account"
@@ -7093,6 +7934,106 @@
    "outcome: expected tools, got none (mcp-check: no tool definitions found in <case> (scanned 1 of 1 source files, and the committed tool lists and MCPB manifests). Grade the live list instead: star)",
    "missed tool list_invoices",
    "missed tool list_customers"
+  ]
+ },
+ "disagreement_keys": {
+  "csharp/attribute-tools": [
+   "outcome|fn|tools->unsupported",
+   "reader-tools|fn|echo_text",
+   "reader-tools|fn|reverse_text"
+  ],
+  "go/conditional-env": [
+   "reader-conditional|fn|suspend_tenant"
+  ],
+  "java/spring-tool-methods": [
+   "outcome|fn|tools->none",
+   "reader-tools|fn|city_humidity",
+   "reader-tools|fn|city_temperature"
+  ],
+  "javascript/poison-escapes": [
+   "sec-control-chars|fn|color_text",
+   "sec-control-chars|fp|title_case",
+   "sec-invisible-encoding|fn|title_case"
+  ],
+  "kotlin/sdk-add-tool": [
+   "outcome|fn|tools->unsupported",
+   "reader-tools|fn|flip_coin",
+   "reader-tools|fn|roll_die"
+  ],
+  "lists/checks-schemas": [
+   "annot-write-marked-readonly|fp|resolve_names"
+  ],
+  "lists/malformed-entry": [
+   "outcome|fn|tools->none",
+   "reader-tools|fn|ping_host",
+   "reader-tools|fn|traceroute_host",
+   "spec-input-schema-missing|fn|ping_host"
+  ],
+  "php/attribute-tools": [
+   "outcome|fn|tools->unsupported",
+   "reader-tools|fn|add_integers",
+   "reader-tools|fn|subtract_integers"
+  ],
+  "python/class-methods": [
+   "outcome|fn|tools->none",
+   "reader-tools|fn|bearing_deg",
+   "reader-tools|fn|distance_km"
+  ],
+  "python/docstring-unicode-escape": [
+   "reader-description|fn|list_folders",
+   "sec-bidi-controls|fn|list_folders",
+   "security-cap|fn|grades"
+  ],
+  "python/generated-loop": [
+   "outcome|fn|tools->none",
+   "reader-tools|fn|to_celsius",
+   "reader-tools|fn|to_fahrenheit"
+  ],
+  "python/poison-escapes": [
+   "reader-tools|fn|lookup_аccount",
+   "reader-tools|fp|lookup_u0430ccount",
+   "sec-control-chars|fn|color_text",
+   "sec-homoglyph|fn|lookup_аccount",
+   "sec-invisible-encoding|fn|title_case",
+   "spec-name-charset|fn|lookup_аccount"
+  ],
+  "real-world/cve-2025-6514-shape": [
+   "gap-shell-injectable-url|fn|connect_account"
+  ],
+  "ruby/tool-classes": [
+   "outcome|fn|tools->unsupported",
+   "reader-tools|fn|host_uptime",
+   "reader-tools|fn|ping_host"
+  ],
+  "rust/two-handlers": [
+   "outcome|fn|multiple->tools",
+   "reader-tools|fp|alpha_status",
+   "reader-tools|fp|beta_status"
+  ],
+  "swift/sdk-tools": [
+   "outcome|fn|tools->unsupported",
+   "reader-tools|fn|unix_time",
+   "reader-tools|fn|utc_now"
+  ],
+  "typescript/alias-server-variable": [
+   "reader-tools|fn|ping_service"
+  ],
+  "typescript/duplicate-and-bad-names": [
+   "openai-name-unique|fn|(list)",
+   "spec-name-unique|fn|(list)"
+  ],
+  "typescript/factory-function": [
+   "reader-annotations|fn|get_key",
+   "reader-annotations|fn|touch_key",
+   "reader-params|fn|get_key",
+   "reader-params|fn|touch_key",
+   "reader-required|fn|get_key",
+   "reader-required|fn|touch_key"
+  ],
+  "typescript/generated-template-names": [
+   "outcome|fn|tools->none",
+   "reader-tools|fn|list_customers",
+   "reader-tools|fn|list_invoices"
   ]
  }
 }

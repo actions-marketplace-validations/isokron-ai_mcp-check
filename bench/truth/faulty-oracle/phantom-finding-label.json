@@ -15,5 +15,6 @@
       "get_value"
     ]
   },
-  "faulty_oracle": "no description has an HTML comment; the label claims get_value has one"
+  "faulty_oracle": "no description has an HTML comment; the label claims get_value has one",
+  "expected_disagreement": "sec-html-comment|fn|get_value"
 }

@@ -2,16 +2,14 @@
 #
 # Puts about 170 small bugs into a temp copy of mcp-check's reader and check code (flipped conditions, dropped
 # registration patterns, weakened regular expressions, off-by-one numbers, swapped severities) and about 40 small
-# edits into the cases, and checks that the benchmark notices each one. Fails when a mutant on the kill list
-# (bench/mutants/expected.json) survives. The full set takes a few minutes on a hosted runner, so it runs in full:
-#   - weekly, and by hand;
-#   - on pull requests that change src/, engine/ or bench/ (other pull requests skip it with a notice).
+# edits into the cases, and checks that the release gate fails each one. Fails when a mutant on the kill list
+# (bench/mutants/expected.json) survives. On pull requests and pushes the same pass is the mutants job of ci.yml
+# (required by ci-ok); this workflow is the weekly run, and a manual one.
 # Nothing is run but mcp-check itself, on files in this repository. No secrets, read-only token.
 
 name: bench-mutants
 
 on:
-  pull_request:
   schedule:
     - cron: "23 5 * * 1"
   workflow_dispatch:
@@ -21,7 +19,7 @@ permissions:
 
 concurrency:
   group: bench-mutants-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: false
 
 jobs:
   mutants:
@@ -31,30 +29,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          fetch-depth: 0
-      - name: Does this change touch reader, check or benchmark code?
-        id: scope
-        env:
-          EVENT: ${{ github.event_name }}
-          BASE_REF: ${{ github.base_ref }}
-        run: |
-          if [ "$EVENT" != pull_request ]; then echo "run=true" >> "$GITHUB_OUTPUT"; exit 0; fi
-          [[ "$BASE_REF" =~ ^[A-Za-z0-9._/-]+$ ]] || { echo "::error::unexpected base ref"; exit 1; }
-          if git diff --name-only "origin/$BASE_REF...HEAD" | grep -qE '^(src/|engine/|bench/)'; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "::notice::no change under src/, engine/ or bench/: the mutant pass is skipped"
-            echo "run=false" >> "$GITHUB_OUTPUT"
-          fi
-      - if: steps.scope.outputs.run == 'true'
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22"
-      - if: steps.scope.outputs.run == 'true'
-        run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npm ci --ignore-scripts --no-audit --no-fund
       - name: The mutant pass
-        if: steps.scope.outputs.run == 'true'
         run: node bench/mutate.mjs --jobs 4 --json mutants.json --md mutants.md
       - name: The result in the job summary
-        if: always() && steps.scope.outputs.run == 'true'
+        if: always()
         run: test -f mutants.md && cat mutants.md >> "$GITHUB_STEP_SUMMARY" || true

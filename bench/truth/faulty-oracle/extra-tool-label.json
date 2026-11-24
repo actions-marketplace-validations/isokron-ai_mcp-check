@@ -10,5 +10,6 @@
     "lookup_word",
     "random_word"
   ],
-  "faulty_oracle": "the list has only lookup_word; the label adds random_word"
+  "faulty_oracle": "the list has only lookup_word; the label adds random_word",
+  "expected_disagreement": "reader-tools|fn|random_word"
 }

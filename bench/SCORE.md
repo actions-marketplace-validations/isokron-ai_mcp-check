@@ -1,14 +1,50 @@
 # mcp-check benchmark score
 
-75 cases with trusted labels, plus 5 faulty-oracle cases (labels deliberately wrong, scored apart). Intervals are Wilson 95%.
+80 cases with trusted labels, plus 5 faulty-oracle cases (labels deliberately wrong, scored apart). Intervals are Wilson 95%.
 
-## Per check
+## Per check: measured against hand-written labels
+
+Every positive of these checks comes from a case whose labels were written by hand from its source (some also have positives from inferred cases).
 
 | Check | TP | FP | FN | TN | Precision | Recall |
 |---|---:|---:|---:|---:|---|---|
-| `abstain` | 4 | 0 | 1 | 70 | 100.0% [51.0–100.0] | 80.0% [37.5–96.4] |
-| `annot-delete-marked-safe` | 3 | 0 | 0 | 153 | 100.0% [43.9–100.0] | 100.0% [43.9–100.0] |
-| `annot-write-marked-readonly` | 3 | 1 | 0 | 152 | 75.0% [30.1–95.4] | 100.0% [43.9–100.0] |
+| `abstain` | 4 | 0 | 1 | 75 | 100.0% [51.0–100.0] | 80.0% [37.5–96.4] |
+| `annot-delete-marked-safe` | 3 | 0 | 0 | 203 | 100.0% [43.9–100.0] | 100.0% [43.9–100.0] |
+| `annot-write-marked-readonly` | 3 | 1 | 0 | 202 | 75.0% [30.1–95.4] | 100.0% [43.9–100.0] |
+| `gap-shell-injectable-url` | 0 | 0 | 1 | 1 | n/a | 0.0% [0.0–79.3] |
+| `openai-name-unique` | 1 | 0 | 1 | 72 | 100.0% [20.6–100.0] | 50.0% [9.4–90.5] |
+| `outcome` | 69 | 0 | 11 | 0 | 100.0% [94.7–100.0] | 86.3% [77.0–92.2] |
+| `reader-annotations` | 112 | 0 | 2 | 0 | 100.0% [96.7–100.0] | 98.3% [93.8–99.5] |
+| `reader-conditional` | 2 | 0 | 1 | 0 | 100.0% [34.2–100.0] | 66.7% [20.8–93.8] |
+| `reader-description` | 113 | 0 | 1 | 0 | 100.0% [96.7–100.0] | 99.1% [95.2–99.8] |
+| `reader-params` | 112 | 0 | 2 | 0 | 100.0% [96.7–100.0] | 98.3% [93.8–99.5] |
+| `reader-required` | 112 | 0 | 2 | 0 | 100.0% [96.7–100.0] | 98.3% [93.8–99.5] |
+| `reader-tools` | 181 | 3 | 22 | 0 | 98.4% [95.3–99.4] | 89.2% [84.1–92.7] |
+| `sec-bidi-controls` | 6 | 0 | 1 | 199 | 100.0% [61.0–100.0] | 85.7% [48.7–97.4] |
+| `sec-control-chars` | 3 | 1 | 2 | 200 | 75.0% [30.1–95.4] | 60.0% [23.1–88.2] |
+| `sec-cross-tool-steering` | 3 | 0 | 0 | 203 | 100.0% [43.9–100.0] | 100.0% [43.9–100.0] |
+| `sec-encoded-blob` | 6 | 0 | 0 | 200 | 100.0% [61.0–100.0] | 100.0% [61.0–100.0] |
+| `sec-external-instructions` | 6 | 0 | 0 | 200 | 100.0% [61.0–100.0] | 100.0% [61.0–100.0] |
+| `sec-homoglyph` | 7 | 0 | 1 | 198 | 100.0% [64.6–100.0] | 87.5% [52.9–97.8] |
+| `sec-html-comment` | 6 | 0 | 0 | 200 | 100.0% [61.0–100.0] | 100.0% [61.0–100.0] |
+| `sec-instruction-markup` | 3 | 0 | 0 | 203 | 100.0% [43.9–100.0] | 100.0% [43.9–100.0] |
+| `sec-instruction-phrases` | 7 | 0 | 0 | 199 | 100.0% [64.6–100.0] | 100.0% [64.6–100.0] |
+| `sec-invisible-encoding` | 3 | 0 | 2 | 201 | 100.0% [43.9–100.0] | 60.0% [23.1–88.2] |
+| `sec-secret-seeking` | 7 | 0 | 0 | 199 | 100.0% [64.6–100.0] | 100.0% [64.6–100.0] |
+| `sec-zero-width` | 6 | 0 | 0 | 200 | 100.0% [61.0–100.0] | 100.0% [61.0–100.0] |
+| `security-cap` | 15 | 0 | 1 | 48 | 100.0% [79.6–100.0] | 93.8% [71.7–98.9] |
+| `severity` | 217 | 0 | 0 | 0 | 100.0% [98.3–100.0] | 100.0% [98.3–100.0] |
+| `spec-input-schema-missing` | 0 | 0 | 1 | 1 | n/a | 0.0% [0.0–79.3] |
+| `spec-name-charset` | 3 | 0 | 1 | 202 | 100.0% [43.9–100.0] | 75.0% [30.1–95.4] |
+| `spec-name-length` | 2 | 0 | 0 | 204 | 100.0% [34.2–100.0] | 100.0% [34.2–100.0] |
+| `spec-name-unique` | 1 | 0 | 1 | 72 | 100.0% [20.6–100.0] | 50.0% [9.4–90.5] |
+
+## Per check: inferred labels, self-consistency only
+
+Every positive of these checks comes from a `truth_level: inferred` case, whose labels were drafted from the engine's own output and then checked by hand. They show that a later build still agrees with this one, not that the check is right.
+
+| Check | TP | FP | FN | TN | Precision | Recall |
+|---|---:|---:|---:|---:|---|---|
 | `anthropic-conversation-data` | 1 | 0 | 0 | 6 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `anthropic-description` | 7 | 0 | 0 | 3 | 100.0% [64.6–100.0] | 100.0% [64.6–100.0] |
 | `anthropic-hint` | 6 | 0 | 0 | 2 | 100.0% [61.0–100.0] | 100.0% [61.0–100.0] |
@@ -16,23 +52,14 @@
 | `anthropic-title` | 14 | 0 | 0 | 0 | 100.0% [78.5–100.0] | 100.0% [78.5–100.0] |
 | `anthropic-unsupported-use` | 1 | 0 | 0 | 6 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `design-use-when` | 34 | 0 | 0 | 2 | 100.0% [89.8–100.0] | 100.0% [89.8–100.0] |
-| `gap-shell-injectable-url` | 0 | 0 | 1 | 1 | n/a | 0.0% [0.0–79.3] |
 | `openai-conversation-input` | 1 | 0 | 0 | 6 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `openai-generic-executor` | 1 | 0 | 0 | 6 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `openai-hints-explicit` | 14 | 0 | 0 | 8 | 100.0% [78.5–100.0] | 100.0% [78.5–100.0] |
 | `openai-name-promotional` | 1 | 0 | 0 | 1 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
-| `openai-name-unique` | 1 | 0 | 1 | 67 | 100.0% [20.6–100.0] | 50.0% [9.4–90.5] |
 | `openai-precise-location` | 1 | 0 | 0 | 6 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `openai-readonly-destructive` | 3 | 0 | 0 | 6 | 100.0% [43.9–100.0] | 100.0% [43.9–100.0] |
 | `openai-restricted-input` | 1 | 0 | 0 | 6 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `openai-retry` | 9 | 0 | 0 | 14 | 100.0% [70.1–100.0] | 100.0% [70.1–100.0] |
-| `outcome` | 64 | 0 | 11 | 0 | 100.0% [94.3–100.0] | 85.3% [75.6–91.6] |
-| `reader-annotations` | 112 | 0 | 2 | 0 | 100.0% [96.7–100.0] | 98.3% [93.8–99.5] |
-| `reader-conditional` | 2 | 0 | 1 | 0 | 100.0% [34.2–100.0] | 66.7% [20.8–93.8] |
-| `reader-description` | 113 | 0 | 1 | 0 | 100.0% [96.7–100.0] | 99.1% [95.2–99.8] |
-| `reader-params` | 112 | 0 | 2 | 0 | 100.0% [96.7–100.0] | 98.3% [93.8–99.5] |
-| `reader-required` | 112 | 0 | 2 | 0 | 100.0% [96.7–100.0] | 98.3% [93.8–99.5] |
-| `reader-tools` | 132 | 2 | 21 | 0 | 98.5% [94.7–99.6] | 86.3% [79.9–90.8] |
 | `reader-unreadable` | 3 | 0 | 0 | 0 | 100.0% [43.9–100.0] | 100.0% [43.9–100.0] |
 | `schema-additional-properties` | 2 | 0 | 0 | 3 | 100.0% [34.2–100.0] | 100.0% [34.2–100.0] |
 | `schema-enum-missing` | 1 | 0 | 0 | 4 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
@@ -43,31 +70,20 @@
 | `schema-required-unknown` | 1 | 0 | 0 | 4 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `schema-response-format` | 2 | 0 | 0 | 5 | 100.0% [34.2–100.0] | 100.0% [34.2–100.0] |
 | `schema-vague-param` | 3 | 0 | 0 | 7 | 100.0% [43.9–100.0] | 100.0% [43.9–100.0] |
-| `sec-bidi-controls` | 1 | 0 | 1 | 154 | 100.0% [20.6–100.0] | 50.0% [9.4–90.5] |
-| `sec-control-chars` | 0 | 0 | 0 | 156 | n/a | n/a |
-| `sec-cross-tool-steering` | 3 | 0 | 0 | 153 | 100.0% [43.9–100.0] | 100.0% [43.9–100.0] |
-| `sec-encoded-blob` | 1 | 0 | 0 | 155 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
-| `sec-external-instructions` | 1 | 0 | 0 | 155 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
-| `sec-homoglyph` | 0 | 0 | 0 | 156 | n/a | n/a |
-| `sec-html-comment` | 1 | 0 | 0 | 155 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
-| `sec-instruction-markup` | 3 | 0 | 0 | 153 | 100.0% [43.9–100.0] | 100.0% [43.9–100.0] |
-| `sec-instruction-phrases` | 7 | 0 | 0 | 149 | 100.0% [64.6–100.0] | 100.0% [64.6–100.0] |
-| `sec-invisible-encoding` | 0 | 0 | 0 | 156 | n/a | n/a |
-| `sec-secret-seeking` | 2 | 0 | 0 | 154 | 100.0% [34.2–100.0] | 100.0% [34.2–100.0] |
-| `sec-zero-width` | 1 | 0 | 0 | 155 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
-| `security-cap` | 10 | 0 | 1 | 48 | 100.0% [72.3–100.0] | 90.9% [62.3–98.4] |
-| `severity` | 170 | 0 | 0 | 0 | 100.0% [97.8–100.0] | 100.0% [97.8–100.0] |
 | `spec-input-schema-field-name` | 1 | 0 | 0 | 4 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
-| `spec-input-schema-missing` | 0 | 0 | 1 | 1 | n/a | 0.0% [0.0–79.3] |
 | `spec-input-schema-root-object` | 1 | 0 | 0 | 4 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `spec-meta-key` | 1 | 0 | 0 | 1 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `spec-meta-reserved` | 1 | 0 | 0 | 1 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
-| `spec-name-charset` | 1 | 0 | 0 | 155 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
-| `spec-name-length` | 0 | 0 | 0 | 156 | n/a | n/a |
-| `spec-name-unique` | 1 | 0 | 1 | 67 | 100.0% [20.6–100.0] | 50.0% [9.4–90.5] |
 | `surface-delete-guard` | 2 | 0 | 0 | 5 | 100.0% [34.2–100.0] | 100.0% [34.2–100.0] |
 | `surface-retry-key` | 3 | 0 | 0 | 12 | 100.0% [43.9–100.0] | 100.0% [43.9–100.0] |
 | `surface-version-guard` | 5 | 0 | 0 | 10 | 100.0% [56.5–100.0] | 100.0% [56.5–100.0] |
+
+## Per check: no positive case
+
+Only false positives can be measured for these.
+
+| Check | TP | FP | FN | TN | Precision | Recall |
+|---|---:|---:|---:|---:|---|---|
 
 ## Per check and language
 
@@ -128,16 +144,16 @@
 | `openai-retry` | python | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `openai-retry` | rust | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `openai-retry` | typescript | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
-| `outcome` | committed-list | 7 | 0 | 1 | 100.0% [64.6–100.0] | 87.5% [52.9–97.8] |
+| `outcome` | committed-list | 8 | 0 | 1 | 100.0% [67.6–100.0] | 88.9% [56.5–98.0] |
 | `outcome` | csharp | 0 | 0 | 1 | n/a | 0.0% [0.0–79.3] |
-| `outcome` | go | 10 | 0 | 0 | 100.0% [72.3–100.0] | 100.0% [72.3–100.0] |
+| `outcome` | go | 11 | 0 | 0 | 100.0% [74.1–100.0] | 100.0% [74.1–100.0] |
 | `outcome` | java | 0 | 0 | 1 | n/a | 0.0% [0.0–79.3] |
-| `outcome` | javascript | 4 | 0 | 0 | 100.0% [51.0–100.0] | 100.0% [51.0–100.0] |
+| `outcome` | javascript | 5 | 0 | 0 | 100.0% [56.5–100.0] | 100.0% [56.5–100.0] |
 | `outcome` | kotlin | 0 | 0 | 1 | n/a | 0.0% [0.0–79.3] |
 | `outcome` | php | 0 | 0 | 1 | n/a | 0.0% [0.0–79.3] |
-| `outcome` | python | 12 | 0 | 2 | 100.0% [75.8–100.0] | 85.7% [60.1–96.0] |
+| `outcome` | python | 13 | 0 | 2 | 100.0% [77.2–100.0] | 86.7% [62.1–96.3] |
 | `outcome` | ruby | 0 | 0 | 1 | n/a | 0.0% [0.0–79.3] |
-| `outcome` | rust | 7 | 0 | 1 | 100.0% [64.6–100.0] | 87.5% [52.9–97.8] |
+| `outcome` | rust | 8 | 0 | 1 | 100.0% [67.6–100.0] | 88.9% [56.5–98.0] |
 | `outcome` | swift | 0 | 0 | 1 | n/a | 0.0% [0.0–79.3] |
 | `outcome` | typescript | 24 | 0 | 1 | 100.0% [86.2–100.0] | 96.0% [80.5–99.3] |
 | `reader-annotations` | committed-list | 4 | 0 | 0 | 100.0% [51.0–100.0] | 100.0% [51.0–100.0] |
@@ -167,16 +183,16 @@
 | `reader-required` | python | 24 | 0 | 0 | 100.0% [86.2–100.0] | 100.0% [86.2–100.0] |
 | `reader-required` | rust | 13 | 0 | 0 | 100.0% [77.2–100.0] | 100.0% [77.2–100.0] |
 | `reader-required` | typescript | 45 | 0 | 2 | 100.0% [92.1–100.0] | 95.7% [85.8–98.8] |
-| `reader-tools` | committed-list | 23 | 0 | 2 | 100.0% [85.7–100.0] | 92.0% [75.0–97.8] |
+| `reader-tools` | committed-list | 34 | 0 | 2 | 100.0% [89.8–100.0] | 94.4% [81.9–98.5] |
 | `reader-tools` | csharp | 0 | 0 | 2 | n/a | 0.0% [0.0–65.8] |
-| `reader-tools` | go | 17 | 0 | 0 | 100.0% [81.6–100.0] | 100.0% [81.6–100.0] |
+| `reader-tools` | go | 27 | 0 | 0 | 100.0% [87.5–100.0] | 100.0% [87.5–100.0] |
 | `reader-tools` | java | 0 | 0 | 2 | n/a | 0.0% [0.0–65.8] |
-| `reader-tools` | javascript | 8 | 0 | 0 | 100.0% [67.6–100.0] | 100.0% [67.6–100.0] |
+| `reader-tools` | javascript | 18 | 0 | 0 | 100.0% [82.4–100.0] | 100.0% [82.4–100.0] |
 | `reader-tools` | kotlin | 0 | 0 | 2 | n/a | 0.0% [0.0–65.8] |
 | `reader-tools` | php | 0 | 0 | 2 | n/a | 0.0% [0.0–65.8] |
-| `reader-tools` | python | 23 | 0 | 4 | 100.0% [85.7–100.0] | 85.2% [67.5–94.1] |
+| `reader-tools` | python | 32 | 1 | 5 | 97.0% [84.7–99.5] | 86.5% [72.0–94.1] |
 | `reader-tools` | ruby | 0 | 0 | 2 | n/a | 0.0% [0.0–65.8] |
-| `reader-tools` | rust | 13 | 2 | 0 | 86.7% [62.1–96.3] | 100.0% [77.2–100.0] |
+| `reader-tools` | rust | 22 | 2 | 0 | 91.7% [74.2–97.7] | 100.0% [85.1–100.0] |
 | `reader-tools` | swift | 0 | 0 | 2 | n/a | 0.0% [0.0–65.8] |
 | `reader-tools` | typescript | 48 | 0 | 3 | 100.0% [92.6–100.0] | 94.1% [84.1–98.0] |
 | `reader-unreadable` | typescript | 3 | 0 | 0 | 100.0% [43.9–100.0] | 100.0% [43.9–100.0] |
@@ -200,13 +216,42 @@
 | `schema-vague-param` | committed-list | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `schema-vague-param` | javascript | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `schema-vague-param` | typescript | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
-| `sec-bidi-controls` | python | 0 | 0 | 1 | n/a | 0.0% [0.0–79.3] |
+| `sec-bidi-controls` | committed-list | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
+| `sec-bidi-controls` | go | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
+| `sec-bidi-controls` | javascript | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
+| `sec-bidi-controls` | python | 1 | 0 | 1 | 100.0% [20.6–100.0] | 50.0% [9.4–90.5] |
+| `sec-bidi-controls` | rust | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `sec-bidi-controls` | typescript | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
+| `sec-control-chars` | committed-list | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
+| `sec-control-chars` | go | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
+| `sec-control-chars` | javascript | 0 | 1 | 1 | 0.0% [0.0–79.3] | 0.0% [0.0–79.3] |
+| `sec-control-chars` | python | 0 | 0 | 1 | n/a | 0.0% [0.0–79.3] |
+| `sec-control-chars` | rust | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `sec-cross-tool-steering` | go | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `sec-cross-tool-steering` | javascript | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `sec-cross-tool-steering` | typescript | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
+| `sec-encoded-blob` | committed-list | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
+| `sec-encoded-blob` | go | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
+| `sec-encoded-blob` | javascript | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
+| `sec-encoded-blob` | python | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
+| `sec-encoded-blob` | rust | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `sec-encoded-blob` | typescript | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
+| `sec-external-instructions` | committed-list | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
+| `sec-external-instructions` | go | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
+| `sec-external-instructions` | javascript | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
+| `sec-external-instructions` | python | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
+| `sec-external-instructions` | rust | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `sec-external-instructions` | typescript | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
+| `sec-homoglyph` | committed-list | 2 | 0 | 0 | 100.0% [34.2–100.0] | 100.0% [34.2–100.0] |
+| `sec-homoglyph` | go | 2 | 0 | 0 | 100.0% [34.2–100.0] | 100.0% [34.2–100.0] |
+| `sec-homoglyph` | javascript | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
+| `sec-homoglyph` | python | 1 | 0 | 1 | 100.0% [20.6–100.0] | 50.0% [9.4–90.5] |
+| `sec-homoglyph` | rust | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
+| `sec-html-comment` | committed-list | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
+| `sec-html-comment` | go | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
+| `sec-html-comment` | javascript | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
+| `sec-html-comment` | python | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
+| `sec-html-comment` | rust | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `sec-html-comment` | typescript | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `sec-instruction-markup` | python | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `sec-instruction-markup` | rust | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
@@ -216,26 +261,46 @@
 | `sec-instruction-phrases` | python | 2 | 0 | 0 | 100.0% [34.2–100.0] | 100.0% [34.2–100.0] |
 | `sec-instruction-phrases` | rust | 2 | 0 | 0 | 100.0% [34.2–100.0] | 100.0% [34.2–100.0] |
 | `sec-instruction-phrases` | typescript | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
-| `sec-secret-seeking` | python | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
+| `sec-invisible-encoding` | committed-list | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
+| `sec-invisible-encoding` | go | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
+| `sec-invisible-encoding` | javascript | 0 | 0 | 1 | n/a | 0.0% [0.0–79.3] |
+| `sec-invisible-encoding` | python | 0 | 0 | 1 | n/a | 0.0% [0.0–79.3] |
+| `sec-invisible-encoding` | rust | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
+| `sec-secret-seeking` | committed-list | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
+| `sec-secret-seeking` | go | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
+| `sec-secret-seeking` | javascript | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
+| `sec-secret-seeking` | python | 2 | 0 | 0 | 100.0% [34.2–100.0] | 100.0% [34.2–100.0] |
+| `sec-secret-seeking` | rust | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `sec-secret-seeking` | typescript | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
+| `sec-zero-width` | committed-list | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
+| `sec-zero-width` | go | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
+| `sec-zero-width` | javascript | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
+| `sec-zero-width` | python | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
+| `sec-zero-width` | rust | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `sec-zero-width` | typescript | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
-| `security-cap` | committed-list | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
-| `security-cap` | go | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
-| `security-cap` | python | 2 | 0 | 1 | 100.0% [34.2–100.0] | 66.7% [20.8–93.8] |
-| `security-cap` | rust | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
+| `security-cap` | committed-list | 2 | 0 | 0 | 100.0% [34.2–100.0] | 100.0% [34.2–100.0] |
+| `security-cap` | go | 2 | 0 | 0 | 100.0% [34.2–100.0] | 100.0% [34.2–100.0] |
+| `security-cap` | javascript | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
+| `security-cap` | python | 3 | 0 | 1 | 100.0% [43.9–100.0] | 75.0% [30.1–95.4] |
+| `security-cap` | rust | 2 | 0 | 0 | 100.0% [34.2–100.0] | 100.0% [34.2–100.0] |
 | `security-cap` | typescript | 5 | 0 | 0 | 100.0% [56.5–100.0] | 100.0% [56.5–100.0] |
-| `severity` | committed-list | 58 | 0 | 0 | 100.0% [93.8–100.0] | 100.0% [93.8–100.0] |
-| `severity` | go | 24 | 0 | 0 | 100.0% [86.2–100.0] | 100.0% [86.2–100.0] |
-| `severity` | javascript | 15 | 0 | 0 | 100.0% [79.6–100.0] | 100.0% [79.6–100.0] |
-| `severity` | python | 29 | 0 | 0 | 100.0% [88.3–100.0] | 100.0% [88.3–100.0] |
-| `severity` | rust | 13 | 0 | 0 | 100.0% [77.2–100.0] | 100.0% [77.2–100.0] |
+| `severity` | committed-list | 70 | 0 | 0 | 100.0% [94.8–100.0] | 100.0% [94.8–100.0] |
+| `severity` | go | 35 | 0 | 0 | 100.0% [90.1–100.0] | 100.0% [90.1–100.0] |
+| `severity` | javascript | 23 | 0 | 0 | 100.0% [85.7–100.0] | 100.0% [85.7–100.0] |
+| `severity` | python | 36 | 0 | 0 | 100.0% [90.4–100.0] | 100.0% [90.4–100.0] |
+| `severity` | rust | 22 | 0 | 0 | 100.0% [85.1–100.0] | 100.0% [85.1–100.0] |
 | `severity` | typescript | 31 | 0 | 0 | 100.0% [89.0–100.0] | 100.0% [89.0–100.0] |
 | `spec-input-schema-field-name` | committed-list | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `spec-input-schema-missing` | committed-list | 0 | 0 | 1 | n/a | 0.0% [0.0–79.3] |
 | `spec-input-schema-root-object` | committed-list | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `spec-meta-key` | committed-list | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `spec-meta-reserved` | committed-list | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
+| `spec-name-charset` | committed-list | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
+| `spec-name-charset` | go | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
+| `spec-name-charset` | python | 0 | 0 | 1 | n/a | 0.0% [0.0–79.3] |
 | `spec-name-charset` | typescript | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
+| `spec-name-length` | committed-list | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
+| `spec-name-length` | javascript | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `spec-name-unique` | committed-list | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `spec-name-unique` | typescript | 0 | 0 | 1 | n/a | 0.0% [0.0–79.3] |
 | `surface-delete-guard` | committed-list | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
@@ -252,16 +317,16 @@ Rows with no positive and no finding in a language are left out of this table; t
 
 | Language | Cases | Outcome right | Abstained (observed) | Abstain expected | Unsupported or none (observed) | Unsupported expected |
 |---|---:|---|---|---:|---|---:|
-| committed-list | 8 | 87.5% [52.9–97.8] | 12.5% [2.2–47.1] | 1 | 12.5% [2.2–47.1] | 0 |
+| committed-list | 9 | 88.9% [56.5–98.0] | 11.1% [2.0–43.5] | 1 | 11.1% [2.0–43.5] | 0 |
 | csharp | 1 | 0.0% [0.0–79.3] | 0.0% [0.0–79.3] | 0 | 100.0% [20.6–100.0] | 0 |
-| go | 10 | 100.0% [72.3–100.0] | 10.0% [1.8–40.4] | 1 | 0.0% [0.0–27.8] | 0 |
+| go | 11 | 100.0% [74.1–100.0] | 9.1% [1.6–37.7] | 1 | 0.0% [0.0–25.9] | 0 |
 | java | 1 | 0.0% [0.0–79.3] | 0.0% [0.0–79.3] | 0 | 100.0% [20.6–100.0] | 0 |
-| javascript | 4 | 100.0% [51.0–100.0] | 0.0% [0.0–49.0] | 0 | 0.0% [0.0–49.0] | 0 |
+| javascript | 5 | 100.0% [56.5–100.0] | 0.0% [0.0–43.5] | 0 | 0.0% [0.0–43.5] | 0 |
 | kotlin | 1 | 0.0% [0.0–79.3] | 0.0% [0.0–79.3] | 0 | 100.0% [20.6–100.0] | 0 |
 | php | 1 | 0.0% [0.0–79.3] | 0.0% [0.0–79.3] | 0 | 100.0% [20.6–100.0] | 0 |
-| python | 14 | 85.7% [60.1–96.0] | 7.1% [1.3–31.5] | 1 | 14.3% [4.0–39.9] | 0 |
+| python | 15 | 86.7% [62.1–96.3] | 6.7% [1.2–29.8] | 1 | 13.3% [3.7–37.9] | 0 |
 | ruby | 1 | 0.0% [0.0–79.3] | 0.0% [0.0–79.3] | 0 | 100.0% [20.6–100.0] | 0 |
-| rust | 8 | 87.5% [52.9–97.8] | 0.0% [0.0–32.4] | 1 | 0.0% [0.0–32.4] | 0 |
+| rust | 9 | 88.9% [56.5–98.0] | 0.0% [0.0–29.9] | 1 | 0.0% [0.0–29.9] | 0 |
 | swift | 1 | 0.0% [0.0–79.3] | 0.0% [0.0–79.3] | 0 | 100.0% [20.6–100.0] | 0 |
 | typescript | 25 | 96.0% [80.5–99.3] | 4.0% [0.7–19.5] | 1 | 8.0% [2.2–25.0] | 1 |
 
@@ -269,7 +334,7 @@ Rows with no positive and no finding in a language are left out of this table; t
 
 | Idiom | TP | FP | FN | Precision | Recall |
 |---|---:|---:|---:|---|---|
-| adversarial | 33 | 0 | 0 | 100.0% [89.6–100.0] | 100.0% [89.6–100.0] |
+| adversarial | 82 | 1 | 1 | 98.8% [93.5–99.8] | 98.8% [93.5–99.8] |
 | aliasing | 3 | 0 | 1 | 100.0% [43.9–100.0] | 75.0% [30.1–95.4] |
 | conditional | 5 | 0 | 0 | 100.0% [56.5–100.0] | 100.0% [56.5–100.0] |
 | decorator | 17 | 0 | 6 | 100.0% [81.6–100.0] | 73.9% [53.5–87.5] |
@@ -290,13 +355,13 @@ Rows with no positive and no finding in a language are left out of this table; t
 
 Each of these has a label that is wrong on purpose. The scorer must disagree with it; a case marked NOT CAUGHT means the scorer echoed the label.
 
-| Case | Caught | Why the label is wrong | What the scorer said |
-|---|---|---|---|
-| faulty-oracle/extra-tool-label | yes | the list has only lookup_word; the label adds random_word | missed tool random_word |
-| faulty-oracle/missed-poison-label | yes | summarise says "Ignore all previous instructions"; the label claims no tool has the phrase | sec-instruction-phrases raised on summarise (truth: not this check); grades capped at F with no blocking security finding labelled (security F, anthropic F, openai F) |
-| faulty-oracle/phantom-finding-label | yes | no description has an HTML comment; the label claims get_value has one | sec-html-comment missed on get_value |
-| faulty-oracle/wrong-outcome | yes | there is only one server; the label claims several | outcome: expected multiple, got tools; phantom tool single_status |
-| faulty-oracle/wrong-tool-name | yes | the first tool is list_labels; the label drops the s | missed tool list_label; phantom tool list_labels |
+| Case | Caught | Why the label is wrong | Disagreement required | What the scorer said |
+|---|---|---|---|---|
+| faulty-oracle/extra-tool-label | yes | the list has only lookup_word; the label adds random_word | `reader-tools\|fn\|random_word` | missed tool random_word |
+| faulty-oracle/missed-poison-label | yes | summarise says "Ignore all previous instructions"; the label claims no tool has the phrase | `sec-instruction-phrases\|fp\|summarise` | sec-instruction-phrases raised on summarise (truth: not this check); grades capped at F with no blocking security finding labelled (security F, anthropic F, openai F) |
+| faulty-oracle/phantom-finding-label | yes | no description has an HTML comment; the label claims get_value has one | `sec-html-comment\|fn\|get_value` | sec-html-comment missed on get_value |
+| faulty-oracle/wrong-outcome | yes | there is only one server; the label claims several | `outcome\|fn\|multiple->tools` | outcome: expected multiple, got tools; phantom tool single_status |
+| faulty-oracle/wrong-tool-name | yes | the first tool is list_labels; the label drops the s | `reader-tools\|fn\|list_label` | missed tool list_label; phantom tool list_labels |
 
 ## Known gaps
 
@@ -307,6 +372,7 @@ Each of these has a label that is wrong on purpose. The scorer must disagree wit
 - **csharp/attribute-tools**: outcome: expected tools, got unsupported (mcp-check: no tool definitions found in <case> (scanned 0 of 0 source files, and the committed tool lists and MCPB manifests). Grade the live list instead: star); missed tool echo_text; missed tool reverse_text
 - **go/conditional-env**: suspend_tenant is registered under a condition but not marked conditional
 - **java/spring-tool-methods**: outcome: expected tools, got none (mcp-check: no tool definitions found in <case> (scanned 0 of 0 source files, and the committed tool lists and MCPB manifests). Grade the live list instead: star); missed tool city_temperature; missed tool city_humidity
+- **javascript/poison-escapes**: sec-control-chars raised on title_case (truth: not this check); sec-control-chars missed on color_text; sec-invisible-encoding missed on title_case
 - **kotlin/sdk-add-tool**: outcome: expected tools, got unsupported (mcp-check: no tool definitions found in <case> (scanned 0 of 0 source files, and the committed tool lists and MCPB manifests). Grade the live list instead: star); missed tool roll_die; missed tool flip_coin
 - **lists/checks-schemas**: annot-write-marked-readonly raised on resolve_names (truth: not this check)
 - **lists/malformed-entry**: outcome: expected tools, got none (mcp-check: no tool definitions found in <case> (scanned 0 of 0 source files, and the committed tool lists and MCPB manifests). Grade the live list instead: star); missed tool ping_host; missed tool traceroute_host; spec-input-schema-missing missed on ping_host
@@ -314,6 +380,7 @@ Each of these has a label that is wrong on purpose. The scorer must disagree wit
 - **python/class-methods**: outcome: expected tools, got none (mcp-check: no tool definitions found in <case> (scanned 1 of 1 source files, and the committed tool lists and MCPB manifests). Grade the live list instead: star); missed tool distance_km; missed tool bearing_deg
 - **python/docstring-unicode-escape**: sec-bidi-controls missed on list_folders; blocking security finding labelled, but the grades are not capped at F (security A, anthropic F, openai D); reader description of list_folders: expected "Lists the folders under a root.\u202eesrever\u202c", got "Lists the folders under a root.u202eesreveru202c"
 - **python/generated-loop**: outcome: expected tools, got none (mcp-check: no tool definitions found in <case> (scanned 1 of 1 source files, and the committed tool lists and MCPB manifests). Grade the live list instead: star); missed tool to_celsius; missed tool to_fahrenheit
+- **python/poison-escapes**: missed tool lookup_аccount; phantom tool lookup_u0430ccount; sec-control-chars missed on color_text; sec-homoglyph missed on lookup_аccount; sec-invisible-encoding missed on title_case; spec-name-charset missed on lookup_аccount
 - **real-world/cve-2025-6514-shape**: gap-shell-injectable-url missed on connect_account
 - **ruby/tool-classes**: outcome: expected tools, got unsupported (mcp-check: no tool definitions found in <case> (scanned 0 of 0 source files, and the committed tool lists and MCPB manifests). Grade the live list instead: star); missed tool ping_host; missed tool host_uptime
 - **rust/two-handlers**: outcome: expected multiple, got tools; phantom tool alpha_status; phantom tool beta_status

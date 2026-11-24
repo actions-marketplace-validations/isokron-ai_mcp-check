@@ -2,23 +2,25 @@
 
 ## Source mutants
 
-170 mutants ran; 51 killed, 119 survived: kill rate 30.0% [23.6–37.3]. 0 did not parse and are not counted.
+170 mutants ran; 52 killed, 118 survived: **gate-level kill rate 30.6% [24.1–37.9]**. A mutant is killed when the required CI gate (bench/gate.mjs) fails it, or the build crashes or hangs. 0 did not parse and are not counted.
 
-Mutants are drawn from code the cases execute: 8023 of 14738 candidate sites (54.4%) ran in an unmutated pass. Sites the cases never reach can hide any bug; per file:
+Of these, 51 caused a new disagreement with the truth in some case, or crashed or hung; 51 of those are gate kills (the gate fails on any new per-case disagreement, so this should be all of them).
+
+Mutants are drawn from code the cases execute: 8090 of 14738 candidate sites (54.9%) ran in an unmutated pass. Sites the cases never reach can hide any bug; per file:
 
 | File | Candidate sites | Executed by the cases |
 |---|---:|---:|
 | `src/inputs/repo-source.cjs` | 4755 | 3022 (63.6%) |
-| `src/inputs/repo-go.cjs` | 3775 | 1605 (42.5%) |
-| `src/inputs/repo-rust.cjs` | 3114 | 1171 (37.6%) |
+| `src/inputs/repo-go.cjs` | 3775 | 1624 (43.0%) |
+| `src/inputs/repo-rust.cjs` | 3114 | 1191 (38.2%) |
 | `src/inputs/collect.js` | 240 | 86 (35.8%) |
 | `src/unreadable.js` | 210 | 146 (69.5%) |
 | `src/tools.js` | 72 | 3 (4.2%) |
-| `engine/core.js` | 2572 | 1990 (77.4%) |
+| `engine/core.js` | 2572 | 2018 (78.5%) |
 
 | Kind | Ran | Killed | Survived |
 |---|---:|---:|---:|
-| flip-condition | 60 | 24 | 36 |
+| flip-condition | 60 | 25 | 35 |
 | drop-registration-pattern | 20 | 2 | 18 |
 | weaken-regex | 35 | 4 | 31 |
 | off-by-one | 25 | 9 | 16 |
@@ -31,7 +33,7 @@ Mutants are drawn from code the cases execute: 8023 of 14738 candidate sites (54
 | `src/inputs/repo-source.cjs` | 32 | 7 | 25 |
 | `src/inputs/repo-go.cjs` | 30 | 3 | 27 |
 | `src/inputs/repo-rust.cjs` | 30 | 11 | 19 |
-| `src/inputs/collect.js` | 16 | 4 | 12 |
+| `src/inputs/collect.js` | 16 | 5 | 11 |
 | `src/unreadable.js` | 24 | 7 | 17 |
 | `src/tools.js` | 3 | 0 | 3 |
 | `engine/core.js` | 35 | 19 | 16 |
@@ -74,7 +76,6 @@ Mutants are drawn from code the cases execute: 8023 of 14738 candidate sites (54
 | repo-go.cjs:rel-boundary:24a48340bd | 198 | `< -> <=` | no |
 | repo-rust.cjs:eq-flip:895bd737fd | 107 | `=== -> !==` | no |
 | repo-source.cjs:logic-swap:003a3e6d99-2 | 2107 | `\|\| -> &&` | no |
-| collect.js:logic-swap:96dea53897-3 | 375 | `&& -> \|\|` | faulty-oracle/extra-tool-label, faulty-oracle/missed-poison-label, faulty-oracle/phantom-finding-label and 62 more |
 | repo-go.cjs:eq-flip:856318312f | 1827 | `=== -> !==` | no |
 | repo-source.cjs:eq-flip:326758d5b5 | 256 | `=== -> !==` | no |
 | unreadable.js:logic-swap:ba5b87cec6 | 69 | `&& -> \|\|` | no |

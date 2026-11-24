@@ -59,8 +59,26 @@ test('ci: the zero-config job runs the Action with no inputs, after a plain chec
   assert.match(job, /- name: The zero-config workflow\n        id: zero\n        uses: \.\/\n      - name:/, 'uses: ./ with no with: block');
   assert.ok(!/setup-node|npm (ci|install)/.test(job), 'no setup-node or install, as in the documented workflow');
   assert.match(job, /\[ "\$SOURCE" = repo-static \]/);
-  assert.match(y, /needs: \[test, action, zero-config, bench\]/);
-  assert.match(y, /\[ "\$n" -eq 4 \]/);
+  assert.match(y, /needs: \[test, action, zero-config, bench, mutants\]/);
+  assert.match(y, /\[ "\$n" -eq 5 \]/);
+});
+
+test('R-BENCH-11: the bench gate and the mutant pass are required by ci-ok, and their steps are pinned', () => {
+  const y = wf['ci.yml'];
+  const bench = y.slice(y.indexOf('\n  bench:\n'), y.indexOf('\n  mutants:\n'));
+  assert.match(bench, /run: node bench\/run\.mjs --json bench-score\.json --md bench-score\.md\n/);
+  assert.match(bench, /run: node bench\/gate\.mjs --score bench-score\.json\n/);
+  assert.ok(!/continue-on-error|\|\| true/.test(bench.replace(/cat bench-score\.md[^\n]*/, '')), 'the gate step cannot be skipped or softened');
+  const mut = y.slice(y.indexOf('\n  mutants:\n'), y.indexOf('\n  zero-config:\n'));
+  assert.match(mut, /run: node bench\/mutate\.mjs --jobs 4 --json mutants\.json --md mutants\.md\n/);
+  assert.match(mut, /grep -qE '\^\(src\/\|engine\/\|bench\/\)' changed\.txt/);
+  assert.ok(!/continue-on-error/.test(mut));
+  assert.ok(!/\$\{\{/.test(mut.split('run: |').slice(1).join('').replace(/\n {8}[A-Z_]+: \$\{\{[^}]*\}\}/g, '')), 'no expressions inside run scripts');
+  assert.match(y.slice(y.indexOf('\n  ci-ok:\n')), /needs: \[test, action, zero-config, bench, mutants\]/);
+  const w = wf['bench-mutants.yml'];
+  assert.match(w, /schedule:/); assert.ok(!/pull_request/.test(w), 'pull requests run the pass in ci.yml');
+  // the benchmark's synthetic package.json files are kept away from Dependabot
+  assert.match(readFileSync(fileURLToPath(new URL('../.github/dependabot.yml', import.meta.url)), 'utf8'), /exclude-paths:\n\s+- "bench\/\*\*"/);
 });
 
 test('scan-static: dispatch only, the pump\'s three inputs, kill switch first, inputs checked whole, one pinned worker-kit step per item', () => {

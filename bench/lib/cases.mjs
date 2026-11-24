@@ -1,7 +1,8 @@
 // The benchmark cases: a folder of source per case (cases/<language>/<name>/) and its ground truth
 // (truth/<language>/<name>.json). The truth sits outside the case folder, so the reader never sees it.
+import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 
 export const OUTCOMES = ['tools', 'none', 'unsupported', 'multiple', 'incomplete', 'names', 'error'];
 export const ABSTAIN = new Set(['multiple', 'incomplete', 'names']);
@@ -18,7 +19,7 @@ export const CORE_CHECKS = [
 /** Checks of the list as a whole (not of one tool), scored on every case that lists tools; truth "none" by default. */
 export const CORE_SERVER_CHECKS = ['spec-name-unique', 'openai-name-unique'];
 
-const KEYS = new Set(['id', 'language', 'idioms', 'about', 'outcome', 'tools', 'optional_tools', 'findings', 'server_findings', 'faulty_oracle', 'known_gap', 'core', 'reproduces', 'details', 'truth_level', 'exhaustive', 'not_scored', 'unreadable', 'split']);
+const KEYS = new Set(['id', 'language', 'idioms', 'about', 'outcome', 'tools', 'optional_tools', 'findings', 'server_findings', 'faulty_oracle', 'known_gap', 'core', 'reproduces', 'details', 'truth_level', 'exhaustive', 'not_scored', 'unreadable', 'split', 'expected_disagreement']);
 const SEVERITIES = new Set(['blocking', 'attention', 'advice']);
 
 /** Validates one truth file; throws with the case id on any mistake, so a typo never scores silently. */
@@ -46,6 +47,9 @@ export function validateTruth(t, id) {
   if (t.truth_level !== undefined && !['established', 'inferred'].includes(t.truth_level)) bad('truth_level');
   for (const [k, v] of Object.entries(t.server_findings || {})) if (!/^[a-z]+(-[a-z0-9]+)+$/.test(k) || !(v === true || SEVERITIES.has(v))) bad('server_findings.' + k + ' must be true or a severity');
   if (t.faulty_oracle !== undefined && (typeof t.faulty_oracle !== 'string' || !t.faulty_oracle)) bad('faulty_oracle must say what is wrong');
+  // a faulty-oracle case names the one disagreement its wrong label must cause ("check|fn-or-fp|subject")
+  if (t.faulty_oracle !== undefined && !(typeof t.expected_disagreement === 'string' && /^[a-z-]+\|(fn|fp)\|.+$/.test(t.expected_disagreement))) bad('a faulty_oracle case needs expected_disagreement, as check|fn-or-fp|subject');
+  if (t.faulty_oracle === undefined && t.expected_disagreement !== undefined) bad('expected_disagreement is for faulty_oracle cases');
   return t;
 }
 
@@ -72,4 +76,20 @@ export function loadCases(base) {
     if (!out.some((c) => c.id === id)) throw new Error('truth ' + id + ' has no case folder');
   }
   return out;
+}
+
+/** Every file under a folder, as sorted paths relative to it. */
+export function filesUnder(dir) {
+  const out = [];
+  const walk = (d) => { for (const f of readdirSync(d).sort()) { const p = join(d, f); if (statSync(p).isDirectory()) walk(p); else out.push(p); } };
+  walk(dir);
+  return out.map((p) => relative(dir, p).split('\\').join('/')).sort();
+}
+
+/** sha256 of the case set: every case file and every truth file, path and content. The baseline records it, so a case
+ *  or a label changed or removed without a rebaseline fails the gate. */
+export function caseSetHash(base) {
+  const h = createHash('sha256');
+  for (const sub of ['cases', 'truth']) for (const f of filesUnder(join(base, sub))) { h.update(sub + '/' + f + '\0'); h.update(readFileSync(join(base, sub, f))); h.update('\0'); }
+  return h.digest('hex');
 }

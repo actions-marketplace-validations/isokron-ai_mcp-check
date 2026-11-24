@@ -14,5 +14,6 @@
   "findings": {
     "sec-instruction-phrases": []
   },
-  "faulty_oracle": "summarise says \"Ignore all previous instructions\"; the label claims no tool has the phrase"
+  "faulty_oracle": "summarise says \"Ignore all previous instructions\"; the label claims no tool has the phrase",
+  "expected_disagreement": "sec-instruction-phrases|fp|summarise"
 }

@@ -38,19 +38,22 @@ export function outcomeOf(message) {
   return 'error';
 }
 
-/** Observes one case folder with the CLI's main() of the given build. */
-export async function observeCase(main, dir) {
+/** Observes one case folder with the CLI's main() of the given build. `work`: a folder for the saved list (the run's
+ *  own, removed by the run; a mutant child killed at its time limit leaves it inside the mutant pass's folder). */
+export async function observeCase(main, dir, work) {
   const out = new Sink(); const err = new Sink();
   let code;
-  const tmp = mkdtempSync(join(tmpdir(), 'bench-save-'));
+  const own = !work;
+  const tmp = work || mkdtempSync(join(tmpdir(), 'bench-save-'));
   const saved = join(tmp, 'list.json');
+  rmSync(saved, { force: true });
   let list = null;
   try {
     code = await main(['--repo-dir', dir, '--format', 'json', '--sections', SECTIONS, '--save', saved], { stdout: out, stderr: err });
     try { const j = JSON.parse(readFileSync(saved, 'utf8')); list = Array.isArray(j.tools) ? j.tools : null; } catch { list = null; }
   } catch (e) {
     return { outcome: 'error', exit: null, message: String(e && e.stack || e).slice(0, 600), tools: [], findings: {}, server: [] };
-  } finally { rmSync(tmp, { recursive: true, force: true }); }
+  } finally { if (own) rmSync(tmp, { recursive: true, force: true }); else rmSync(saved, { force: true }); }
   if (code === 0 || code === 1) {
     let j;
     try { j = JSON.parse(out.text); } catch (e) { return { outcome: 'error', exit: code, message: 'unparsable JSON: ' + String(e.message).slice(0, 200), tools: [], findings: {}, server: [] }; }
@@ -83,12 +86,15 @@ export async function observeCase(main, dir) {
 }
 
 /** Loads the CLI of the build at `root` and observes every case: { id: observation }. */
-export async function observeAll(root, cases, { onCase } = {}) {
+export async function observeAll(root, cases, { onCase, tmp = null } = {}) {
   const { main } = await import(pathToFileURL(join(root, 'src', 'cli.js')).href);
+  const work = mkdtempSync(join(tmp || tmpdir(), 'bench-save-'));
   const obs = {};
-  for (const c of cases) {
-    obs[c.id] = await observeCase(main, c.dir);
-    if (onCase) onCase(c, obs[c.id]);
-  }
+  try {
+    for (const c of cases) {
+      obs[c.id] = await observeCase(main, c.dir, work);
+      if (onCase) onCase(c, obs[c.id]);
+    }
+  } finally { rmSync(work, { recursive: true, force: true }); }
   return obs;
 }

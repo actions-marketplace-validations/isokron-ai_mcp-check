@@ -10,5 +10,6 @@
     "list_label",
     "rename_label"
   ],
-  "faulty_oracle": "the first tool is list_labels; the label drops the s"
+  "faulty_oracle": "the first tool is list_labels; the label drops the s",
+  "expected_disagreement": "reader-tools|fn|list_label"
 }
