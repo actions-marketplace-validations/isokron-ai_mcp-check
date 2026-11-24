@@ -1338,13 +1338,15 @@ export function expectedIdentity(manifest, item, expect, env) {
   return { attempt_id: env.ATTEMPT_ID || expect.attempt_id, fence: item.fence, run_key: item.run_key, repo: env.GITHUB_REPOSITORY, workflow_file: manifest.workflow && manifest.workflow.file, workflow_sha: env.GITHUB_WORKFLOW_SHA, run_id: Number(env.GITHUB_RUN_ID) };
 }
 
-export async function verifyBundles({ toolQa, tars, expect, env = process.env, fetch: fetchImpl = globalThis.fetch, registryFile = null }) {
-  const imp = (p) => import(pathToFileURL(join(toolQa, p)).href);
-  const { validateManifest } = await imp('worker-kit/contract.mjs');
-  const { readTar } = await imp('worker-kit/tar.mjs');
-  const { checkBundle } = await imp('ingest/forgery.mjs');
-  const { scanFiles } = await imp('ingest/redact.mjs');
-  const reg = await imp('ingest/registry.mjs');
+export async function verifyBundles({ toolQa, ingest = toolQa, tars, expect, env = process.env, fetch: fetchImpl = globalThis.fetch, registryFile = null }) {
+  // The worker kit's commit builds the bundle; ingest's commit (tool-qa's main, which judges for real) checks it,
+  // with the field registry it pins.
+  const imp = (dir, p) => import(pathToFileURL(join(dir, p)).href);
+  const { validateManifest } = await imp(toolQa, 'worker-kit/contract.mjs');
+  const { readTar } = await imp(toolQa, 'worker-kit/tar.mjs');
+  const { checkBundle } = await imp(ingest, 'ingest/forgery.mjs');
+  const { scanFiles } = await imp(ingest, 'ingest/redact.mjs');
+  const reg = await imp(ingest, 'ingest/registry.mjs');
   const registry = registryFile ? reg.parseRegistry(readFileSync(registryFile, 'utf8')) : await reg.loadRegistry({ fetch: fetchImpl });
   const problems = []; const results = [];
   for (const t of tars) {
@@ -1425,15 +1427,18 @@ export async function main(argv, { env = process.env, stdout = process.stdout, s
     return 0;
   }
   if (cmd === 'verify' && rest.length >= 3) {
+    let ingest = null;
+    if (rest[0] === '--ingest') { ingest = rest[1]; rest.splice(0, 2); }
     const [toolQa, expectFile, ...tars] = rest;
+    if (!toolQa || !expectFile || !tars.length) { say('usage: node corpus/live-probe.mjs verify [--ingest <tool-qa dir>] <tool-qa dir> <expect.json> <tar>...'); return 2; }
     const expect = JSON.parse(readFileSync(expectFile, 'utf8'));
-    const { problems, results } = await verifyBundles({ toolQa, tars, expect, env, fetch: fetchImpl });
+    const { problems, results } = await verifyBundles({ toolQa, ingest: ingest || toolQa, tars, expect, env, fetch: fetchImpl });
     for (const r of results) say(JSON.stringify(r));
     for (const p of problems) say('::error title=' + LANE + ' self test::' + JSON.stringify(p));
     say(problems.length ? problems.length + ' problem(s)' : 'every bundle passed tool-qa\'s checks and the expected outcomes');
     return problems.length ? 3 : 0;
   }
-  stderr.write('usage: node corpus/live-probe.mjs plan <work> --msc <dir> [--seed <file>] | bundle <work> | verify <tool-qa dir> <expect.json> <tar>... | known-answer [<capture.json>]\n');
+  stderr.write('usage: node corpus/live-probe.mjs plan <work> --msc <dir> [--seed <file>] | bundle <work> | verify [--ingest <tool-qa dir>] <tool-qa dir> <expect.json> <tar>... | known-answer [<capture.json>]\n');
   return 2;
 }
 

@@ -417,6 +417,18 @@ test('R-LP-21: the sandbox at mcp-surface-corpus 73a2669 builds native modules, 
   assert.deepEqual(shard.items.find((x) => x.subject === 'isokron-ai/kronicle-lite').expect, { status: 'graded', min_tools: 1 });
 });
 
+test('R-LP-22: the self test judges the bundles with the ingest tool-qa runs, whose registry declares every field the lane writes', () => {
+  const y = wf('live-probe-selftest.yml');
+  const ref = /\n  INGEST_REF: '([0-9a-f]{40})'\n/.exec(y);
+  assert.ok(ref, 'INGEST_REF pinned to a full SHA');
+  assert.match(y, new RegExp("repository: isokron-ai/tool-qa\\n          ref: \\$\\{\\{ env\\.INGEST_REF \\}\\}\\n          path: tool-qa-ingest\\n          sparse-checkout: \\|\\n            worker-kit/\\n            ingest/\\n            scripts/lib/yaml-lite\\.mjs\\n"));
+  assert.match(y, /verify --ingest tool-qa-ingest tool-qa /);
+  // Every field the lane can write is declared, with its type, in the registry that ingest pins (mcp-results f2b16de).
+  const reg = registryTypes();
+  for (const [f, t] of Object.entries({ ...LP.FIELDS, ...LP.TOOL_LIST_FIELDS })) assert.equal(reg.get(f) && reg.get(f).type, t, f);
+  assert.equal(createHash('sha256').update(readFileSync(join(FX, 'fields-registry.yaml'))).digest('hex'), 'c79f5124d90bf5a8d2cb6e2e2a351228ceddc827ed52339990e9550a6b07d31f', 'the test copy is mcp-results f2b16de, as tool-qa pins it');
+});
+
 test('R-LP-12: npm installs run their install scripts, in the sandbox, so native modules can be built', async () => {
   const r = await LP.resolveSubject({ subject: 'acme/widget', repo: 'acme/widget' }, { fetch: fakeFetch([server('io.github.acme/widget', 'acme/widget', [npmPkg('@acme/widget')])]) });
   assert.equal(r.launch.install_scripts, true);
@@ -785,7 +797,7 @@ test('live-probe self test workflow: runs on pull requests the same steps as the
   const norm = (s) => between(s).replace(/inputs\.shard_id/g, 'env.SHARD_ID').replace(/inputs\.attempt_id/g, 'env.ATTEMPT_ID').replace(/inputs\.items/g, 'env.ITEMS').replace(/      - name: The fixture items\n        run: .*\n/, '');
   assert.equal(norm(y), norm(w), 'the self test runs exactly the worker\'s steps');
   assert.equal((y.match(/dry-run: 'true'/g) || []).length, 3);
-  assert.match(y, /node corpus\/live-probe\.mjs verify tool-qa corpus\/fixtures\/live-probe\/selftest-shard\.json/);
+  assert.match(y, /node corpus\/live-probe\.mjs verify --ingest tool-qa-ingest tool-qa corpus\/fixtures\/live-probe\/selftest-shard\.json/);
 });
 
 test('live-probe workflows: the sparse checkout of tool-qa holds every file the plan and verify steps read', () => {
