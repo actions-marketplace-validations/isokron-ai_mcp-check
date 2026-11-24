@@ -137,6 +137,19 @@ export function pickSourceMutants(all, ran, { total = null, seed }) {
   return { picked, stats };
 }
 
+/** The kill-list mutants to run beside the picked ones: every id in expected.json that this source can still produce
+ *  (`extra`), and the ids it can no longer produce because their line changed (`gone`, reported). Fixture ids (fx-)
+ *  always run with the fixture mutants. */
+export function withKillList(picked, all, expected) {
+  const have = new Set(picked.map((m) => m.id)); const byId = new Map(all.map((m) => [m.id, m]));
+  const extra = []; const gone = [];
+  for (const id of (expected && expected.killed) || []) {
+    if (id.startsWith('fx-') || have.has(id)) continue;
+    if (byId.has(id)) extra.push(byId.get(id)); else gone.push(id);
+  }
+  return { extra, gone };
+}
+
 /** --sample: a fixed subset of n of the picked mutants (the same n for the same seed and the same picked set). */
 export function sampleOf(picked, n, seed) {
   const keep = new Set(seededShuffle(picked.map((m) => m.id).sort(), seed + ':sample').slice(0, n));
@@ -164,6 +177,11 @@ export async function runSourceMutants(o, cases, base) {
   let { picked, stats } = pickSourceMutants(all, ran, { total: o.source, seed: o.seed });
   const full = picked.length;
   if (o.sample && o.sample < picked.length) picked = sampleOf(picked, o.sample, o.seed);
+  // every mutant on the kill list runs too, picked by the quota or not, so the list can only ratchet
+  const kill = existsSync(o.expected) ? JSON.parse(readFileSync(o.expected, 'utf8')) : { killed: [] };
+  const { extra, gone } = withKillList(picked, all, kill);
+  const quotaIds = new Set(picked.map((m) => m.id));
+  picked = picked.concat(extra);
   const slots = Array.from({ length: o.jobs }, () => buildCopy(base));
   const results = await pool(picked, o.jobs, async (m, w) => {
     const dir = slots[w]; const file = join(dir, m.file);
@@ -189,7 +207,8 @@ export async function runSourceMutants(o, cases, base) {
       return { ...m, status: 'survived', ground_truth: fresh.length > 0, output_changed_in: changed, ...(fixed.length ? { fixes: fixed.slice(0, 3) } : {}) };
     } finally { writeFileSync(file, orig); }
   });
-  return { results, stats, full, clean_disagreements: D0.size };
+  results.forEach((r) => { if (!quotaIds.has(r.id)) r.from_kill_list = true; });
+  return { results, stats, full, clean_disagreements: D0.size, kill_list_gone: gone };
 }
 
 /** Applies a fixture mutant's truth edit to a copy of the truth. Findings labels may be lists or { tool: severity }. */
@@ -258,12 +277,14 @@ export function lostKills(expected, results) {
 export function mutantMarkdown(r) {
   const L = ['# Mutant pass', ''];
   if (r.source) {
-    const s = r.source; const valid = s.results.filter((x) => x.status !== 'invalid');
+    const s = r.source; const valid = s.results.filter((x) => x.status !== 'invalid' && !x.from_kill_list);
+    const fromList = s.results.filter((x) => x.from_kill_list);
     const killed = valid.filter((x) => x.status === 'killed');
     const w = wilson(killed.length, valid.length);
     L.push('## Source mutants', '');
     const gt = valid.filter((x) => x.ground_truth || x.by === 'timeout' || x.by === 'crash');
     L.push(valid.length + ' mutants ran' + (s.full > s.results.length ? ' (a sample of the full ' + s.full + ')' : '') + '; ' + killed.length + ' killed, ' + (valid.length - killed.length) + ' survived: **gate-level kill rate ' + (w ? (w.p * 100).toFixed(1) + '% [' + (w.lo * 100).toFixed(1) + '–' + (w.hi * 100).toFixed(1) + ']' : 'n/a') + '**. A mutant is killed when the required CI gate (bench/gate.mjs) fails it, or the build crashes or hangs. ' + (s.results.length - valid.length) + ' did not parse and are not counted.', '');
+    L.push('Every mutant on the kill list (`mutants/expected.json`) runs as well, picked by the quota or not: ' + fromList.length + ' more ran this time (' + fromList.filter((x) => x.status === 'killed').length + ' killed, ' + fromList.filter((x) => x.status === 'survived').length + ' survived)' + ((s.kill_list_gone || []).length ? '; ' + s.kill_list_gone.length + ' kill-list ids can no longer be made because their line changed: ' + s.kill_list_gone.join(', ') : '') + '. The rates above are of the quota set.', '');
     L.push('Of these, ' + gt.length + ' caused a new disagreement with the truth in some case, or crashed or hung; ' + gt.filter((x) => x.status === 'killed').length + ' of those are gate kills (the gate fails on any new per-case disagreement, so this should be all of them).', '');
     L.push('Mutants are drawn from code the cases execute: ' + s.stats.covered + ' of ' + s.stats.sites + ' candidate sites (' + (100 * s.stats.covered / s.stats.sites).toFixed(1) + '%) ran in an unmutated pass. Sites the cases never reach can hide any bug; per file:', '');
     L.push('| File | Candidate sites | Executed by the cases |', '|---|---:|---:|');
@@ -273,7 +294,7 @@ export function mutantMarkdown(r) {
     L.push('', '| File | Ran | Killed | Survived |', '|---|---:|---:|---:|');
     for (const f of TARGETS) { const xs = valid.filter((x) => x.file === f); if (xs.length) L.push('| `' + f + '` | ' + xs.length + ' | ' + xs.filter((x) => x.status === 'killed').length + ' | ' + xs.filter((x) => x.status === 'survived').length + ' |'); }
     L.push('', '### Surviving source mutants (test gaps)', '');
-    const sv = valid.filter((x) => x.status === 'survived');
+    const sv = s.results.filter((x) => x.status === 'survived'); // the quota set, and any kill-list mutant that survived
     if (!sv.length) L.push('None.');
     else { L.push('"Output changed" names cases whose output moved without crossing a label: a label there would kill the mutant.', '', '| Mutant | Line | Change | Output changed |', '|---|---:|---|---|'); }
     const code = (x) => '`' + String(x).replace(/`/g, "'").slice(0, 110).replace(/\|/g, '\\|') + '`';

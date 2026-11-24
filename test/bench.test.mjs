@@ -10,11 +10,12 @@ import { loadCases } from '../bench/lib/cases.mjs';
 import { compareCase, scoreAll, wilson } from '../bench/lib/score.mjs';
 import { compare } from '../bench/gate.mjs';
 import { run } from '../bench/run.mjs';
-import { buildCopy, disagreementSet, lostKills, observeChild, patchTruth, sampleOf } from '../bench/mutate.mjs';
+import { buildCopy, disagreementSet, lostKills, observeChild, patchTruth, sampleOf, withKillList } from '../bench/mutate.mjs';
 import { CORE_CHECKS, CORE_SERVER_CHECKS } from '../bench/lib/cases.mjs';
 import { labelMap } from '../bench/lib/score.mjs';
 import { observeAll } from '../bench/lib/observe.mjs';
-import { caseSetHashes } from '../bench/lib/holdout-guard.mjs';
+import { caseSetHashes, fileHashes } from '../bench/lib/holdout-guard.mjs';
+import { guard, LABEL } from '../bench/base-guard.mjs';
 import { createHash } from 'node:crypto';
 import { tmpdir as osTmp } from 'node:os';
 import { TARGETS, mutantsOf } from '../bench/mutants/sites.mjs';
@@ -229,7 +230,7 @@ test('R-BENCH-10: no public case or truth file matches a holdout file hash', () 
   // the guard compares whitespace-free text too, so reformatting a copied file does not get past it
   const dir = mkdtempSync(join(tmpdir(), 'bench-guard-'));
   try {
-    const any = caseSetHashes(benchDir)[0];
+    const any = caseSetHashes(benchDir).find((x) => readFileSync(join(benchDir, x.path)).length >= 400);
     const text = readFileSync(join(benchDir, any.path), 'utf8');
     writeFileSync(join(dir, 'x'), text.replace(/\n/g, '\n\n  '));
     const h = createHash('sha256').update(readFileSync(join(dir, 'x'), 'utf8').replace(/\s+/g, '')).digest('hex');
@@ -259,4 +260,53 @@ test('R-BENCH-13: the saved lists go in the run\'s own folder, which is removed,
   const after = readdirSync(osTmp()).filter((f) => f.startsWith('bench-save-') && !before.has(f));
   assert.deepEqual(after, []);
   assert.match(readFileSync(join(benchDir, 'mutate.mjs'), 'utf8'), /'--tmp', dirname\(outFile\)/);
+});
+
+test('R-BENCH-14: a pull request cannot accept its own regressions: new misses, false alarms and kill-list removals against the base baseline fail without the bench-rebaseline label', () => {
+  const c = { tp: 5, fn: 0, fp: 0, tn: 9, recall: wilson(5, 5), precision: wilson(5, 5) };
+  const base = { case_set_hash: 'a', cases: 2, checks: { 'sec-zero-width': { all: c, by_language: {} } }, disagreement_keys: {}, faulty_oracle: [] };
+  // the reviewer's case: sec-zero-width switched off, and the pull request's own baseline rewritten to match
+  const worse = { tp: 0, fn: 5, fp: 0, tn: 9, recall: wilson(0, 5), precision: null };
+  const now = { case_set_hash: 'b', cases: 2, checks: { 'sec-zero-width': { all: worse, by_language: {} } }, disagreement_keys: { 'go/x': ['sec-zero-width|fn|t'] }, faulty_oracle: [] };
+  assert.deepEqual(compare(now, now).failures, [], 'against its own baseline it passes');
+  const r = guard({ base, now, baseExpected: { killed: ['a', 'b'] }, expected: { killed: ['a'] }, guardChanged: ['bench/gate.mjs'] });
+  assert.ok(r.findings.includes('go/x: new miss against the base: sec-zero-width|fn|t'));
+  assert.ok(r.findings.some((f) => /sec-zero-width \(all languages\): false negatives rose from 0 to 5 \(against the base\)/.test(f)));
+  assert.ok(r.findings.includes('removed from the kill list (bench/mutants/expected.json): b'));
+  assert.ok(r.findings.includes('the gate or this guard changed: bench/gate.mjs'));
+  assert.ok(!r.findings.some((f) => /case-set|cases or their truth changed|rebaseline: /.test(f)), 'a new case set and improvements are not regressions');
+  // improvements only: nothing to report
+  const better = { ...base, disagreement_keys: {} };
+  assert.deepEqual(guard({ base: { ...base, disagreement_keys: { 'go/x': ['sec-zero-width|fn|t'] } }, now: better, baseExpected: null, expected: null }).findings, []);
+  // the pull request that adds the benchmark: the base has none, so it passes
+  assert.match(guard({ base: null, now }).skipped, /no bench\/baseline\.json/);
+  assert.equal(LABEL, 'bench-rebaseline');
+  // the step: base files read with git show, labels only through env, on pull requests, re-run on label changes
+  const y = readFileSync(join(root, '.github', 'workflows', 'ci.yml'), 'utf8');
+  const step = y.slice(y.indexOf("      - name: Against the base branch's baseline and kill list"), y.indexOf('\n  mutants:\n'));
+  assert.match(step, /if: github\.event_name == 'pull_request'/);
+  assert.match(step, /PR_LABELS: \$\{\{ toJSON\(github\.event\.pull_request\.labels\.\*\.name\) \}\}/);
+  assert.match(step, /git show "origin\/\$BASE_REF:bench\/baseline\.json"/);
+  assert.match(step, /git show "origin\/\$BASE_REF:bench\/mutants\/expected\.json"/);
+  assert.match(step, /node bench\/base-guard\.mjs --base base-baseline\.json --base-expected base-expected\.json --score bench-score\.json/);
+  assert.ok(!/\$\{\{/.test(step.slice(step.indexOf('run: |'))), 'no expression inside the script');
+  assert.match(y, /types: \[opened, synchronize, reopened, labeled, unlabeled\]/);
+});
+
+test('R-BENCH-15: every mutant on the kill list runs in every pass, so the list only ratchets', () => {
+  const all = [{ id: 'q1' }, { id: 'q2' }, { id: 'k1' }, { id: 'k2' }];
+  const { extra, gone } = withKillList([{ id: 'q1' }], all, { killed: ['q1', 'k1', 'k2', 'k-gone', 'fx-ts-x'] });
+  assert.deepEqual(extra.map((m) => m.id), ['k1', 'k2'], 'not picked by the quota, still run');
+  assert.deepEqual(gone, ['k-gone'], 'reported, and the base-branch guard flags it when expected.json drops it');
+  const src = readFileSync(join(benchDir, 'mutate.mjs'), 'utf8');
+  assert.match(src, /const \{ extra, gone \} = withKillList\(picked, all, kill\);/);
+  assert.match(src, /picked = picked\.concat\(extra\);/);
+  assert.deepEqual(lostKills({ killed: ['k1'] }, [{ id: 'k1', status: 'survived', from_kill_list: true }]), ['k1']);
+});
+
+test('R-BENCH-16: the holdout hash list names no private path, and tiny files get only their byte hash', () => {
+  const list = JSON.parse(readFileSync(join(benchDir, 'holdout-hashes.json'), 'utf8'));
+  assert.ok(!/research\/|company-audit|benchmark-holdout/.test(list.about), list.about);
+  assert.equal(fileHashes(Buffer.from('{ "name": "x" }\n')).length, 1);
+  assert.equal(fileHashes(Buffer.alloc(300, 'a')).length, 2);
 });
