@@ -43,9 +43,10 @@ concurrency:
 
 env:
   # The isokron-ai/tool-qa commit whose worker-kit seals and uploads the bundles. Every worker-kit step below
-  # names this same commit (test/scan-static.test.mjs checks). All zeros is a placeholder until the kit with
-  # item-index is on tool-qa's main: while it is set, the guard fails the run before anything is read.
-  WORKER_KIT_REF: '0000000000000000000000000000000000000000'
+  # names this same commit (test/workflows.test.mjs checks), and test/tool-qa/ holds tool-qa's result contract
+  # at it (test/tool-qa.test.mjs checks). The all-zero placeholder makes the guard fail the run before anything
+  # is read.
+  WORKER_KIT_REF: 'b1f25a9b0b7655f45eb353f31562a93d9319d5a4'
 
 jobs:
   guard:
@@ -124,7 +125,7 @@ jobs:
       # failed upload does not stop the others.
       - name: Seal and upload item 0
         if: ${{ !cancelled() && steps.scan.outcome == 'success' && steps.scan.outputs.has_0 == 'true' }}
-        uses: isokron-ai/tool-qa/worker-kit@0000000000000000000000000000000000000000 # WORKER_KIT_REF (placeholder)
+        uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # WORKER_KIT_REF
         with:
           bundle-dir: ${{ runner.temp }}/scan-static/0/bundle
           meta-file: ${{ runner.temp }}/scan-static/0/meta.json
@@ -134,7 +135,7 @@ jobs:
           run-key: ${{ steps.scan.outputs.run_key_0 }}
       - name: Seal and upload item 1
         if: ${{ !cancelled() && steps.scan.outcome == 'success' && steps.scan.outputs.has_1 == 'true' }}
-        uses: isokron-ai/tool-qa/worker-kit@0000000000000000000000000000000000000000 # WORKER_KIT_REF (placeholder)
+        uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # WORKER_KIT_REF
         with:
           bundle-dir: ${{ runner.temp }}/scan-static/1/bundle
           meta-file: ${{ runner.temp }}/scan-static/1/meta.json
@@ -144,7 +145,7 @@ jobs:
           run-key: ${{ steps.scan.outputs.run_key_1 }}
       - name: Seal and upload item 2
         if: ${{ !cancelled() && steps.scan.outcome == 'success' && steps.scan.outputs.has_2 == 'true' }}
-        uses: isokron-ai/tool-qa/worker-kit@0000000000000000000000000000000000000000 # WORKER_KIT_REF (placeholder)
+        uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # WORKER_KIT_REF
         with:
           bundle-dir: ${{ runner.temp }}/scan-static/2/bundle
           meta-file: ${{ runner.temp }}/scan-static/2/meta.json
@@ -154,7 +155,7 @@ jobs:
           run-key: ${{ steps.scan.outputs.run_key_2 }}
       - name: Seal and upload item 3
         if: ${{ !cancelled() && steps.scan.outcome == 'success' && steps.scan.outputs.has_3 == 'true' }}
-        uses: isokron-ai/tool-qa/worker-kit@0000000000000000000000000000000000000000 # WORKER_KIT_REF (placeholder)
+        uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # WORKER_KIT_REF
         with:
           bundle-dir: ${{ runner.temp }}/scan-static/3/bundle
           meta-file: ${{ runner.temp }}/scan-static/3/meta.json
@@ -164,7 +165,7 @@ jobs:
           run-key: ${{ steps.scan.outputs.run_key_3 }}
       - name: Seal and upload item 4
         if: ${{ !cancelled() && steps.scan.outcome == 'success' && steps.scan.outputs.has_4 == 'true' }}
-        uses: isokron-ai/tool-qa/worker-kit@0000000000000000000000000000000000000000 # WORKER_KIT_REF (placeholder)
+        uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # WORKER_KIT_REF
         with:
           bundle-dir: ${{ runner.temp }}/scan-static/4/bundle
           meta-file: ${{ runner.temp }}/scan-static/4/meta.json
@@ -174,7 +175,7 @@ jobs:
           run-key: ${{ steps.scan.outputs.run_key_4 }}
       - name: Seal and upload item 5
         if: ${{ !cancelled() && steps.scan.outcome == 'success' && steps.scan.outputs.has_5 == 'true' }}
-        uses: isokron-ai/tool-qa/worker-kit@0000000000000000000000000000000000000000 # WORKER_KIT_REF (placeholder)
+        uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # WORKER_KIT_REF
         with:
           bundle-dir: ${{ runner.temp }}/scan-static/5/bundle
           meta-file: ${{ runner.temp }}/scan-static/5/meta.json
@@ -184,7 +185,7 @@ jobs:
           run-key: ${{ steps.scan.outputs.run_key_5 }}
       - name: Seal and upload item 6
         if: ${{ !cancelled() && steps.scan.outcome == 'success' && steps.scan.outputs.has_6 == 'true' }}
-        uses: isokron-ai/tool-qa/worker-kit@0000000000000000000000000000000000000000 # WORKER_KIT_REF (placeholder)
+        uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # WORKER_KIT_REF
         with:
           bundle-dir: ${{ runner.temp }}/scan-static/6/bundle
           meta-file: ${{ runner.temp }}/scan-static/6/meta.json
@@ -194,7 +195,7 @@ jobs:
           run-key: ${{ steps.scan.outputs.run_key_6 }}
       - name: Seal and upload item 7
         if: ${{ !cancelled() && steps.scan.outcome == 'success' && steps.scan.outputs.has_7 == 'true' }}
-        uses: isokron-ai/tool-qa/worker-kit@0000000000000000000000000000000000000000 # WORKER_KIT_REF (placeholder)
+        uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # WORKER_KIT_REF
         with:
           bundle-dir: ${{ runner.temp }}/scan-static/7/bundle
           meta-file: ${{ runner.temp }}/scan-static/7/meta.json
@@ -204,7 +205,7 @@ jobs:
           run-key: ${{ steps.scan.outputs.run_key_7 }}
       - name: Seal and upload item 8
         if: ${{ !cancelled() && steps.scan.outcome == 'success' && steps.scan.outputs.has_8 == 'true' }}
-        uses: isokron-ai/tool-qa/worker-kit@0000000000000000000000000000000000000000 # WORKER_KIT_REF (placeholder)
+        uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # WORKER_KIT_REF
         with:
           bundle-dir: ${{ runner.temp }}/scan-static/8/bundle
           meta-file: ${{ runner.temp }}/scan-static/8/meta.json
@@ -214,7 +215,7 @@ jobs:
           run-key: ${{ steps.scan.outputs.run_key_8 }}
       - name: Seal and upload item 9
         if: ${{ !cancelled() && steps.scan.outcome == 'success' && steps.scan.outputs.has_9 == 'true' }}
-        uses: isokron-ai/tool-qa/worker-kit@0000000000000000000000000000000000000000 # WORKER_KIT_REF (placeholder)
+        uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # WORKER_KIT_REF
         with:
           bundle-dir: ${{ runner.temp }}/scan-static/9/bundle
           meta-file: ${{ runner.temp }}/scan-static/9/meta.json
@@ -224,7 +225,7 @@ jobs:
           run-key: ${{ steps.scan.outputs.run_key_9 }}
       - name: Seal and upload item 10
         if: ${{ !cancelled() && steps.scan.outcome == 'success' && steps.scan.outputs.has_10 == 'true' }}
-        uses: isokron-ai/tool-qa/worker-kit@0000000000000000000000000000000000000000 # WORKER_KIT_REF (placeholder)
+        uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # WORKER_KIT_REF
         with:
           bundle-dir: ${{ runner.temp }}/scan-static/10/bundle
           meta-file: ${{ runner.temp }}/scan-static/10/meta.json
@@ -234,7 +235,7 @@ jobs:
           run-key: ${{ steps.scan.outputs.run_key_10 }}
       - name: Seal and upload item 11
         if: ${{ !cancelled() && steps.scan.outcome == 'success' && steps.scan.outputs.has_11 == 'true' }}
-        uses: isokron-ai/tool-qa/worker-kit@0000000000000000000000000000000000000000 # WORKER_KIT_REF (placeholder)
+        uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # WORKER_KIT_REF
         with:
           bundle-dir: ${{ runner.temp }}/scan-static/11/bundle
           meta-file: ${{ runner.temp }}/scan-static/11/meta.json
@@ -244,7 +245,7 @@ jobs:
           run-key: ${{ steps.scan.outputs.run_key_11 }}
       - name: Seal and upload item 12
         if: ${{ !cancelled() && steps.scan.outcome == 'success' && steps.scan.outputs.has_12 == 'true' }}
-        uses: isokron-ai/tool-qa/worker-kit@0000000000000000000000000000000000000000 # WORKER_KIT_REF (placeholder)
+        uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # WORKER_KIT_REF
         with:
           bundle-dir: ${{ runner.temp }}/scan-static/12/bundle
           meta-file: ${{ runner.temp }}/scan-static/12/meta.json
@@ -254,7 +255,7 @@ jobs:
           run-key: ${{ steps.scan.outputs.run_key_12 }}
       - name: Seal and upload item 13
         if: ${{ !cancelled() && steps.scan.outcome == 'success' && steps.scan.outputs.has_13 == 'true' }}
-        uses: isokron-ai/tool-qa/worker-kit@0000000000000000000000000000000000000000 # WORKER_KIT_REF (placeholder)
+        uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # WORKER_KIT_REF
         with:
           bundle-dir: ${{ runner.temp }}/scan-static/13/bundle
           meta-file: ${{ runner.temp }}/scan-static/13/meta.json
@@ -264,7 +265,7 @@ jobs:
           run-key: ${{ steps.scan.outputs.run_key_13 }}
       - name: Seal and upload item 14
         if: ${{ !cancelled() && steps.scan.outcome == 'success' && steps.scan.outputs.has_14 == 'true' }}
-        uses: isokron-ai/tool-qa/worker-kit@0000000000000000000000000000000000000000 # WORKER_KIT_REF (placeholder)
+        uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # WORKER_KIT_REF
         with:
           bundle-dir: ${{ runner.temp }}/scan-static/14/bundle
           meta-file: ${{ runner.temp }}/scan-static/14/meta.json
@@ -274,7 +275,7 @@ jobs:
           run-key: ${{ steps.scan.outputs.run_key_14 }}
       - name: Seal and upload item 15
         if: ${{ !cancelled() && steps.scan.outcome == 'success' && steps.scan.outputs.has_15 == 'true' }}
-        uses: isokron-ai/tool-qa/worker-kit@0000000000000000000000000000000000000000 # WORKER_KIT_REF (placeholder)
+        uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # WORKER_KIT_REF
         with:
           bundle-dir: ${{ runner.temp }}/scan-static/15/bundle
           meta-file: ${{ runner.temp }}/scan-static/15/meta.json
@@ -284,7 +285,7 @@ jobs:
           run-key: ${{ steps.scan.outputs.run_key_15 }}
       - name: Seal and upload item 16
         if: ${{ !cancelled() && steps.scan.outcome == 'success' && steps.scan.outputs.has_16 == 'true' }}
-        uses: isokron-ai/tool-qa/worker-kit@0000000000000000000000000000000000000000 # WORKER_KIT_REF (placeholder)
+        uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # WORKER_KIT_REF
         with:
           bundle-dir: ${{ runner.temp }}/scan-static/16/bundle
           meta-file: ${{ runner.temp }}/scan-static/16/meta.json
@@ -294,7 +295,7 @@ jobs:
           run-key: ${{ steps.scan.outputs.run_key_16 }}
       - name: Seal and upload item 17
         if: ${{ !cancelled() && steps.scan.outcome == 'success' && steps.scan.outputs.has_17 == 'true' }}
-        uses: isokron-ai/tool-qa/worker-kit@0000000000000000000000000000000000000000 # WORKER_KIT_REF (placeholder)
+        uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # WORKER_KIT_REF
         with:
           bundle-dir: ${{ runner.temp }}/scan-static/17/bundle
           meta-file: ${{ runner.temp }}/scan-static/17/meta.json
@@ -304,7 +305,7 @@ jobs:
           run-key: ${{ steps.scan.outputs.run_key_17 }}
       - name: Seal and upload item 18
         if: ${{ !cancelled() && steps.scan.outcome == 'success' && steps.scan.outputs.has_18 == 'true' }}
-        uses: isokron-ai/tool-qa/worker-kit@0000000000000000000000000000000000000000 # WORKER_KIT_REF (placeholder)
+        uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # WORKER_KIT_REF
         with:
           bundle-dir: ${{ runner.temp }}/scan-static/18/bundle
           meta-file: ${{ runner.temp }}/scan-static/18/meta.json
@@ -314,7 +315,7 @@ jobs:
           run-key: ${{ steps.scan.outputs.run_key_18 }}
       - name: Seal and upload item 19
         if: ${{ !cancelled() && steps.scan.outcome == 'success' && steps.scan.outputs.has_19 == 'true' }}
-        uses: isokron-ai/tool-qa/worker-kit@0000000000000000000000000000000000000000 # WORKER_KIT_REF (placeholder)
+        uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # WORKER_KIT_REF
         with:
           bundle-dir: ${{ runner.temp }}/scan-static/19/bundle
           meta-file: ${{ runner.temp }}/scan-static/19/meta.json
@@ -324,7 +325,7 @@ jobs:
           run-key: ${{ steps.scan.outputs.run_key_19 }}
       - name: Seal and upload item 20
         if: ${{ !cancelled() && steps.scan.outcome == 'success' && steps.scan.outputs.has_20 == 'true' }}
-        uses: isokron-ai/tool-qa/worker-kit@0000000000000000000000000000000000000000 # WORKER_KIT_REF (placeholder)
+        uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # WORKER_KIT_REF
         with:
           bundle-dir: ${{ runner.temp }}/scan-static/20/bundle
           meta-file: ${{ runner.temp }}/scan-static/20/meta.json
@@ -334,7 +335,7 @@ jobs:
           run-key: ${{ steps.scan.outputs.run_key_20 }}
       - name: Seal and upload item 21
         if: ${{ !cancelled() && steps.scan.outcome == 'success' && steps.scan.outputs.has_21 == 'true' }}
-        uses: isokron-ai/tool-qa/worker-kit@0000000000000000000000000000000000000000 # WORKER_KIT_REF (placeholder)
+        uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # WORKER_KIT_REF
         with:
           bundle-dir: ${{ runner.temp }}/scan-static/21/bundle
           meta-file: ${{ runner.temp }}/scan-static/21/meta.json
@@ -344,7 +345,7 @@ jobs:
           run-key: ${{ steps.scan.outputs.run_key_21 }}
       - name: Seal and upload item 22
         if: ${{ !cancelled() && steps.scan.outcome == 'success' && steps.scan.outputs.has_22 == 'true' }}
-        uses: isokron-ai/tool-qa/worker-kit@0000000000000000000000000000000000000000 # WORKER_KIT_REF (placeholder)
+        uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # WORKER_KIT_REF
         with:
           bundle-dir: ${{ runner.temp }}/scan-static/22/bundle
           meta-file: ${{ runner.temp }}/scan-static/22/meta.json
@@ -354,7 +355,7 @@ jobs:
           run-key: ${{ steps.scan.outputs.run_key_22 }}
       - name: Seal and upload item 23
         if: ${{ !cancelled() && steps.scan.outcome == 'success' && steps.scan.outputs.has_23 == 'true' }}
-        uses: isokron-ai/tool-qa/worker-kit@0000000000000000000000000000000000000000 # WORKER_KIT_REF (placeholder)
+        uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # WORKER_KIT_REF
         with:
           bundle-dir: ${{ runner.temp }}/scan-static/23/bundle
           meta-file: ${{ runner.temp }}/scan-static/23/meta.json
@@ -364,7 +365,7 @@ jobs:
           run-key: ${{ steps.scan.outputs.run_key_23 }}
       - name: Seal and upload item 24
         if: ${{ !cancelled() && steps.scan.outcome == 'success' && steps.scan.outputs.has_24 == 'true' }}
-        uses: isokron-ai/tool-qa/worker-kit@0000000000000000000000000000000000000000 # WORKER_KIT_REF (placeholder)
+        uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # WORKER_KIT_REF
         with:
           bundle-dir: ${{ runner.temp }}/scan-static/24/bundle
           meta-file: ${{ runner.temp }}/scan-static/24/meta.json
