@@ -492,6 +492,24 @@ test('R-LP-11: no upload unless the sandbox is gone: no container or volume at a
   for (const re of [/docker ps -aq \| wc -l/, /docker volume ls -q \| wc -l/, /pgrep -u 65534/, /pgrep -f 'runsc\|containerd-shim-runsc'/]) assert.match(sh, re);
 });
 
+test('R-LP-14: one sandbox commit everywhere: the conformance workflow, the in-job sandbox-guard and the checkout; the guard runs before any target', () => {
+  for (const f of ['live-probe.yml', 'live-probe-selftest.yml']) {
+    const y = wf(f);
+    const ref = /\n  SURFACE_CORPUS_REF: '([0-9a-f]{40})'\n/.exec(y)[1];
+    assert.equal(ref, '97bd96cae93b894fa3f891e3c05514a7c4bc0432', f + ': at or after mcp-surface-corpus #7');
+    const code = y.replace(/^\s*#.*$/gm, '');
+    assert.match(code, new RegExp('\\n  sandbox:\\n(?:    .*\\n)*?    uses: isokron-ai/mcp-surface-corpus/\\.github/workflows/sandbox-conformance\\.yml@' + ref + ' # SURFACE_CORPUS_REF\\n    with:\\n      mutations: false\\n'), f);
+    assert.match(code, new RegExp('uses: isokron-ai/mcp-surface-corpus/sandbox-guard@' + ref + ' # SURFACE_CORPUS_REF\\n'), f);
+    assert.match(code, /needs\.sandbox\.outputs\.verdict == 'pass'/, f + ': no target unless the conformance check passed');
+    const i = code.indexOf('sandbox-guard@'); const j = code.indexOf('id: plan'); const k = code.indexOf('run: corpus/live-probe-sandbox.sh');
+    assert.ok(i > 0 && i < j && j < k, f + ': the guard runs before the plan and the sandbox step');
+    assert.match(code, /GUARD_VERDICT: \$\{\{ steps\.guard\.outputs\.verdict \}\}\n          GUARD_SHA: \$\{\{ steps\.guard\.outputs\.sandbox-sha \}\}\n/);
+  }
+  const sh = readFileSync(join(root, 'corpus', 'live-probe-sandbox.sh'), 'utf8');
+  assert.match(sh, /"\$\{GUARD_VERDICT:-\}" != pass .*"\$GUARD_SHA" != "\$msc_commit"/, 'no target unless the guard passed from the same commit');
+  assert.ok(sh.indexOf('GUARD_VERDICT') < sh.indexOf('drive "$work/targets-controls.json"'));
+});
+
 test('R-LP-03: the self test checks a bundle\'s workflow commit against GITHUB_WORKFLOW_SHA, as the worker kit records it', () => {
   const exp = LP.expectedIdentity({ workflow: { file: '.github/workflows/live-probe-selftest.yml' } }, { fence: 2, run_key: 'b'.repeat(64) }, {}, { ATTEMPT_ID: 'a1', GITHUB_REPOSITORY: 'isokron-ai/mcp-check', GITHUB_SHA: '1'.repeat(40), GITHUB_WORKFLOW_SHA: '2'.repeat(40), GITHUB_RUN_ID: '9' });
   assert.deepEqual(exp, { attempt_id: 'a1', fence: 2, run_key: 'b'.repeat(64), repo: 'isokron-ai/mcp-check', workflow_file: '.github/workflows/live-probe-selftest.yml', workflow_sha: '2'.repeat(40), run_id: 9 });
@@ -546,7 +564,8 @@ test('live-probe workflow: dispatch only, the pump\'s inputs, kill switch first,
   const guardSteps = job('guard').split('\n      - ');
   assert.match(guardSteps[1], /^id: enabled\n.*\n        env:\n          LOOP_ENABLED: \$\{\{ vars\.LOOP_ENABLED \}\}\n/, 'the first step is the LOOP_ENABLED check');
   assert.match(job('guard'), /LANE_LIVE_PROBE_ENABLED: \$\{\{ vars\.LANE_LIVE_PROBE_ENABLED \}\}\n        run: node corpus\/loop-guard\.mjs --lane live-probe/);
-  assert.match(job('probe'), /needs: guard\n    if: needs\.guard\.outputs\.proceed == 'true'/);
+  assert.match(job('probe'), /needs: \[guard, sandbox\]\n    if: needs\.guard\.outputs\.proceed == 'true' && needs\.sandbox\.outputs\.verdict == 'pass'\n/);
+  assert.match(job('sandbox'), /needs: guard\n    if: needs\.guard\.outputs\.proceed == 'true'\n/);
   const steps = job('probe').split('\n      - ');
   assert.match(steps[2], /^name: Check the inputs\n/);
   assert.equal((steps[2].match(/\[\[ ! "\$[A-Z_]+" =~ \$[a-z_]+ \]\]/g) || []).length, 3);

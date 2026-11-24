@@ -51,7 +51,7 @@ env:
   # subject's packages). Every worker-kit step below names this same commit (test/live-probe.test.mjs checks).
   WORKER_KIT_REF: 'b1f25a9b0b7655f45eb353f31562a93d9319d5a4'
   # The isokron-ai/mcp-surface-corpus commit whose sandbox and driver run the servers (its main).
-  SURFACE_CORPUS_REF: '3b43c19a3b84950732379ea5beee06a8f73512a6'
+  SURFACE_CORPUS_REF: '97bd96cae93b894fa3f891e3c05514a7c4bc0432'
 
 jobs:
   guard:
@@ -87,14 +87,27 @@ jobs:
           LANE_LIVE_PROBE_ENABLED: ${{ vars.LANE_LIVE_PROBE_ENABLED }}
         run: node corpus/loop-guard.mjs --lane live-probe
 
-  probe:
+  # The pinned sandbox's own conformance check (mcp-surface-corpus's reusable workflow, at SURFACE_CORPUS_REF), on a
+  # runner of its own: gVisor, the firewall and the hostile self test, passed only when its telemetry recomputes a pass.
+  sandbox:
     needs: guard
     if: needs.guard.outputs.proceed == 'true'
+    permissions:
+      contents: read
+    uses: isokron-ai/mcp-surface-corpus/.github/workflows/sandbox-conformance.yml@97bd96cae93b894fa3f891e3c05514a7c4bc0432 # SURFACE_CORPUS_REF
+    with:
+      mutations: false
+      artifact-prefix: live-probe-sandbox
+
+  probe:
+    needs: [guard, sandbox]
+    if: needs.guard.outputs.proceed == 'true' && needs.sandbox.outputs.verdict == 'pass'
     name: live-probe
     runs-on: ubuntu-24.04
-    # Below the pump's lease for a shard of 10: 1.5 x (4 + 10 x 2) + 10 = 46 minutes. No subject runs past minute 36
-    # of this job (the deadline step); those not reached report a retryable skip (shard_deadline).
-    timeout-minutes: 43
+    # Below the pump's lease for a shard of 10: 1.5 x (4 + 10 x 2) + 10 = 46 minutes, with the guard and the conformance
+    # check (about 3 minutes) before it. No subject runs past minute 34 of this job (the deadline step); those not
+    # reached report a retryable skip (shard_deadline).
+    timeout-minutes: 40
     permissions:
       contents: read
     steps:
@@ -121,7 +134,7 @@ jobs:
           if [[ ! "$ITEMS" =~ $items_re ]] || [ "${#ITEMS}" -gt 60000 ]; then echo "::error title=live-probe::items must be one line of JSON, a list of at most 60000 characters"; exit 1; fi
       - id: deadline
         name: Deadline for the subjects
-        run: echo "at=$(( $(date +%s) + 36 * 60 ))" >> "$GITHUB_OUTPUT"
+        run: echo "at=$(( $(date +%s) + 34 * 60 ))" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -149,6 +162,13 @@ jobs:
             scripts/lib/yaml-lite.mjs
           sparse-checkout-cone-mode: false
           persist-credentials: false
+      # Before any target, on this runner: the same sandbox guard (gVisor, the firewall, the hostile self test and its
+      # telemetry check), from the commit SURFACE_CORPUS_REF pins. It fails the job unless the verdict is pass.
+      - id: guard
+        name: Sandbox guard on this runner (mcp-surface-corpus sandbox-guard)
+        uses: isokron-ai/mcp-surface-corpus/sandbox-guard@97bd96cae93b894fa3f891e3c05514a7c4bc0432 # SURFACE_CORPUS_REF
+        with:
+          out: ${{ runner.temp }}/live-probe/selftest
       # Registry and GitHub reads only (JSON, fixed hosts): nothing of a subject is fetched to run here.
       - id: plan
         name: Resolve each subject's install method
@@ -157,8 +177,8 @@ jobs:
           ATTEMPT_ID: ${{ inputs.attempt_id }}
           ITEMS: ${{ inputs.items }}
         run: node corpus/live-probe.mjs plan "$RUNNER_TEMP/live-probe" --msc surface-corpus --seed tool-qa/history/seed-v1.json
-      # Every subject runs in the sandbox's containers, never in this shell. The step ends only after every
-      # container, network and volume of the sandbox is gone.
+      # Every subject runs in the sandbox's containers, never in this shell. The step ends only after the sandbox is
+      # gone: no container or volume at all, no process of uid 65534, no runsc process.
       - id: sandbox
         name: Run the controls and subjects in the sandbox
         env:
@@ -166,6 +186,8 @@ jobs:
           # api.github.com only, never to a container.
           GH_TOKEN: ${{ github.token }}
           DEADLINE: ${{ steps.deadline.outputs.at }}
+          GUARD_VERDICT: ${{ steps.guard.outputs.verdict }}
+          GUARD_SHA: ${{ steps.guard.outputs.sandbox-sha }}
         run: corpus/live-probe-sandbox.sh "$RUNNER_TEMP/live-probe" surface-corpus "$DEADLINE"
       - id: bundle
         name: Check the controls and build the bundles

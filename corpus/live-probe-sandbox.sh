@@ -4,10 +4,11 @@
 #
 #   corpus/live-probe-sandbox.sh <work> <mcp-surface-corpus checkout> <deadline, epoch seconds>
 #
-#   1. gVisor (runsc) installed and registered exactly as the sandbox pins it, then the host firewall (net-guard.sh);
-#   2. the sandbox self test (bin/sandbox-selftest.mjs, eleven escape attempts) and its telemetry check
-#      (scripts/check-selftest.mjs), before any target. If the check fails, nothing else runs.
-#      TODO: call mcp-surface-corpus's reusable sandbox-conformance.yml instead, once it is merged there.
+#   1. before it, the workflow ran mcp-surface-corpus's sandbox-guard action on this runner (gVisor installed and
+#      registered as pinned, the host firewall, the hostile self test); this script runs no target unless that guard
+#      said pass from the same sandbox commit as the checkout (GUARD_VERDICT, GUARD_SHA);
+#   2. the self test's telemetry check (scripts/check-selftest.mjs) once more, from the checkout, before any target.
+#      If it fails, nothing else runs.
 #   3. the controls (our own server from npm, and the forgery server) through the sandbox driver;
 #   4. the subjects through the sandbox driver, stopped at the deadline (the items left report a retryable skip);
 #   5. a last sweep of every container, network and volume of the runs, and a check that none is left, so no
@@ -59,23 +60,18 @@ drive() {
   return "${PIPESTATUS[0]}"
 }
 
-# 1. gVisor first: registering runsc restarts the Docker daemon; then the firewall. The logs stay ours (not root's).
-# shellcheck disable=SC2024
-sudo "$msc/scripts/install-runsc.sh" "$(command -v node)" >"$work/install-runsc.log" 2>&1; install_rc=$?
-# shellcheck disable=SC2024
-if [ "$install_rc" -eq 0 ]; then sudo "$msc/scripts/net-guard.sh" >"$work/net-guard.log" 2>&1; guard_rc=$?; fi
-if [ "$install_rc" -ne 0 ] || [ "$guard_rc" -ne 0 ]; then
-  echo "::error title=live-probe::the sandbox could not be set up (gVisor $install_rc, firewall $guard_rc); no target ran"
-  tail -n 20 "$work/install-runsc.log" "$work/net-guard.log" 2>/dev/null
+# 1. The sandbox guard ran on this runner, passed, and from the sandbox commit checked out here.
+if [ "${GUARD_VERDICT:-}" != pass ] || ! [[ "${GUARD_SHA:-}" =~ ^[0-9a-f]{40}$ ]] || [ "$GUARD_SHA" != "$msc_commit" ]; then
+  echo "::error title=live-probe::the sandbox guard did not pass on this runner, or ran another sandbox commit; no target ran"
   write_state; exit 1
 fi
+install_rc=0; guard_rc=0; selftest_rc=0
 
-# 2. The self test, then its telemetry check, which alone decides.
-(cd "$msc" && node bin/sandbox-selftest.mjs --out "$work/selftest" --lane ci) >"$work/selftest.log" 2>&1; selftest_rc=$?
+# 2. Its telemetry check once more, from this checkout; it alone decides.
 node "$msc/scripts/check-selftest.mjs" "$work/selftest/telemetry.jsonl" >"$work/selftest-check.txt" 2>&1; check_rc=$?
 cat "$work/selftest-check.txt"
 if [ "$check_rc" -ne 0 ]; then
-  echo "::error title=live-probe::the sandbox self test failed (harness $selftest_rc, check $check_rc); no target ran"
+  echo "::error title=live-probe::the sandbox self test does not check out (check $check_rc); no target ran"
   sweep >/dev/null 2>&1 || true
   write_state; exit 1
 fi

@@ -50,12 +50,18 @@ The run is named `shard <shard_id>`.
    [isokron-ai/mcp-surface-corpus](https://github.com/isokron-ai/mcp-surface-corpus) at `SURFACE_CORPUS_REF`, used as
    it is: gVisor (`runsc`) with syscall tracing, user 65534, no capabilities, a read-only root, an install network
    whose only way out is an allowlist proxy to the package registry, a run network with no way out, a DNS logger
-   that answers every name with itself, and the host firewall. Before any target the sandbox self test runs its
-   eleven escape attempts and its telemetry check must pass; if not, nothing else runs. Then the controls, then the
-   subjects, each with its own time limit, all stopped at minute 36 of the job. Last, every container, network and
-   volume is removed, and the upload steps start only when there is no container or volume left at all (labelled
-   or not), no labelled network, no host process running as the sandbox user (uid 65534), and no `runsc` or
-   `containerd-shim-runsc` process.
+   that answers every name with itself, and the host firewall. Before any target, at that same commit:
+   - its reusable `sandbox-conformance.yml` runs as the job `sandbox`, on a runner of its own; the probe job starts
+     only when its verdict is `pass`;
+   - in the probe job, on the runner that will run the targets, its `sandbox-guard` action installs gVisor and the
+     firewall and runs the eleven escape attempts of the self test, and fails the job unless the telemetry
+     recomputes a pass; the sandbox script then runs no target unless that guard passed from the same commit as
+     the checkout, and checks the telemetry once more itself.
+
+   Then the controls, then the subjects, each with its own time limit, all stopped at minute 34 of the job. Last,
+   every container, network and volume is removed, and the upload steps start only when there is no container or
+   volume left at all (labelled or not), no labelled network, no host process running as the sandbox user (uid
+   65534), and no `runsc` or `containerd-shim-runsc` process.
 4. **Grade and bundle** (`corpus/live-probe.mjs bundle`). The controls are checked first; then each item's bundle is
    written, and tool-qa's worker-kit (pinned to `WORKER_KIT_REF`) seals and uploads it as
    `result-<attempt_id>-<i>.tar.age`. Every item gets a bundle.
