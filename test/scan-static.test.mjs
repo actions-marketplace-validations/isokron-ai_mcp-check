@@ -819,3 +819,22 @@ test('R-SS-10: the token stays in the parent, goes to api.github.com only, and a
   assert.equal(out.detail, 'RefusedHost ["subject","timeoutMs"]', 'refused, and no token in the thread');
   assert.deepEqual(asked, []);
 });
+
+test('R-SS-11: a list too large to hold as one string is list_rejected (too_large), measured without building it', async () => {
+  const { jsonBytesUpTo, readList, MAX_BYTES } = await import('../src/limits.js');
+  for (const v of [{ a: [1, 'é', null, true, -0, 1.5e300, { 'k"ey': 'x\n' }] }, [], {}, 'plain', [undefined, () => 1], { u: undefined, d: new Date(0) }]) {
+    assert.equal(jsonBytesUpTo(v, 1e9), Buffer.byteLength(JSON.stringify(v), 'utf8'), JSON.stringify(v));
+  }
+  const shared = { type: 'object', properties: Object.fromEntries(Array.from({ length: 300 }, (_, i) => ['p' + i, { type: 'string', description: 'x'.repeat(400) }])) };
+  const huge = { tools: Array.from({ length: 5000 }, (_, i) => ({ name: 'tool_' + i, inputSchema: shared })) };
+  const t0 = performance.now();
+  assert.throws(() => readList(huge, 'the list'), (e) => e.code === 'too_large' && /is over 2\.00 MiB as JSON/.test(e.message));
+  assert.ok(performance.now() - t0 < 2000, 'stops at the cap');
+  assert.equal(jsonBytesUpTo(huge, MAX_BYTES), MAX_BYTES + 1);
+
+  // Through a real subject: 5,000 tools sharing a constant, read and graded in its own thread.
+  const scan = await scanInWorker('o/shared', { fetch: fakeGithub({ 'o/shared': { files: sharedConstantRepo(5000) } }), timeoutMs: 60_000 });
+  assert.equal(scan.detail, 'list_rejected');
+  assert.equal(scan.list_error, 'too_large');
+  assert.equal(scan.retryable, false);
+});
