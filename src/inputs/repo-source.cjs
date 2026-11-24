@@ -1380,6 +1380,9 @@
     else if (tok.type === 'id' && /^(True|False|None)$/.test(tok.value)) r = { value: tok.value === 'None' ? null : tok.value === 'True', end: i + 1, exact: true };
     else if (isP(tok, '[') || isP(tok, '(')) {
       const close = pyMatch(t, i); const a = []; let k = i + 1; let exact = true; let comma = false;
+      // [*OTHER, x]: unpacks a list the reader may not know, so the list's length is unknown and the list is not read
+      // (a list with the unpacked part left out would be read as a shorter enum or required list than the real one)
+      for (let q = i + 1; q < close; q = pySkip(t, q) + 1) { if ((isP(t[q], '*') || isP(t[q], '**')) && (isP(t[q - 1], tok.value) || isP(t[q - 1], ','))) { lose(literalsArr(t, i, close + 1)); return { value: PY_SKIP, end: close + 1 }; } if (!isP(t[pySkip(t, q)], ',')) break; }
       while (k < close) { const v = pyValue(t, k, ctx); if (v.value === PY_SKIP) { exact = false; const e2 = pySkip(t, k); lose(literalsArr(t, k, e2)); k = e2; } else { a.push(v.value); exact = exact && v.exact !== false; k = v.end; } if (isP(t[k], ',')) { comma = true; k++; } else break; }
       if (k >= close || isP(t[k], tok.value === '[' ? ']' : ')')) r = isP(tok, '(') && !comma && a.length === 1 ? { value: a[0], end: close + 1, exact } : { value: a, end: close + 1, exact };
     } else if (isP(tok, '{')) {
@@ -1666,6 +1669,72 @@
       if (a && camel) { const o = {}; Object.keys(a).forEach((k) => { o[/^(read_only|destructive|idempotent|open_world)_hint$/.test(k) ? k.replace(/_(\w)/g, (x, c) => c.toUpperCase()) : k] = a[k]; }); a = o; }
       return a || null;
     };
+    // Tool dicts in one logical line (R-RD-01): a dict whose own keys include "name" (a string the reader can work out) and
+    // "inputSchema" is a tool as a hand-rolled server lists it, wherever it stands (a TOOLS list, a return value, a
+    // constant). "input_schema" is also the key of the Anthropic API's tool tables, so it counts only in a hand-rolled
+    // server's file: one that answers "tools/list" and registers nothing through an SDK (a FastMCP file that also calls
+    // the Anthropic API has such dicts too). A name the reader cannot work out (a parameter, an attribute, a name a
+    // def's parameter or local shadows) is not a tool here: the dict is a template filled elsewhere. A file that uses an
+    // MCP client (ClientSession, mcp.client, fastmcp's Client) is not read for dicts: its tool dicts describe another
+    // server's tools (a gateway's or a test's copies).
+    const handRolled = /["']tools\/list["']/.test(clean) && !/\b(?:FastMCP|MCPServer)\b|@[\w.]*\.tool\b|\.add_tool\s*\(|\bTool\s*\(/.test(clean);
+    const mcpClient = /^\s*(?:from\s+mcp(?:\.client[\w.]*)?\s+import\s+[^\n]*\b(?:ClientSession|Client|stdio_client|sse_client|streamablehttp_client)\b|from\s+fastmcp(?:\.client[\w.]*)?\s+import\s+[^\n]*\bClient\b|import\s+mcp\.client\b)/m.test(clean);
+    // the names a def around logical line k binds (its parameters and the names its body assigns): they shadow constants
+    const shadowAt = (k) => {
+      const out = new Set(); let ind = L[k].indent;
+      for (let m = k - 1; m >= 0 && ind > 0; m--) {
+        if (L[m].indent >= ind) continue;
+        ind = L[m].indent;
+        const d = /^(?:async\s+)?def\s+\w+\s*\(([\s\S]*?)\)\s*(?:->[\s\S]*?)?:/.exec(L[m].text); if (!d) continue;
+        splitTop(d[1], ',').forEach((x) => { const pm = /^\**\s*(\w+)/.exec(x.trim()); if (pm) out.add(pm[1]); });
+        for (let q = m + 1; q < L.length && L[q].indent > L[m].indent; q++) { const a = /^([A-Za-z_]\w*)\s*(?::[^=]+?)?=(?!=)/.exec(L[q].text) || /^for\s+([A-Za-z_]\w*)\b/.exec(L[q].text); if (a) out.add(a[1]); }
+      }
+      return out;
+    };
+    const dictTools = (l, k) => {
+      if (mcpClient) return;
+      let t; try { t = pyTokenize(l.text); } catch (e) { return; }
+      let nls = null;
+      const lineOf = (pos) => { if (!nls) { nls = []; for (let q = 0; q < l.text.length; q++) if (l.text.charCodeAt(q) === 10) nls.push(q); } let lo = 0; let hi = nls.length; while (lo < hi) { const mid = (lo + hi) >> 1; if (nls[mid] < pos) lo = mid + 1; else hi = mid; } return l.line + lo; };
+      const shadow = l.indent > 0 ? shadowAt(k) : null;
+      let dctx = ctx;
+      if (shadow && shadow.size) { const c2 = Object.assign({}, ctx.consts); shadow.forEach((n) => { delete c2[n]; }); dctx = Object.assign({}, ctx, { consts: c2 }); }
+      const bm = l.indent === 0 ? /^([A-Za-z_]\w*)\s*(?::[^=]+)?=\s*\{/.exec(l.text) : null;
+      for (let i = 0; i < t.length; i++) {
+        if (!isP(t[i], '{')) continue;
+        const close = pyMatch(t, i); if (close >= t.length) continue;
+        // the dict's own keys (depth 1): key token -> index of its value
+        const keys = {}; let j = i + 1;
+        while (j < close) {
+          if (t[j].type === 'str' && isP(t[j + 1], ':') && (isP(t[j - 1], '{') || isP(t[j - 1], ','))) { if (!hasOwn(keys, t[j].value)) keys[t[j].value] = j + 2; }
+          if (isP(t[j], '(') || isP(t[j], '[') || isP(t[j], '{')) { j = pyMatch(t, j) + 1; continue; }
+          j++;
+        }
+        const sk = keys.inputSchema !== undefined ? 'inputSchema' : keys.input_schema !== undefined && handRolled ? 'input_schema' : null;
+        if (keys.name === undefined || !sk) continue;
+        const nv = pyValue(t, keys.name, dctx);
+        if (typeof nv.value !== 'string' || nv.exact === false || !nv.value || !(isP(t[nv.end], ',') || isP(t[nv.end], '}'))) continue;
+        const tool = { name: nv.value }; const un = [];
+        const val = (key) => (keys[key] === undefined ? undefined : pyValue(t, keys[key], dctx));
+        const tv = val('title'); if (tv && typeof tv.value === 'string') tool.title = tv.value;
+        const dv = val('description');
+        if (dv) {
+          if (typeof dv.value === 'string') { tool.description = dv.value; if (dv.partial) un.push('description'); }
+          else { const e2 = pySkip(t, keys.description); const lits = literalsArr(t, keys.description, e2); lose(lits); if (lits.length) tool.description = lits.join(' … ').slice(0, MAX_STR); un.push('description'); }
+        }
+        const sv = val(sk);
+        let exact = !un.length;
+        if (sv && sv.value !== PY_SKIP && sv.value && typeof sv.value === 'object' && !Array.isArray(sv.value)) { tool.inputSchema = sv.value; exact = exact && sv.exact !== false; }
+        else if (dv) { tool.inputSchema = { type: 'object' }; un.push('inputSchema'); lose(literalsArr(t, keys[sk], pySkip(t, keys[sk]))); exact = false; }
+        else continue;
+        const av = val('annotations');
+        if (av) { if (av.value && av.value !== PY_SKIP && typeof av.value === 'object' && !Array.isArray(av.value)) tool.annotations = av.value; else un.push('annotations'); }
+        ['outputSchema', '_meta', 'icons', 'execution'].forEach((key) => { const v = val(key); if (v && v.value && v.value !== PY_SKIP && typeof v.value === 'object') tool[key] = v.value; });
+        tool._unreadable = un;
+        add(tool, lineOf(t[i].s), { lowLevel: true, literal: true, binding: bm && i === t.findIndex((x) => isP(x, '{')) ? bm[1] : null, exactTypes: exact && !un.length });
+        i = close;
+      }
+    };
     for (let k = 0; k < L.length; k++) {
       const l = L[k];
       const lineLost = []; LOST.cur = lineLost; const toolsBefore = tools.length; const unresBefore = unresolved.length;
@@ -1696,6 +1765,8 @@
         }
         k = e; continue;
       }
+      // tools written out as dicts: {"name": …, "description": …, "inputSchema": {…}} (a hand-written tools/list answer)
+      if (/["'](?:inputSchema|input_schema)["']\s*:/.test(l.text)) dictTools(l, k);
       // calls inside the line: Tool(...), x.tool(fn, ...), x.add_tool(fn, ...), Tool.from_function(...), *ToolDefinition(fn=...)
       if (!/\bTool\s*\(|\.tool\s*\(|add_tool\s*\(|from_function\s*\(|ToolDefinition\s*\(/.test(l.text)) continue;
       const t = pyTokenize(l.text);
