@@ -1,0 +1,11 @@
+{
+  "about": "The fixture shard of .github/workflows/live-probe-selftest.yml: our own repositories, each taking a different path through the lane. The workflow sends subject, run_key and fence as the items input; expect is what the self test checks in each bundle.",
+  "items": [
+    { "subject": "isokron-ai/mcp-check", "run_key": "1111111111111111111111111111111111111111111111111111111111111111", "fence": 1,
+      "expect": { "status": "graded", "catalog_hash": "3b6986dcdac856b5a8baaf4836be4c726f8076da7bca547fe4e186931cf02919" } },
+    { "subject": "isokron-ai/kronicle-lite", "run_key": "2222222222222222222222222222222222222222222222222222222222222222", "fence": 2,
+      "expect": { "status": "skipped", "skip_reason": "timeout_start" } },
+    { "subject": "isokron-ai/tool-qa", "run_key": "3333333333333333333333333333333333333333333333333333333333333333", "fence": 3,
+      "expect": { "status": "skipped", "skip_reason": "no_runnable_artifact" } }
+  ]
+}

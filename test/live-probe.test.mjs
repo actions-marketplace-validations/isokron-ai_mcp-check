@@ -1,0 +1,507 @@
+// The live-probe loop worker (corpus/live-probe.mjs, .github/workflows/live-probe.yml): input checks, the install
+// method resolver (registry and seed list, fetch mocked), the sandbox target lists, the item and control logic over
+// saved sandbox output, and every bundle judged by tool-qa's own contract and forgery checks (test/tool-qa/). No
+// network: the sandbox itself runs only on GitHub (live-probe-selftest.yml).
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import * as LP from '../corpus/live-probe.mjs';
+import { evaluateGuard } from '../corpus/loop-guard.mjs';
+import { buildManifest, collectFiles, validateManifest, SKIP_REASONS } from './tool-qa/worker-kit/contract.mjs';
+import { readTar, writeTar } from './tool-qa/worker-kit/tar.mjs';
+import { checkBundle } from './tool-qa/ingest/forgery.mjs';
+import { scanFiles } from './tool-qa/ingest/redact.mjs';
+
+const root = fileURLToPath(new URL('..', import.meta.url));
+const FX = join(root, 'test', 'fixtures', 'live-probe');
+const fx = (f) => readFileSync(join(FX, f), 'utf8');
+const MARKER = 'liveprobe-MARKERMARKERMARKER0000';
+const NODE24 = 'docker.io/library/node:24-bookworm-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23fceb061c54';
+const items = (n, f = (i) => 'owner' + i + '/repo' + i) => JSON.stringify(Array.from({ length: n }, (_, i) => ({ subject: f(i), run_key: String(i + 1).repeat(64).slice(0, 64).replace(/[^0-9a-f]/g, 'a'), fence: i + 1 })));
+
+// ------------------------------------------------------------------ a fake registry and OCI registry
+
+function res(status, body, headers = {}) {
+  const buf = Buffer.from(typeof body === 'string' ? body : JSON.stringify(body));
+  const h = new Map(Object.entries({ 'content-length': String(buf.length), ...headers }).map(([k, v]) => [k.toLowerCase(), v]));
+  return { status, ok: status >= 200 && status < 300, headers: { get: (k) => h.get(k.toLowerCase()) ?? null }, arrayBuffer: async () => buf };
+}
+function fakeFetch(servers, { status = 200, oci = {} } = {}) {
+  const calls = [];
+  const f = async (url, init = {}) => {
+    calls.push({ url: String(url), method: init.method || 'GET', auth: init.headers && init.headers.authorization });
+    const u = new URL(url);
+    if (u.hostname === 'registry.modelcontextprotocol.io') {
+      if (status !== 200) return res(status, { error: 'x' });
+      const q = (u.searchParams.get('search') || '').toLowerCase();
+      return res(200, { servers: servers.filter((s) => s.name.toLowerCase().includes(q) || (s.packages || []).some((p) => String(p.identifier).toLowerCase().includes(q))).map((server) => ({ server })) });
+    }
+    if (u.hostname === 'auth.example.io') return res(200, { token: 'anon-token' });
+    const o = oci[u.hostname];
+    if (o) {
+      if (!init.headers.authorization) return res(401, '', { 'www-authenticate': 'Bearer realm="https://auth.example.io/token",service="' + u.hostname + '"' });
+      return o(u, init);
+    }
+    throw new Error('unexpected fetch ' + url);
+  };
+  f.calls = calls;
+  return f;
+}
+const npmPkg = (identifier, extra = {}) => ({ registryType: 'npm', identifier, version: '1.2.3', transport: { type: 'stdio' }, ...extra });
+const server = (name, repo, packages, extra = {}) => ({ name, version: '1.2.3', repository: { url: 'https://github.com/' + repo, source: 'github' }, packages, ...extra });
+
+// ------------------------------------------------------------------ inputs
+
+test('live-probe inputs: checked whole; at most 10 items; nothing is repeated back', () => {
+  const ok = LP.parseInputs({ shardId: 'live-probe-1', attemptId: 'a1', items: items(10) });
+  assert.equal(ok.items.length, 10);
+  assert.equal(ok.items[3].repo, 'owner3/repo3');
+  assert.throws(() => LP.parseInputs({ shardId: 'live-probe-1', attemptId: 'a1', items: items(11) }), (e) => e.code === 'bad_items');
+  assert.throws(() => LP.parseInputs({ shardId: 'bad\nid', attemptId: 'a1', items: items(1) }), (e) => e.code === 'bad_shard_id');
+  assert.throws(() => LP.parseInputs({ shardId: 's', attemptId: 'a1', items: '[{"subject":"a/b","run_key":"x","fence":1}]' }), (e) => e.code === 'bad_run_key');
+  assert.throws(() => LP.parseInputs({ shardId: 's', attemptId: 'a1', items: JSON.stringify([{ subject: 'a/b', run_key: 'a'.repeat(64), fence: 1, extra: 1 }]) }), (e) => e.code === 'bad_item');
+  assert.throws(() => LP.parseInputs({ shardId: 's', attemptId: 'a1', items: JSON.stringify([{ subject: 'a/b', run_key: 'a'.repeat(64), fence: 1 }, { subject: 'c/d', run_key: 'a'.repeat(64), fence: 2 }]) }), (e) => e.code === 'duplicate_run_key');
+  const odd = LP.parseInputs({ shardId: 's', attemptId: 'a1', items: JSON.stringify([{ subject: 'npm:left-pad', run_key: 'a'.repeat(64), fence: 1 }]) });
+  assert.equal(odd.items[0].repo, null, 'not owner/name: a bad_subject skip, not a failed shard');
+});
+
+// ------------------------------------------------------------------ helpers
+
+test('live-probe helpers: repository URLs, OCI references, arguments, env, transports, package URLs', () => {
+  assert.equal(LP.repoOfUrl('https://github.com/Owner/Repo.git'), 'owner/repo');
+  assert.equal(LP.repoOfUrl('git+https://github.com/a/b'), 'a/b');
+  assert.equal(LP.repoOfUrl('https://gitlab.com/a/b'), null);
+  assert.deepEqual(LP.parseOciRef('ghcr.io/apollographql/apollo-mcp-server:v2.2.1'), { host: 'ghcr.io', path: 'apollographql/apollo-mcp-server', tag: 'v2.2.1', digest: null });
+  assert.deepEqual(LP.parseOciRef('mcp/fetch'), { host: 'docker.io', path: 'mcp/fetch', tag: 'latest', digest: null });
+  assert.deepEqual(LP.parseOciRef('alpine:3'), { host: 'docker.io', path: 'library/alpine', tag: '3', digest: null });
+  assert.equal(LP.parseOciRef('localhost:5000/x:1'), null, 'a registry with a port, or on the runner itself, is never pulled');
+  assert.equal(LP.parseOciRef('ghcr.io/a/../b:1'), null);
+  assert.deepEqual(LP.packageArgs([{ type: 'positional', value: 'serve' }, { type: 'named', name: '--port', default: '8080' }, { type: 'positional', isRequired: true, valueHint: 'path' }, { type: 'positional', value: '{dir}' }]), { args: ['serve', '--port', '8080'], unfilled: 1 });
+  assert.deepEqual(LP.packageEnv([{ name: 'API_KEY', isRequired: true, isSecret: true, default: 'x' }, { name: 'MODE', isRequired: true, default: 'fast' }, { name: 'PATH', isRequired: true }, { name: 'OPT' }]), { env: { API_KEY: null, MODE: 'fast' }, names: ['API_KEY', 'MODE', 'OPT'] });
+  assert.deepEqual(LP.transportOf({ type: 'streamable-http', url: 'http://localhost:3001/mcp' }), { transport: 'http', http: { port: 3001, path: '/mcp' } });
+  assert.deepEqual(LP.transportOf({ type: 'sse', url: 'http://localhost:3001/sse' }), { detail: 'unsupported_transport' });
+  assert.deepEqual(LP.transportOf({ type: 'streamable-http', url: 'http://localhost:{port}/mcp' }), { detail: 'unsupported_transport' });
+  assert.equal(LP.purlOf('npm', '@isokron/mcp-check', '1.3.1'), 'pkg:npm/%40isokron/mcp-check@1.3.1');
+  assert.equal(LP.purlOf('pypi', 'MCP_Server.Time', 'latest'), 'pkg:pypi/mcp-server-time');
+});
+
+test('live-probe safeText: a subject string outside raw/ never carries an identity word, a key or an assignment', () => {
+  assert.equal(LP.safeText('@isokron/mcp-check'), '@isokron/mcp-check');
+  for (const s of ['attempt_id', 'my-run-key-server', 'fence', 'Fencing tool', 'run key: x', 'say "hi"', "it's"]) assert.equal(LP.safeText(s), null, s);
+  assert.equal(LP.safeText('ghcr.io/acme/box:1.4'), 'ghcr.io/acme/box:1.4');
+  assert.equal(LP.safeText('https://example.com/x'), 'https://example.com/x');
+});
+
+// ------------------------------------------------------------------ resolving
+
+test('live-probe resolve: the registry entry of the repository, npm before pypi before oci, stdio first', async () => {
+  const f = fakeFetch([server('io.github.acme/widget', 'acme/widget', [
+    { registryType: 'pypi', identifier: 'widget-mcp', version: '2.0.0', transport: { type: 'stdio' } },
+    npmPkg('@acme/widget', { transport: { type: 'streamable-http', url: 'http://localhost:4000/mcp' } }),
+    npmPkg('@acme/widget-stdio', { packageArguments: [{ type: 'positional', value: 'stdio' }], environmentVariables: [{ name: 'ACME_TOKEN', isRequired: true, isSecret: true }] }),
+  ], { repository: { url: 'https://github.com/acme/widget', subfolder: 'packages/server' } })]);
+  const r = await LP.resolveSubject({ subject: 'acme/widget', repo: 'acme/widget' }, { fetch: f });
+  assert.equal(r.status, 'runnable');
+  assert.deepEqual(r.launch, { kind: 'npm', package: '@acme/widget-stdio', version: '1.2.3', args: ['stdio'], env: { ACME_TOKEN: null } });
+  assert.equal(r.choice.matched_by, 'repository');
+  assert.equal(r.subdir, 'packages/server');
+  assert.equal(r.registry.name, 'io.github.acme/widget');
+  assert.ok(f.calls.every((c) => c.url.startsWith('https://registry.modelcontextprotocol.io/v0.1/servers?search=')));
+});
+
+test('live-probe resolve: the seed list finds a moved repository; seed packages alone when the registry has none', async () => {
+  const seed = new Map([['isokron-ai/kronicle-lite', [{ registry: 'npm', identifier: 'kronicle-lite' }]], ['acme/solo', [{ registry: 'pypi', identifier: 'solo-mcp' }, { registry: 'cargo', identifier: 'solo' }]]]);
+  const f = fakeFetch([server('io.github.rafe-walker/kronicle-lite', 'rafe-walker/kronicle-lite', [npmPkg('kronicle-lite', { version: '0.10.2', packageArguments: [{ type: 'positional', value: 'serve' }] })])]);
+  const a = await LP.resolveSubject({ subject: 'isokron-ai/kronicle-lite', repo: 'isokron-ai/kronicle-lite' }, { fetch: f, seed });
+  assert.equal(a.status, 'runnable');
+  assert.equal(a.choice.matched_by, 'seed');
+  assert.deepEqual(a.launch, { kind: 'npm', package: 'kronicle-lite', version: '0.10.2', args: ['serve'] });
+  const b = await LP.resolveSubject({ subject: 'acme/solo', repo: 'acme/solo' }, { fetch: f, seed });
+  assert.equal(b.status, 'runnable');
+  assert.deepEqual(b.launch, { kind: 'pypi', package: 'solo-mcp', version: 'latest' });
+  assert.equal(b.choice.matched_by, 'seed-only');
+});
+
+test('live-probe resolve: skips with the right codes (none, remote only, unsupported, private registry, sse, bad subject)', async () => {
+  const f = fakeFetch([
+    server('io.github.acme/remote', 'acme/remote', [], { remotes: [{ type: 'streamable-http', url: 'https://mcp.acme.example/mcp' }] }),
+    server('io.github.acme/rusty', 'acme/rusty', [{ registryType: 'cargo', identifier: 'rusty' }, { registryType: 'mcpb', identifier: 'https://example.com/x.mcpb' }]),
+    server('io.github.acme/private', 'acme/private', [npmPkg('@acme/private', { registryBaseUrl: 'https://npm.acme.example' })]),
+    server('io.github.acme/sse', 'acme/sse', [npmPkg('@acme/sse', { transport: { type: 'sse', url: 'http://localhost:3000/sse' } })]),
+  ]);
+  const r = async (s) => (await LP.resolveSubject({ subject: s, repo: s }, { fetch: f })).detail;
+  assert.equal(await r('acme/nothing'), 'no_package');
+  assert.equal(await r('acme/remote'), 'remote_only');
+  assert.equal(await r('acme/rusty'), 'unsupported_package');
+  assert.equal(await r('acme/private'), 'private_registry');
+  assert.equal(await r('acme/sse'), 'unsupported_transport');
+  assert.equal((await LP.resolveSubject({ subject: 'npm:x', repo: null }, { fetch: f })).detail, 'bad_subject');
+  for (const d of ['no_package', 'remote_only', 'unsupported_package', 'private_registry', 'unsupported_transport', 'bad_subject']) assert.ok(SKIP_REASONS.includes(LP.DETAILS[d][0]), d);
+});
+
+test('live-probe resolve: a registry rate limit or outage is a retryable skip, never a failed shard', async () => {
+  const a = await LP.resolveSubject({ subject: 'a/b', repo: 'a/b' }, { fetch: fakeFetch([], { status: 429 }) });
+  assert.equal(a.detail, 'rate_limited');
+  assert.deepEqual(LP.DETAILS.rate_limited.slice(0, 2), ['rate_limited', true]);
+  const b = await LP.resolveSubject({ subject: 'a/b', repo: 'a/b' }, { fetch: fakeFetch([], { status: 503 }) });
+  assert.equal(b.detail, 'upstream_error');
+  assert.deepEqual(LP.DETAILS.upstream_error.slice(0, 2), ['upstream_unavailable', true]);
+  const c = await LP.resolveSubject({ subject: 'a/b', repo: 'a/b' }, { fetch: async () => { throw new TypeError('fetch failed'); } });
+  assert.equal(c.detail, 'upstream_error');
+});
+
+test('live-probe resolve: an OCI tag is pinned to its digest through the registry\'s anonymous token, or the next package is tried', async () => {
+  const digest = 'sha256:' + 'ab'.repeat(32);
+  const f = fakeFetch([
+    server('io.github.acme/box', 'acme/box', [{ registryType: 'oci', identifier: 'oci.example.io/acme/box:1.4', transport: { type: 'stdio' }, packageArguments: [{ type: 'positional', value: 'stdio' }] }]),
+    server('io.github.acme/gone', 'acme/gone', [{ registryType: 'oci', identifier: 'oci.example.io/acme/gone:1', transport: { type: 'stdio' } }, { registryType: 'pypi', identifier: 'gone-mcp', version: '1.0', transport: { type: 'stdio' } }]),
+    server('io.github.acme/only', 'acme/only', [{ registryType: 'oci', identifier: 'oci.example.io/acme/gone:1', transport: { type: 'stdio' } }]),
+  ], { oci: { 'oci.example.io': (u) => (u.pathname.includes('/gone/') ? res(404, '') : res(200, '', { 'docker-content-digest': digest })) } });
+  const a = await LP.resolveSubject({ subject: 'acme/box', repo: 'acme/box' }, { fetch: f });
+  assert.deepEqual(a.launch, { kind: 'docker', image: 'oci.example.io/acme/box:1.4@' + digest, args: ['stdio'] });
+  assert.equal(a.choice.oci_digest, 'ab'.repeat(32));
+  assert.ok(f.calls.some((c) => c.url.startsWith('https://auth.example.io/token?service=oci.example.io&scope=repository%3Aacme%2Fbox%3Apull')));
+  const b = await LP.resolveSubject({ subject: 'acme/gone', repo: 'acme/gone' }, { fetch: f });
+  assert.equal(b.launch.kind, 'pypi', 'the image is gone: the next package');
+  const c = await LP.resolveSubject({ subject: 'acme/only', repo: 'acme/only' }, { fetch: f });
+  assert.equal(c.detail, 'image_unavailable');
+});
+
+// ------------------------------------------------------------------ plan and target lists
+
+test('live-probe plan: targets s001.., a target the sandbox refuses is a launch_invalid skip, the budget is shared out', async () => {
+  const f = fakeFetch([server('io.github.a/one', 'a/one', [npmPkg('one')]), server('io.github.a/two', 'a/two', [npmPkg('two')])]);
+  const inputs = LP.parseInputs({ shardId: 's', attemptId: 'a1', items: JSON.stringify([{ subject: 'a/one', run_key: 'a'.repeat(64), fence: 1 }, { subject: 'a/two', run_key: 'b'.repeat(64), fence: 2 }, { subject: 'a/three', run_key: 'c'.repeat(64), fence: 3 }]) });
+  const plan = await LP.planShard({ inputs, fetch: f, marker: MARKER, validateTarget: (t) => { if (t.launch.package === 'two') throw new Error('refused'); } });
+  assert.deepEqual(plan.items.map((x) => [x.target_id, x.resolution.status, x.resolution.detail]), [['s001', 'runnable', null], [null, 'skipped', 'launch_invalid'], [null, 'skipped', 'no_package']]);
+  assert.equal(plan.runnable, 1);
+  assert.equal(plan.subject_timeout_s, LP.SUBJECT_TIMEOUT_MAX_S);
+  assert.equal(plan.items[0].target.timeout_s, plan.subject_timeout_s);
+  assert.deepEqual(plan.items[0].target, { id: 's001', repo: 'a/one', ref: 'HEAD', registry: 'io.github.a/one', launch: { kind: 'npm', package: 'one', version: '1.2.3' }, timeout_s: plan.subject_timeout_s });
+  assert.equal(LP.subjectTimeout(10), 147);
+  assert.ok(LP.subjectTimeout(10) * 10 <= LP.SUBJECT_BUDGET_S);
+  const lists = LP.targetLists(plan, { node24Image: NODE24 });
+  assert.deepEqual(lists.subjects.targets.map((t) => t.id), ['s001']);
+  assert.deepEqual(lists.controls.targets.map((t) => t.id), ['s901', 's902']);
+  const forgery = lists.controls.targets[1].launch;
+  assert.equal(forgery.kind, 'docker');
+  assert.equal(forgery.image, NODE24, 'the sandbox\'s own pinned node image');
+  assert.equal(forgery.entrypoint, 'node');
+  assert.equal(forgery.args[0], '-e');
+  assert.ok(forgery.args[1].length <= 2000 && !/[\n\r]/.test(forgery.args[1]));
+  assert.equal(forgery.args[2], MARKER);
+  assert.deepEqual(lists.controls.targets[0].launch, { kind: 'npm', package: '@isokron/mcp-check', version: '1.3.1', args: ['serve'] });
+  assert.throws(() => LP.targetLists(plan, { node24Image: 'node:24' }));
+});
+
+// ------------------------------------------------------------------ a whole shard from saved sandbox output
+
+/** A work folder as corpus/live-probe-sandbox.sh leaves it, from the fixtures. */
+function workFolder({ marker = MARKER, selftestRc = 0, items: its = null, swept = true, subjectsRc = 0, known = 'probe-known.json', drop = [] } = {}) {
+  const w = mkdtempSync(join(tmpdir(), 'live-probe-test-'));
+  const put = (p, s) => { mkdirSync(join(w, p, '..'), { recursive: true }); writeFileSync(join(w, p), typeof s === 'string' ? s : JSON.stringify(s)); };
+  const rk = (c) => c.repeat(64);
+  const resolution = (type) => ({ status: 'runnable', detail: null, registry: { name: 'io.github.isokron-ai/mcp-check', version: '1.3.1', entries: 1, transports: ['stdio'], remotes: 0 }, choice: { type, identifier: '@isokron/mcp-check', version: '1.3.1', transport: 'stdio', runtime_hint: 'npx', args_n: 1, args_unfilled: 0, env_names: [], oci_digest: null, purl: 'pkg:npm/%40isokron/mcp-check@1.3.1', matched_by: 'repository+seed' }, candidates: [], launch: { kind: 'npm' }, subdir: null, seed_packages: 1 });
+  const plan = {
+    format: LP.PLAN_FORMAT, shard_id: 's', attempt_id: 'attempt-1', marker, planned_at: '2026-11-23T10:00:00.000Z', subject_timeout_s: 147, runnable: 3,
+    items: its || [
+      { index: 0, subject: 'isokron-ai/mcp-check', repo: 'isokron-ai/mcp-check', run_key: rk('1'), fence: 1, target_id: 's001', resolution: resolution('npm'), resolve_ms: 120 },
+      { index: 1, subject: 'isokron-ai/kronicle-lite', repo: 'isokron-ai/kronicle-lite', run_key: rk('2'), fence: 2, target_id: 's002', resolution: resolution('npm'), resolve_ms: 80 },
+      { index: 2, subject: 'isokron-ai/tool-qa', repo: 'isokron-ai/tool-qa', run_key: rk('3'), fence: 3, target_id: null, resolution: { status: 'skipped', detail: 'no_package', registry: null, choice: null, candidates: [], launch: null, subdir: null, seed_packages: 0 }, resolve_ms: 50 },
+      { index: 3, subject: 'acme/late', repo: 'acme/late', run_key: rk('4'), fence: 4, target_id: 's004', resolution: resolution('npm'), resolve_ms: 50 },
+    ],
+  };
+  put('plan.json', plan);
+  put('sandbox.json', { install_rc: 0, guard_rc: 0, selftest_rc: 0, selftest_check_rc: selftestRc, controls_rc: 0, subjects_rc: subjectsRc, swept, msc_commit: '3b43c19a3b84950732379ea5beee06a8f73512a6', gvisor_release: '20261103', worker_kit_ref: 'b1f25a9b0b7655f45eb353f31562a93d9319d5a4' });
+  put('selftest/results.json', { format: 'x', cases: ['direct-ip', 'doh-ip', 'output-forgery'].map((c) => ({ case: c, blocked: true, logged: true, pass: true })), passed: 3, total: 3 });
+  const forgery = fx('probe-forgery.json').split('liveprobe-MARKERMARKERMARKER0000').join(marker);
+  put('driver-controls/s901/probe-bare.json', fx(known));
+  put('driver-controls/s901/record.json', fx('record-ok.json'));
+  put('driver-controls/s902/probe-bare.json', forgery);
+  put('driver-controls/s902/record.json', JSON.parse(fx('record-ok.json')));
+  put('driver-controls/_shard/telemetry.jsonl', '');
+  put('driver-subjects/_shard/shard.json', { runner: { os: 'linux', arch: 'x64', kernel: '6.11.0-1018-azure', node: 'v22.21.0', docker: '28.0.4', container_platform: 'linux/amd64' } });
+  put('driver-subjects/_shard/telemetry.jsonl', fx('telemetry.jsonl'));
+  put('driver-subjects/s001/record.json', fx('record-ok.json'));
+  put('driver-subjects/s001/probe-bare.json', fx('probe-known.json'));
+  put('driver-subjects/s001/static.json', fx('static-known.json'));
+  put('driver-subjects/s001/steps.log', 'npm install ...\n');
+  // kronicle-lite: installed, then exited before answering (a native module was not built).
+  const rec2 = JSON.parse(fx('record-ok.json')); rec2.layers.live = false;
+  put('driver-subjects/s002/record.json', rec2);
+  put('driver-subjects/s002/probe-bare.json', { format: 'isokron-surface-probe/1', era: null, initialize: null, error: 'the server exited before answering', lists: {}, transport: { exit: 1 } });
+  for (const p of drop) { try { writeFileSync(join(w, p), ''); } catch { /* */ } }
+  return w;
+}
+
+const ENV = { GITHUB_REPOSITORY: 'isokron-ai/mcp-check', GITHUB_WORKFLOW_REF: 'isokron-ai/mcp-check/.github/workflows/live-probe.yml@refs/heads/main', GITHUB_WORKFLOW_SHA: 'c'.repeat(40), GITHUB_RUN_ID: '77', GITHUB_RUN_ATTEMPT: '1' };
+
+/** What the worker-kit and then ingest do with one item's folder: manifest, tar, and tool-qa's own checks. */
+function judge(dir, item) {
+  const meta = JSON.parse(readFileSync(join(dir, 'meta.json'), 'utf8'));
+  const files = collectFiles(join(dir, 'bundle'));
+  const workflow = { repo: ENV.GITHUB_REPOSITORY, file: '.github/workflows/live-probe.yml', sha: ENV.GITHUB_WORKFLOW_SHA, run_id: 77, run_attempt: 1 };
+  const manifest = buildManifest({ identity: { attempt_id: 'attempt-1', fence: item.fence, run_key: item.run_key }, workflow, meta, files });
+  const v = validateManifest(manifest);
+  const tar = writeTar([{ path: 'manifest.json', data: Buffer.from(JSON.stringify(manifest)) }, ...files]);
+  const back = new Map(readTar(tar).filter((e) => e.path !== 'manifest.json').map((e) => [e.path, e.data]));
+  const problems = checkBundle(manifest, back, { attempt_id: 'attempt-1', fence: item.fence, run_key: item.run_key, repo: workflow.repo, workflow_file: workflow.file, workflow_sha: workflow.sha, run_id: 77 });
+  const secrets = scanFiles(new Map([...back].filter(([k]) => !k.startsWith('raw/'))));
+  return { manifest, v, problems, secrets, files: back };
+}
+
+/** The pinned field registry (mcp-results at tool-qa's REGISTRY_COMMIT): id -> type. */
+function registryTypes() {
+  const out = new Map();
+  for (const m of fx('fields-registry.yaml').matchAll(/\{id: ([a-z0-9_]+), layer: [a-z_]+, type: ([a-z]+),.*status: ([a-z]+)\}/g)) out.set(m[1], { type: m[2], status: m[3] });
+  return out;
+}
+
+test('live-probe bundle: every item gets a bundle that tool-qa\'s contract and forgery checks accept', () => {
+  const w = workFolder({ subjectsRc: 124 });
+  const lines = [];
+  const summary = LP.bundleShard({ work: w, log: (l) => lines.push(l) });
+  assert.deepEqual(summary.map((s) => [s.status, s.detail]), [['graded', null], ['skipped', 'start_failed'], ['skipped', 'no_package'], ['skipped', 'shard_deadline']]);
+  const plan = JSON.parse(readFileSync(join(w, 'plan.json'), 'utf8'));
+  for (const item of plan.items) {
+    const dir = join(w, 'out', String(item.index));
+    const j = judge(dir, item);
+    assert.ok(j.v.ok, JSON.stringify(j.v.errors));
+    assert.deepEqual(j.problems, [], 'item ' + item.index + ': ' + JSON.stringify(j.problems));
+    assert.deepEqual(j.secrets, []);
+    assert.deepEqual(j.manifest.controls.map((c) => [c.kind, c.expected, c.observed]), [['known_good', 'match', 'match'], ['forgery', 'contained', 'contained'], ['malicious', 'blocked', 'blocked']]);
+    assert.ok([...j.files.keys()].some((k) => k.startsWith('raw/') && j.files.get(k).includes(MARKER)), 'the forgery marker is in raw/');
+  }
+  // The skips: codes from tool-qa's list, retryable only for a passing cause.
+  const meta = (i) => JSON.parse(readFileSync(join(w, 'out', String(i), 'meta.json'), 'utf8'));
+  assert.deepEqual(meta(0).skips, []);
+  assert.deepEqual(meta(1).skips, [{ stage: 'start', reason: 'timeout_start', evidence: LP.RESULT_PATH }]);
+  assert.deepEqual(meta(2).skips, [{ stage: 'resolve', reason: 'no_runnable_artifact', evidence: LP.RESULT_PATH }]);
+  assert.deepEqual(meta(3).skips, [{ stage: 'start', reason: 'upstream_unavailable', evidence: LP.RESULT_PATH, retryable: true }]);
+  assert.equal(meta(0).subject.sha, '5e2668aed07efeb61beb2f3761bc3348af2075c3');
+  assert.equal(meta(0).tools[1].name, 'isokron-ai/mcp-surface-corpus');
+  assert.match(lines.join('\n'), /item 3: skipped \(shard_deadline, upstream_unavailable, retryable\)/);
+});
+
+test('live-probe bundle: the live grade, the static comparison and the field records', () => {
+  const w = workFolder();
+  LP.bundleShard({ work: w });
+  const b = join(w, 'out', '0', 'bundle');
+  const r = JSON.parse(readFileSync(join(b, 'results', 'live-probe.json'), 'utf8'));
+  const known = JSON.parse(readFileSync(LP.KNOWN_ANSWER_FILE, 'utf8')).answer;
+  assert.equal(r.status, 'graded');
+  assert.deepEqual(LP.answerOf(r.live), known, 'the live list graded as mcp-check -- <server> grades it');
+  assert.equal(r.live.config_state, 'none');
+  assert.equal(r.static_vs_live.static_tool_count, known.tool_count - 1);
+  assert.equal(r.static_vs_live.names_only_live, 1);
+  assert.equal(r.static_vs_live.same_catalog_hash, false);
+  assert.ok(existsSync(join(b, 'raw', 'tools-list.json')) && existsSync(join(b, 'raw', 'static-compare.json')) && existsSync(join(b, 'raw', 'telemetry.jsonl')));
+  // Telemetry of this subject and the run, not of another subject.
+  const tel = readFileSync(join(b, 'raw', 'telemetry.jsonl'), 'utf8');
+  assert.match(tel, /registry\.npmjs\.org/); assert.doesNotMatch(tel, /other\.example\.com/);
+  // Field records: declared in the pinned registry, of its type, a null only with a reason.
+  const reg = registryTypes();
+  const recs = readFileSync(join(b, 'observations', 'live.ndjson'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  for (const o of recs) {
+    assert.ok(reg.has(o.field), o.field + ' is in the registry');
+    assert.equal(reg.get(o.field).type, LP.FIELDS[o.field], o.field + ' type');
+    assert.equal(o.stage, 'live');
+    if (o.value === null) assert.ok(o.why, o.field);
+  }
+  const by = (f) => recs.filter((o) => o.field === f).map((o) => o.value);
+  for (const [f, t] of Object.entries(LP.FIELDS)) assert.equal(reg.get(f) && reg.get(f).type, t, f);
+  assert.deepEqual(by('subject_id'), ['isokron-ai/mcp-check']);
+  assert.deepEqual(by('registry_package_identifier'), ['@isokron/mcp-check']);
+  assert.deepEqual(by('package_purl'), ['pkg:npm/%40isokron/mcp-check@1.3.1']);
+  assert.deepEqual(by('protocol_era'), ['legacy']);
+  assert.equal(by('server_info')[0].name, 'mcp-check');
+  assert.equal(by('capabilities_flags')[0].tools, true);
+  assert.deepEqual(by('config_state'), ['none']);
+  assert.equal(by('catalog_per_config_state')[0].none.catalog_hash, known.catalog_hash);
+  assert.deepEqual(by('sandbox_tier'), ['gvisor']);
+  assert.equal(by('our_tool_versions')[0].surface_corpus, '3b43c19a3b84950732379ea5beee06a8f73512a6');
+  assert.equal(by('install_phase_behaviour')[0].egress_refused, 1);
+  const net = by('network_event');
+  assert.deepEqual(net.map((e) => e.kind), ['dns_query', 'egress', 'dns_query', 'connection', 'host_drop']);
+  assert.equal(net[2].host, null, 'a looked-up name with an identity word stays in raw/ (hash only)');
+  assert.match(net[2].host_sha256, /^[0-9a-f]{64}$/);
+  assert.equal(net[3].host, 'telemetry.example.com');
+  const skipped = readFileSync(join(w, 'out', '2', 'bundle', 'observations', 'live.ndjson'), 'utf8');
+  assert.match(skipped, /"field":"error_taxonomy_code","value":"no_package"/);
+});
+
+test('live-probe controls: a known answer that does not match, a self test that failed, or a sandbox not swept uploads nothing', () => {
+  // Another server answering in the known-answer slot: a different list.
+  const forged = JSON.parse(fx('probe-forgery.json'));
+  const w1 = workFolder();
+  writeFileSync(join(w1, 'driver-controls', 's901', 'probe-bare.json'), JSON.stringify(forged));
+  assert.throws(() => LP.bundleShard({ work: w1 }), (e) => e instanceof LP.ControlFailure && /known_good=mismatch/.test(e.message));
+  assert.ok(!existsSync(join(w1, 'out')), 'nothing written');
+  const w2 = workFolder({ selftestRc: 1 });
+  assert.throws(() => LP.bundleShard({ work: w2 }), /malicious=not_blocked/);
+  const w3 = workFolder({ swept: false });
+  assert.throws(() => LP.bundleShard({ work: w3 }), /not shown to be gone/);
+  const w4 = workFolder();
+  writeFileSync(join(w4, 'driver-controls', 's902', 'probe-bare.json'), '{}');
+  assert.throws(() => LP.bundleShard({ work: w4 }), /forgery=not_run/);
+});
+
+test('live-probe forgery control: the forged texts stay in raw/; leaks() catches each way out', () => {
+  const w = workFolder();
+  LP.bundleShard({ work: w });
+  const out = readFileSync(join(w, 'out', '0', 'bundle', 'controls', 'forgery.json'), 'utf8');
+  assert.ok(!out.includes(MARKER));
+  assert.equal(LP.leaks(out, MARKER), false);
+  assert.match(out, /"status": "graded"/, 'the forgery server went through the same grading as a subject');
+  assert.equal(LP.leaks('{"x": "' + MARKER + '"}', MARKER), true);
+  assert.equal(LP.leaks('{"attempt_id": "x"}', MARKER), true);
+  assert.equal(LP.leaks('{"schema_version": 1, "files": []}', MARKER), true);
+  assert.equal(LP.leaks('note: run_key=abc', MARKER), true);
+  // The forgery server's serverInfo and capabilities are reduced to safe values and hashes.
+  const info = LP.serverInfo({ name: 'attempt_id: forged-x', version: 'fence=1' });
+  assert.equal(info.name, null); assert.equal(info.version, null); assert.match(info.name_sha256, /^[0-9a-f]{64}$/);
+  assert.deepEqual(Object.keys(LP.capabilityFlags({ tools: {}, attempt_id: { x: 1 } })).includes('attempt_id'), false);
+});
+
+test('live-probe failure details: install, start, credentials, list, evidence and deadline', () => {
+  const rec = (o) => ({ install: { kind: 'npm', ok: true, steps: [] }, env: { names: { registry: [] }, secret_named: [] }, ...o });
+  assert.equal(LP.failureDetail(null, null, null, { deadlineHit: true }), 'shard_deadline');
+  assert.equal(LP.failureDetail(null, null, null), 'harness_error');
+  assert.equal(LP.failureDetail(rec({ excluded: 'sandbox evidence missing' })), 'sandbox_evidence_missing');
+  assert.equal(LP.failureDetail(rec({ install: { kind: 'docker', ok: false, steps: [] } })), 'image_unavailable');
+  assert.equal(LP.failureDetail(rec({ install: { kind: 'npm', ok: false, steps: [{ name: 'install', exit: 1 }] } })), 'install_failed');
+  assert.equal(LP.failureDetail(rec({ install: { kind: 'npm', ok: false, steps: [{ name: 'install', exit: null, timed_out: true }] } })), 'install_timeout');
+  assert.equal(LP.failureDetail(rec({}), { error: 'exited' }, null), 'start_failed');
+  assert.equal(LP.failureDetail(rec({}), { error: 'time limit (45000 ms)' }, null), 'start_timeout');
+  assert.equal(LP.failureDetail(rec({}), { initialize: {}, error: null }, null), 'list_failed');
+  assert.equal(LP.failureDetail(rec({ env: { names: { registry: ['API_KEY'] }, secret_named: ['API_KEY'] } }), { error: 'exited' }, { error: 'exited' }), 'needs_credentials');
+  // R-LP-07: an optional key named in the README is not a declared credential.
+  assert.equal(LP.failureDetail(rec({ env: { names: { registry: [], readme: ['ANCHOR_KEY'], used: ['ANCHOR_KEY'] }, secret_named: ['ANCHOR_KEY'] } }), { error: null, initialize_error: 'the server exited (exit 1, signal null)' }, { error: null }), 'start_failed');
+  for (const [d, [reason]] of Object.entries(LP.DETAILS)) assert.ok(SKIP_REASONS.includes(reason), d + ' -> ' + reason);
+});
+
+test('live-probe raw files are capped and the cut is recorded', () => {
+  const w = workFolder();
+  const big = JSON.parse(fx('probe-known.json'));
+  big.stderr = 'x'.repeat(LP.RAW_FILE_CAP + 10);
+  writeFileSync(join(w, 'driver-subjects', 's001', 'probe-bare.json'), JSON.stringify(big));
+  LP.bundleShard({ work: w });
+  const r = JSON.parse(readFileSync(join(w, 'out', '0', 'bundle', 'results', 'live-probe.json'), 'utf8'));
+  assert.deepEqual(r.raw_truncated.map((x) => x.path), ['raw/probe-bare.json']);
+  assert.equal(readFileSync(join(w, 'out', '0', 'bundle', 'raw', 'probe-bare.json')).length, LP.RAW_FILE_CAP);
+});
+
+test('live-probe known answer: corpus/fixtures/live-probe/known-answer.json is what the code computes from the saved capture', () => {
+  assert.deepEqual(JSON.parse(readFileSync(LP.KNOWN_ANSWER_FILE, 'utf8')), LP.knownAnswerFrom());
+  const fixture = JSON.parse(readFileSync(join(root, 'corpus', 'fixtures', 'live-probe', 'selftest-shard.json'), 'utf8'));
+  assert.equal(fixture.items[0].expect.catalog_hash, LP.knownAnswerFrom().answer.catalog_hash, 'the self test expects the same list');
+  assert.equal(LP.KNOWN_ANSWER.launch.version, JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version === '1.3.1' ? '1.3.1' : LP.KNOWN_ANSWER.launch.version);
+});
+
+test('live-probe forgery server: one argument for node -e, under the sandbox\'s 2000 characters', () => {
+  const s = LP.forgeryScript();
+  assert.ok(s.length <= 2000);
+  assert.doesNotMatch(s, /\/\/ /);
+});
+
+// ------------------------------------------------------------------ kill switch
+
+test('live-probe kill switch: LOOP_ENABLED exactly true, a pause, and LANE_LIVE_PROBE_ENABLED', () => {
+  const now = Date.parse('2026-11-23T12:00:00Z');
+  const g = (env) => evaluateGuard(env, { lane: 'live-probe', now }).reason;
+  assert.equal(g({ LOOP_ENABLED: 'true' }), 'enabled');
+  assert.equal(g({ LOOP_ENABLED: 'TRUE' }), 'loop_disabled');
+  assert.equal(g({ LOOP_ENABLED: 'true', LOOP_PAUSE_UNTIL: '2026-11-24' }), 'paused');
+  assert.equal(g({ LOOP_ENABLED: 'true', LOOP_PAUSE_UNTIL: 'soon' }), 'pause_unreadable');
+  assert.equal(g({ LOOP_ENABLED: 'true', LANE_LIVE_PROBE_ENABLED: 'false' }), 'lane_disabled');
+  assert.equal(g({ LOOP_ENABLED: 'true', LANE_SCAN_STATIC_ENABLED: 'false' }), 'enabled', 'another lane\'s switch');
+});
+
+// ------------------------------------------------------------------ workflows
+
+const wfDir = join(root, '.github', 'workflows');
+const wf = (f) => readFileSync(join(wfDir, f), 'utf8');
+
+test('live-probe workflow: dispatch only, the pump\'s inputs, kill switch first, inputs checked whole, one pinned worker-kit step per item', () => {
+  const y = wf('live-probe.yml');
+  const code = y.replace(/^\s*#.*$/gm, '');
+  assert.match(y, /\non:\n  workflow_dispatch:\n    inputs:\n/);
+  assert.ok(!/\n  (push|schedule|pull_request|workflow_call|pull_request_target|workflow_run):/.test(y));
+  assert.deepEqual([...y.matchAll(/^      ([a-z_]+):\n        description:/gm)].map((m) => m[1]), ['shard_id', 'attempt_id', 'items']);
+  assert.match(y, /\nrun-name: shard \$\{\{ inputs\.shard_id \}\}\n/);
+  assert.match(y, /\npermissions: \{\}\n/);
+  assert.ok(!/secrets\./.test(code));
+  assert.ok(!/github\.event\./.test(code));
+  for (const m of code.matchAll(/run: \|?\n?((?:.*\n)*?)(?=      - |\n?$)/g)) assert.ok(!/\$\{\{/.test(m[1]), 'an expression inside a run: script');
+  for (const m of code.matchAll(/uses:\s*(\S+)/g)) assert.match(m[1], /^[\w.-]+\/[\w./-]+@[0-9a-f]{40}$/);
+  const jobs = code.split(/\n  (?=[a-z-]+:\n    )/);
+  const job = (n) => jobs.find((j) => j.startsWith(n + ':'));
+  for (const n of ['guard', 'probe']) {
+    assert.match(job(n), /\n    timeout-minutes: \d+\n/, n);
+    assert.match(job(n), /\n    permissions:\n      contents: read\n(?!      )/, n);
+  }
+  assert.ok(Number(/timeout-minutes: (\d+)/.exec(job('probe'))[1]) < 46, 'under the pump\'s lease of 46 minutes');
+  const guardSteps = job('guard').split('\n      - ');
+  assert.match(guardSteps[1], /^id: enabled\n.*\n        env:\n          LOOP_ENABLED: \$\{\{ vars\.LOOP_ENABLED \}\}\n/, 'the first step is the LOOP_ENABLED check');
+  assert.match(job('guard'), /LANE_LIVE_PROBE_ENABLED: \$\{\{ vars\.LANE_LIVE_PROBE_ENABLED \}\}\n        run: node corpus\/loop-guard\.mjs --lane live-probe/);
+  assert.match(job('probe'), /needs: guard\n    if: needs\.guard\.outputs\.proceed == 'true'/);
+  const steps = job('probe').split('\n      - ');
+  assert.match(steps[1], /^name: Check the inputs\n/);
+  assert.equal((steps[1].match(/\[\[ ! "\$[A-Z_]+" =~ \$[a-z_]+ \]\]/g) || []).length, 3);
+  const names = steps.map((s) => (/name: (.*)/.exec(s) || [])[1]);
+  assert.ok(names.indexOf('Run the controls and subjects in the sandbox') < names.indexOf('Check the controls and build the bundles'));
+  assert.ok(names.indexOf('Check the controls and build the bundles') < names.indexOf('Seal and upload item 0'), 'no upload before the sandbox is gone and the controls passed');
+  const ref = /\n  WORKER_KIT_REF: '([0-9a-f]{40})'\n/.exec(y)[1];
+  const kit = steps.filter((s) => /uses: isokron-ai\/tool-qa\/worker-kit@/.test(s));
+  assert.equal(kit.length, LP.MAX_ITEMS);
+  kit.forEach((s, i) => {
+    assert.match(s, new RegExp('uses: isokron-ai/tool-qa/worker-kit@' + ref + '( #.*)?\\n'));
+    assert.match(s, new RegExp("steps\\.bundle\\.outcome == 'success' && steps\\.plan\\.outputs\\.has_" + i + " == 'true'"));
+    assert.match(s, new RegExp("item-index: '" + i + "'\\n"));
+    assert.match(s, new RegExp('fence: \\$\\{\\{ steps\\.plan\\.outputs\\.fence_' + i + ' \\}\\}'));
+    assert.match(s, new RegExp('run-key: \\$\\{\\{ steps\\.plan\\.outputs\\.run_key_' + i + ' \\}\\}'));
+    assert.match(s, new RegExp('/live-probe/out/' + i + '/bundle\\n'));
+    assert.ok(!/dry-run/.test(s));
+  });
+  assert.match(y, /\n  SURFACE_CORPUS_REF: '[0-9a-f]{40}'\n/);
+});
+
+test('live-probe self test workflow: runs on pull requests the same steps as the worker, with dry-run bundles judged by tool-qa', () => {
+  const y = wf('live-probe-selftest.yml');
+  const w = wf('live-probe.yml');
+  assert.match(y, /\non:\n  pull_request:\n    paths:\n/);
+  assert.match(y, /\npermissions: \{\}\n/);
+  assert.ok(!/pull_request_target|secrets\./.test(y.replace(/^\s*#.*$/gm, '')));
+  for (const k of ['WORKER_KIT_REF', 'SURFACE_CORPUS_REF']) assert.equal(new RegExp('\\n  ' + k + ": '([0-9a-f]{40})'\\n").exec(y)[1], new RegExp('\\n  ' + k + ": '([0-9a-f]{40})'\\n").exec(w)[1], k);
+  const between = (s) => s.slice(s.indexOf('      - id: deadline'), s.indexOf('      - id: bundle'));
+  const norm = (s) => between(s).replace(/inputs\.shard_id/g, 'env.SHARD_ID').replace(/inputs\.attempt_id/g, 'env.ATTEMPT_ID').replace(/inputs\.items/g, 'env.ITEMS').replace(/      - name: The fixture items\n        run: .*\n/, '');
+  assert.equal(norm(y), norm(w), 'the self test runs exactly the worker\'s steps');
+  assert.equal((y.match(/dry-run: 'true'/g) || []).length, 3);
+  assert.match(y, /node corpus\/live-probe\.mjs verify tool-qa corpus\/fixtures\/live-probe\/selftest-shard\.json/);
+});
+
+test('live-probe workflows: the sparse checkout of tool-qa holds every file the plan and verify steps read', () => {
+  for (const f of ['live-probe.yml', 'live-probe-selftest.yml']) {
+    const block = /sparse-checkout: \|\n((?:            .*\n)+)/.exec(wf(f));
+    assert.ok(block, f);
+    const entries = block[1].trim().split(/\s+/);
+    for (const need of LP.TOOL_QA_FILES) assert.ok(entries.some((e) => (e.endsWith('/') ? need.startsWith(e) : need === e)), f + ' lacks ' + need);
+  }
+});
+
+test('the vendored tool-qa contract is unedited and at the commit WORKER_KIT_REF pins in live-probe.yml', () => {
+  const vendored = JSON.parse(readFileSync(join(root, 'test', 'tool-qa', 'VENDORED.json'), 'utf8'));
+  for (const f of vendored.files) assert.equal(createHash('sha256').update(readFileSync(join(root, 'test', 'tool-qa', f.path))).digest('hex'), f.sha256, f.path);
+  assert.equal(vendored.commit, /\n  WORKER_KIT_REF: '([0-9a-f]{40})'\n/.exec(wf('live-probe.yml'))[1]);
+  for (const r of new Set(Object.values(LP.DETAILS).map((d) => d[0]))) assert.ok(SKIP_REASONS.includes(r), r);
+});
+
+test('live-probe docs exist and name the fixtures', () => {
+  const doc = readFileSync(join(root, 'corpus', 'LIVE-PROBE.md'), 'utf8');
+  assert.match(doc, /live-probe/);
+  assert.ok(readdirSync(join(root, 'corpus', 'fixtures', 'live-probe')).includes('forgery-server.js'));
+});
