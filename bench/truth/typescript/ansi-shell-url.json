@@ -1,0 +1,27 @@
+{
+  "id": "typescript/ansi-shell-url",
+  "language": "typescript",
+  "idioms": [
+    "adversarial"
+  ],
+  "about": "terminal escape sequences (CSI and an OSC 8 hyperlink) and URLs with shell syntax (command substitution, a backtick) in descriptions, with a URL with & parameters and a written-out ESC code as clean controls",
+  "outcome": "tools",
+  "tools": [
+    "colorize_log",
+    "open_docs",
+    "connect_account",
+    "fetch_report",
+    "list_items",
+    "show_colors"
+  ],
+  "findings": {
+    "sec-control-chars": {
+      "colorize_log": "attention",
+      "open_docs": "attention"
+    },
+    "sec-shell-url": {
+      "connect_account": "blocking",
+      "fetch_report": "blocking"
+    }
+  }
+}
