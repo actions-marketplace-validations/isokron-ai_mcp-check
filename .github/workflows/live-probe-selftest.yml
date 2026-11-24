@@ -38,9 +38,9 @@ env:
   WORKER_KIT_REF: '2ffcea16117ec679398f83eefe8c6fa66d38bac6'
   SURFACE_CORPUS_REF: '4c16b586e8e5886acb098285b6ec405fd4db4ac7'
   # The tool-qa commit whose ingest judges the bundles here: tool-qa's ingest with the field registry it pins
-  # (mcp-results a6fa803 since tool-qa #32: the oracle stage's fields). The worker kit that builds them stays at
+  # (mcp-results 0699149 since tool-qa #32: the oracle stage's fields). The worker kit that builds them stays at
   # WORKER_KIT_REF.
-  INGEST_REF: '508dd5579aa892969745c4caed979ad92a46138f'
+  INGEST_REF: '99f511f3e6e3a19d0af9f464af13c5850cada910'
 
 jobs:
   # The pinned sandbox's own conformance check (mcp-surface-corpus's reusable workflow, at SURFACE_CORPUS_REF), on a
