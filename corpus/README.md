@@ -144,16 +144,29 @@ The meta file names the subject (`owner/name` and the commit read), the engine v
 settings, the start and finish times, the skips and the controls.
 
 Skip codes in the meta file come from the loop's fixed list (tool-qa `worker-kit/contract.mjs`). Every skip
-says whether it is `retryable`.
+says whether it is `retryable`, and who it is down to (`fault`, R-SS-14): `tool` (our reader, grader or bundle
+builder), `subject` (the repository itself) or `infra` (GitHub's limits and outages). Our own limits are never
+recorded as the subject's, so tool-qa counts them as unassessed (our limit), never as excluded, and its due list
+puts them first when a new mcp-check version moves the run_key.
 
-- `no_runnable_artifact`, not retryable: asking again will not help. `bad_subject`, `repo_unavailable` (gone,
-  private or blocked), `repo_empty`, `no_tools`, `unsupported_language`, `names_only`, `multiple_servers`,
-  `reader_limit`, `list_rejected`, `listing_too_large`, `reader_error`, or `bundle_error` (the full bundle could
-  not be built or written, for example over tool-qa's size caps; a minimal one was: results, observations, logs
-  and controls, no subject `raw/`). A 403 on the repository itself counts as `repo_unavailable` unless GitHub marks
-  it as a rate limit (`x-ratelimit-remaining: 0`, `retry-after`, or "rate limit" in the answer); a 403 while
-  reading the tree or a file that GitHub does not explain is `upstream_error` (retryable, so tool-qa's bounded
-  retries decide).
+| Detail (`results/scan-static.json`) | Skip reason | Fault | Retryable |
+|---|---|---|---|
+| `repo_unavailable` (gone, private or blocked), `repo_empty` | `no_runnable_artifact` | subject | no |
+| `bad_subject` (not a GitHub owner/name; this lane reads GitHub only) | `no_runnable_artifact` | tool | no |
+| `no_tools` (no tool registration found) | `no_tools_found` | tool | no |
+| `unsupported_language` | `unsupported_language` | tool | no |
+| `multiple_servers` | `unsupported_layout` | tool | no |
+| `reader_limit`, `names_only` | `reader_limit` | tool | no |
+| `listing_too_large`, `list_rejected` with `list_error: too_large` | `too_large` | tool | no |
+| `list_rejected` (any other code), `reader_error`, `bundle_error` | `tool_error` | tool | no |
+| `rate_limited` | `rate_limited` | infra | yes |
+| `upstream_error`, `read_failed`, `timeout`, `shard_deadline` | `upstream_unavailable` | infra | yes |
+
+- Not retryable: asking again will not help. `bundle_error` means the full bundle could not be built or written,
+  for example over tool-qa's size caps; a minimal one was: results, observations, logs and controls, no subject
+  `raw/`. A 403 on the repository itself counts as `repo_unavailable` unless GitHub marks it as a rate limit
+  (`x-ratelimit-remaining: 0`, `retry-after`, or "rate limit" in the answer); a 403 while reading the tree or a
+  file that GitHub does not explain is `upstream_error` (retryable, so tool-qa's bounded retries decide).
 - `rate_limited`, retryable: a GitHub rate limit. After one, the rest of the shard is not read and reports it
   too. The shard also stops early, before a subject starts, when GitHub says fewer than 13 API calls are left
   (the three one subject takes, plus a reserve of ten).

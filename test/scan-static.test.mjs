@@ -11,14 +11,14 @@ import { spawnSync } from 'node:child_process';
 import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
 import {
-  FORMAT, KNOWN_ANSWER_FILE, MARKER_RE, MAX_ITEMS, MAX_ITEMS_CHARS, PERMANENT, RESULT_PATH, SKIP_REASON, TRANSIENT, skipReasonFor,
-  InputProblem, buildBundle, forgeryControl, isDateTime, knownAnswerControl, knownAnswerFile, main, observationsOf,
+  FORMAT, KNOWN_ANSWER_FILE, MARKER_RE, MAX_ITEMS, MAX_ITEMS_CHARS, PERMANENT, RESULT_PATH, SKIP_REASON, SKIPS, TRANSIENT, skipFaultFor, skipReasonFor,
+  InputProblem, buildBundle, gradeError, forgeryControl, isDateTime, knownAnswerControl, knownAnswerFile, main, observationsOf,
   parseInputs, runShard, scanSubject, settingsDigest,
   RAW_FILE_CAP, READ_LANGUAGES, SERVERS_SHARE, serverBreakdown, serverSkip, CALLS_PER_SUBJECT, RATE_RESERVE, SUBJECT_HEAP_MB, fixtureFetch, httpDetail, jsonUpTo, knownAnswer, notRead, rawText, readDetail, reportItem, scanInWorker, writeItem,
 } from '../corpus/scan-static.mjs';
 import * as guard from '../corpus/loop-guard.mjs';
 // tool-qa's own result contract and ingest checks, at the commit WORKER_KIT_REF pins (test/tool-qa/README.md).
-import { SKIP_REASONS, buildManifest, validateManifest } from './tool-qa/worker-kit/contract.mjs';
+import { SKIP_FAULTS, SKIP_REASONS, buildManifest, resultFault, validateManifest } from './tool-qa/worker-kit/contract.mjs';
 import { readTar, writeTar } from './tool-qa/worker-kit/tar.mjs';
 import { checkBundle } from './tool-qa/ingest/forgery.mjs';
 import { scanFiles } from './tool-qa/ingest/redact.mjs';
@@ -295,7 +295,7 @@ test('scanSubject: every failure is a skip; one that may pass when asked again i
     assert.equal(s.grade, null, name);
     assert.equal(s.list, null, name);
     assert.ok((status === 'skipped' ? PERMANENT : TRANSIENT).includes(detail), name);
-    assert.equal(s.skip_reason, status === 'skipped' ? SKIP_REASON : detail === 'rate_limited' ? 'rate_limited' : 'upstream_unavailable', name);
+    assert.equal(s.skip_reason, status === 'skipped' ? SKIPS[detail][0] : detail === 'rate_limited' ? 'rate_limited' : 'upstream_unavailable', name);
   }
 });
 
@@ -387,7 +387,7 @@ test('runShard: one bundle per item, failed ones too; a rate limit stops reading
       assert.equal(result.status, 'skipped');
       const retry = i === '4' || i === '5';
       assert.equal(result.retryable, retry);
-      assert.deepEqual(meta.skips, [{ stage: 'static', reason: retry ? skipReasonFor(result.detail) : SKIP_REASON, evidence: RESULT_PATH, retryable: retry }]);
+      assert.deepEqual(meta.skips, [{ stage: 'static', reason: skipReasonFor(result.detail), evidence: RESULT_PATH, retryable: retry, fault: skipFaultFor(result.detail) }]);
       assert.equal(result.tool_count, null);
       assert.equal(obs[2].value, null);
     }
@@ -409,7 +409,7 @@ test('runShard: past the shard budget no subject is started (a retryable skip); 
   assert.deepEqual(r.items.map((x) => [x.status, x.detail]), [['graded', null], ['skipped', 'shard_deadline']]);
   assert.ok(!calls.some((c) => c.url.includes('/o/b')));
   const late = JSON.parse(readFileSync(join(out, '1', 'meta.json'), 'utf8'));
-  assert.deepEqual(late.skips, [{ stage: 'static', reason: 'upstream_unavailable', evidence: RESULT_PATH, retryable: true }]);
+  assert.deepEqual(late.skips, [{ stage: 'static', reason: 'upstream_unavailable', evidence: RESULT_PATH, retryable: true, fault: 'infra' }]);
   assertBundle(readTree(join(out, '1', 'bundle')), late);
 
   const out2 = join(tmp('bad'), 'out');
@@ -541,7 +541,7 @@ test('a rate-limited and an upstream-failed shard report retryable skips that to
   const expected = ['upstream_unavailable', 'rate_limited', 'rate_limited'];
   for (const i of [0, 1, 2]) {
     const meta = JSON.parse(readFileSync(join(out, String(i), 'meta.json'), 'utf8'));
-    assert.deepEqual(meta.skips, [{ stage: 'static', reason: expected[i], evidence: RESULT_PATH, retryable: true }]);
+    assert.deepEqual(meta.skips, [{ stage: 'static', reason: expected[i], evidence: RESULT_PATH, retryable: true, fault: 'infra' }]);
     assert.ok(!JSON.stringify(meta).includes('trace_unavailable'));
     const manifest = assertToolQa(readTree(join(out, String(i), 'bundle')), meta, { identity: { attempt_id: 'att-1', fence: 10 + i, run_key: key(i) } });
     // Every skip retryable: tool-qa records the item as retry_later and sends it out again.
@@ -553,11 +553,11 @@ test('a lasting failure keeps its non-retryable skip code', async () => {
   const out = join(tmp('gone'), 'out');
   await runShard({ shardId: 's', attemptId: 'att-1', items: itemsOf(['o/gone']), out, fetch: fakeGithub({}) });
   const meta = JSON.parse(readFileSync(join(out, '0', 'meta.json'), 'utf8'));
-  assert.deepEqual(meta.skips, [{ stage: 'static', reason: 'no_runnable_artifact', evidence: RESULT_PATH, retryable: false }]);
+  assert.deepEqual(meta.skips, [{ stage: 'static', reason: 'no_runnable_artifact', evidence: RESULT_PATH, retryable: false, fault: 'subject' }]);
   const manifest = assertToolQa(readTree(join(out, '0', 'bundle')), meta);
   assert.equal(manifest.skips[0].retryable, false);
   for (const d of TRANSIENT) assert.ok(['rate_limited', 'upstream_unavailable'].includes(skipReasonFor(d)), d);
-  for (const d of PERMANENT) assert.equal(skipReasonFor(d), 'no_runnable_artifact', d);
+  for (const d of PERMANENT) assert.ok(SKIP_REASON === skipReasonFor(d) ? ['bad_subject', 'repo_unavailable', 'repo_empty'].includes(d) : skipFaultFor(d) === 'tool', d);
 });
 
 // ---- regressions (REGRESSIONS.md) ----
@@ -635,7 +635,7 @@ test('R-SS-01: a bundle that cannot be built or written falls back to a minimal 
   assert.ok(![...bundle.keys()].some((p) => p.startsWith('raw/subject/')), 'no subject raw/');
   assert.ok(bundle.has(RESULT_PATH) && bundle.has('observations/static.ndjson') && bundle.has('controls/forgery.json'));
   const meta = JSON.parse(readFileSync(join(dir, 'meta.json'), 'utf8'));
-  assert.deepEqual(meta.skips, [{ stage: 'static', reason: 'no_runnable_artifact', evidence: RESULT_PATH, retryable: false }]);
+  assert.deepEqual(meta.skips, [{ stage: 'static', reason: 'tool_error', evidence: RESULT_PATH, retryable: false, fault: 'tool' }]);
   assertBundle(bundle, meta);
   // Too large: a results file over the per-file cap.
   const big = reportItem(join(tmp('big'), '0'), { item, scan, controls: [forgery, known], startedAt: DATE, finishedAt: DATE, fileCap: 1000 });
@@ -747,7 +747,7 @@ test('R-SS-07: a shard stops before the API budget runs dry, with retryable skip
   // Each subject takes 3 API calls. After o/a, 6 are left, under 3 x 3 subjects: stop.
   assert.deepEqual(r.items.map((x) => [x.status, x.detail]), [['graded', null], ['skipped', 'rate_limited'], ['skipped', 'rate_limited'], ['skipped', 'rate_limited']]);
   const meta = JSON.parse(readFileSync(join(out, '1', 'meta.json'), 'utf8'));
-  assert.deepEqual(meta.skips, [{ stage: 'static', reason: 'rate_limited', evidence: RESULT_PATH, retryable: true }]);
+  assert.deepEqual(meta.skips, [{ stage: 'static', reason: 'rate_limited', evidence: RESULT_PATH, retryable: true, fault: 'infra' }]);
 });
 
 test('R-SS-08: a subject\'s thread caps its raw/ texts before posting them, and runs under a heap limit', async () => {
@@ -914,7 +914,7 @@ test('R-SS-13: the breakdown passes tool-qa\'s worker kit and ingest checks, and
   assert.equal(result.status, 'skipped');
   assert.equal(result.detail, 'multiple_servers');
   assert.equal(result.servers.length, 2);
-  assert.deepEqual(meta.skips, [{ stage: 'static', reason: 'no_runnable_artifact', evidence: RESULT_PATH, retryable: false }]);
+  assert.deepEqual(meta.skips, [{ stage: 'static', reason: 'unsupported_layout', evidence: RESULT_PATH, retryable: false, fault: 'tool' }]);
   assert.ok(files['raw/subject/servers.json'].includes('alpha_one'));
   assert.deepEqual(obs.find((o) => o.field === 'registration_provenance').value, null);
   const one = await scanSubject('o/r', { fetch: fakeGithub({ 'o/r': { files: jsLiteral } }) });
@@ -968,4 +968,53 @@ test('R-SS-13: a server folder and the whole subject use one list of read langua
   const src = readFileSync(fileURLToPath(new URL('../corpus/scan-static.mjs', import.meta.url)), 'utf8');
   assert.equal((src.match(/READ_LANGUAGES\.includes\(lang\.name\)/g) || []).length, 2, 'scanSubject and serverSkip both use READ_LANGUAGES');
   assert.ok(!/\[\s*'Go',\s*'Rust'[^\]]*\]\.includes/.test(src), 'no second copy of the list');
+});
+
+test('R-SS-14: every detail code is recorded with a tool-qa reason and a fault its reason allows; our own limits are never the subject\'s', () => {
+  assert.deepEqual(Object.keys(SKIPS).sort(), [...PERMANENT, ...TRANSIENT].sort());
+  for (const [detail, [reason, fault]] of Object.entries(SKIPS)) {
+    assert.ok(SKIP_REASONS.includes(reason), detail);
+    assert.ok(SKIP_FAULTS[reason].allowed.includes(fault), detail + ': ' + fault + ' for ' + reason);
+    assert.equal(skipReasonFor(detail), reason, detail);
+    assert.equal(skipFaultFor(detail), fault, detail);
+  }
+  // Only a repository that is gone, private, blocked or empty is the subject's; everything else that lasts is ours.
+  assert.deepEqual(PERMANENT.filter((d) => skipFaultFor(d) === 'subject').sort(), ['repo_empty', 'repo_unavailable']);
+  assert.deepEqual(TRANSIENT.map(skipFaultFor), TRANSIENT.map(() => 'infra'));
+  assert.deepEqual(
+    ['no_tools', 'unsupported_language', 'names_only', 'multiple_servers', 'reader_limit', 'list_rejected', 'listing_too_large', 'reader_error', 'bundle_error'].map((d) => [d, skipReasonFor(d)]),
+    [['no_tools', 'no_tools_found'], ['unsupported_language', 'unsupported_language'], ['names_only', 'reader_limit'], ['multiple_servers', 'unsupported_layout'],
+      ['reader_limit', 'reader_limit'], ['list_rejected', 'tool_error'], ['listing_too_large', 'too_large'], ['reader_error', 'tool_error'], ['bundle_error', 'tool_error']],
+  );
+  assert.equal(skipReasonFor('list_rejected', 'too_large'), 'too_large');
+  assert.equal(skipReasonFor('list_rejected', 'invalid_schema'), 'tool_error');
+});
+
+test('R-SS-14: a reader limit reaches tool-qa as our own: valid under the pinned contract, unassessed_tool, never excluded or the subject\'s', async () => {
+  const forgery = await forgeryControl({ marker: 'm'.repeat(32) });
+  const known = await knownAnswerControl();
+  const item = { index: 0, subject: 'o/r', repo: 'o/r', run_key: key(0), fence: 10 };
+  for (const [detail, listError, reason] of [
+    ['no_tools', null, 'no_tools_found'], ['unsupported_language', null, 'unsupported_language'], ['multiple_servers', null, 'unsupported_layout'],
+    ['names_only', null, 'reader_limit'], ['list_rejected', 'too_large', 'too_large'], ['reader_error', null, 'tool_error'],
+  ]) {
+    const scan = { ...notRead(detail), list_error: listError, skip_reason: skipReasonFor(detail, listError) };
+    const { files, meta } = buildBundle({ item, scan, controls: [forgery, known], startedAt: DATE, finishedAt: DATE });
+    assert.deepEqual(meta.skips, [{ stage: 'static', reason, evidence: RESULT_PATH, retryable: false, fault: 'tool' }], detail);
+    const manifest = assertToolQa(new Map(Object.entries(files)), meta);
+    assert.deepEqual(resultFault(manifest.skips), { fault: 'tool', coverage: 'unassessed_tool', faults: { tool: 1 } }, detail);
+  }
+  // A repository that is gone stays the subject's; a rate limit is infra.
+  const gone = buildBundle({ item, scan: notRead('repo_unavailable'), controls: [forgery, known], startedAt: DATE, finishedAt: DATE });
+  assert.equal(resultFault(gone.meta.skips).coverage, 'subject');
+  const limited = buildBundle({ item, scan: notRead('rate_limited'), controls: [forgery, known], startedAt: DATE, finishedAt: DATE });
+  assert.equal(resultFault(limited.meta.skips).coverage, 'unassessed_infra');
+});
+
+test('R-SS-14: a list too large to hold (list_rejected / too_large) is recorded as too_large', () => {
+  const s = { ...notRead('list_rejected'), list_error: 'too_large' };
+  assert.equal(skipReasonFor(s.detail, s.list_error), 'too_large');
+  const e = gradeError(new RangeError('Invalid string length'));
+  assert.equal(e.detail, 'list_rejected');
+  assert.equal(skipReasonFor(e.detail, e.listError), 'too_large');
 });

@@ -10,8 +10,9 @@
 // For every item i, <out-dir>/<i>/bundle/ holds the result files of tool-qa's worker contract
 // (worker-kit/README.md) and <out-dir>/<i>/meta.json the meta file; the step outputs has_<i>, fence_<i> and
 // run_key_<i> name it for the worker-kit step that seals and uploads it as result-<attempt_id>-<i>.tar.age. A
-// subject that cannot be graded still reports, with a skip: SKIP_REASON when asking again will not help (gone,
-// empty, no tool found, ...); rate_limited or upstream_unavailable, marked retryable, when it may (a rate limit, an
+// subject that cannot be graded still reports, with a skip and its fault side (SKIPS): not retryable when asking
+// again will not help (gone or empty: the subject's; no tool found, an unsupported language or layout, a reader
+// limit or error: ours); rate_limited or upstream_unavailable, marked retryable, when it may (a rate limit, an
 // upstream error, the time limit), so tool-qa sends the item out again (retry_later); results/ says which case it
 // was. Exit 0 whatever the subjects did; 1 when the dispatch inputs are malformed
 // (nothing is read); 3 on a harness error, including a control that did not give its expected outcome (nothing is
@@ -79,19 +80,51 @@ export const PERMANENT = Object.freeze(['bad_subject', 'repo_unavailable', 'repo
 export const TRANSIENT = Object.freeze(['rate_limited', 'upstream_error', 'timeout', 'read_failed', 'shard_deadline']);
 /**
  * The skip reasons (tool-qa worker-kit/contract.mjs SKIP_REASONS) a skipped item is recorded with; results/ holds
- * the exact detail code. A lasting failure is recorded as SKIP_REASON (not retryable). A passing one is recorded
- * with `retryable: true`, as rate_limited (a GitHub rate limit) or upstream_unavailable (GitHub answered 5xx or
- * something unreadable, the read broke off, the subject ran out of time, or the shard ran out of time before it
- * started, which only happens when upstream calls are slow): tool-qa then sends the item out again after a backoff.
+ * the exact detail code. A passing failure is recorded with `retryable: true`, as rate_limited (a GitHub rate limit)
+ * or upstream_unavailable (GitHub answered 5xx or something unreadable, the read broke off, the subject ran out of
+ * time, or the shard ran out of time before it started, which only happens when upstream calls are slow): tool-qa
+ * then sends the item out again after a backoff.
  */
 export const SKIP_REASON = 'no_runnable_artifact';
 export const SKIP_RATE_LIMITED = 'rate_limited';
 export const SKIP_UPSTREAM = 'upstream_unavailable';
 
-/** The skip reason a skip with this detail code is recorded with. */
-export function skipReasonFor(detail) {
-  if (!TRANSIENT.includes(detail)) return SKIP_REASON;
-  return detail === 'rate_limited' ? SKIP_RATE_LIMITED : SKIP_UPSTREAM;
+/**
+ * The tool-qa skip reason and fault side of every detail code (R-SS-14; tool-qa worker-kit SKIP_FAULTS). A lasting
+ * failure of ours is never recorded as the subject's: our reader's limits and errors have reasons of their own, all
+ * with fault "tool". Only a repository that is gone, private, blocked or empty is the subject's. A subject that is
+ * not a GitHub owner/name is ours too: this lane reads GitHub only. no_tools (no registration found) is ours until a
+ * person says the repository is not a server.
+ */
+export const SKIPS = Object.freeze({
+  bad_subject: Object.freeze(['no_runnable_artifact', 'tool']),
+  repo_unavailable: Object.freeze(['no_runnable_artifact', 'subject']),
+  repo_empty: Object.freeze(['no_runnable_artifact', 'subject']),
+  no_tools: Object.freeze(['no_tools_found', 'tool']),
+  unsupported_language: Object.freeze(['unsupported_language', 'tool']),
+  names_only: Object.freeze(['reader_limit', 'tool']),
+  multiple_servers: Object.freeze(['unsupported_layout', 'tool']),
+  reader_limit: Object.freeze(['reader_limit', 'tool']),
+  list_rejected: Object.freeze(['tool_error', 'tool']), // list_error too_large: too_large
+  listing_too_large: Object.freeze(['too_large', 'tool']),
+  reader_error: Object.freeze(['tool_error', 'tool']),
+  bundle_error: Object.freeze(['tool_error', 'tool']),
+  rate_limited: Object.freeze([SKIP_RATE_LIMITED, 'infra']),
+  upstream_error: Object.freeze([SKIP_UPSTREAM, 'infra']),
+  timeout: Object.freeze([SKIP_UPSTREAM, 'infra']),
+  read_failed: Object.freeze([SKIP_UPSTREAM, 'infra']),
+  shard_deadline: Object.freeze([SKIP_UPSTREAM, 'infra']),
+});
+
+/** The skip reason a skip with this detail code (and list error, for list_rejected) is recorded with. */
+export function skipReasonFor(detail, listError = null) {
+  if (detail === 'list_rejected' && listError === 'too_large') return 'too_large';
+  return Object.hasOwn(SKIPS, detail) ? SKIPS[detail][0] : 'tool_error';
+}
+
+/** Who a skip with this detail code is down to: tool, subject or infra (tool-qa worker-kit FAULT_SIDES). */
+export function skipFaultFor(detail) {
+  return Object.hasOwn(SKIPS, detail) ? SKIPS[detail][1] : 'tool';
 }
 /** A subject id the result manifest accepts (subject.id: no whitespace, at most 512 characters). */
 export const SUBJECT_ID_RE = /^[^\s]{1,512}$/;
@@ -442,9 +475,9 @@ export async function scanSubject(subject, { fetch: fetchImpl = globalThis.fetch
     if (detail !== 'multiple_servers') out.servers = null;
     out.status = 'skipped';
     out.retryable = TRANSIENT.includes(detail);
-    out.skip_reason = skipReasonFor(detail);
     out.http_status = e && Number.isInteger(e.status) ? e.status : null;
     out.list_error = e && typeof e.listError === 'string' && /^[a-z_]{1,40}$/.test(e.listError) ? e.listError : null;
+    out.skip_reason = skipReasonFor(detail, out.list_error);
     if (detail === 'reader_error') out.error_name = safeName((e && e.errorName) || (e && e.name));
     out.grade = null;
     out.list = null;
@@ -821,7 +854,10 @@ export function buildBundle({ item, scan, controls, startedAt, finishedAt, diges
     settings_manifest_digest: digest,
     started_at: startedAt,
     finished_at: finishedAt,
-    skips: scan.status === 'skipped' ? [{ stage: STAGE, reason: scan.skip_reason || SKIP_REASON, evidence: RESULT_PATH, retryable: scan.retryable === true }] : [],
+    skips: scan.status === 'skipped' ? [{
+      stage: STAGE, reason: scan.skip_reason || skipReasonFor(scan.detail, scan.list_error), evidence: RESULT_PATH, retryable: scan.retryable === true,
+      fault: skipFaultFor(scan.detail),
+    }] : [],
     controls: controls.map((c) => c.control),
   };
   return { files, meta };
