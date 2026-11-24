@@ -34,7 +34,7 @@ concurrency:
 
 env:
   WORKER_KIT_REF: 'b1f25a9b0b7655f45eb353f31562a93d9319d5a4'
-  SURFACE_CORPUS_REF: '97bd96cae93b894fa3f891e3c05514a7c4bc0432'
+  SURFACE_CORPUS_REF: '73a2669ca3d571bc50c5deab1cd171bc4a70ddda'
 
 jobs:
   # The pinned sandbox's own conformance check (mcp-surface-corpus's reusable workflow, at SURFACE_CORPUS_REF), on a
@@ -42,7 +42,7 @@ jobs:
   sandbox:
     permissions:
       contents: read
-    uses: isokron-ai/mcp-surface-corpus/.github/workflows/sandbox-conformance.yml@97bd96cae93b894fa3f891e3c05514a7c4bc0432 # SURFACE_CORPUS_REF
+    uses: isokron-ai/mcp-surface-corpus/.github/workflows/sandbox-conformance.yml@73a2669ca3d571bc50c5deab1cd171bc4a70ddda # SURFACE_CORPUS_REF
     with:
       mutations: false
       artifact-prefix: live-probe-sandbox
@@ -102,7 +102,7 @@ jobs:
       # telemetry check), from the commit SURFACE_CORPUS_REF pins. It fails the job unless the verdict is pass.
       - id: guard
         name: Sandbox guard on this runner (mcp-surface-corpus sandbox-guard)
-        uses: isokron-ai/mcp-surface-corpus/sandbox-guard@97bd96cae93b894fa3f891e3c05514a7c4bc0432 # SURFACE_CORPUS_REF
+        uses: isokron-ai/mcp-surface-corpus/sandbox-guard@73a2669ca3d571bc50c5deab1cd171bc4a70ddda # SURFACE_CORPUS_REF
         with:
           out: ${{ runner.temp }}/live-probe/selftest
       # Registry and GitHub reads only (JSON, fixed hosts): nothing of a subject is fetched to run here.

@@ -331,6 +331,92 @@ test('R-LP-16: OCI subjects run one at a time, each only with about 4x its image
   assert.ok(sh.indexOf('need=$(( bytes * 4 ))') < sh.indexOf('drive "$work/oci/$id.json"'));
 });
 
+test('R-LP-17: the install is pinned to the version whose provenance was checked, so a moving latest cannot swap it', async () => {
+  // npm: the registry entry gives no version; the attested document says 1.3.1.
+  const map = { ...npmProvenanceMap() };
+  map['https://registry.npmjs.org/@isokron%2fmcp-check/latest'] = map['https://registry.npmjs.org/@isokron%2fmcp-check/1.3.1'];
+  const reg = fakeFetch([server('io.github.someone-else/mcp-check', 'isokron-ai/mcp-check', [npmPkg('@isokron/mcp-check', { version: undefined })])]);
+  const both = async (url, init) => (String(url).startsWith('https://registry.npmjs.org/') ? urlFetch(map)(url, init) : reg(url, init));
+  const r = await LP.resolveSubject({ subject: 'isokron-ai/mcp-check', repo: 'isokron-ai/mcp-check' }, { fetch: both });
+  assert.equal(r.choice.verified_by, 'npm_provenance');
+  assert.equal(r.launch.version, '1.3.1', 'not latest');
+  assert.equal(r.choice.version, '1.3.1');
+  assert.equal(r.choice.purl, 'pkg:npm/%40isokron/mcp-check@1.3.1');
+  // PyPI: the same, from the release document's own version.
+  const pmap = pypiProvenanceMap();
+  pmap['https://pypi.org/pypi/mcp-server-time/json'] = pmap['https://pypi.org/pypi/mcp-server-time/2026.11.18/json'];
+  const out = {};
+  assert.equal(await LP.packageVerifiedBy({ registryType: 'pypi', identifier: 'mcp-server-time' }, 'modelcontextprotocol/servers', { fetch: urlFetch(pmap), out }), 'pypi_provenance');
+  assert.equal(out.version, '2026.11.18');
+  // A release document for another version than the one asked for: refused.
+  const odd = pypiProvenanceMap(); odd['https://pypi.org/pypi/mcp-server-time/9.9.9/json'] = odd['https://pypi.org/pypi/mcp-server-time/2026.11.18/json'];
+  const o2 = {};
+  assert.equal(await LP.packageVerifiedBy({ registryType: 'pypi', identifier: 'mcp-server-time', version: '9.9.9' }, 'modelcontextprotocol/servers', { fetch: urlFetch(odd), out: o2 }), null);
+  assert.equal(o2.why, 'provenance_other_artifact');
+});
+
+/** DER helpers for synthetic certificates (structure only; never signed). */
+const der = (tag, ...parts) => { const body = Buffer.concat(parts); const n = body.length; const len = n < 0x80 ? Buffer.from([n]) : n < 0x100 ? Buffer.from([0x81, n]) : Buffer.from([0x82, n >> 8, n & 0xff]); return Buffer.concat([Buffer.from([tag]), len, body]); };
+const fulcioOid = (arc) => der(0x06, Buffer.from([0x2b, 0x06, 0x01, 0x04, 0x01, 0x83, 0xbf, 0x30, 0x01, arc]));
+const ext = (oid, value, critical = false) => der(0x30, oid, ...(critical ? [der(0x01, Buffer.from([0xff]))] : []), der(0x04, value));
+const utf8 = (t) => der(0x0c, Buffer.from(t));
+const certWith = (exts, { trailing = Buffer.alloc(0) } = {}) => {
+  const tbs = der(0x30, der(0xa0, der(0x02, Buffer.from([2]))), der(0x02, Buffer.from([1])), der(0x30), der(0x30), der(0x30), der(0x30), der(0x30), der(0xa3, der(0x30, ...exts)));
+  return Buffer.concat([der(0x30, tbs, der(0x30), der(0x03, Buffer.from([0]))), trailing]);
+};
+
+test('R-LP-18: Fulcio extensions are read from tbsCertificate.extensions, each exactly once', () => {
+  const repo = 'https://github.com/acme/victim';
+  const ok = certWith([ext(fulcioOid(12), utf8(repo)), ext(fulcioOid(8), utf8('https://token.actions.githubusercontent.com'))]);
+  assert.equal(LP.fulcioExtension(ok, 12), repo);
+  assert.equal(LP.fulcioExtension(ok, 8), 'https://token.actions.githubusercontent.com');
+  assert.equal(LP.fulcioExtension(ok, 9), null);
+  // The same extension twice: refused, whichever value comes first.
+  const twice = certWith([ext(fulcioOid(12), utf8('https://github.com/attacker/x')), ext(fulcioOid(12), utf8(repo))]);
+  assert.throws(() => LP.fulcioExtension(twice, 12), /appears twice/);
+  // The OID's bytes inside another extension's value are not that extension (a byte search would have found them).
+  const hidden = certWith([ext(der(0x06, Buffer.from([0x55, 0x1d, 0x11])), Buffer.concat([fulcioOid(12), der(0x04, utf8(repo))]))]);
+  assert.equal(hidden.indexOf(Buffer.from([0x2b, 0x06, 0x01, 0x04, 0x01, 0x83, 0xbf, 0x30, 0x01, 0x0c])) > 0, true);
+  assert.equal(LP.fulcioExtension(hidden, 12), null);
+  // Not DER: trailing bytes, a value that is not a UTF8String filling the extension.
+  assert.throws(() => LP.certExtensions(certWith([], { trailing: Buffer.from([0]) })), /not a DER certificate/);
+  assert.equal(LP.fulcioExtension(certWith([ext(fulcioOid(12), Buffer.concat([utf8(repo), Buffer.from([0])]))]), 12), null);
+  // The real certificates parse, with every Fulcio extension once.
+  const real = Buffer.from(pj('npm-mcp-check-1.3.1-attestations.json').attestations.find((a) => a.predicateType === 'https://slsa.dev/provenance/v1').bundle.verificationMaterial.certificate.rawBytes, 'base64');
+  const oids = LP.certExtensions(real).map((e) => e.oid);
+  assert.equal(new Set(oids).size, oids.length);
+  assert.equal(LP.fulcioExtension(real, 12), 'https://github.com/isokron-ai/mcp-check');
+});
+
+test('R-LP-19: a shared reusable workflow signs for the subject only when it is on the allowlist and is the SAN', () => {
+  const gen = 'https://github.com/slsa-framework/slsa-github-generator/.github/workflows/builder_nodejs_slsa3.yml@refs/tags/v2.1.0';
+  assert.equal(LP.signerKind({ san: 'URI:https://github.com/acme/victim/.github/workflows/release.yml@refs/tags/v1', buildSigner: 'https://github.com/acme/victim/.github/workflows/release.yml@refs/tags/v1', repo: 'acme/victim' }), 'repository_workflow');
+  assert.equal(LP.signerKind({ san: 'URI:' + gen, buildSigner: gen, repo: 'acme/victim' }), 'trusted_reusable_workflow');
+  assert.equal(LP.signerKind({ san: 'URI:' + gen.replace('@refs/tags/v2.1.0', '@refs/heads/main'), buildSigner: gen.replace('@refs/tags/v2.1.0', '@refs/heads/main'), repo: 'acme/victim' }), null, 'a branch, not a release tag');
+  assert.equal(LP.signerKind({ san: 'URI:https://github.com/attacker/shared/.github/workflows/sign.yml@refs/tags/v1', buildSigner: 'https://github.com/attacker/shared/.github/workflows/sign.yml@refs/tags/v1', repo: 'acme/victim' }), null, 'not on the allowlist');
+  assert.equal(LP.signerKind({ san: 'URI:https://github.com/attacker/shared/.github/workflows/sign.yml@refs/tags/v1', buildSigner: gen, repo: 'acme/victim' }), null, 'the SAN is not the allowlisted signer');
+  assert.deepEqual(LP.TRUSTED_REUSABLE_SIGNERS, ['https://github.com/slsa-framework/slsa-github-generator/.github/workflows/']);
+  assert.match(readFileSync(join(root, 'corpus', 'LIVE-PROBE.md'), 'utf8'), /slsa-framework\/slsa-github-generator\/\.github\/workflows\//);
+});
+
+test('R-LP-20: tool_count and tool_list_sha256 are written as fields of their own, declared in the pinned registry', () => {
+  const w = workFolder();
+  LP.bundleShard({ work: w });
+  const recs = readFileSync(join(w, 'out', '0', 'bundle', 'observations', 'live.ndjson'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  const known = JSON.parse(readFileSync(LP.KNOWN_ANSWER_FILE, 'utf8')).answer;
+  assert.deepEqual(recs.filter((x) => x.field === 'tool_count').map((x) => x.value), [known.tool_count]);
+  assert.deepEqual(recs.filter((x) => x.field === 'tool_list_sha256').map((x) => x.value), [known.catalog_hash]);
+  const reg = registryTypes();
+  assert.equal(reg.get('tool_count').type, 'integer');
+  assert.equal(reg.get('tool_list_sha256').type, 'hash');
+});
+
+test('R-LP-21: the sandbox at mcp-surface-corpus 73a2669 builds native modules, so kronicle-lite is expected to start in the self test', () => {
+  for (const f of ['live-probe.yml', 'live-probe-selftest.yml']) assert.equal((wf(f).match(/73a2669ca3d571bc50c5deab1cd171bc4a70ddda/g) || []).length, 3, f + ': the env pin, the conformance workflow and the guard');
+  const shard = JSON.parse(readFileSync(join(root, 'corpus', 'fixtures', 'live-probe', 'selftest-shard.json'), 'utf8'));
+  assert.deepEqual(shard.items.find((x) => x.subject === 'isokron-ai/kronicle-lite').expect, { status: 'graded', min_tools: 1 });
+});
+
 test('R-LP-12: npm installs run their install scripts, in the sandbox, so native modules can be built', async () => {
   const r = await LP.resolveSubject({ subject: 'acme/widget', repo: 'acme/widget' }, { fetch: fakeFetch([server('io.github.acme/widget', 'acme/widget', [npmPkg('@acme/widget')])]) });
   assert.equal(r.launch.install_scripts, true);
@@ -474,15 +560,17 @@ test('live-probe bundle: the live grade, the static comparison and the field rec
   const recs = readFileSync(join(b, 'observations', 'live.ndjson'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
   for (const o of recs) {
     assert.ok(reg.has(o.field), o.field + ' is in the registry');
-    assert.equal(reg.get(o.field).type, LP.FIELDS[o.field], o.field + ' type');
+    assert.equal(reg.get(o.field).type, { ...LP.FIELDS, ...LP.TOOL_LIST_FIELDS }[o.field], o.field + ' type');
     assert.equal(o.stage, 'live');
     if (o.value === null) assert.ok(o.why, o.field);
   }
   const by = (f) => recs.filter((o) => o.field === f).map((o) => o.value);
   for (const [f, t] of Object.entries(LP.FIELDS)) assert.equal(reg.get(f) && reg.get(f).type, t, f);
-  // tool_count and tool_list_sha256 wait for tool-qa's registry pin (EMIT_TOOL_LIST_FIELDS).
-  assert.equal(LP.EMIT_TOOL_LIST_FIELDS, false);
-  assert.ok(!recs.some((x) => x.field in LP.TOOL_LIST_FIELDS) && !reg.has('tool_count'), 'not written while the pinned registry lacks them');
+  // R-LP-20: tool_count and tool_list_sha256 as fields of their own, now that tool-qa pins mcp-results f2b16de.
+  assert.equal(LP.EMIT_TOOL_LIST_FIELDS, true);
+  for (const [f, t] of Object.entries(LP.TOOL_LIST_FIELDS)) assert.equal(reg.get(f) && reg.get(f).type, t, f);
+  assert.deepEqual(by('tool_count'), [known.tool_count]);
+  assert.deepEqual(by('tool_list_sha256'), [known.catalog_hash]);
   assert.deepEqual(by('subject_id'), ['isokron-ai/mcp-check']);
   assert.deepEqual(by('registry_package_identifier'), ['@isokron/mcp-check']);
   assert.deepEqual(by('package_purl'), ['pkg:npm/%40isokron/mcp-check@1.3.1']);
@@ -595,7 +683,7 @@ test('R-LP-14: one sandbox commit everywhere: the conformance workflow, the in-j
   for (const f of ['live-probe.yml', 'live-probe-selftest.yml']) {
     const y = wf(f);
     const ref = /\n  SURFACE_CORPUS_REF: '([0-9a-f]{40})'\n/.exec(y)[1];
-    assert.equal(ref, '97bd96cae93b894fa3f891e3c05514a7c4bc0432', f + ': at or after mcp-surface-corpus #7');
+    assert.equal(ref, '73a2669ca3d571bc50c5deab1cd171bc4a70ddda', f + ': at or after mcp-surface-corpus #8');
     const code = y.replace(/^\s*#.*$/gm, '');
     assert.match(code, new RegExp('\\n  sandbox:\\n(?:    .*\\n)*?    uses: isokron-ai/mcp-surface-corpus/\\.github/workflows/sandbox-conformance\\.yml@' + ref + ' # SURFACE_CORPUS_REF\\n    with:\\n      mutations: false\\n'), f);
     assert.match(code, new RegExp('uses: isokron-ai/mcp-surface-corpus/sandbox-guard@' + ref + ' # SURFACE_CORPUS_REF\\n'), f);
