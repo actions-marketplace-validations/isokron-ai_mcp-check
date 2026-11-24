@@ -3,8 +3,9 @@
  * live-probe bundle (corpus/LIVE-PROBE.md, "Oracles"). Pure: no files, no network.
  *
  * - Each SDK client's catalog is hashed with this repository's engine, exactly as our reader's list is (the catalog
- *   hash of `mcp-check -- <server>`), and by its tool names alone, so a difference can be told apart: names, or the
- *   definitions behind the same names.
+ *   hash of `mcp-check -- <server>`), once more with the annotations that only state the spec's default left out, and
+ *   by its tool names alone, so a difference can be told apart: names, the definitions behind the same names, or only
+ *   a default the client's SDK wrote out (`catalog_vs_reader: same_but_annotation_defaults`, no disagreement).
  * - Each conformance check gets one status: pass, fail, warning, info, skipped; expected_fail when the subject's
  *   baseline lists that failure; bridge_excluded when the check is about the bridge, not the server (pins.json);
  *   not_applicable when a list method the server never declared answered "method not found".
@@ -32,19 +33,37 @@ const isObj = (x) => !!x && typeof x === 'object' && !Array.isArray(x);
 const int = (x) => (Number.isSafeInteger(x) ? x : null);
 const pick = (s, re) => (typeof s === 'string' && re.test(s) ? s : null);
 
-/** The engine's catalog hash and tool count of a client's tools, and the hash of the sorted tool names; or null. */
+/**
+ * The spec's defaults for tool annotations (a hint left out means this value). Some SDKs write a default out when a
+ * server left it out (the Go SDK writes idempotentHint: false): the same catalog to a client, not another server.
+ */
+export const ANNOTATION_DEFAULTS = Object.freeze({ readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true });
+
+/** The tools with every annotation that only states its default removed (an annotations object left empty goes too). */
+export function withoutDefaults(tools) {
+  return tools.map((t) => {
+    if (!isObj(t) || !isObj(t.annotations)) return t;
+    const a = Object.fromEntries(Object.entries(t.annotations).filter(([k, v]) => !(k in ANNOTATION_DEFAULTS && ANNOTATION_DEFAULTS[k] === v)));
+    const { annotations: _a, ...rest } = t;
+    return Object.keys(a).length ? { ...rest, annotations: a } : rest;
+  });
+}
+
+function engineHash(tools) {
+  try { const p = M.parseInput(JSON.stringify({ tools })); if (p.error) return null; return M.analyse(p).input; } catch { return null; }
+}
+
+/**
+ * The engine's catalog hash and tool count of a list of tools (a client's, or our reader's), the same hash with the
+ * annotation defaults removed, and the hash of the sorted tool names; or null.
+ */
 export function clientCatalog(tools) {
   if (!Array.isArray(tools)) return null;
   const names = tools.map((t) => (isObj(t) && typeof t.name === 'string' ? t.name : null));
   const namesSha = sha256(JSON.stringify([...names].map(String).sort()));
-  try {
-    const p = M.parseInput(JSON.stringify({ tools }));
-    if (p.error) return { tool_count: tools.length, catalog_sha256: null, names_sha256: namesSha, names };
-    const r = M.analyse(p);
-    return { tool_count: r.input.tools, catalog_sha256: r.input.catalogHash, names_sha256: namesSha, names };
-  } catch {
-    return { tool_count: tools.length, catalog_sha256: null, names_sha256: namesSha, names };
-  }
+  const full = engineHash(tools);
+  const plain = engineHash(withoutDefaults(tools));
+  return { tool_count: full ? full.tools : tools.length, catalog_sha256: full ? full.catalogHash : null, catalog_defaults_sha256: plain ? plain.catalogHash : null, names_sha256: namesSha, names };
 }
 
 /** The hash of a reader's sorted tool names, the same way. */
@@ -58,7 +77,8 @@ function clientEntry(c, pinsClient) {
     entry: {
       client: c.id, sdk: pinsClient ? pinsClient.sdk : null, sdk_version: pick(r && r.sdk_version, VERSION_RE) || (pinsClient ? pinsClient.version : null),
       outcome, stage: pick(r && r.stage, /^[a-z]{1,12}$/), protocol_negotiated: pick(r && r.protocol, PROTOCOL_RE),
-      tool_count: cat ? cat.tool_count : null, catalog_sha256: cat ? cat.catalog_sha256 : null, names_sha256: cat ? cat.names_sha256 : null,
+      tool_count: cat ? cat.tool_count : null, catalog_sha256: cat ? cat.catalog_sha256 : null, catalog_defaults_sha256: cat ? cat.catalog_defaults_sha256 : null, names_sha256: cat ? cat.names_sha256 : null,
+      catalog_vs_reader: null,
       pages: int(r && r.pages), ms: int(c.ms),
     },
     names: cat ? cat.names : null,
@@ -124,12 +144,19 @@ export function judgeOracles(rec, { reader, pins, baseline = null }) {
     out.conformance = { suite: { package: pins.conformance.package, version: pins.conformance.version, git_commit: pins.conformance.git_commit, integrity: pins.conformance.integrity, requirement_sets_sha256: pins.conformance.requirement_sets_sha256 }, bridge: isObj(rec.bridge) ? { name: pick(rec.bridge.name, /^[a-z-]{1,40}$/), version: pick(rec.bridge.version, VERSION_RE), stats: isObj(rec.bridge.stats) ? Object.fromEntries(Object.entries(rec.bridge.stats).filter(([k, v]) => /^[a-z_]{1,40}$/.test(k) && (int(v) !== null || typeof v === 'boolean'))) : null } : null, problem: conf.problem ? 'suite_unavailable' : null, summary, checks, stale_baseline: stale };
     if (!conf.problem) out.components.push({ name: pins.conformance.package, version: pins.conformance.version });
   }
-  out.disagreements = disagreements(out, names, reader);
+  // Against our reader's list: the same catalog, the same once annotation defaults are left out (the client's SDK
+  // wrote a default the server did not send), or different.
+  const rd = reader && reader.listed && Array.isArray(reader.tools) ? clientCatalog(reader.tools) : null;
+  for (const c of out.clients) {
+    if (c.outcome !== 'listed' || !reader || !reader.listed) continue;
+    c.catalog_vs_reader = c.catalog_sha256 === reader.catalog_hash ? 'same' : rd && c.catalog_defaults_sha256 && c.catalog_defaults_sha256 === rd.catalog_defaults_sha256 ? 'same_but_annotation_defaults' : 'different';
+  }
+  out.disagreements = disagreements(out, names, reader, rd);
   return out;
 }
 
 /** The disagreements between our reader, the clients and the suite (DESIGN-v3 §7 classes). */
-export function disagreements(j, names, reader) {
+export function disagreements(j, names, reader, readerCatalog = null) {
   const d = [];
   const listedClients = j.clients.filter((c) => c.outcome === 'listed');
   const failedClients = j.clients.filter((c) => !['listed', 'unavailable', 'skipped'].includes(c.outcome));
@@ -143,7 +170,7 @@ export function disagreements(j, names, reader) {
     else if (!readerListed && c.outcome === 'listed') d.push({ class: 'D6', oracle_a: 'reader', oracle_b: b, kind: 'outcome', detail: { a: 'not_listed', b: 'listed' } });
     else if (readerListed && c.outcome === 'listed') {
       if (c.names_sha256 !== namesSha(reader.names)) d.push({ class: 'D6', oracle_a: 'reader', oracle_b: b, kind: 'tool_names', detail: { ...diffNames(reader.names, names.get(c.client)), count_a: int(reader.tool_count), count_b: c.tool_count } });
-      else if (c.catalog_sha256 !== reader.catalog_hash) d.push({ class: 'D4', oracle_a: 'reader', oracle_b: b, kind: 'catalog', detail: { count_a: int(reader.tool_count), count_b: c.tool_count } });
+      else if (c.catalog_sha256 !== reader.catalog_hash && !(readerCatalog && c.catalog_defaults_sha256 && c.catalog_defaults_sha256 === readerCatalog.catalog_defaults_sha256)) d.push({ class: 'D4', oracle_a: 'reader', oracle_b: b, kind: 'catalog', detail: { count_a: int(reader.tool_count), count_b: c.tool_count } });
     }
   }
   // Clients against each other: the first listed client is the reference.
@@ -151,7 +178,7 @@ export function disagreements(j, names, reader) {
   if (ref) {
     for (const c of listedClients.slice(1)) {
       if (c.names_sha256 !== ref.names_sha256) d.push({ class: 'D6', oracle_a: `client:${ref.client}`, oracle_b: `client:${c.client}`, kind: 'tool_names', detail: { ...diffNames(names.get(ref.client), names.get(c.client)), count_a: ref.tool_count, count_b: c.tool_count } });
-      else if (c.catalog_sha256 !== ref.catalog_sha256) d.push({ class: 'D4', oracle_a: `client:${ref.client}`, oracle_b: `client:${c.client}`, kind: 'catalog', detail: { count_a: ref.tool_count, count_b: c.tool_count } });
+      else if (c.catalog_sha256 !== ref.catalog_sha256 && c.catalog_defaults_sha256 !== ref.catalog_defaults_sha256) d.push({ class: 'D4', oracle_a: `client:${ref.client}`, oracle_b: `client:${c.client}`, kind: 'catalog', detail: { count_a: ref.tool_count, count_b: c.tool_count } });
     }
     for (const c of failedClients) d.push({ class: c.outcome === 'timeout' ? 'D12' : 'D6', oracle_a: `client:${ref.client}`, oracle_b: `client:${c.client}`, kind: 'outcome', detail: { a: 'listed', b: c.outcome } });
   }

@@ -295,7 +295,7 @@ const knownRec = () => JSON.parse(readFileSync(join(LPFX, 'oracles-known.json'),
 const knownReader = () => {
   const p = JSON.parse(readFileSync(join(LPFX, 'probe-known.json'), 'utf8'));
   const g = LP.gradeList(LP.listText(p.lists['tools/list'].raw_pages));
-  return { listed: true, tool_count: g.summary.tool_count, catalog_hash: g.summary.catalog_hash, names: g.names, pages: 1, check_ids: Object.keys(g.summary.check_counts), capabilities: p.initialize.capabilities };
+  return { listed: true, tool_count: g.summary.tool_count, catalog_hash: g.summary.catalog_hash, names: g.names, tools: LP.toolsOf(p.lists['tools/list'].raw_pages), pages: 1, check_ids: Object.keys(g.summary.check_counts), capabilities: p.initialize.capabilities };
 };
 
 test('judge: every SDK client\'s catalog hashes as our reader\'s (the engine\'s catalog hash); the statuses of the checks', () => {
@@ -437,4 +437,27 @@ test('live-probe bundle: an oracle known answer that does not match stops the up
   put('driver-controls/s901/oracles.json', rec);
   put('driver-controls/s902/probe-bare.json', fx('probe-forgery.json').split('liveprobe-MARKERMARKERMARKER0000').join(MARKER));
   assert.throws(() => LP.bundleShard({ work: w }), (e) => e instanceof LP.ControlFailure && /known_good=mismatch/.test(e.message));
+});
+
+test('R-ORC-01: a client SDK that writes out an annotation default (Go: idempotentHint false) is the same catalog, not a D4 disagreement; a real difference still is', () => {
+  // The self test on GitHub (kronicle-lite 0.10.2): the Go SDK wrote idempotentHint: false on two tools that left it
+  // out, so its catalog hash differed from our reader's and the other clients', and the judge raised D4 leads that
+  // would fire on most servers with annotations.
+  const annotate = (tools) => tools.map((t, i) => (i === 0 ? { ...t, annotations: { readOnlyHint: true, openWorldHint: false } } : t));
+  const p = JSON.parse(readFileSync(join(LPFX, 'probe-known.json'), 'utf8'));
+  const tools = annotate(LP.toolsOf(p.lists['tools/list'].raw_pages));
+  const g = LP.gradeList(JSON.stringify({ tools }));
+  const reader = { listed: true, tool_count: g.summary.tool_count, catalog_hash: g.summary.catalog_hash, names: g.names, tools, pages: 1, check_ids: Object.keys(g.summary.check_counts), capabilities: { tools: {} } };
+  const rec = knownRec();
+  for (const c of rec.clients) c.result.tools = annotate(c.result.tools);
+  const go = rec.clients.find((c) => c.id === 'go');
+  go.result.tools[0] = { ...go.result.tools[0], annotations: { idempotentHint: false, openWorldHint: false, readOnlyHint: true } };
+  const j = judgeOracles(rec, { reader, pins: PINS });
+  assert.deepEqual(j.disagreements, []);
+  assert.notEqual(j.clients.find((c) => c.client === 'go').catalog_sha256, reader.catalog_hash, 'the full hashes do differ');
+  assert.deepEqual(j.clients.map((c) => [c.client, c.catalog_vs_reader]), [['typescript-v1', 'same'], ['typescript-v2', 'same'], ['python', 'same'], ['go', 'same_but_annotation_defaults']]);
+  // A hint that is not the default is a real difference: still D4, against the reader and the other clients.
+  go.result.tools[0] = { ...go.result.tools[0], annotations: { readOnlyHint: false, openWorldHint: false } };
+  const k = judgeOracles(rec, { reader, pins: PINS }).disagreements.map((x) => `${x.class} ${x.oracle_a} ${x.oracle_b} ${x.kind}`);
+  assert.deepEqual(k, ['D4 reader client:go catalog', 'D4 client:typescript-v1 client:go catalog']);
 });

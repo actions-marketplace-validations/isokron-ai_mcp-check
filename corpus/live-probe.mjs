@@ -1062,6 +1062,11 @@ function resolutionObs(r) {
 
 // ------------------------------------------------------------------ oracles
 
+/** Every tool of a probe's tools/list pages, in order (our reader's list, for the oracle judge). */
+export function toolsOf(rawPages) {
+  return (Array.isArray(rawPages) ? rawPages : []).flatMap((p) => (p && isObj(p.result) && Array.isArray(p.result.tools) ? p.result.tools : []));
+}
+
 /** The oracle record the driver wrote for a target (corpus/live-probe-driver.mjs), or null. */
 export function oracleRecord(dir) {
   for (const f of ['oracles.json', 'oracles-unlisted.json', 'oracles-error.json']) {
@@ -1170,7 +1175,7 @@ export function buildItem(item, ctx) {
       result.timing.grade_ms = Date.now() - g0;
       if (g) {
         result.live = { ...g.summary, config_state: primary === bare ? 'none' : 'dummy', pages: int(primary.lists['tools/list'].pages) };
-        reader = { listed: true, tool_count: g.summary.tool_count, catalog_hash: g.summary.catalog_hash, names: g.names, pages: int(primary.lists['tools/list'].pages), check_ids: Object.keys(g.summary.check_counts), capabilities: isObj(primary.initialize) && isObj(primary.initialize.capabilities) ? primary.initialize.capabilities : null };
+        reader = { listed: true, tool_count: g.summary.tool_count, catalog_hash: g.summary.catalog_hash, names: g.names, tools: toolsOf(primary.lists['tools/list'].raw_pages), pages: int(primary.lists['tools/list'].pages), check_ids: Object.keys(g.summary.check_counts), capabilities: isObj(primary.initialize) && isObj(primary.initialize.capabilities) ? primary.initialize.capabilities : null };
         files['raw/report.json'] = json({ findings: g.report.findings, tool_names: g.names });
         const cmp = compareStatic(g, stat);
         result.static_vs_live = cmp.summary;
@@ -1313,7 +1318,7 @@ export function evaluateControls(ctx, { knownFile = KNOWN_ANSWER_FILE } = {}) {
     if (p) {
       try {
         const g = gradeList(listText(p.lists['tools/list'].raw_pages));
-        reader = { listed: true, tool_count: g.summary.tool_count, catalog_hash: g.summary.catalog_hash, names: g.names, pages: int(p.lists['tools/list'].pages), check_ids: Object.keys(g.summary.check_counts), capabilities: isObj(p.initialize) && isObj(p.initialize.capabilities) ? p.initialize.capabilities : null };
+        reader = { listed: true, tool_count: g.summary.tool_count, catalog_hash: g.summary.catalog_hash, names: g.names, tools: toolsOf(p.lists['tools/list'].raw_pages), pages: int(p.lists['tools/list'].pages), check_ids: Object.keys(g.summary.check_counts), capabilities: isObj(p.initialize) && isObj(p.initialize.capabilities) ? p.initialize.capabilities : null };
       } catch { reader = { listed: false }; }
     }
     const found = oracleRecord(dir);
