@@ -129,11 +129,10 @@ export const FIELDS = Object.freeze({
   static_vs_live_agreement: 'object', commit_sha: 'string', commit_date: 'timestamp',
 });
 /**
- * tool_count and tool_list_sha256 (mcp-results f2b16de) are written as fields of their own only once tool-qa's ingest
- * pins a registry that has them (ingest/registry.mjs REGISTRY_COMMIT); until then an undeclared field would reject the
- * bundle, and both values travel inside catalog_per_config_state. Turn this on together with that pin.
+ * tool_count and tool_list_sha256 (mcp-results f2b16de) are written as fields of their own: tool-qa's ingest pins that
+ * registry (tool-qa #14). Off, both values would travel only inside catalog_per_config_state.
  */
-export const EMIT_TOOL_LIST_FIELDS = false;
+export const EMIT_TOOL_LIST_FIELDS = true;
 export const TOOL_LIST_FIELDS = Object.freeze({ tool_count: 'integer', tool_list_sha256: 'hash' });
 const ENUM_RE = /^[A-Za-z0-9][A-Za-z0-9._:/+-]{0,127}$/;
 const DATE_TIME_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(\.\d{1,9})?(Z|[+-](\d{2}):(\d{2}))$/;
@@ -403,37 +402,104 @@ export function sigstoreChains(file = SIGSTORE_CA_FILE) {
   return chains;
 }
 
-/** DER length at `i`: [length, header bytes], or null. */
-function derLen(buf, i) {
-  const b = buf[i];
-  if (b === undefined) return null;
-  if (b < 0x80) return [b, 1];
-  const n = b & 0x7f;
-  if (n < 1 || n > 3 || i + n >= buf.length) return null;
-  let len = 0;
-  for (let k = 1; k <= n; k++) len = len * 256 + buf[i + k];
-  return [len, 1 + n];
+/** One DER element at `i` of `buf`: { tag, start, end, next } (content from start to end), or null. */
+function derAt(buf, i, limit = buf.length) {
+  if (i + 2 > limit) return null;
+  const tag = buf[i];
+  if ((tag & 0x1f) === 0x1f) return null; // multi-byte tags do not occur in X.509
+  let len = buf[i + 1]; let hdr = 2;
+  if (len & 0x80) {
+    const n = len & 0x7f;
+    if (n < 1 || n > 3 || i + 2 + n > limit) return null;
+    len = 0;
+    for (let k = 0; k < n; k++) len = len * 256 + buf[i + 2 + k];
+    if (len < 0x80 || (n > 1 && buf[i + 2] === 0)) return null; // DER: shortest length form
+    hdr += n;
+  }
+  const start = i + hdr; const end = start + len;
+  return end <= limit ? { tag, start, end, next: end } : null;
 }
-const FULCIO_OID = (arc) => Buffer.from([0x06, 0x0a, 0x2b, 0x06, 0x01, 0x04, 0x01, 0x83, 0xbf, 0x30, 0x01, arc]);
+/** The elements of a constructed DER value, in order; null when they do not exactly fill it. */
+function derChildren(buf, el) {
+  const out = [];
+  for (let i = el.start; i < el.end;) { const c = derAt(buf, i, el.end); if (!c) return null; out.push(c); i = c.next; }
+  return out;
+}
+/** A DER OBJECT IDENTIFIER's content as dotted text. */
+function oidText(b) {
+  if (!b.length) return null;
+  const parts = [Math.min(2, Math.floor(b[0] / 40)), b[0] - 40 * Math.min(2, Math.floor(b[0] / 40))];
+  let v = 0;
+  for (let i = 1; i < b.length; i++) { v = v * 128 + (b[i] & 0x7f); if (!(b[i] & 0x80)) { parts.push(v); v = 0; } else if (v > 2 ** 40) return null; }
+  return b[b.length - 1] & 0x80 ? null : parts.join('.');
+}
+
 /**
- * The value of one Fulcio certificate extension (OID 1.3.6.1.4.1.57264.1.<arc>) as text, or null: the OCTET STRING
- * after the OID (an optional critical flag between), holding a DER UTF8String (arcs 8 and later) or raw text (arc 1).
+ * The extensions of an X.509 certificate, parsed from tbsCertificate.extensions: [{ oid, critical, value }], or
+ * throws when the certificate is not well-formed DER or names an extension twice (RFC 5280 forbids it).
+ */
+export function certExtensions(der) {
+  const cert = derAt(der, 0);
+  if (!cert || cert.tag !== 0x30 || cert.end !== der.length) throw new Error('not a DER certificate');
+  const top = derChildren(der, cert);
+  if (!top || top.length !== 3 || top[0].tag !== 0x30) throw new Error('not a DER certificate');
+  const tbs = derChildren(der, top[0]);
+  if (!tbs) throw new Error('the tbsCertificate is not well-formed');
+  const ext = tbs.find((e) => e.tag === 0xa3);
+  if (!ext) return [];
+  const wrapped = derChildren(der, ext);
+  if (!wrapped || wrapped.length !== 1 || wrapped[0].tag !== 0x30) throw new Error('the extensions are not well-formed');
+  const out = []; const seen = new Set();
+  for (const e of derChildren(der, wrapped[0]) || (() => { throw new Error('the extensions are not well-formed'); })()) {
+    const f = e.tag === 0x30 ? derChildren(der, e) : null;
+    if (!f || f.length < 2 || f.length > 3 || f[0].tag !== 0x06) throw new Error('an extension is not well-formed');
+    const oid = oidText(der.subarray(f[0].start, f[0].end));
+    if (!oid) throw new Error('an extension OID is not well-formed');
+    if (seen.has(oid)) throw new Error('the extension ' + oid + ' appears twice');
+    seen.add(oid);
+    let critical = false; let val = f[1];
+    if (f.length === 3) { if (f[1].tag !== 0x01 || f[1].end - f[1].start !== 1) throw new Error('an extension is not well-formed'); critical = der[f[1].start] === 0xff; val = f[2]; }
+    if (val.tag !== 0x04) throw new Error('an extension value is not an OCTET STRING');
+    out.push({ oid, critical, value: der.subarray(val.start, val.end) });
+  }
+  return out;
+}
+
+/**
+ * The value of one Fulcio certificate extension (OID 1.3.6.1.4.1.57264.1.<arc>) as text, or null when the certificate
+ * does not have it: a DER UTF8String filling the value (arcs 8 and later) or raw text (arcs 1 to 7). Throws when the
+ * certificate is malformed or has an extension twice (certExtensions).
  */
 export function fulcioExtension(der, arc) {
-  const oid = FULCIO_OID(arc);
-  const at = der.indexOf(oid);
-  if (at < 0) return null;
-  let i = at + oid.length;
-  if (der[i] === 0x01 && der[i + 1] === 0x01) i += 3;
-  if (der[i] !== 0x04) return null;
-  const ol = derLen(der, i + 1);
-  if (!ol) return null;
-  const start = i + 1 + ol[1]; const end = start + ol[0];
-  if (end > der.length) return null;
-  const inner = der.subarray(start, end);
-  if (inner[0] === 0x0c) { const l = derLen(inner, 1); if (!l || 1 + l[1] + l[0] !== inner.length) return null; return inner.subarray(1 + l[1]).toString('utf8'); }
-  return inner.toString('utf8');
+  const hits = certExtensions(der).filter((e) => e.oid === '1.3.6.1.4.1.57264.1.' + arc);
+  if (!hits.length) return null;
+  const v = hits[0].value;
+  if (arc < 8) return v.toString('utf8');
+  const s = derAt(v, 0);
+  if (!s || s.tag !== 0x0c || s.start === s.end || s.end !== v.length) return null;
+  return v.subarray(s.start, s.end).toString('utf8');
 }
+
+/**
+ * Reusable workflows trusted to sign for the repository that calls them (the Build Signer URI, Fulcio extension 9,
+ * starts with one of these and names a release tag). With one of them the certificate's SAN names the reusable
+ * workflow, not the subject; the Source Repository URI (extension 12) still names the subject. corpus/LIVE-PROBE.md.
+ */
+export const TRUSTED_REUSABLE_SIGNERS = Object.freeze([
+  'https://github.com/slsa-framework/slsa-github-generator/.github/workflows/',
+]);
+/**
+ * Who signed, given the certificate's SAN and Build Signer URI (extension 9), once its Source Repository URI is the
+ * subject: 'repository_workflow' (a workflow of the subject itself), 'trusted_reusable_workflow' (an allowlisted
+ * reusable workflow, which signs as itself), or null.
+ */
+export function signerKind({ san, buildSigner, repo }) {
+  const want = 'https://github.com/' + repo.toLowerCase() + '/';
+  if (String(san).toLowerCase().startsWith('uri:' + want)) return 'repository_workflow';
+  if (trustedSigner(buildSigner) && san === 'URI:' + buildSigner) return 'trusted_reusable_workflow';
+  return null;
+}
+const trustedSigner = (uri) => typeof uri === 'string' && TRUSTED_REUSABLE_SIGNERS.some((p) => uri.startsWith(p) && /^[A-Za-z0-9_.-]+\.ya?ml@refs\/tags\/v[0-9][0-9A-Za-z.-]*$/.test(uri.slice(p.length)));
 
 /**
  * Checks one Sigstore-signed DSSE statement: the leaf certificate chains to the pinned Fulcio authority, it was issued
@@ -442,9 +508,9 @@ export function fulcioExtension(der, arc) {
  * Not checked here: the transparency log (Rekor) entry and that the signing time fell inside the certificate's
  * ten-minute validity; the registry checked those when it accepted the attestation, and serves it.
  */
-export function sigstoreProblem({ certDer, payloadType, body, signature, repo, chains = sigstoreChains() }) {
+export function sigstoreProblem({ certDer, payloadType, body, signature, repo, chains = sigstoreChains(), info = {} }) {
   let leaf;
-  try { leaf = new X509Certificate(certDer); } catch { return 'certificate_unreadable'; }
+  try { leaf = new X509Certificate(certDer); certExtensions(certDer); } catch { return 'certificate_unreadable'; }
   const chain = chains.find((c) => c.length && leaf.checkIssued(c[0]) && leaf.verify(c[0].publicKey) && c.every((x, k) => (k + 1 < c.length ? x.checkIssued(c[k + 1]) && x.verify(c[k + 1].publicKey) : x.verify(x.publicKey))));
   if (!chain) return 'certificate_not_from_fulcio';
   const issuer = fulcioExtension(certDer, 8) || fulcioExtension(certDer, 1);
@@ -452,7 +518,9 @@ export function sigstoreProblem({ certDer, payloadType, body, signature, repo, c
   const want = 'https://github.com/' + repo.toLowerCase();
   const source = fulcioExtension(certDer, 12);
   if (!source || source.toLowerCase() !== want) return 'certificate_other_repository';
-  if (!String(leaf.subjectAltName || '').toLowerCase().startsWith('uri:' + want + '/')) return 'certificate_other_repository';
+  const signer = signerKind({ san: String(leaf.subjectAltName || ''), buildSigner: fulcioExtension(certDer, 9), repo });
+  if (!signer) return 'certificate_other_repository';
+  info.signer = signer;
   const pae = Buffer.concat([Buffer.from('DSSEv1 ' + Buffer.byteLength(payloadType) + ' ' + payloadType + ' ' + body.length + ' '), body]);
   try { if (!createVerify('sha256').update(pae).verify(leaf.publicKey, signature)) return 'signature_invalid'; } catch { return 'signature_invalid'; }
   return null;
@@ -464,7 +532,7 @@ export function sigstoreProblem({ certDer, payloadType, body, signature, repo, c
  * workflow repository must be the subject, and sigstoreProblem must pass for the subject. package.json fields
  * (repository, homepage, bugs) are the publisher's own words and count for nothing. Returns null or a reason.
  */
-export async function npmProvenanceProblem(id, version, subject, { fetch: fetchImpl = globalThis.fetch, chains } = {}) {
+export async function npmProvenanceProblem(id, version, subject, { fetch: fetchImpl = globalThis.fetch, chains, info = {} } = {}) {
   const v = await getJson(fetchImpl, 'https://registry.npmjs.org/' + id.replace('/', '%2f') + '/' + (version && version !== 'latest' ? encodeURIComponent(version) : 'latest'));
   if (!isObj(v) || !isObj(v.dist)) return 'package_missing';
   const m = /^sha512-([A-Za-z0-9+/]{86}==)$/.exec(String(v.dist.integrity || ''));
@@ -484,7 +552,10 @@ export async function npmProvenanceProblem(id, version, subject, { fetch: fetchI
   if (!(Array.isArray(st.subject) && st.subject.some((x) => isObj(x) && x.name === purl && isObj(x.digest) && x.digest.sha512 === tarSha512))) return 'provenance_other_artifact';
   const wf = st.predicate && st.predicate.buildDefinition && st.predicate.buildDefinition.externalParameters && st.predicate.buildDefinition.externalParameters.workflow;
   if (!isObj(wf) || String(wf.repository || '').toLowerCase() !== 'https://github.com/' + subject.toLowerCase()) return 'provenance_other_repository';
-  return sigstoreProblem({ certDer: Buffer.from(certB64, 'base64'), payloadType: env.payloadType, body, signature: Buffer.from(env.signatures[0].sig, 'base64'), repo: subject, ...(chains ? { chains } : {}) });
+  const p = sigstoreProblem({ certDer: Buffer.from(certB64, 'base64'), payloadType: env.payloadType, body, signature: Buffer.from(env.signatures[0].sig, 'base64'), repo: subject, info, ...(chains ? { chains } : {}) });
+  // The version that was checked: the install is pinned to it, so a moving "latest" cannot swap the package.
+  if (!p) { if (typeof v.version !== 'string' || !SEMVER.test(v.version)) return 'provenance_other_artifact'; info.version = v.version; }
+  return p;
 }
 
 /**
@@ -492,10 +563,11 @@ export async function npmProvenanceProblem(id, version, subject, { fetch: fetchI
  * Publisher whose repository is the subject. The statement must name the file with its sha256 as PyPI lists it, and
  * sigstoreProblem must pass for the subject. project_urls and the home page count for nothing. Returns null or a reason.
  */
-export async function pypiProvenanceProblem(id, version, subject, { fetch: fetchImpl = globalThis.fetch, chains } = {}) {
+export async function pypiProvenanceProblem(id, version, subject, { fetch: fetchImpl = globalThis.fetch, chains, info = {} } = {}) {
   const rel = await getJson(fetchImpl, 'https://pypi.org/pypi/' + encodeURIComponent(id) + '/' + (version && version !== 'latest' ? encodeURIComponent(version) + '/' : '') + 'json');
   if (!isObj(rel) || !isObj(rel.info) || !Array.isArray(rel.urls)) return 'package_missing';
-  const ver = String(rel.info.version || version || '');
+  const ver = String(rel.info.version || '');
+  if (!SEMVER.test(ver) || (version && version !== 'latest' && ver !== version)) return 'provenance_other_artifact';
   const files = rel.urls.filter((u) => isObj(u) && typeof u.filename === 'string' && /^[A-Za-z0-9._+-]{1,200}$/.test(u.filename) && isObj(u.digests) && /^[0-9a-f]{64}$/.test(String(u.digests.sha256))).sort((x, y) => (x.packagetype === 'bdist_wheel' ? 0 : 1) - (y.packagetype === 'bdist_wheel' ? 0 : 1)).slice(0, 3);
   if (!files.length) return 'package_missing';
   let why = 'no_provenance';
@@ -509,8 +581,8 @@ export async function pypiProvenanceProblem(id, version, subject, { fetch: fetch
         const body = Buffer.from(a.envelope.statement, 'base64');
         let st; try { st = JSON.parse(body.toString('utf8')); } catch { why = 'provenance_unreadable'; continue; }
         if (!(Array.isArray(st.subject) && st.subject.some((x) => isObj(x) && x.name === f.filename && isObj(x.digest) && x.digest.sha256 === f.digests.sha256))) { why = 'provenance_other_artifact'; continue; }
-        const p = sigstoreProblem({ certDer: Buffer.from(a.verification_material.certificate, 'base64'), payloadType: 'application/vnd.in-toto+json', body, signature: Buffer.from(a.envelope.signature, 'base64'), repo: subject, ...(chains ? { chains } : {}) });
-        if (!p) return null;
+        const p = sigstoreProblem({ certDer: Buffer.from(a.verification_material.certificate, 'base64'), payloadType: 'application/vnd.in-toto+json', body, signature: Buffer.from(a.envelope.signature, 'base64'), repo: subject, info, ...(chains ? { chains } : {}) });
+        if (!p) { info.version = ver; return null; }
         why = p;
       }
     }
@@ -528,8 +600,8 @@ export async function packageVerifiedBy(pkg, subject, { fetch: fetchImpl = globa
   const type = String(pkg.registryType || pkg.registry || '').toLowerCase();
   const id = typeof pkg.identifier === 'string' ? pkg.identifier.trim() : '';
   const version = typeof pkg.version === 'string' && SEMVER.test(pkg.version) ? pkg.version : null;
-  if (type === 'npm' && NPM_NAME.test(id)) { out.why = await npmProvenanceProblem(id, version, subject, { fetch: fetchImpl, chains }); return out.why ? null : 'npm_provenance'; }
-  if (type === 'pypi' && PYPI_NAME.test(id)) { out.why = await pypiProvenanceProblem(id, version, subject, { fetch: fetchImpl, chains }); return out.why ? null : 'pypi_provenance'; }
+  if (type === 'npm' && NPM_NAME.test(id)) { out.why = await npmProvenanceProblem(id, version, subject, { fetch: fetchImpl, chains, info: out }); return out.why ? null : 'npm_provenance'; }
+  if (type === 'pypi' && PYPI_NAME.test(id)) { out.why = await pypiProvenanceProblem(id, version, subject, { fetch: fetchImpl, chains, info: out }); return out.why ? null : 'pypi_provenance'; }
   if (type === 'oci') {
     const ref = parseOciRef(id);
     if (ref && ref.host === 'ghcr.io' && ref.path.split('/')[0] === subject.toLowerCase().split('/')[0]) return 'ghcr_owner';
@@ -684,6 +756,12 @@ export async function resolveSubject(item, { seed = new Map(), fetch: fetchImpl 
         const why = {};
         verifiedBy = await packageVerifiedBy(c.pkg, item.repo, { fetch: fetchImpl, chains, out: why });
         if (!verifiedBy) { details.push('unverified_registry_entry'); out.unverified = [...(out.unverified || []), { identifier: String(c.pkg.identifier || '').slice(0, 200), why: why.why || null }].slice(0, 8); continue; }
+        // Install exactly the version whose provenance was checked (R-LP-17).
+        if (why.version && (r.launch.kind === 'npm' || r.launch.kind === 'pypi')) {
+          if (r.launch.version !== 'latest' && r.launch.version !== why.version) { details.push('unverified_registry_entry'); continue; }
+          r.launch.version = why.version; r.choice.version = why.version; r.choice.purl = purlOf(r.launch.kind, r.launch.package, why.version);
+        }
+        if (why.signer) r.choice.provenance_signer = why.signer;
       }
       const s = c.server;
       out.status = 'runnable'; out.launch = r.launch; out.choice = { ...r.choice, matched_by: c.by, verified_by: verifiedBy };
@@ -981,7 +1059,7 @@ export function buildItem(item, ctx) {
   };
   if (r) {
     lines.push(...resolutionObs(r));
-    result.install = r.choice ? { method: r.choice.type, matched_by: safeText(r.choice.matched_by, /^[a-z+-]{1,40}$/), verified_by: safeText(r.choice.verified_by, /^[a-z_]{1,20}$/), oci_bytes: int(r.choice.oci_bytes), transport: r.choice.transport, version_requested: safeText(r.choice.version, SAFE_VERSION), args: r.choice.args_n, args_unfilled: r.choice.args_unfilled, env_declared: r.choice.env_names.length, registry_entries: r.registry ? r.registry.entries : 0 } : null;
+    result.install = r.choice ? { method: r.choice.type, matched_by: safeText(r.choice.matched_by, /^[a-z+-]{1,40}$/), verified_by: safeText(r.choice.verified_by, /^[a-z_]{1,20}$/), provenance_signer: safeText(r.choice.provenance_signer, /^[a-z_]{1,40}$/), oci_bytes: int(r.choice.oci_bytes), transport: r.choice.transport, version_requested: safeText(r.choice.version, SAFE_VERSION), args: r.choice.args_n, args_unfilled: r.choice.args_unfilled, env_declared: r.choice.env_names.length, registry_entries: r.registry ? r.registry.entries : 0 } : null;
     if (Array.isArray(r.unverified)) result.unverified = r.unverified.map((u) => safeText(u.why, /^[a-z_]{1,40}$/));
     files['raw/resolution.json'] = json({ registry: r.registry, choice: r.choice, candidates: r.candidates, launch: r.launch, subdir: r.subdir, seed_packages: r.seed_packages, invalid: r.invalid ?? null, unverified: r.unverified ?? null });
   }
@@ -1260,13 +1338,15 @@ export function expectedIdentity(manifest, item, expect, env) {
   return { attempt_id: env.ATTEMPT_ID || expect.attempt_id, fence: item.fence, run_key: item.run_key, repo: env.GITHUB_REPOSITORY, workflow_file: manifest.workflow && manifest.workflow.file, workflow_sha: env.GITHUB_WORKFLOW_SHA, run_id: Number(env.GITHUB_RUN_ID) };
 }
 
-export async function verifyBundles({ toolQa, tars, expect, env = process.env, fetch: fetchImpl = globalThis.fetch, registryFile = null }) {
-  const imp = (p) => import(pathToFileURL(join(toolQa, p)).href);
-  const { validateManifest } = await imp('worker-kit/contract.mjs');
-  const { readTar } = await imp('worker-kit/tar.mjs');
-  const { checkBundle } = await imp('ingest/forgery.mjs');
-  const { scanFiles } = await imp('ingest/redact.mjs');
-  const reg = await imp('ingest/registry.mjs');
+export async function verifyBundles({ toolQa, ingest = toolQa, tars, expect, env = process.env, fetch: fetchImpl = globalThis.fetch, registryFile = null }) {
+  // The worker kit's commit builds the bundle; ingest's commit (tool-qa's main, which judges for real) checks it,
+  // with the field registry it pins.
+  const imp = (dir, p) => import(pathToFileURL(join(dir, p)).href);
+  const { validateManifest } = await imp(toolQa, 'worker-kit/contract.mjs');
+  const { readTar } = await imp(toolQa, 'worker-kit/tar.mjs');
+  const { checkBundle } = await imp(ingest, 'ingest/forgery.mjs');
+  const { scanFiles } = await imp(ingest, 'ingest/redact.mjs');
+  const reg = await imp(ingest, 'ingest/registry.mjs');
   const registry = registryFile ? reg.parseRegistry(readFileSync(registryFile, 'utf8')) : await reg.loadRegistry({ fetch: fetchImpl });
   const problems = []; const results = [];
   for (const t of tars) {
@@ -1347,15 +1427,18 @@ export async function main(argv, { env = process.env, stdout = process.stdout, s
     return 0;
   }
   if (cmd === 'verify' && rest.length >= 3) {
+    let ingest = null;
+    if (rest[0] === '--ingest') { ingest = rest[1]; rest.splice(0, 2); }
     const [toolQa, expectFile, ...tars] = rest;
+    if (!toolQa || !expectFile || !tars.length) { say('usage: node corpus/live-probe.mjs verify [--ingest <tool-qa dir>] <tool-qa dir> <expect.json> <tar>...'); return 2; }
     const expect = JSON.parse(readFileSync(expectFile, 'utf8'));
-    const { problems, results } = await verifyBundles({ toolQa, tars, expect, env, fetch: fetchImpl });
+    const { problems, results } = await verifyBundles({ toolQa, ingest: ingest || toolQa, tars, expect, env, fetch: fetchImpl });
     for (const r of results) say(JSON.stringify(r));
     for (const p of problems) say('::error title=' + LANE + ' self test::' + JSON.stringify(p));
     say(problems.length ? problems.length + ' problem(s)' : 'every bundle passed tool-qa\'s checks and the expected outcomes');
     return problems.length ? 3 : 0;
   }
-  stderr.write('usage: node corpus/live-probe.mjs plan <work> --msc <dir> [--seed <file>] | bundle <work> | verify <tool-qa dir> <expect.json> <tar>... | known-answer [<capture.json>]\n');
+  stderr.write('usage: node corpus/live-probe.mjs plan <work> --msc <dir> [--seed <file>] | bundle <work> | verify [--ingest <tool-qa dir>] <tool-qa dir> <expect.json> <tar>... | known-answer [<capture.json>]\n');
   return 2;
 }
 
