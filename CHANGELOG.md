@@ -2,6 +2,12 @@
 
 All notable changes to `@isokron/mcp-check` and the `isokron-ai/mcp-check` Action. The package follows [semantic versioning](https://semver.org/); the grading rubric has its own version (`rubric_version`), noted with each release.
 
+## Unreleased
+
+### Reader
+
+- **Another agent host's plugin tools are not MCP tools (R-RD-05).** A JavaScript or TypeScript file that imports another agent host's tool API (an OpenCode `@opencode-ai/plugin` or OpenClaw `openclaw/plugin-sdk` plugin, the Vercel AI SDK `ai`, `@openai/agents`, LangChain, Mastra or LlamaIndex) and no MCP module now gives no tools: its `tool({ … })` and `api.registerTool({ … })` calls define that host's tools. They used to be listed as MCP tools, could split a repository of one MCP server and its host plugins into "several servers" (nothing graded), and could hide an MCP tool of the same name in Go or Rust. Such files are named in the scan (`hints.hostPlugins`) and in the "nothing found" message, never graded. A file that also imports any module whose name mentions MCP (the SDK, FastMCP, `mcp-handler`, …) or the Claude Agent SDK keeps its tools.
+
 ## 1.3.1 (2026-11-22)
 
 Docs and metadata only; no change to the reader, the engine or the rubric (2.2.0).

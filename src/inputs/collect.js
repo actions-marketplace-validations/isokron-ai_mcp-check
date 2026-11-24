@@ -208,6 +208,8 @@ export function whyNothing(r) {
   else if (lang && lang.files >= lang.readFiles) s += ' The source here is ' + lang.name + ' (' + plural(lang.files, ext(lang.name) + ' file') + '): ' + lang.name + ' source is not read yet (the reader reads TypeScript, JavaScript, Python, Go and Rust).';
   const ign = (h.ignoredFolders || []).filter((x) => x.tools);
   if (ign.length) s += ' Tool definitions were found only in folders that look like admin, console, docs, examples, evaluation or test code, which are not graded from a parent folder: ' + ign.map((x) => line(x.path, 200) + ' (' + plural(x.tools, 'tool') + ')').join(', ') + '; if one of them is the server, point the check at that folder.';
+  const host = (h.hostPlugins || []).filter((x) => x.tools);
+  if (host.length) s += ' Tool definitions for another agent host\'s plugin API were found (not MCP tools, so not graded): ' + host.slice(0, 5).map((x) => line(x.path, 200) + ' (' + line(x.module, 60) + ', ' + plural(x.tools, 'tool') + ')').join(', ') + (host.length > 5 ? ' and ' + (host.length - 5) + ' more' : '') + '.';
   if (h.serverWithoutTools) s += ' A server is constructed in ' + line(h.serverWithoutTools || '.', 200) + ', but none of its tools could be read.';
   if (h.unresolvedNames) s += ' ' + plural(h.unresolvedNames, 'tool registration') + ' had a name the reader could not resolve (computed at run time).';
   if (h.lists) s += ' Not used: ' + plural(h.lists.length, 'committed tool list') + ' in different places (' + h.lists.map((x) => line(x.path, 200)).join(', ') + '); grade one by giving the file itself.';
