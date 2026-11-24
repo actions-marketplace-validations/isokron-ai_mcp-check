@@ -1,7 +1,7 @@
 # Regressions
 
-Every problem found in the loop worker (`corpus/scan-static.mjs` and its workflow) is pinned by a named test
-that stays in the suite for good. Tests are named after their row (`R-SS-01: ...`), and
+Every problem found in the loop worker (`corpus/scan-static.mjs` and its workflow, rows R-SS-) and in the source reader
+(`src/inputs/`, rows R-RD-) is pinned by a named test that stays in the suite for good. Tests are named after their row (`R-SS-01: ...`), and
 [`test/regressions.test.mjs`](test/regressions.test.mjs) fails if a row names a test that does not exist, or if
 a test named `R-SS-...` has no row.
 
@@ -45,3 +45,4 @@ it (`file` › `test name`), and the commit(s) that fixed it.
 | R-LP-21 | LOW. live-probe: a server needing a native module (kronicle-lite) could not be installed in the sandbox. Now pinned to mcp-surface-corpus 73a2669, which builds such modules in the full Node image. | `test/live-probe.test.mjs` › `R-LP-21: the sandbox at mcp-surface-corpus 73a2669 builds native modules, so kronicle-lite is expected to start in the self test` | c0e7220 |
 | R-LP-22 | LOW. live-probe: the self test judged bundles with ingest at the worker kit's commit, whose registry pin predated the fields the lane writes, so it refused `tool_count` and `tool_list_sha256` (seen only on GitHub). Now ingest's checks come from tool-qa at `INGEST_REF`, the commit that judges for real. | `test/live-probe.test.mjs` › `R-LP-22: the self test judges the bundles with the ingest tool-qa runs, whose registry declares every field the lane writes` | 848955f |
 | R-LP-23 | LOW. live-probe: R-LP-21's sandbox pin (73a2669) was one merge behind mcp-surface-corpus main, so the self test this lane runs before any target lacked #9's install-network hostile cases and #10's proxy positive control, though npm installs with scripts run on that network. Now pinned at 066c15d. | `test/live-probe.test.mjs` › `R-LP-23: the sandbox pin includes the install-network hostile cases and the proxy positive control (mcp-surface-corpus #9, #10)` | c05d85a |
+| R-RD-03 | MEDIUM. A hand-rolled Rust server whose tools come from a helper returning `json!({ "name": name, "inputSchema": … })` was read as one unresolved tool and no list (scan-static `no_tools` on HyunSeob/iphone-cli, 21 tools): the `json!` branch did not bind the function's parameters, so the helper was never followed to its calls. | `test/repo-reader-rust.test.mjs` › `R-RD-03: a helper that returns json!({ "name": name, … }) from its parameters: each call with literal arguments is a tool`<br>`test/repo-reader-rust.test.mjs` › `R-RD-03: a json! helper called with a name the reader cannot work out is counted as unresolved, never invented` | 717fa49 |
