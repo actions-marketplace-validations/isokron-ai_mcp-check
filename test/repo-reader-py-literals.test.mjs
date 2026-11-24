@@ -99,3 +99,28 @@ test('R-RD-01: a tool dict whose schema is computed keeps its name and descripti
   assert.deepEqual(r.unreadable.inputSchema, ['run']);
   assert.equal(r.tools[0].description, 'Runs a job.');
 });
+
+test('R-RD-01: a FastMCP file that also calls the Anthropic API: its input_schema dict is not an MCP tool', () => {
+  const src = 'from mcp.server.fastmcp import FastMCP\nimport anthropic\nmcp = FastMCP("x")\nFINAL = {"name": "final_answer", "description": "Ends the loop.", "input_schema": {"type": "object", "properties": {}}}\n\n@mcp.tool()\ndef ask(q: str) -> str:\n    """Asks."""\n    return anthropic.Anthropic().messages.create(tools=[FINAL])\n';
+  assert.deepEqual(names(read({ 'pyproject.toml': '[project]\nname = "x"\ndependencies = ["mcp"]\n', 'x/server.py': src })), ['ask']);
+});
+
+test('R-RD-01: a file that uses an MCP client: its tool dicts describe another server, not this one', () => {
+  const src = 'from mcp import ClientSession\nFAKE_TOOLS = [{"name": "remote_search", "description": "Searches.", "inputSchema": {"type": "object"}}]\n\nasync def proxy(session: ClientSession):\n    return FAKE_TOOLS\n';
+  assert.deepEqual(names(read({ 'pyproject.toml': '[project]\nname = "x"\n', 'x/gateway.py': src })), []);
+});
+
+test("R-RD-01: a def's parameter or local shadows a module constant of the same name: the dict is a template, not a tool", () => {
+  const src = 'name = "my-server"\nschema = {"type": "object"}\n\ndef make(name, desc):\n    return {"name": name, "description": desc, "inputSchema": schema}\n\ndef other():\n    name = compute()\n    return {"name": name, "description": "d", "inputSchema": {"type": "object"}}\n\ndef handle(m):\n    if m == "tools/list":\n        return {"tools": []}\n';
+  assert.deepEqual(names(read({ 'pyproject.toml': '[project]\nname = "x"\n', 'x/server.py': src })), []);
+});
+
+test('R-RD-01: many tool dicts in one long logical line are read in linear time', () => {
+  const one = (i) => '    {"name": "t' + i + '", "description": "Tool ' + i + '.", "inputSchema": {"type": "object", "properties": {}}},\n';
+  const src = 'TOOLS = [\n' + Array.from({ length: 4000 }, (_, i) => one(i)).join('') + ']\n\ndef handle(m):\n    if m == "tools/list":\n        return {"tools": TOOLS}\n';
+  const t0 = performance.now();
+  const an = read({ 'pyproject.toml': '[project]\nname = "x"\n', 'x/server.py': src });
+  assert.equal(an.tools.length, 4000);
+  assert.equal(an.tools[3999].line, 4001);
+  assert.ok(performance.now() - t0 < 5000, Math.round(performance.now() - t0) + ' ms');
+});
