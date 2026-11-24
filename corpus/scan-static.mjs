@@ -244,14 +244,17 @@ async function ghJson(f, path, token) {
 
 /**
  * A failure of the reader (RepoSource.fromGitHub), as a detail code. The reader calls any 403 or 429 a rate limit;
- * here a 403 is one only when GitHub said so (x-ratelimit-remaining 0, or retry-after) on a refused answer this
- * subject got (`refused`); otherwise it is a refusal of the repository, which is permanent (R-SS-07).
+ * here a 403 is one only when GitHub said so on a refused answer this subject got (`refused`):
+ * x-ratelimit-remaining 0, retry-after, or "rate limit" at the start of the body (GitHub's secondary limits send no
+ * headers). A 403 from the reader without any of these is unexplained: upstream_error, retryable, so tool-qa's
+ * bounded retries decide (R-SS-07, R-SS-09). The repository's own refusal shows on the API call before the reader
+ * (httpDetail: repo_unavailable).
  */
 export function readDetail(e, aborted, refused = null) {
   if (aborted || (e && e.name === 'AbortError')) return 'timeout';
-  const limited = !!refused && (refused.status === 429 || refused.remaining === '0' || refused.retryAfter != null);
+  const limited = !!refused && (refused.status === 429 || refused.remaining === '0' || refused.retryAfter != null || refused.rateLimitBody === true);
   if (e && (e.status === 429 || ((e.code === 'rate_limited' || e.status === 403) && limited))) return 'rate_limited';
-  if (e && (e.code === 'rate_limited' || e.status === 403)) return 'repo_unavailable';
+  if (e && (e.code === 'rate_limited' || e.status === 403)) return 'upstream_error';
   if (e && e.code === 'incomplete') return 'read_failed';
   if (e && e.code === 'too_large') return 'listing_too_large';
   if (e && Number.isInteger(e.status)) return 'upstream_error';
@@ -283,7 +286,11 @@ export async function scanSubject(subject, { fetch: fetchImpl = globalThis.fetch
     const res = await fetchImpl(url, { ...init, signal: ctl.signal });
     if (res && (res.status === 403 || res.status === 429)) {
       const h = (k) => (res.headers && typeof res.headers.get === 'function' ? res.headers.get(k) : null);
-      refused = { status: res.status, remaining: h('x-ratelimit-remaining'), retryAfter: h('retry-after') };
+      refused = { status: res.status, remaining: h('x-ratelimit-remaining'), retryAfter: h('retry-after'), rateLimitBody: false };
+      // GitHub's secondary rate limits come without rate-limit headers; their body says so (R-SS-09).
+      if (typeof res.clone === 'function') {
+        try { refused.rateLimitBody = /rate limit/i.test((await res.clone().text()).slice(0, 2048)); } catch { /* the headers are enough */ }
+      }
     }
     return res;
   };
@@ -658,7 +665,7 @@ export function rawText(value, cap = RAW_FILE_CAP) {
 }
 
 /** The raw/ files of one subject: { files, truncated } (paths of the files that were cut). */
-function rawFiles(raw, cap) {
+export function rawFiles(raw, cap = RAW_FILE_CAP) {
   const files = {};
   const truncated = [];
   const add = (path, value) => {
@@ -684,7 +691,8 @@ export class BundleTooLarge extends Error {
  * fileCap or the files are over bundleCap together.
  */
 export function buildBundle({ item, scan, controls, startedAt, finishedAt, digest = settingsDigest(), rawCap = RAW_FILE_CAP, fileCap = BUNDLE_FILE_CAP, bundleCap = BUNDLE_CAP }) {
-  const raw = rawFiles(scan.raw || {}, rawCap);
+  // A subject scanned in its own thread brings its raw/ texts built and capped already (R-SS-08).
+  const raw = scan.rawFiles && typeof scan.rawFiles === 'object' ? scan.rawFiles : rawFiles(scan.raw || {}, rawCap);
   const files = {};
   files[RESULT_PATH] = json({ ...resultOf(item, scan, finishedAt), raw_truncated: raw.truncated });
   files['observations/static.ndjson'] = observationsOf(scan);
@@ -751,8 +759,15 @@ export function reportItem(dir, { item, scan, controls, startedAt, finishedAt, d
 const WORKER_URL = new URL('./scan-subject-worker.mjs', import.meta.url);
 /** A subject's thread gets this long past SUBJECT_TIMEOUT_MS to stop on its own before it is terminated. */
 export const SUBJECT_GRACE_MS = 5 * 1000;
+/** API calls one subject takes (repository, branch, tree), and how many to leave unused (R-SS-09). */
+export const CALLS_PER_SUBJECT = 3;
+export const RATE_RESERVE = 10;
 /** Largest answer body handed to a subject's thread (the reader's own caps are lower). */
 const PROXY_BODY_CAP = 16 * 1024 * 1024;
+/** Heap limit of a subject's thread: well above a large real repository, well below the runner's memory. */
+export const SUBJECT_HEAP_MB = 1536;
+/** The only hosts a subject's thread may reach: GitHub's API and its raw file host (R-SS-10). */
+const PROXY_HOSTS = new Set(['api.github.com', 'raw.githubusercontent.com']);
 const PASSED_HEADERS = ['content-length', 'content-type', 'x-ratelimit-remaining', 'x-ratelimit-limit', 'x-ratelimit-reset', 'retry-after', 'location', 'etag'];
 
 async function readCappedBody(res, cap) {
@@ -795,7 +810,8 @@ export function scanInWorker(subject, { fetch: fetchImpl = globalThis.fetch, tok
     };
     const failed = (detail, name) => ({ ...notRead(detail), error_name: safeName(name) });
     try {
-      worker = new Worker(workerUrl, { workerData: { subject, token, timeoutMs }, env: {} });
+      // The thread gets no token (the requests it asks for get it here) and a heap limit (R-SS-08, R-SS-10).
+      worker = new Worker(workerUrl, { workerData: { subject, timeoutMs }, env: {}, resourceLimits: { maxOldGenerationSizeMb: SUBJECT_HEAP_MB } });
     } catch (e) {
       finish(failed('reader_error', e && e.name));
       return;
@@ -810,13 +826,19 @@ export function scanInWorker(subject, { fetch: fetchImpl = globalThis.fetch, tok
       inflight.set(m.id, ctl);
       (async () => {
         try {
-          const res = await fetchImpl(m.url, { headers: m.headers || {}, redirect: m.redirect || 'follow', credentials: 'omit', signal: ctl.signal });
+          let host = null;
+          try { host = new URL(m.url).protocol === 'https:' ? new URL(m.url).host : null; } catch { host = null; }
+          if (!PROXY_HOSTS.has(host)) throw Object.assign(new Error('requests go to ' + [...PROXY_HOSTS].join(' and ') + ' only'), { name: 'RefusedHost' });
+          const headers = { ...(m.headers || {}) };
+          for (const k of Object.keys(headers)) if (k.toLowerCase() === 'authorization') delete headers[k];
+          if (token && host === 'api.github.com') headers.Authorization = 'Bearer ' + token;
+          const res = await fetchImpl(m.url, { headers, redirect: m.redirect || 'follow', credentials: 'omit', signal: ctl.signal });
           const get = (k) => (res.headers && typeof res.headers.get === 'function' ? res.headers.get(k) : null);
-          const headers = {};
-          for (const k of PASSED_HEADERS) { const v = get(k); if (v !== null && v !== undefined) headers[k] = String(v); }
+          const passed = {};
+          for (const k of PASSED_HEADERS) { const v = get(k); if (v !== null && v !== undefined) passed[k] = String(v); }
           onResponse(m.url, res.status, get);
           const body = res.status === 204 || res.status === 304 ? null : await readCappedBody(res, PROXY_BODY_CAP);
-          if (!settled) worker.postMessage({ type: 'response', id: m.id, status: res.status, headers, body });
+          if (!settled) worker.postMessage({ type: 'response', id: m.id, status: res.status, headers: passed, body });
         } catch (e) {
           if (!settled) worker.postMessage({ type: 'response', id: m.id, error: { name: String((e && e.name) || 'Error'), message: String((e && e.message) || e).slice(0, 300) } });
         } finally {
@@ -872,8 +894,8 @@ export async function runShard({ shardId, attemptId, items, out, fetch: fetchImp
     const i = item.index;
     if (!stop && clock() - t0 > budgetMs) stop = 'shard_deadline';
     // Each subject takes a few API calls: stop before the budget runs dry, not after (R-SS-07).
-    const left = input.items.filter((x) => x.index >= i && x.repo).length;
-    if (!stop && item.repo && remaining !== null && remaining < 3 * left) stop = 'rate_limited';
+    // One subject takes about 3 API calls; stop when not even that is left above a reserve (R-SS-09).
+    if (!stop && item.repo && remaining !== null && remaining < CALLS_PER_SUBJECT + RATE_RESERVE) stop = 'rate_limited';
     let scan;
     const startedAt = now().toISOString();
     if (stop) scan = notRead(stop);
