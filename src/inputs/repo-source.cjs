@@ -510,7 +510,7 @@
     const shaped = { type: 'object', properties: props };
     const req = Object.keys(props).filter((k) => !(optionalKeys && optionalKeys.has(k))); if (req.length) shaped.required = req;
     if (f.closed) shaped.additionalProperties = false;
-    shaped.$schema = DIALECT[f.dialect];
+    if (DIALECT[f.dialect]) shaped.$schema = DIALECT[f.dialect];
     return shaped;
   }
 
@@ -728,7 +728,7 @@
     const v = parseValue(t, i, ctx);
     if (v.value === SKIP || !v.value || typeof v.value !== 'object') return { schema: null, end: v.end, exact: false };
     if (v.rawShape) return { schema: rootSchema(v.value, v.optionalKeys, ctx.fl), end: v.end, exact: v.exact };
-    if (v.zod && v.value.type === 'object') { const s = Object.assign({}, v.value); s.$schema = DIALECT[(ctx.fl || FL_DEFAULT).dialect]; return { schema: s, end: v.end, exact: v.exact }; }
+    if (v.zod && v.value.type === 'object') { const s = Object.assign({}, v.value); const d = DIALECT[(ctx.fl || FL_DEFAULT).dialect]; if (d) s.$schema = d; return { schema: s, end: v.end, exact: v.exact }; }
     return { schema: v.value, end: v.end, exact: v.exact };
   }
 
@@ -738,6 +738,9 @@
   // The SDK a TypeScript file is written against, from its imports first and the repository's dependencies second
   // (opts.sdk = { kind: 'v1' | 'v2', version, zod }, see detectSdk). Unknown stays at the zod 3 / SDK 1 reading the reader always had.
   //   execution: SDK 1.24 to 1.x adds { taskSupport: 'forbidden' } to every McpServer tool; earlier 1.x and 2.x do not.
+  //   customList (sdk.customList, see customListHandler): the server sets its own tools/list handler on the McpServer, so
+  //   the $schema the SDK would add is not known and is not written; nor is execution, unless the new handler wraps the
+  //   SDK's own (it keeps the SDK's fields and rewrites the schemas) (R-RD-04).
   function semver(v) { const m = /(\d+)\.(\d+)(?:\.(\d+))?/.exec(String(v || '')); return m ? [Number(m[1]), Number(m[2]), Number(m[3] || 0)] : null; }
   function tsFlavour(src, sdk) {
     sdk = sdk || {};
@@ -749,7 +752,21 @@
     if (!zod) zod = kind === 'v2' ? 4 : 3;
     const v = semver(sdk.version);
     const sameKind = !sdk.kind || sdk.kind === kind;
-    return { kind, zod, dialect: kind === 'v2' ? '2020-12' : 'draft-07', closed: zod < 4, intBounds: zod >= 4, execution: kind === 'v1' && sameKind && !!v && v[0] === 1 && (v[1] >= 24) };
+    const execution = kind === 'v1' && sameKind && !!v && v[0] === 1 && (v[1] >= 24);
+    if (sdk.customList) return { kind, zod, dialect: null, closed: zod < 4, intBounds: zod >= 4, execution: sdk.customList === 'wrap' && execution, customList: sdk.customList };
+    return { kind, zod, dialect: kind === 'v2' ? '2020-12' : 'draft-07', closed: zod < 4, intBounds: zod >= 4, execution };
+  }
+  // A TypeScript or JavaScript file that builds an McpServer and sets its own tools/list handler on it
+  // (mcpServer.server.setRequestHandler(ListToolsRequestSchema, …) under SDK 1.x, (…, 'tools/list', …) under 2.x): the
+  // server lists its tools its own way, so the reader cannot tell what the SDK would have added to them (R-RD-04).
+  // Only the McpServer's own inner server counts (x.server.setRequestHandler, x not `this`: this.server is how a class
+  // holds a low-level Server), in a file that imports McpServer from the SDK. Returns 'wrap' when the new handler calls
+  // the SDK's (read from _requestHandlers), which keeps what the SDK adds except what the wrapper rewrites, else 'replace'.
+  function customListHandler(path, text) {
+    if (!/\.(ts|mts|cts|js|mjs|cjs)$/.test(path) || typeof text !== 'string' || text.indexOf('setRequestHandler') < 0) return null;
+    if (!/\bimport\b[^;]*?\bMcpServer\b[^;]*?\bfrom\s*['"]@modelcontextprotocol\/(?:sdk|server)\b/.test(text)) return null;
+    if (!/(?:^|[^\w$.])(?!this\b)[A-Za-z_$][\w$]*\.server\s*\.setRequestHandler\s*\(\s*(?:[\w$.]*ListToolsRequestSchema\b|['"`]tools\/list['"`])/.test(text)) return null;
+    return /\b_requestHandlers\b/.test(text) ? 'wrap' : 'replace';
   }
   // Calls that take a tool: the SDK's (registerTool, tool, addTool) and project helpers named like one (scopedTool,
   // defineTool, createTool, tool). A helper counts only when what it is given looks like a tool (a name and a config
@@ -1202,7 +1219,7 @@
         if (sawZod && s && typeof s === 'object' && !isSchemaObj(s)) {
           // find the key in tokens to recover optional flags
           const k = keyAtTop(t, i, r.end, key); if (k >= 0) { const sh = zodShapeAt(t, k + 2, ctx); if (sh.schema) r.value[key] = sh.schema; }
-        } else if (sawZod && s && s.type === 'object' && !s.$schema) { r.value[key] = Object.assign({}, s, { $schema: DIALECT[fl.dialect] }, fl.closed && s.additionalProperties === undefined ? { additionalProperties: false } : {}); }
+        } else if (sawZod && s && s.type === 'object' && !s.$schema) { r.value[key] = Object.assign({}, s, DIALECT[fl.dialect] ? { $schema: DIALECT[fl.dialect] } : {}, fl.closed && s.additionalProperties === undefined ? { additionalProperties: false } : {}); }
       });
     }
     r.sawZod = sawZod;
@@ -2127,6 +2144,8 @@
     const text = new Map(all);
     const sdk = Object.assign({}, detectSdk(text), opts.sdk || {});
     const readable = plan.src.map((p) => [p, text.get(p)]).filter(([, x]) => typeof x === 'string' && x.length <= 600000);
+    const custom = readable.map(([p, x]) => customListHandler(p, x)).filter(Boolean);
+    if (custom.length) sdk.customList = custom.includes('replace') ? 'replace' : 'wrap';
     const candidates = readable.filter(([, x]) => TOOL_HINT.test(x));
     const srcList = candidates.slice(0, opts.maxSourceFiles || MAX_TOOL_FILES);
     const consts = collectGlobalConsts(readable);

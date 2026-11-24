@@ -2,6 +2,10 @@
 
 All notable changes to `@isokron/mcp-check` and the `isokron-ai/mcp-check` Action. The package follows [semantic versioning](https://semver.org/); the grading rubric has its own version (`rubric_version`), noted with each release.
 
+## Unreleased
+
+- **Reader: an McpServer with its own tools/list handler (R-RD-04).** A TypeScript or JavaScript server that sets its own `tools/list` handler on its McpServer (`mcpServer.server.setRequestHandler(ListToolsRequestSchema, …)`, or `'tools/list'` under SDK 2) no longer gets the `$schema` the SDK would have added, and no `execution` field unless the new handler wraps the SDK's own. The reader cannot see what the handler lists, so it asserts neither, and `spec-schema-dialect` and `spec-execution-legacy` no longer fire on what the server does not send. Found on mcp-check's own server, which serves JSON Schema 2020-12 without `$schema` and was graded Spec C from source. `this.server.setRequestHandler` (a class holding a low-level `Server`) does not count.
+
 ## 1.3.1 (2026-11-22)
 
 Docs and metadata only; no change to the reader, the engine or the rubric (2.2.0).
