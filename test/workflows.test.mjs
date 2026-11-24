@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 
@@ -8,10 +9,12 @@ const dir = fileURLToPath(new URL('../.github/workflows/', import.meta.url));
 const wf = Object.fromEntries(readdirSync(dir).filter((f) => f.endsWith('.yml')).map((f) => [f, readFileSync(join(dir, f), 'utf8')]));
 
 test('workflows: every third-party action pinned by full SHA; read-only default token; no pull_request_target', () => {
-  assert.deepEqual(Object.keys(wf).sort(), ['ci.yml', 'corpus.yml', 'release.yml']);
+  assert.deepEqual(Object.keys(wf).sort(), ['ci.yml', 'corpus.yml', 'release.yml', 'scan-static.yml']);
   for (const [f, y] of Object.entries(wf)) {
     for (const m of y.replace(/^\s*#.*$/gm, '').matchAll(/uses:\s*(\S+)/g)) if (m[1] !== './') assert.match(m[1], /^[\w.-]+\/[\w./-]+@[0-9a-f]{40}$/, f + ': ' + m[1]);
-    assert.match(y, /\npermissions:\n  contents: read\n/, f + ': top-level permissions are contents: read');
+    // The loop worker grants nothing at the top; each of its jobs asks for contents: read.
+    if (f === 'scan-static.yml') assert.match(y, /\npermissions: \{\}\n/, f + ': top-level permissions are {}');
+    else assert.match(y, /\npermissions:\n  contents: read\n/, f + ': top-level permissions are contents: read');
     assert.ok(!/pull_request_target|workflow_run/.test(y.replace(/^#.*$/gm, '')), f);
     for (const m of y.matchAll(/persist-credentials:\s*(\S+)/g)) assert.equal(m[1], 'false', f);
   }
@@ -58,4 +61,84 @@ test('ci: the zero-config job runs the Action with no inputs, after a plain chec
   assert.match(job, /\[ "\$SOURCE" = repo-static \]/);
   assert.match(y, /needs: \[test, action, zero-config\]/);
   assert.match(y, /\[ "\$n" -eq 3 \]/);
+});
+
+test('scan-static: dispatch only, the pump\'s three inputs, kill switch first, inputs checked whole, one pinned worker-kit step per item', () => {
+  const y = wf['scan-static.yml'];
+  const code = y.replace(/^\s*#.*$/gm, '');
+  assert.match(y, /\non:\n  workflow_dispatch:\n    inputs:\n/);
+  assert.ok(!/\n  (push|schedule|pull_request|workflow_call):/.test(y));
+  assert.deepEqual([...y.matchAll(/^      ([a-z_]+):\n        description:/gm)].map((m) => m[1]), ['shard_id', 'attempt_id', 'items'], 'exactly the inputs tool-qa\'s pump sends');
+  assert.match(y, /\nrun-name: shard \$\{\{ inputs\.shard_id \}\}\n/);
+  assert.match(y, /\nconcurrency:\n  group: scan-static-/);
+  assert.ok(!/secrets\./.test(code), 'no secrets');
+  assert.ok(!/github\.event\./.test(code));
+  // No input is expanded inside a run: script; they reach steps through env.
+  for (const m of code.matchAll(/run: \|?\n?((?:.*\n)*?)(?=      - |\n?$)/g)) assert.ok(!/\$\{\{\s*inputs\./.test(m[1]), 'an input expanded in a run: script');
+  const jobs = code.split(/\n  (?=[a-z-]+:\n    )/);
+  const job = (n) => jobs.find((j) => j.startsWith(n + ':'));
+  for (const n of ['guard', 'scan']) {
+    assert.match(job(n), /\n    timeout-minutes: \d+\n/, n);
+    assert.match(job(n), /\n    permissions:\n      contents: read\n(?!      )/, n);
+  }
+  assert.match(job('guard'), /if: github\.repository == 'isokron-ai\/mcp-check' && github\.ref == 'refs\/heads\/main'/);
+  const guardSteps = job('guard').split('\n      - ');
+  assert.match(guardSteps[1], /^id: enabled\n.*\n        env:\n          LOOP_ENABLED: \$\{\{ vars\.LOOP_ENABLED \}\}\n        run: \|\n          if \[\[ "\$LOOP_ENABLED" == "true" \]\]; then echo "on=true"/, 'the first step is the LOOP_ENABLED check');
+  for (const s of guardSteps.slice(2)) assert.match(s, /if: steps\.enabled\.outputs\.on == 'true'/, 'later guard steps run only when the loop is on');
+  assert.match(job('guard'), /LOOP_ENABLED: \$\{\{ vars\.LOOP_ENABLED \}\}\n(?:.*\n)*?        run: node corpus\/loop-guard\.mjs --lane scan-static/);
+  assert.match(job('scan'), /needs: guard\n    if: needs\.guard\.outputs\.proceed == 'true'/);
+  const steps = job('scan').split('\n      - ');
+  assert.match(steps[1], /^name: Kill switch, again /, 'R-SS-06: the switches are checked again first');
+  assert.match(steps[2], /^name: Check the inputs\n/, 'the inputs are checked before anything is checked out or read');
+  assert.equal((steps[2].match(/\[\[ ! "\$[A-Z_]+" =~ \$[a-z_]+ \]\]/g) || []).length, 3, 'all three inputs, as whole strings');
+  // The worker-kit: one step per item index 0..24, all at the same commit as WORKER_KIT_REF.
+  const ref = /\n  WORKER_KIT_REF: '([0-9a-f]{40})'\n/.exec(y)[1];
+  const kit = steps.filter((s) => /uses: isokron-ai\/tool-qa\/worker-kit@/.test(s));
+  assert.equal(kit.length, 25);
+  kit.forEach((s, i) => {
+    assert.match(s, new RegExp('uses: isokron-ai/tool-qa/worker-kit@' + ref + '( #.*)?\\n'), 'item ' + i + ' names WORKER_KIT_REF');
+    assert.match(s, new RegExp("steps\\.scan\\.outputs\\.has_" + i + " == 'true'"));
+    // R-SS-02: gated on the controls, not on the scan step's success.
+    assert.match(s, /if: \$\{\{ !cancelled\(\) && steps\.scan\.outputs\.controls_ok == 'true' && steps\.scan\.outputs\.controls_failed != 'true' && /);
+    assert.ok(!/steps\.scan\.outcome/.test(s), 'item ' + i + ' does not need the scan step to succeed');
+    assert.match(s, new RegExp("item-index: '" + i + "'\\n"));
+    assert.match(s, new RegExp('fence: \\$\\{\\{ steps\\.scan\\.outputs\\.fence_' + i + ' \\}\\}'));
+    assert.match(s, new RegExp('run-key: \\$\\{\\{ steps\\.scan\\.outputs\\.run_key_' + i + ' \\}\\}'));
+    assert.match(s, new RegExp('/scan-static/' + i + '/bundle\\n'));
+    assert.match(s, new RegExp('\\n {10}meta-file: \\$\\{\\{ runner\\.temp \\}\\}/scan-static/' + i + '/meta\\.json\\n'), 'R-SS-05: item ' + i + ' seals its own meta file');
+  });
+  const scanStep = steps.find((s) => s.startsWith('id: scan\n'));
+  assert.match(scanStep, /\n        timeout-minutes: (\d+)\n/, 'R-SS-02: the scan step has its own limit');
+  const stepLimit = Number(/\n        timeout-minutes: (\d+)\n/.exec(scanStep)[1]);
+  const jobLimit = Number(/\n    timeout-minutes: (\d+)\n/.exec(job('scan'))[1]);
+  assert.ok(stepLimit >= 34 && stepLimit <= jobLimit - 6, 'past the 32-minute budget and a last subject, and room left for the uploads');
+});
+
+test('R-SS-06: the scan job checks LOOP_ENABLED and the lane switch again, before anything else', () => {
+  const y = wf['scan-static.yml'];
+  const scan = y.split(/\n  (?=[a-z-]+:\n    )/).find((j) => j.startsWith('scan:'));
+  const step = scan.split('\n      - ')[1];
+  assert.match(step, /LOOP_ENABLED: \$\{\{ vars\.LOOP_ENABLED \}\}/);
+  assert.match(step, /LANE_SCAN_STATIC_ENABLED: \$\{\{ vars\.LANE_SCAN_STATIC_ENABLED \}\}/);
+  const script = /run: \|\n((?: {10}.*\n?)+)/.exec(step)[1].replace(/^ {10}/gm, '');
+  const run = (env) => spawnSync('bash', ['-e', '-c', script], { env: { PATH: process.env.PATH, ...env }, encoding: 'utf8' });
+  assert.equal(run({ LOOP_ENABLED: 'true' }).status, 0, 'lane unset means on');
+  assert.equal(run({ LOOP_ENABLED: 'true', LANE_SCAN_STATIC_ENABLED: 'true' }).status, 0);
+  const off = run({ LOOP_ENABLED: 'false' });
+  assert.equal(off.status, 1);
+  assert.match(off.stdout, /LOOP_ENABLED was switched off/);
+  assert.equal(run({}).status, 1);
+  const lane = run({ LOOP_ENABLED: 'true', LANE_SCAN_STATIC_ENABLED: 'false' });
+  assert.equal(lane.status, 1);
+  assert.match(lane.stdout, /lane was switched off/);
+});
+
+test('R-SS-05: each of the 25 worker-kit steps seals the bundle and the meta file of its own item', () => {
+  const steps = wf['scan-static.yml'].split('\n      - ').filter((s) => /uses: isokron-ai\/tool-qa\/worker-kit@/.test(s));
+  assert.equal(steps.length, 25);
+  steps.forEach((s, i) => {
+    assert.match(s, new RegExp("item-index: '" + i + "'\\n"));
+    assert.match(s, new RegExp('\\n {10}bundle-dir: \\$\\{\\{ runner\\.temp \\}\\}/scan-static/' + i + '/bundle\\n'));
+    assert.match(s, new RegExp('\\n {10}meta-file: \\$\\{\\{ runner\\.temp \\}\\}/scan-static/' + i + '/meta\\.json\\n'));
+  });
 });
