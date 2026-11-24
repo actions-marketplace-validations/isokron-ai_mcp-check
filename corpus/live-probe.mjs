@@ -66,7 +66,7 @@ export const FORGERY_SERVER = join(FIXTURES, 'forgery-server.js');
  */
 export const KNOWN_ANSWER = Object.freeze({
   id: 's901', repo: 'isokron-ai/mcp-check', commit: '5e2668aed07efeb61beb2f3761bc3348af2075c3', registry: 'io.github.isokron-ai/mcp-check',
-  launch: Object.freeze({ kind: 'npm', package: '@isokron/mcp-check', version: '1.3.1', args: Object.freeze(['serve']) }),
+  launch: Object.freeze({ kind: 'npm', package: '@isokron/mcp-check', version: '1.3.1', install_scripts: true, args: Object.freeze(['serve']) }),
   timeout_s: 300,
 });
 /** The forgery control: corpus/fixtures/live-probe/forgery-server.js in the sandbox's own digest-pinned node image. */
@@ -93,6 +93,9 @@ export const DETAILS = Object.freeze({
   no_package: ['no_runnable_artifact', false, 'resolve'],
   unsupported_package: ['no_runnable_artifact', false, 'resolve'],
   private_registry: ['no_runnable_artifact', false, 'resolve'],
+  unverified_registry_entry: ['no_runnable_artifact', false, 'resolve'],
+  oci_host_not_allowed: ['policy_excluded', false, 'resolve'],
+  image_too_large: ['policy_excluded', false, 'resolve'],
   launch_invalid: ['no_runnable_artifact', false, 'resolve'],
   remote_only: ['remote_only', false, 'resolve'],
   unsupported_transport: ['unsupported_transport', false, 'resolve'],
@@ -257,6 +260,19 @@ export function repoOfUrl(url) {
   return m ? (m[1] + '/' + m[2]).toLowerCase() : null;
 }
 
+/**
+ * owner/name of a GitHub URL in package metadata, lower case, or null: a full URL (any path after the repository, as
+ * in project_urls), git@github.com:owner/name, or npm's shorthand github:owner/name or owner/name.
+ */
+export function repoOfMetadataUrl(url) {
+  if (typeof url !== 'string' || url.length > 500) return null;
+  const u = url.trim();
+  let m = /^(?:git\+)?(?:https?|git|ssh):\/\/(?:git@)?(?:www\.)?github\.com[/:]([A-Za-z0-9-]{1,39})\/([A-Za-z0-9._-]{1,100}?)(?:\.git)?(?:[/#?].*)?$/i.exec(u)
+    || /^git@github\.com:([A-Za-z0-9-]{1,39})\/([A-Za-z0-9._-]{1,100}?)(?:\.git)?$/i.exec(u)
+    || /^(?:github:)?([A-Za-z0-9-]{1,39})\/([A-Za-z0-9._-]{1,100}?)(?:\.git)?$/.exec(u);
+  return m ? (m[1] + '/' + m[2]).toLowerCase() : null;
+}
+
 const TYPE_RANK = { npm: 0, pypi: 1, oci: 2 };
 const TRANSPORT_RANK = { stdio: 0, 'streamable-http': 1 };
 const DEFAULT_BASE = { npm: ['https://registry.npmjs.org', 'https://registry.npmjs.org/'], pypi: ['https://pypi.org', 'https://pypi.org/', 'https://pypi.org/simple', 'https://pypi.org/simple/'] };
@@ -268,6 +284,12 @@ const RESERVED_ENV = /^(PATH|HOME|TMPDIR|LD_[A-Z_]+|NODE_OPTIONS|NODE_EXTRA_CA_C
 const ARG_RE = /^[^\u0000\n\r]{1,2000}$/;
 const SUBDIR = /^(?![/.])(?!.*(?:^|\/)\.\.?(?:\/|$))[A-Za-z0-9._@+/-]{1,200}$/;
 const REGISTRY_NAME = /^[A-Za-z0-9][A-Za-z0-9.-]{0,120}\/[A-Za-z0-9][A-Za-z0-9._-]{0,120}$/;
+
+/** The OCI registries an image may come from, and the token services they send us to. No IP literal, no other host. */
+export const OCI_HOSTS = Object.freeze(['docker.io', 'ghcr.io', 'quay.io', 'public.ecr.aws', 'mcr.microsoft.com', 'registry.gitlab.com']);
+export const OCI_TOKEN_HOSTS = Object.freeze(['auth.docker.io', 'ghcr.io', 'quay.io', 'public.ecr.aws', 'mcr.microsoft.com', 'gitlab.com', 'registry.gitlab.com']);
+/** An image whose layers (and config) add up to more than this is not pulled. */
+export const OCI_MAX_BYTES = 2 * 1024 ** 3;
 
 /** An OCI reference split into host, path, tag and digest; null when it is not one we can pull by digest. */
 export function parseOciRef(id) {
@@ -294,53 +316,97 @@ const MANIFEST_ACCEPT = [
   'application/vnd.oci.image.index.v1+json', 'application/vnd.docker.distribution.manifest.list.v2+json',
   'application/vnd.oci.image.manifest.v1+json', 'application/vnd.docker.distribution.manifest.v2+json',
 ].join(', ');
+const MANIFEST_CAP = 4 * 1024 * 1024;
 
 /**
- * The digest an OCI tag points to, from the registry's v2 API (anonymous: the registry's own token service when it
- * asks for one). Data only: nothing is pulled here. Throws a detail code: image_unavailable, rate_limited or
- * upstream_error.
+ * The digest an OCI reference points to and the size of its linux/amd64 image, from the registry's v2 API (anonymous:
+ * the registry's own token service when it asks for one). Data only: no layer is fetched here. Only OCI_HOSTS, and token
+ * services on OCI_TOKEN_HOSTS. Throws a detail code: oci_host_not_allowed, image_unavailable, image_too_large,
+ * rate_limited or upstream_error.
  */
-export async function resolveOciDigest(ref, { fetch: fetchImpl = globalThis.fetch, timeoutMs = 20_000 } = {}) {
-  if (ref.digest) return ref.digest;
+export async function resolveOciImage(ref, { fetch: fetchImpl = globalThis.fetch, timeoutMs = 20_000, maxBytes = OCI_MAX_BYTES } = {}) {
+  if (!OCI_HOSTS.includes(ref.host)) throw fail('oci_host_not_allowed');
   const api = ref.host === 'docker.io' ? 'registry-1.docker.io' : ref.host;
-  const url = 'https://' + api + '/v2/' + ref.path + '/manifests/' + encodeURIComponent(ref.tag);
-  const ask = async (method, auth) => {
-    try {
-      return await fetchImpl(url, { method, headers: { accept: MANIFEST_ACCEPT, 'user-agent': 'isokron-mcp-check-live-probe', ...(auth ? { authorization: auth } : {}) }, redirect: 'follow', credentials: 'omit', signal: AbortSignal.timeout(timeoutMs) });
-    } catch { throw fail('upstream_error'); }
-  };
+  const urlFor = (reference) => 'https://' + api + '/v2/' + ref.path + '/manifests/' + encodeURIComponent(reference);
   const header = (res, k) => (res.headers && typeof res.headers.get === 'function' ? res.headers.get(k) : null);
   let auth = null;
-  let res = await ask('HEAD', null);
-  if (res.status === 401) {
-    const m = /^Bearer\s+(.*)$/i.exec(String(header(res, 'www-authenticate') || ''));
-    if (!m) throw fail('image_unavailable');
-    const params = {};
-    for (const p of m[1].matchAll(/([a-z]+)="([^"]{0,500})"/gi)) params[p[1].toLowerCase()] = p[2];
-    let realm;
-    try { realm = new URL(params.realm); } catch { throw fail('image_unavailable'); }
-    if (realm.protocol !== 'https:' || !SAFE_HOST.test(realm.hostname)) throw fail('image_unavailable');
-    if (params.service) realm.searchParams.set('service', params.service);
-    realm.searchParams.set('scope', 'repository:' + ref.path + ':pull');
-    const tok = await getJson(fetchImpl, realm.href, { timeoutMs, cap: 64 * 1024 });
-    const token = tok && (typeof tok.token === 'string' ? tok.token : typeof tok.access_token === 'string' ? tok.access_token : null);
-    if (!token || token.length > 16384) throw fail('image_unavailable');
-    auth = 'Bearer ' + token;
-    res = await ask('HEAD', auth);
+  const ask = async (url) => {
+    try {
+      return await fetchImpl(url, { method: 'GET', headers: { accept: MANIFEST_ACCEPT, 'user-agent': 'isokron-mcp-check-live-probe', ...(auth ? { authorization: auth } : {}) }, redirect: 'follow', credentials: 'omit', signal: AbortSignal.timeout(timeoutMs) });
+    } catch { throw fail('upstream_error'); }
+  };
+  const manifest = async (reference) => {
+    let res = await ask(urlFor(reference));
+    if (res.status === 401 && !auth) {
+      const m = /^Bearer\s+(.*)$/i.exec(String(header(res, 'www-authenticate') || ''));
+      if (!m) throw fail('image_unavailable');
+      const params = {};
+      for (const p of m[1].matchAll(/([a-z]+)="([^"]{0,500})"/gi)) params[p[1].toLowerCase()] = p[2];
+      let realm;
+      try { realm = new URL(params.realm); } catch { throw fail('image_unavailable'); }
+      if (realm.protocol !== 'https:' || realm.port !== '' || !OCI_TOKEN_HOSTS.includes(realm.hostname)) throw fail('oci_host_not_allowed');
+      if (params.service) realm.searchParams.set('service', params.service);
+      realm.searchParams.set('scope', 'repository:' + ref.path + ':pull');
+      const tok = await getJson(fetchImpl, realm.href, { timeoutMs, cap: 64 * 1024 });
+      const token = tok && (typeof tok.token === 'string' ? tok.token : typeof tok.access_token === 'string' ? tok.access_token : null);
+      if (!token || token.length > 16384) throw fail('image_unavailable');
+      auth = 'Bearer ' + token;
+      res = await ask(urlFor(reference));
+    }
+    if (res.status === 401 || res.status === 403 || res.status === 404) {
+      if (res.status === 403 && httpDetail(403, (k) => header(res, k)) === 'rate_limited') throw fail('rate_limited');
+      throw fail('image_unavailable', { status: res.status });
+    }
+    if (!res.ok) throw fail(httpDetail(res.status, (k) => header(res, k)), { status: res.status });
+    const buf = await readCapped(res, MANIFEST_CAP);
+    let doc;
+    try { doc = JSON.parse(buf.toString('utf8')); } catch { throw fail('image_unavailable'); }
+    const digest = 'sha256:' + sha256(buf);
+    return { doc, digest };
+  };
+  const top = await manifest(ref.digest || ref.tag);
+  if (ref.digest && top.digest !== ref.digest) throw fail('image_unavailable');
+  let image = top.doc;
+  if (isObj(image) && Array.isArray(image.manifests)) {
+    const pick = image.manifests.find((e) => isObj(e) && isObj(e.platform) && e.platform.os === 'linux' && e.platform.architecture === 'amd64' && typeof e.digest === 'string' && /^sha256:[0-9a-f]{64}$/.test(e.digest));
+    if (!pick) throw fail('image_unavailable');
+    const sub = await manifest(pick.digest);
+    if (sub.digest !== pick.digest) throw fail('image_unavailable');
+    image = sub.doc;
   }
-  if (res.status === 401 || res.status === 403 || res.status === 404) {
-    if (res.status === 403 && httpDetail(403, (k) => header(res, k)) === 'rate_limited') throw fail('rate_limited');
-    throw fail('image_unavailable', { status: res.status });
+  if (!isObj(image) || !Array.isArray(image.layers) || !image.layers.length) throw fail('image_unavailable');
+  const sizes = [image.config && image.config.size, ...image.layers.map((l) => l && l.size)];
+  if (!sizes.every((n) => Number.isSafeInteger(n) && n >= 0)) throw fail('image_unavailable');
+  const bytes = sizes.reduce((a, b) => a + b, 0);
+  if (bytes > maxBytes) throw fail('image_too_large', { bytes });
+  return { digest: top.digest, bytes };
+}
+
+/**
+ * Whether a package's own metadata names the subject's repository: npm's repository, homepage and bugs URLs of that
+ * version; PyPI's project_urls, home page and download URL; an image on ghcr.io under the subject's owner. A missing
+ * package is no; a registry that fails throws upstream_error or rate_limited.
+ */
+export async function packagePointsTo(pkg, subject, { fetch: fetchImpl = globalThis.fetch } = {}) {
+  const type = String(pkg.registryType || pkg.registry || '').toLowerCase();
+  const id = typeof pkg.identifier === 'string' ? pkg.identifier.trim() : '';
+  const want = subject.toLowerCase();
+  const version = typeof pkg.version === 'string' && SEMVER.test(pkg.version) ? pkg.version : null;
+  const urls = [];
+  if (type === 'npm' && NPM_NAME.test(id)) {
+    const j = await getJson(fetchImpl, 'https://registry.npmjs.org/' + id.replace('/', '%2f') + '/' + (version ? encodeURIComponent(version) : 'latest'));
+    if (!isObj(j)) return false;
+    urls.push(typeof j.repository === 'string' ? j.repository : isObj(j.repository) ? j.repository.url : null, j.homepage, isObj(j.bugs) ? j.bugs.url : j.bugs);
+  } else if (type === 'pypi' && PYPI_NAME.test(id)) {
+    const j = await getJson(fetchImpl, 'https://pypi.org/pypi/' + encodeURIComponent(id) + '/' + (version ? encodeURIComponent(version) + '/' : '') + 'json');
+    const info = isObj(j) && isObj(j.info) ? j.info : null;
+    if (!info) return false;
+    urls.push(...(isObj(info.project_urls) ? Object.values(info.project_urls) : []), info.home_page, info.download_url);
+  } else if (type === 'oci') {
+    const ref = parseOciRef(id);
+    return !!(ref && ref.host === 'ghcr.io' && ref.path.split('/')[0] === want.split('/')[0]);
   }
-  if (!res.ok) throw fail(httpDetail(res.status, (k) => header(res, k)), { status: res.status });
-  let digest = header(res, 'docker-content-digest');
-  if (!/^sha256:[0-9a-f]{64}$/.test(String(digest || ''))) {
-    // Some registries leave the digest out of a HEAD answer: the manifest's own bytes give it.
-    const g = await ask('GET', auth);
-    if (!g.ok) throw fail(g.status === 404 ? 'image_unavailable' : httpDetail(g.status, (k) => header(g, k)));
-    digest = 'sha256:' + sha256(await readCapped(g, 4 * 1024 * 1024));
-  }
-  return digest;
+  return urls.some((u) => repoOfMetadataUrl(u) === want);
 }
 
 /** Arguments from a registry package's packageArguments: values and defaults only, never a value we would invent. */
@@ -411,7 +477,9 @@ export async function launchFor(pkg, { fetch: fetchImpl = globalThis.fetch } = {
   if (type === 'npm') {
     if (!NPM_NAME.test(id)) return { detail: 'launch_invalid' };
     choice.purl = purlOf('npm', id, version);
-    return { launch: { kind: 'npm', package: id, version, ...common }, choice };
+    // Install scripts run (native modules are built where they can be): the install is in the sandbox under gVisor,
+    // its egress only through the allowlist proxy, its syscalls traced, and what it asked the proxy for is recorded.
+    return { launch: { kind: 'npm', package: id, version, install_scripts: true, ...common }, choice };
   }
   if (type === 'pypi') {
     if (!PYPI_NAME.test(id)) return { detail: 'launch_invalid' };
@@ -420,13 +488,19 @@ export async function launchFor(pkg, { fetch: fetchImpl = globalThis.fetch } = {
   }
   const ref = parseOciRef(id);
   if (!ref) return { detail: 'launch_invalid' };
-  const digest = await resolveOciDigest(ref, { fetch: fetchImpl });
+  if (!OCI_HOSTS.includes(ref.host)) return { detail: 'oci_host_not_allowed' };
+  const { digest, bytes } = await resolveOciImage(ref, { fetch: fetchImpl });
   choice.oci_digest = digest.slice('sha256:'.length);
+  choice.oci_bytes = bytes;
   choice.version = ref.tag;
   return { launch: { kind: 'docker', image: ref.host + '/' + ref.path + ':' + ref.tag + '@' + digest, ...common }, choice };
 }
 
-/** Registry entries (latest versions) whose repository is the subject or whose packages are the seed list's. */
+/**
+ * Registry entries (latest versions) whose repository is the subject or whose packages are the seed list's. Each says
+ * how it matched: seed (it carries a package of the seed list), namespace (its name is io.github.<subject owner>/...,
+ * which the registry verifies), repository (only its repository URL, free text anyone can publish).
+ */
 export async function registryEntries(subject, seedPkgs, { fetch: fetchImpl = globalThis.fetch, base = REGISTRY_BASE } = {}) {
   const [owner, name] = subject.split('/');
   const seedIds = new Set(seedPkgs.map((p) => String(p.registry).toLowerCase() + ':' + String(p.identifier).toLowerCase()));
@@ -439,14 +513,15 @@ export async function registryEntries(subject, seedPkgs, { fetch: fetchImpl = gl
       if (!isObj(s) || typeof s.name !== 'string' || found.has(s.name)) continue;
       const byRepo = repoOfUrl(s.repository && s.repository.url) === subject.toLowerCase();
       const bySeed = (Array.isArray(s.packages) ? s.packages : []).some((p) => isObj(p) && seedIds.has(String(p.registryType).toLowerCase() + ':' + String(p.identifier).toLowerCase()));
-      if (byRepo || bySeed) found.set(s.name, { server: s, by: byRepo && bySeed ? 'repository+seed' : byRepo ? 'repository' : 'seed' });
+      const byNamespace = byRepo && s.name.toLowerCase().startsWith('io.github.' + owner.toLowerCase() + '/');
+      if (byRepo || bySeed) found.set(s.name, { server: s, seed: bySeed, namespace: byNamespace, repository: byRepo, by: [byRepo && 'repository', byNamespace && 'namespace', bySeed && 'seed'].filter(Boolean).join('+') });
     }
   }
   // Entries carrying a package of the seed list first (the seed names what was sampled), then by name.
-  return [...found.values()].sort((a, b) => (b.by.includes('seed') - a.by.includes('seed')) || (a.server.name < b.server.name ? -1 : 1));
+  return [...found.values()].sort((a, b) => (b.seed - a.seed) || (b.namespace - a.namespace) || (a.server.name < b.server.name ? -1 : 1));
 }
 
-const DETAIL_ORDER = ['unsupported_transport', 'image_unavailable', 'launch_invalid', 'private_registry', 'unsupported_package'];
+const DETAIL_ORDER = ['unverified_registry_entry', 'image_too_large', 'oci_host_not_allowed', 'unsupported_transport', 'image_unavailable', 'launch_invalid', 'private_registry', 'unsupported_package'];
 
 /**
  * How to run one subject: { status: 'runnable', launch, choice, registry, subdir } or { status: 'skipped', detail }.
@@ -460,8 +535,8 @@ export async function resolveSubject(item, { seed = new Map(), fetch: fetchImpl 
   try {
     const entries = await registryEntries(item.repo, seedPkgs, { fetch: fetchImpl, base });
     const cands = [];
-    for (const { server, by } of entries) for (const p of Array.isArray(server.packages) ? server.packages.slice(0, 20) : []) if (isObj(p)) cands.push({ server, by, pkg: p });
-    if (!entries.length) for (const p of seedPkgs) cands.push({ server: null, by: 'seed-only', pkg: { registryType: p.registry, identifier: p.identifier } });
+    for (const e of entries) for (const p of Array.isArray(e.server.packages) ? e.server.packages.slice(0, 20) : []) if (isObj(p)) cands.push({ server: e.server, entry: e, by: e.by, pkg: p });
+    if (!entries.length) for (const p of seedPkgs) cands.push({ server: null, entry: null, by: 'seed-only', pkg: { registryType: p.registry, identifier: p.identifier } });
     const inSeed = (c) => seedPkgs.some((p) => p.registry === String(c.pkg.registryType).toLowerCase() && p.identifier.toLowerCase() === String(c.pkg.identifier).toLowerCase());
     const rank = (c) => [inSeed(c) ? 0 : 1, TRANSPORT_RANK[(c.pkg.transport && c.pkg.transport.type) || 'stdio'] ?? 9, TYPE_RANK[String(c.pkg.registryType).toLowerCase()] ?? 9];
     cands.sort((a, b) => { const x = rank(a); const y = rank(b); for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return x[i] - y[i]; return 0; });
@@ -474,8 +549,14 @@ export async function resolveSubject(item, { seed = new Map(), fetch: fetchImpl 
         r = { detail: (e && e.detail) || 'launch_invalid' };
       }
       if (r.detail) { details.push(r.detail); continue; }
+      // An entry that matched on its repository URL alone is anyone's claim: its package must point back to the repo.
+      let verifiedBy = !c.entry ? 'seed' : c.entry.seed ? 'seed' : c.entry.namespace ? 'namespace' : null;
+      if (!verifiedBy) {
+        if (await packagePointsTo(c.pkg, item.repo, { fetch: fetchImpl })) verifiedBy = String(c.pkg.registryType).toLowerCase() === 'oci' ? 'ghcr_owner' : 'package_metadata';
+        else { details.push('unverified_registry_entry'); continue; }
+      }
       const s = c.server;
-      out.status = 'runnable'; out.launch = r.launch; out.choice = { ...r.choice, matched_by: c.by };
+      out.status = 'runnable'; out.launch = r.launch; out.choice = { ...r.choice, matched_by: c.by, verified_by: verifiedBy };
       if (s) {
         out.registry = { name: s.name, version: typeof s.version === 'string' ? s.version.slice(0, 64) : null, entries: entries.length, transports: [...new Set((s.packages || []).map((p) => (p && p.transport && typeof p.transport.type === 'string' ? p.transport.type : 'stdio')))].slice(0, 5), remotes: Array.isArray(s.remotes) ? s.remotes.length : 0 };
         const sub = s.repository && typeof s.repository.subfolder === 'string' ? s.repository.subfolder.replace(/^\.?\/+|\/+$/g, '') : '';
@@ -483,9 +564,11 @@ export async function resolveSubject(item, { seed = new Map(), fetch: fetchImpl 
       }
       return out;
     }
-    if (!cands.length) out.detail = entries.some(({ server }) => Array.isArray(server.remotes) && server.remotes.length) ? 'remote_only' : 'no_package';
+    // A remote-only entry counts only when it is the subject's own (seed or namespace); otherwise it is someone's claim.
+    const own = entries.filter((e) => e.seed || e.namespace);
+    if (!cands.length) out.detail = own.some(({ server }) => Array.isArray(server.remotes) && server.remotes.length) ? 'remote_only' : entries.length > own.length ? 'unverified_registry_entry' : 'no_package';
     else out.detail = DETAIL_ORDER.find((d) => details.includes(d)) || 'unsupported_package';
-    if (entries.length) out.registry = { name: entries[0].server.name, version: typeof entries[0].server.version === 'string' ? entries[0].server.version.slice(0, 64) : null, entries: entries.length, transports: [], remotes: Array.isArray(entries[0].server.remotes) ? entries[0].server.remotes.length : 0 };
+    if (own.length) out.registry = { name: own[0].server.name, version: typeof own[0].server.version === 'string' ? own[0].server.version.slice(0, 64) : null, entries: own.length, transports: [], remotes: Array.isArray(own[0].server.remotes) ? own[0].server.remotes.length : 0 };
   } catch (e) {
     out.status = 'skipped';
     out.detail = e && (e.detail === 'rate_limited' || e.detail === 'upstream_error') ? e.detail : 'upstream_error';
@@ -765,7 +848,7 @@ export function buildItem(item, ctx) {
   };
   if (r) {
     lines.push(...resolutionObs(r));
-    result.install = r.choice ? { method: r.choice.type, matched_by: safeText(r.choice.matched_by, /^[a-z+-]{1,20}$/), transport: r.choice.transport, version_requested: safeText(r.choice.version, SAFE_VERSION), args: r.choice.args_n, args_unfilled: r.choice.args_unfilled, env_declared: r.choice.env_names.length, registry_entries: r.registry ? r.registry.entries : 0 } : null;
+    result.install = r.choice ? { method: r.choice.type, matched_by: safeText(r.choice.matched_by, /^[a-z+-]{1,40}$/), verified_by: safeText(r.choice.verified_by, /^[a-z_]{1,20}$/), oci_bytes: int(r.choice.oci_bytes), transport: r.choice.transport, version_requested: safeText(r.choice.version, SAFE_VERSION), args: r.choice.args_n, args_unfilled: r.choice.args_unfilled, env_declared: r.choice.env_names.length, registry_entries: r.registry ? r.registry.entries : 0 } : null;
     files['raw/resolution.json'] = json({ registry: r.registry, choice: r.choice, candidates: r.candidates, launch: r.launch, subdir: r.subdir, seed_packages: r.seed_packages, invalid: r.invalid ?? null });
   }
   let detail = null; let subjectSha = null; let deadlineHit = ctx.deadlineHit;
@@ -979,7 +1062,8 @@ export function bundleShard({ work, now = () => new Date(), log = () => {}, know
   const controls = evaluateControls(ctx, { knownFile });
   const bad = controls.filter((c) => c.control.observed !== c.control.expected);
   if (bad.length) throw new ControlFailure('controls failed: ' + bad.map((c) => c.control.kind + '=' + c.control.observed).join(', '));
-  if (state.swept !== true) throw new ControlFailure('the sandbox was not shown to be gone before upload');
+  const left = isObj(state.left) ? state.left : null;
+  if (state.swept !== true || !left || !['labelled', 'containers', 'volumes', 'uid_65534_processes', 'runsc_processes'].every((k) => left[k] === 0)) throw new ControlFailure('the sandbox was not shown to be gone before upload');
   const digest = settingsDigest(mscCommit);
   const finishedAt = now().toISOString();
   const outRoot = join(work, 'out');
@@ -1019,6 +1103,11 @@ export function bundleShard({ work, now = () => new Date(), log = () => {}, know
 /** The tool-qa files verify imports, with what they import; the workflows' sparse checkout of tool-qa must hold them. */
 export const TOOL_QA_FILES = Object.freeze(['worker-kit/contract.mjs', 'worker-kit/manifest.schema.json', 'worker-kit/tar.mjs', 'ingest/forgery.mjs', 'ingest/redact.mjs', 'ingest/registry.mjs', 'scripts/lib/yaml-lite.mjs', 'history/seed-v1.json']);
 
+/** What ingest would check a self test bundle's identity against: the worker kit records GITHUB_WORKFLOW_SHA. */
+export function expectedIdentity(manifest, item, expect, env) {
+  return { attempt_id: env.ATTEMPT_ID || expect.attempt_id, fence: item.fence, run_key: item.run_key, repo: env.GITHUB_REPOSITORY, workflow_file: manifest.workflow && manifest.workflow.file, workflow_sha: env.GITHUB_WORKFLOW_SHA, run_id: Number(env.GITHUB_RUN_ID) };
+}
+
 export async function verifyBundles({ toolQa, tars, expect, env = process.env, fetch: fetchImpl = globalThis.fetch, registryFile = null }) {
   const imp = (p) => import(pathToFileURL(join(toolQa, p)).href);
   const { validateManifest } = await imp('worker-kit/contract.mjs');
@@ -1037,7 +1126,7 @@ export async function verifyBundles({ toolQa, tars, expect, env = process.env, f
     if (!v.ok) problems.push({ tar: t, reason: 'manifest_invalid', detail: v.errors.slice(0, 5) });
     const item = expect.items.find((x) => x.run_key === manifest.run_key);
     if (!item) { problems.push({ tar: t, reason: 'unexpected_run_key' }); continue; }
-    const exp = { attempt_id: env.ATTEMPT_ID || expect.attempt_id, fence: item.fence, run_key: item.run_key, repo: env.GITHUB_REPOSITORY, workflow_file: manifest.workflow && manifest.workflow.file, workflow_sha: env.GITHUB_WORKFLOW_SHA, run_id: Number(env.GITHUB_RUN_ID) };
+    const exp = expectedIdentity(manifest, item, expect, env);
     for (const p of checkBundle(manifest, files, exp)) problems.push({ tar: t, ...p });
     const obsFiles = new Map([...files].filter(([k]) => k.startsWith('observations/')));
     const ov = reg.validateObservations(obsFiles, registry);

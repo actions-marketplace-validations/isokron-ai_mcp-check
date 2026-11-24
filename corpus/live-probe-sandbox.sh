@@ -29,6 +29,7 @@ mkdir -p "$work"
 umask 077
 
 install_rc=-1; guard_rc=-1; selftest_rc=-1; check_rc=-1; controls_rc=-1; subjects_rc=-1; swept=false
+left_labelled=-1; left_containers=-1; left_volumes=-1; uid_procs=-1; runsc_procs=-1
 gvisor=$(node -e 'process.stdout.write(String(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).release || ""))' "$msc/gvisor.json" 2>/dev/null || true)
 msc_commit=$(git -C "$msc" rev-parse HEAD 2>/dev/null || true)
 
@@ -36,9 +37,10 @@ write_state() {
   node -e '
     const [file, ...v] = process.argv.slice(1);
     const n = (x) => (/^-?[0-9]{1,4}$/.test(x) ? Number(x) : null);
-    const s = { install_rc: n(v[0]), guard_rc: n(v[1]), selftest_rc: n(v[2]), selftest_check_rc: n(v[3]), controls_rc: n(v[4]), subjects_rc: n(v[5]), swept: v[6] === "true", msc_commit: /^[0-9a-f]{40}$/.test(v[7]) ? v[7] : null, gvisor_release: v[8] || null, worker_kit_ref: /^[0-9a-f]{40}$/.test(v[9]) ? v[9] : null, finished_at: new Date().toISOString() };
+    const s = { install_rc: n(v[0]), guard_rc: n(v[1]), selftest_rc: n(v[2]), selftest_check_rc: n(v[3]), controls_rc: n(v[4]), subjects_rc: n(v[5]), swept: v[6] === "true", msc_commit: /^[0-9a-f]{40}$/.test(v[7]) ? v[7] : null, gvisor_release: v[8] || null, worker_kit_ref: /^[0-9a-f]{40}$/.test(v[9]) ? v[9] : null, left: { labelled: n(v[10]), containers: n(v[11]), volumes: n(v[12]), uid_65534_processes: n(v[13]), runsc_processes: n(v[14]) }, finished_at: new Date().toISOString() };
     require("fs").writeFileSync(file, JSON.stringify(s, null, 2) + "\n");
-  ' "$work/sandbox.json" "$install_rc" "$guard_rc" "$selftest_rc" "$check_rc" "$controls_rc" "$subjects_rc" "$swept" "$msc_commit" "$gvisor" "${WORKER_KIT_REF:-}"
+  ' "$work/sandbox.json" "$install_rc" "$guard_rc" "$selftest_rc" "$check_rc" "$controls_rc" "$subjects_rc" "$swept" "$msc_commit" "$gvisor" "${WORKER_KIT_REF:-}" \
+    "$left_labelled" "$left_containers" "$left_volumes" "$uid_procs" "$runsc_procs"
 }
 
 sweep() {
@@ -98,10 +100,24 @@ else
   subjects_rc=0
 fi
 
-# 5. Nothing of a target may outlive this step.
+# 5. Nothing of a target may outlive this step: no container or volume at all (labelled or not), no labelled
+#    network, no host process running as the sandbox user (65534), and no runsc or containerd-shim-runsc process.
+#    A process that got out some other way (another user, another name) is not seen here: corpus/LIVE-PROBE.md.
 sweep >>"$work/sweep.log" 2>&1 || true
-left_over=$(( $(docker ps -aq --filter label=isokron.surface.run | wc -l) + $(docker network ls -q --filter label=isokron.surface.run | wc -l) ))
-if [ "$left_over" -eq 0 ]; then swept=true; else echo "::error title=live-probe::$left_over sandbox containers or networks are still there"; fi
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  pgrep -f 'runsc|containerd-shim-runsc' >/dev/null || break
+  sleep 1
+done
+left_labelled=$(( $(docker ps -aq --filter label=isokron.surface.run | wc -l) + $(docker network ls -q --filter label=isokron.surface.run | wc -l) ))
+left_containers=$(docker ps -aq | wc -l)
+left_volumes=$(docker volume ls -q | wc -l)
+uid_procs=$(pgrep -u 65534 | wc -l)
+runsc_procs=$(pgrep -f 'runsc|containerd-shim-runsc' | wc -l)
+if [ $(( left_labelled + left_containers + left_volumes + uid_procs + runsc_procs )) -eq 0 ]; then swept=true
+else
+  echo "::error title=live-probe::the sandbox is not gone: $left_labelled labelled, $left_containers containers, $left_volumes volumes, $uid_procs processes of uid 65534, $runsc_procs runsc processes"
+  ps -eo pid,user,comm 2>/dev/null | awk '$2 == "nobody" || $2 == "65534" || $3 ~ /runsc|containerd-shim/' >>"$work/sweep.log" || true
+fi
 write_state
 echo "sandbox: self test $check_rc, controls $controls_rc, subjects $subjects_rc, swept $swept"
 exit 0

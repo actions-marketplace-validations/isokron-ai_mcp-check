@@ -30,7 +30,7 @@ function res(status, body, headers = {}) {
   const h = new Map(Object.entries({ 'content-length': String(buf.length), ...headers }).map(([k, v]) => [k.toLowerCase(), v]));
   return { status, ok: status >= 200 && status < 300, headers: { get: (k) => h.get(k.toLowerCase()) ?? null }, arrayBuffer: async () => buf };
 }
-function fakeFetch(servers, { status = 200, oci = {} } = {}) {
+function fakeFetch(servers, { status = 200, oci = {}, realm = 'https://ghcr.io/token', npm = {}, pypi = {} } = {}) {
   const calls = [];
   const f = async (url, init = {}) => {
     calls.push({ url: String(url), method: init.method || 'GET', auth: init.headers && init.headers.authorization });
@@ -40,10 +40,12 @@ function fakeFetch(servers, { status = 200, oci = {} } = {}) {
       const q = (u.searchParams.get('search') || '').toLowerCase();
       return res(200, { servers: servers.filter((s) => s.name.toLowerCase().includes(q) || (s.packages || []).some((p) => String(p.identifier).toLowerCase().includes(q))).map((server) => ({ server })) });
     }
-    if (u.hostname === 'auth.example.io') return res(200, { token: 'anon-token' });
+    if (u.hostname === 'registry.npmjs.org') { const k = decodeURIComponent(u.pathname.slice(1)).replace(/\/[^/]+$/, ''); return k in npm ? res(200, npm[k]) : res(404, {}); }
+    if (u.hostname === 'pypi.org') { const k = u.pathname.split('/')[2]; return k in pypi ? res(200, pypi[k]) : res(404, {}); }
+    if (u.pathname === '/token') return res(200, { token: 'anon-token' });
     const o = oci[u.hostname];
     if (o) {
-      if (!init.headers.authorization) return res(401, '', { 'www-authenticate': 'Bearer realm="https://auth.example.io/token",service="' + u.hostname + '"' });
+      if (!init.headers.authorization) return res(401, '', { 'www-authenticate': 'Bearer realm="' + realm + '",service="' + u.hostname + '"' });
       return o(u, init);
     }
     throw new Error('unexpected fetch ' + url);
@@ -106,8 +108,9 @@ test('live-probe resolve: the registry entry of the repository, npm before pypi 
   ], { repository: { url: 'https://github.com/acme/widget', subfolder: 'packages/server' } })]);
   const r = await LP.resolveSubject({ subject: 'acme/widget', repo: 'acme/widget' }, { fetch: f });
   assert.equal(r.status, 'runnable');
-  assert.deepEqual(r.launch, { kind: 'npm', package: '@acme/widget-stdio', version: '1.2.3', args: ['stdio'], env: { ACME_TOKEN: null } });
-  assert.equal(r.choice.matched_by, 'repository');
+  assert.deepEqual(r.launch, { kind: 'npm', package: '@acme/widget-stdio', version: '1.2.3', install_scripts: true, args: ['stdio'], env: { ACME_TOKEN: null } });
+  assert.equal(r.choice.matched_by, 'repository+namespace');
+  assert.equal(r.choice.verified_by, 'namespace');
   assert.equal(r.subdir, 'packages/server');
   assert.equal(r.registry.name, 'io.github.acme/widget');
   assert.ok(f.calls.every((c) => c.url.startsWith('https://registry.modelcontextprotocol.io/v0.1/servers?search=')));
@@ -119,7 +122,8 @@ test('live-probe resolve: the seed list finds a moved repository; seed packages 
   const a = await LP.resolveSubject({ subject: 'isokron-ai/kronicle-lite', repo: 'isokron-ai/kronicle-lite' }, { fetch: f, seed });
   assert.equal(a.status, 'runnable');
   assert.equal(a.choice.matched_by, 'seed');
-  assert.deepEqual(a.launch, { kind: 'npm', package: 'kronicle-lite', version: '0.10.2', args: ['serve'] });
+  assert.deepEqual(a.launch, { kind: 'npm', package: 'kronicle-lite', version: '0.10.2', install_scripts: true, args: ['serve'] });
+  assert.equal(a.choice.verified_by, 'seed');
   const b = await LP.resolveSubject({ subject: 'acme/solo', repo: 'acme/solo' }, { fetch: f, seed });
   assert.equal(b.status, 'runnable');
   assert.deepEqual(b.launch, { kind: 'pypi', package: 'solo-mcp', version: 'latest' });
@@ -154,21 +158,87 @@ test('live-probe resolve: a registry rate limit or outage is a retryable skip, n
   assert.equal(c.detail, 'upstream_error');
 });
 
-test('live-probe resolve: an OCI tag is pinned to its digest through the registry\'s anonymous token, or the next package is tried', async () => {
-  const digest = 'sha256:' + 'ab'.repeat(32);
+/** An OCI registry stub: an index with a linux/amd64 image whose layers add up to `bytes`. */
+function ociRegistry(bytes, { amd64 = true } = {}) {
+  const image = JSON.stringify({ schemaVersion: 2, mediaType: 'application/vnd.oci.image.manifest.v1+json', config: { size: 1000, digest: 'sha256:' + 'c'.repeat(64) }, layers: [{ size: bytes - 1000, digest: 'sha256:' + 'd'.repeat(64) }] });
+  const imageDigest = 'sha256:' + createHash('sha256').update(image).digest('hex');
+  const index = JSON.stringify({ schemaVersion: 2, mediaType: 'application/vnd.oci.image.index.v1+json', manifests: [{ digest: imageDigest, size: image.length, platform: amd64 ? { os: 'linux', architecture: 'amd64' } : { os: 'linux', architecture: 'arm64' } }] });
+  const indexDigest = 'sha256:' + createHash('sha256').update(index).digest('hex');
+  const handler = (u) => (u.pathname.endsWith('/gone/manifests/1') ? res(404, '') : u.pathname.endsWith('/' + encodeURIComponent(imageDigest)) ? res(200, image) : res(200, index));
+  return { handler, indexDigest };
+}
+
+test('R-LP-09: an OCI image only from the allowed registries, token services included, never an IP literal', async () => {
+  const ok = ociRegistry(50 * 1024 * 1024);
   const f = fakeFetch([
-    server('io.github.acme/box', 'acme/box', [{ registryType: 'oci', identifier: 'oci.example.io/acme/box:1.4', transport: { type: 'stdio' }, packageArguments: [{ type: 'positional', value: 'stdio' }] }]),
-    server('io.github.acme/gone', 'acme/gone', [{ registryType: 'oci', identifier: 'oci.example.io/acme/gone:1', transport: { type: 'stdio' } }, { registryType: 'pypi', identifier: 'gone-mcp', version: '1.0', transport: { type: 'stdio' } }]),
-    server('io.github.acme/only', 'acme/only', [{ registryType: 'oci', identifier: 'oci.example.io/acme/gone:1', transport: { type: 'stdio' } }]),
-  ], { oci: { 'oci.example.io': (u) => (u.pathname.includes('/gone/') ? res(404, '') : res(200, '', { 'docker-content-digest': digest })) } });
+    server('io.github.acme/box', 'acme/box', [{ registryType: 'oci', identifier: 'ghcr.io/acme/box:1.4', transport: { type: 'stdio' }, packageArguments: [{ type: 'positional', value: 'stdio' }] }]),
+    server('io.github.acme/gone', 'acme/gone', [{ registryType: 'oci', identifier: 'ghcr.io/acme/gone:1', transport: { type: 'stdio' } }, { registryType: 'pypi', identifier: 'gone-mcp', version: '1.0', transport: { type: 'stdio' } }]),
+    server('io.github.acme/elsewhere', 'acme/elsewhere', [{ registryType: 'oci', identifier: 'registry.example.com/acme/x:1', transport: { type: 'stdio' } }]),
+    server('io.github.acme/ip', 'acme/ip', [{ registryType: 'oci', identifier: '10.0.0.5/acme/x:1', transport: { type: 'stdio' } }]),
+  ], { oci: { 'ghcr.io': ok.handler } });
   const a = await LP.resolveSubject({ subject: 'acme/box', repo: 'acme/box' }, { fetch: f });
-  assert.deepEqual(a.launch, { kind: 'docker', image: 'oci.example.io/acme/box:1.4@' + digest, args: ['stdio'] });
-  assert.equal(a.choice.oci_digest, 'ab'.repeat(32));
-  assert.ok(f.calls.some((c) => c.url.startsWith('https://auth.example.io/token?service=oci.example.io&scope=repository%3Aacme%2Fbox%3Apull')));
-  const b = await LP.resolveSubject({ subject: 'acme/gone', repo: 'acme/gone' }, { fetch: f });
-  assert.equal(b.launch.kind, 'pypi', 'the image is gone: the next package');
-  const c = await LP.resolveSubject({ subject: 'acme/only', repo: 'acme/only' }, { fetch: f });
-  assert.equal(c.detail, 'image_unavailable');
+  assert.deepEqual(a.launch, { kind: 'docker', image: 'ghcr.io/acme/box:1.4@' + ok.indexDigest, args: ['stdio'] });
+  assert.equal(a.choice.oci_bytes, 50 * 1024 * 1024);
+  assert.ok(f.calls.some((c) => c.url.startsWith('https://ghcr.io/token?service=ghcr.io&scope=repository%3Aacme%2Fbox%3Apull')));
+  assert.equal((await LP.resolveSubject({ subject: 'acme/gone', repo: 'acme/gone' }, { fetch: f })).launch.kind, 'pypi', 'the image is gone: the next package');
+  assert.equal((await LP.resolveSubject({ subject: 'acme/elsewhere', repo: 'acme/elsewhere' }, { fetch: f })).detail, 'oci_host_not_allowed');
+  assert.equal((await LP.resolveSubject({ subject: 'acme/ip', repo: 'acme/ip' }, { fetch: f })).detail, 'oci_host_not_allowed');
+  assert.ok(!f.calls.some((c) => /registry\.example\.com|10\.0\.0\.5/.test(c.url)), 'nothing was asked of a host off the list');
+  // A token service off the list: refused before it is asked.
+  const g = fakeFetch([server('io.github.acme/box', 'acme/box', [{ registryType: 'oci', identifier: 'ghcr.io/acme/box:1.4', transport: { type: 'stdio' } }])], { oci: { 'ghcr.io': ok.handler }, realm: 'https://169.254.169.254/token' });
+  assert.equal((await LP.resolveSubject({ subject: 'acme/box', repo: 'acme/box' }, { fetch: g })).detail, 'oci_host_not_allowed');
+  assert.ok(!g.calls.some((c) => c.url.includes('169.254')));
+  assert.deepEqual(LP.DETAILS.oci_host_not_allowed.slice(0, 2), ['policy_excluded', false]);
+  assert.deepEqual(LP.OCI_HOSTS, ['docker.io', 'ghcr.io', 'quay.io', 'public.ecr.aws', 'mcr.microsoft.com', 'registry.gitlab.com']);
+});
+
+test('R-LP-10: an image over 2 GB, or with no linux/amd64 image, is not pulled', async () => {
+  const big = ociRegistry(LP.OCI_MAX_BYTES + 1);
+  const arm = ociRegistry(1024 * 1024, { amd64: false });
+  const f = (h) => fakeFetch([server('io.github.acme/box', 'acme/box', [{ registryType: 'oci', identifier: 'quay.io/acme/box:2', transport: { type: 'stdio' } }])], { oci: { 'quay.io': h }, realm: 'https://quay.io/token' });
+  const a = await LP.resolveSubject({ subject: 'acme/box', repo: 'acme/box' }, { fetch: f(big.handler) });
+  assert.equal(a.detail, 'image_too_large');
+  assert.deepEqual(LP.DETAILS.image_too_large.slice(0, 2), ['policy_excluded', false]);
+  assert.equal((await LP.resolveSubject({ subject: 'acme/box', repo: 'acme/box' }, { fetch: f(arm.handler) })).detail, 'image_unavailable');
+});
+
+test('R-LP-08: a registry entry that names the repository but not from its owner is not the subject\'s, unless its package points back', async () => {
+  const spoof = (pkgs, extra = {}) => server('io.github.attacker/victim', 'acme/victim', pkgs, extra);
+  // The package's own metadata names another repository: refused.
+  const a = await LP.resolveSubject({ subject: 'acme/victim', repo: 'acme/victim' }, { fetch: fakeFetch([spoof([npmPkg('evil-pkg')])], { npm: { 'evil-pkg': { repository: { url: 'git+https://github.com/attacker/evil.git' } } } }) });
+  assert.equal(a.status, 'skipped');
+  assert.equal(a.detail, 'unverified_registry_entry');
+  assert.equal(a.registry, null, 'the claiming entry is not recorded as the subject\'s');
+  assert.deepEqual(LP.DETAILS.unverified_registry_entry.slice(0, 2), ['no_runnable_artifact', false]);
+  // A package that does not exist on npm: refused.
+  assert.equal((await LP.resolveSubject({ subject: 'acme/victim', repo: 'acme/victim' }, { fetch: fakeFetch([spoof([npmPkg('nowhere')])]) })).detail, 'unverified_registry_entry');
+  // npm metadata that points back (shorthand or URL): accepted, and results say how.
+  const b = await LP.resolveSubject({ subject: 'acme/victim', repo: 'acme/victim' }, { fetch: fakeFetch([spoof([npmPkg('victim-mcp')])], { npm: { 'victim-mcp': { repository: 'github:acme/victim' } } }) });
+  assert.equal(b.status, 'runnable');
+  assert.equal(b.choice.matched_by, 'repository');
+  assert.equal(b.choice.verified_by, 'package_metadata');
+  // PyPI project_urls with a path under the repository.
+  const c = await LP.resolveSubject({ subject: 'acme/victim', repo: 'acme/victim' }, { fetch: fakeFetch([spoof([{ registryType: 'pypi', identifier: 'victim-mcp', version: '1.0', transport: { type: 'stdio' } }])], { pypi: { 'victim-mcp': { info: { project_urls: { Source: 'https://github.com/acme/victim/tree/main/server' } } } } }) });
+  assert.equal(c.choice.verified_by, 'package_metadata');
+  // A remote-only claim is not the subject's either.
+  assert.equal((await LP.resolveSubject({ subject: 'acme/victim', repo: 'acme/victim' }, { fetch: fakeFetch([spoof([], { remotes: [{ type: 'streamable-http', url: 'https://x.example/mcp' }] })]) })).detail, 'unverified_registry_entry');
+  // The owner's namespace (case-insensitive) is verified by the registry itself.
+  const d = await LP.resolveSubject({ subject: 'Acme/victim', repo: 'Acme/victim' }, { fetch: fakeFetch([server('io.github.acme/victim', 'acme/victim', [npmPkg('victim-mcp')])]) });
+  assert.equal(d.choice.verified_by, 'namespace');
+  // The result records both.
+  const w = workFolder();
+  LP.bundleShard({ work: w });
+  const r = JSON.parse(readFileSync(join(w, 'out', '0', 'bundle', 'results', 'live-probe.json'), 'utf8'));
+  assert.equal(r.install.matched_by, 'repository+namespace+seed');
+  assert.equal(r.install.verified_by, 'seed');
+  assert.equal(LP.repoOfMetadataUrl('git@github.com:Acme/Victim.git'), 'acme/victim');
+  assert.equal(LP.repoOfMetadataUrl('https://gitlab.com/acme/victim'), null);
+});
+
+test('R-LP-12: npm installs run their install scripts, in the sandbox, so native modules can be built', async () => {
+  const r = await LP.resolveSubject({ subject: 'acme/widget', repo: 'acme/widget' }, { fetch: fakeFetch([server('io.github.acme/widget', 'acme/widget', [npmPkg('@acme/widget')])]) });
+  assert.equal(r.launch.install_scripts, true);
+  assert.equal(LP.KNOWN_ANSWER.launch.install_scripts, true, 'the known-answer control takes the same path');
 });
 
 // ------------------------------------------------------------------ plan and target lists
@@ -181,7 +251,7 @@ test('live-probe plan: targets s001.., a target the sandbox refuses is a launch_
   assert.equal(plan.runnable, 1);
   assert.equal(plan.subject_timeout_s, LP.SUBJECT_TIMEOUT_MAX_S);
   assert.equal(plan.items[0].target.timeout_s, plan.subject_timeout_s);
-  assert.deepEqual(plan.items[0].target, { id: 's001', repo: 'a/one', ref: 'HEAD', registry: 'io.github.a/one', launch: { kind: 'npm', package: 'one', version: '1.2.3' }, timeout_s: plan.subject_timeout_s });
+  assert.deepEqual(plan.items[0].target, { id: 's001', repo: 'a/one', ref: 'HEAD', registry: 'io.github.a/one', launch: { kind: 'npm', package: 'one', version: '1.2.3', install_scripts: true }, timeout_s: plan.subject_timeout_s });
   assert.equal(LP.subjectTimeout(10), 147);
   assert.ok(LP.subjectTimeout(10) * 10 <= LP.SUBJECT_BUDGET_S);
   const lists = LP.targetLists(plan, { node24Image: NODE24 });
@@ -194,18 +264,18 @@ test('live-probe plan: targets s001.., a target the sandbox refuses is a launch_
   assert.equal(forgery.args[0], '-e');
   assert.ok(forgery.args[1].length <= 2000 && !/[\n\r]/.test(forgery.args[1]));
   assert.equal(forgery.args[2], MARKER);
-  assert.deepEqual(lists.controls.targets[0].launch, { kind: 'npm', package: '@isokron/mcp-check', version: '1.3.1', args: ['serve'] });
+  assert.deepEqual(lists.controls.targets[0].launch, { kind: 'npm', package: '@isokron/mcp-check', version: '1.3.1', install_scripts: true, args: ['serve'] });
   assert.throws(() => LP.targetLists(plan, { node24Image: 'node:24' }));
 });
 
 // ------------------------------------------------------------------ a whole shard from saved sandbox output
 
 /** A work folder as corpus/live-probe-sandbox.sh leaves it, from the fixtures. */
-function workFolder({ marker = MARKER, selftestRc = 0, items: its = null, swept = true, subjectsRc = 0, known = 'probe-known.json', drop = [] } = {}) {
+function workFolder({ marker = MARKER, selftestRc = 0, items: its = null, swept = true, subjectsRc = 0, known = 'probe-known.json', drop = [], left = {} } = {}) {
   const w = mkdtempSync(join(tmpdir(), 'live-probe-test-'));
   const put = (p, s) => { mkdirSync(join(w, p, '..'), { recursive: true }); writeFileSync(join(w, p), typeof s === 'string' ? s : JSON.stringify(s)); };
   const rk = (c) => c.repeat(64);
-  const resolution = (type) => ({ status: 'runnable', detail: null, registry: { name: 'io.github.isokron-ai/mcp-check', version: '1.3.1', entries: 1, transports: ['stdio'], remotes: 0 }, choice: { type, identifier: '@isokron/mcp-check', version: '1.3.1', transport: 'stdio', runtime_hint: 'npx', args_n: 1, args_unfilled: 0, env_names: [], oci_digest: null, purl: 'pkg:npm/%40isokron/mcp-check@1.3.1', matched_by: 'repository+seed' }, candidates: [], launch: { kind: 'npm' }, subdir: null, seed_packages: 1 });
+  const resolution = (type) => ({ status: 'runnable', detail: null, registry: { name: 'io.github.isokron-ai/mcp-check', version: '1.3.1', entries: 1, transports: ['stdio'], remotes: 0 }, choice: { type, identifier: '@isokron/mcp-check', version: '1.3.1', transport: 'stdio', runtime_hint: 'npx', args_n: 1, args_unfilled: 0, env_names: [], oci_digest: null, purl: 'pkg:npm/%40isokron/mcp-check@1.3.1', matched_by: 'repository+namespace+seed', verified_by: 'seed' }, candidates: [], launch: { kind: 'npm' }, subdir: null, seed_packages: 1 });
   const plan = {
     format: LP.PLAN_FORMAT, shard_id: 's', attempt_id: 'attempt-1', marker, planned_at: '2026-11-23T10:00:00.000Z', subject_timeout_s: 147, runnable: 3,
     items: its || [
@@ -216,7 +286,7 @@ function workFolder({ marker = MARKER, selftestRc = 0, items: its = null, swept 
     ],
   };
   put('plan.json', plan);
-  put('sandbox.json', { install_rc: 0, guard_rc: 0, selftest_rc: 0, selftest_check_rc: selftestRc, controls_rc: 0, subjects_rc: subjectsRc, swept, msc_commit: '3b43c19a3b84950732379ea5beee06a8f73512a6', gvisor_release: '20261103', worker_kit_ref: 'b1f25a9b0b7655f45eb353f31562a93d9319d5a4' });
+  put('sandbox.json', { install_rc: 0, guard_rc: 0, selftest_rc: 0, selftest_check_rc: selftestRc, controls_rc: 0, subjects_rc: subjectsRc, swept, left: { labelled: 0, containers: 0, volumes: 0, uid_65534_processes: swept ? 0 : 1, runsc_processes: 0, ...left }, msc_commit: '3b43c19a3b84950732379ea5beee06a8f73512a6', gvisor_release: '20261103', worker_kit_ref: 'b1f25a9b0b7655f45eb353f31562a93d9319d5a4' });
   put('selftest/results.json', { format: 'x', cases: ['direct-ip', 'doh-ip', 'output-forgery'].map((c) => ({ case: c, blocked: true, logged: true, pass: true })), passed: 3, total: 3 });
   const forgery = fx('probe-forgery.json').split('liveprobe-MARKERMARKERMARKER0000').join(marker);
   put('driver-controls/s901/probe-bare.json', fx(known));
@@ -408,6 +478,34 @@ test('live-probe forgery server: one argument for node -e, under the sandbox\'s 
   assert.doesNotMatch(s, /\/\/ /);
 });
 
+test('R-LP-11: no upload unless the sandbox is gone: no container or volume at all, no uid 65534 or runsc process', () => {
+  for (const left of [{ containers: 1 }, { volumes: 2 }, { uid_65534_processes: 1 }, { runsc_processes: 1 }, { labelled: 1 }]) {
+    const w = workFolder({ left });
+    assert.throws(() => LP.bundleShard({ work: w }), /not shown to be gone/, JSON.stringify(left));
+    assert.ok(!existsSync(join(w, 'out')));
+  }
+  const w = workFolder();
+  const state = JSON.parse(readFileSync(join(w, 'sandbox.json'), 'utf8')); delete state.left;
+  writeFileSync(join(w, 'sandbox.json'), JSON.stringify(state));
+  assert.throws(() => LP.bundleShard({ work: w }), /not shown to be gone/, 'a state file without the counts');
+  const sh = readFileSync(join(root, 'corpus', 'live-probe-sandbox.sh'), 'utf8');
+  for (const re of [/docker ps -aq \| wc -l/, /docker volume ls -q \| wc -l/, /pgrep -u 65534/, /pgrep -f 'runsc\|containerd-shim-runsc'/]) assert.match(sh, re);
+});
+
+test('R-LP-03: the self test checks a bundle\'s workflow commit against GITHUB_WORKFLOW_SHA, as the worker kit records it', () => {
+  const exp = LP.expectedIdentity({ workflow: { file: '.github/workflows/live-probe-selftest.yml' } }, { fence: 2, run_key: 'b'.repeat(64) }, {}, { ATTEMPT_ID: 'a1', GITHUB_REPOSITORY: 'isokron-ai/mcp-check', GITHUB_SHA: '1'.repeat(40), GITHUB_WORKFLOW_SHA: '2'.repeat(40), GITHUB_RUN_ID: '9' });
+  assert.deepEqual(exp, { attempt_id: 'a1', fence: 2, run_key: 'b'.repeat(64), repo: 'isokron-ai/mcp-check', workflow_file: '.github/workflows/live-probe-selftest.yml', workflow_sha: '2'.repeat(40), run_id: 9 });
+});
+
+test('R-LP-13: the probe job checks LOOP_ENABLED and the lane switch again, before anything else', () => {
+  const y = wf('live-probe.yml').replace(/^\s*#.*$/gm, '');
+  const job = y.split(/\n  (?=[a-z-]+:\n    )/).find((j) => j.startsWith('probe:'));
+  const steps = job.split('\n      - ');
+  assert.match(steps[1], /^name: Kill switch, again \(LOOP_ENABLED, LANE_LIVE_PROBE_ENABLED\)\n        env:\n          LOOP_ENABLED: \$\{\{ vars\.LOOP_ENABLED \}\}\n          LANE_LIVE_PROBE_ENABLED: \$\{\{ vars\.LANE_LIVE_PROBE_ENABLED \}\}\n/);
+  assert.match(steps[1], /"\$LOOP_ENABLED" != "true" \]\]; then .*exit 1; fi/);
+  assert.match(steps[2], /^name: Check the inputs\n/);
+});
+
 // ------------------------------------------------------------------ kill switch
 
 test('live-probe kill switch: LOOP_ENABLED exactly true, a pause, and LANE_LIVE_PROBE_ENABLED', () => {
@@ -450,8 +548,8 @@ test('live-probe workflow: dispatch only, the pump\'s inputs, kill switch first,
   assert.match(job('guard'), /LANE_LIVE_PROBE_ENABLED: \$\{\{ vars\.LANE_LIVE_PROBE_ENABLED \}\}\n        run: node corpus\/loop-guard\.mjs --lane live-probe/);
   assert.match(job('probe'), /needs: guard\n    if: needs\.guard\.outputs\.proceed == 'true'/);
   const steps = job('probe').split('\n      - ');
-  assert.match(steps[1], /^name: Check the inputs\n/);
-  assert.equal((steps[1].match(/\[\[ ! "\$[A-Z_]+" =~ \$[a-z_]+ \]\]/g) || []).length, 3);
+  assert.match(steps[2], /^name: Check the inputs\n/);
+  assert.equal((steps[2].match(/\[\[ ! "\$[A-Z_]+" =~ \$[a-z_]+ \]\]/g) || []).length, 3);
   const names = steps.map((s) => (/name: (.*)/.exec(s) || [])[1]);
   assert.ok(names.indexOf('Run the controls and subjects in the sandbox') < names.indexOf('Check the controls and build the bundles'));
   assert.ok(names.indexOf('Check the controls and build the bundles') < names.indexOf('Seal and upload item 0'), 'no upload before the sandbox is gone and the controls passed');

@@ -98,6 +98,14 @@ jobs:
     permissions:
       contents: read
     steps:
+      # The switches again, first: one turned off after the guard job stops the run before anything is read.
+      - name: Kill switch, again (LOOP_ENABLED, LANE_LIVE_PROBE_ENABLED)
+        env:
+          LOOP_ENABLED: ${{ vars.LOOP_ENABLED }}
+          LANE_LIVE_PROBE_ENABLED: ${{ vars.LANE_LIVE_PROBE_ENABLED }}
+        run: |
+          if [[ "$LOOP_ENABLED" != "true" ]]; then echo "::error title=live-probe::LOOP_ENABLED was switched off after the guard job; nothing is run"; exit 1; fi
+          if [[ -n "$LANE_LIVE_PROBE_ENABLED" && "$LANE_LIVE_PROBE_ENABLED" != "true" ]]; then echo "::error title=live-probe::the live-probe lane was switched off after the guard job; nothing is run"; exit 1; fi
       - name: Check the inputs
         env:
           SHARD_ID: ${{ inputs.shard_id }}
