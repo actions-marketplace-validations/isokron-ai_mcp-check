@@ -13,13 +13,13 @@ Every positive of these checks comes from a case whose labels were written by ha
 | `annot-write-marked-readonly` | 3 | 1 | 0 | 202 | 75.0% [30.1–95.4] | 100.0% [43.9–100.0] |
 | `gap-shell-injectable-url` | 0 | 0 | 1 | 1 | n/a | 0.0% [0.0–79.3] |
 | `openai-name-unique` | 1 | 0 | 1 | 72 | 100.0% [20.6–100.0] | 50.0% [9.4–90.5] |
-| `outcome` | 69 | 0 | 11 | 0 | 100.0% [94.7–100.0] | 86.3% [77.0–92.2] |
+| `outcome` | 70 | 0 | 10 | 0 | 100.0% [94.8–100.0] | 87.5% [78.5–93.1] |
 | `reader-annotations` | 112 | 0 | 2 | 0 | 100.0% [96.7–100.0] | 98.3% [93.8–99.5] |
 | `reader-conditional` | 2 | 0 | 1 | 0 | 100.0% [34.2–100.0] | 66.7% [20.8–93.8] |
 | `reader-description` | 113 | 0 | 1 | 0 | 100.0% [96.7–100.0] | 99.1% [95.2–99.8] |
 | `reader-params` | 112 | 0 | 2 | 0 | 100.0% [96.7–100.0] | 98.3% [93.8–99.5] |
 | `reader-required` | 112 | 0 | 2 | 0 | 100.0% [96.7–100.0] | 98.3% [93.8–99.5] |
-| `reader-tools` | 181 | 3 | 22 | 0 | 98.4% [95.3–99.4] | 89.2% [84.1–92.7] |
+| `reader-tools` | 183 | 3 | 20 | 0 | 98.4% [95.4–99.5] | 90.1% [85.3–93.5] |
 | `sec-bidi-controls` | 6 | 0 | 1 | 199 | 100.0% [61.0–100.0] | 85.7% [48.7–97.4] |
 | `sec-control-chars` | 3 | 1 | 2 | 200 | 75.0% [30.1–95.4] | 60.0% [23.1–88.2] |
 | `sec-cross-tool-steering` | 3 | 0 | 0 | 203 | 100.0% [43.9–100.0] | 100.0% [43.9–100.0] |
@@ -32,7 +32,7 @@ Every positive of these checks comes from a case whose labels were written by ha
 | `sec-invisible-encoding` | 3 | 0 | 2 | 201 | 100.0% [43.9–100.0] | 60.0% [23.1–88.2] |
 | `sec-secret-seeking` | 7 | 0 | 0 | 199 | 100.0% [64.6–100.0] | 100.0% [64.6–100.0] |
 | `sec-zero-width` | 6 | 0 | 0 | 200 | 100.0% [61.0–100.0] | 100.0% [61.0–100.0] |
-| `security-cap` | 15 | 0 | 1 | 48 | 100.0% [79.6–100.0] | 93.8% [71.7–98.9] |
+| `security-cap` | 15 | 0 | 1 | 49 | 100.0% [79.6–100.0] | 93.8% [71.7–98.9] |
 | `severity` | 217 | 0 | 0 | 0 | 100.0% [98.3–100.0] | 100.0% [98.3–100.0] |
 | `spec-input-schema-missing` | 0 | 0 | 1 | 1 | n/a | 0.0% [0.0–79.3] |
 | `spec-name-charset` | 3 | 0 | 1 | 202 | 100.0% [43.9–100.0] | 75.0% [30.1–95.4] |
@@ -145,7 +145,7 @@ Only false positives can be measured for these.
 | `openai-retry` | rust | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `openai-retry` | typescript | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `outcome` | committed-list | 8 | 0 | 1 | 100.0% [67.6–100.0] | 88.9% [56.5–98.0] |
-| `outcome` | csharp | 0 | 0 | 1 | n/a | 0.0% [0.0–79.3] |
+| `outcome` | csharp | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `outcome` | go | 11 | 0 | 0 | 100.0% [74.1–100.0] | 100.0% [74.1–100.0] |
 | `outcome` | java | 0 | 0 | 1 | n/a | 0.0% [0.0–79.3] |
 | `outcome` | javascript | 5 | 0 | 0 | 100.0% [56.5–100.0] | 100.0% [56.5–100.0] |
@@ -184,7 +184,7 @@ Only false positives can be measured for these.
 | `reader-required` | rust | 13 | 0 | 0 | 100.0% [77.2–100.0] | 100.0% [77.2–100.0] |
 | `reader-required` | typescript | 45 | 0 | 2 | 100.0% [92.1–100.0] | 95.7% [85.8–98.8] |
 | `reader-tools` | committed-list | 34 | 0 | 2 | 100.0% [89.8–100.0] | 94.4% [81.9–98.5] |
-| `reader-tools` | csharp | 0 | 0 | 2 | n/a | 0.0% [0.0–65.8] |
+| `reader-tools` | csharp | 2 | 0 | 0 | 100.0% [34.2–100.0] | 100.0% [34.2–100.0] |
 | `reader-tools` | go | 27 | 0 | 0 | 100.0% [87.5–100.0] | 100.0% [87.5–100.0] |
 | `reader-tools` | java | 0 | 0 | 2 | n/a | 0.0% [0.0–65.8] |
 | `reader-tools` | javascript | 18 | 0 | 0 | 100.0% [82.4–100.0] | 100.0% [82.4–100.0] |
@@ -318,7 +318,7 @@ Rows with no positive and no finding in a language are left out of this table; t
 | Language | Cases | Outcome right | Abstained (observed) | Abstain expected | Unsupported or none (observed) | Unsupported expected |
 |---|---:|---|---|---:|---|---:|
 | committed-list | 9 | 88.9% [56.5–98.0] | 11.1% [2.0–43.5] | 1 | 11.1% [2.0–43.5] | 0 |
-| csharp | 1 | 0.0% [0.0–79.3] | 0.0% [0.0–79.3] | 0 | 100.0% [20.6–100.0] | 0 |
+| csharp | 1 | 100.0% [20.6–100.0] | 0.0% [0.0–79.3] | 0 | 0.0% [0.0–79.3] | 0 |
 | go | 11 | 100.0% [74.1–100.0] | 9.1% [1.6–37.7] | 1 | 0.0% [0.0–25.9] | 0 |
 | java | 1 | 0.0% [0.0–79.3] | 0.0% [0.0–79.3] | 0 | 100.0% [20.6–100.0] | 0 |
 | javascript | 5 | 100.0% [56.5–100.0] | 0.0% [0.0–43.5] | 0 | 0.0% [0.0–43.5] | 0 |
@@ -337,7 +337,7 @@ Rows with no positive and no finding in a language are left out of this table; t
 | adversarial | 82 | 1 | 1 | 98.8% [93.5–99.8] | 98.8% [93.5–99.8] |
 | aliasing | 3 | 0 | 1 | 100.0% [43.9–100.0] | 75.0% [30.1–95.4] |
 | conditional | 5 | 0 | 0 | 100.0% [56.5–100.0] | 100.0% [56.5–100.0] |
-| decorator | 17 | 0 | 6 | 100.0% [81.6–100.0] | 73.9% [53.5–87.5] |
+| decorator | 19 | 0 | 4 | 100.0% [83.2–100.0] | 82.6% [62.9–93.0] |
 | dynamic | 2 | 0 | 0 | 100.0% [34.2–100.0] | 100.0% [34.2–100.0] |
 | explicit-registration | 2 | 0 | 4 | 100.0% [34.2–100.0] | 33.3% [9.7–70.0] |
 | generated | 4 | 0 | 4 | 100.0% [51.0–100.0] | 50.0% [21.5–78.5] |
@@ -369,7 +369,6 @@ Each of these has a label that is wrong on purpose. The scorer must disagree wit
 
 ## Every disagreement
 
-- **csharp/attribute-tools**: outcome: expected tools, got unsupported (mcp-check: no tool definitions found in <case> (scanned 0 of 0 source files, and the committed tool lists and MCPB manifests). Grade the live list instead: star); missed tool echo_text; missed tool reverse_text
 - **go/conditional-env**: suspend_tenant is registered under a condition but not marked conditional
 - **java/spring-tool-methods**: outcome: expected tools, got none (mcp-check: no tool definitions found in <case> (scanned 0 of 0 source files, and the committed tool lists and MCPB manifests). Grade the live list instead: star); missed tool city_temperature; missed tool city_humidity
 - **javascript/poison-escapes**: sec-control-chars raised on title_case (truth: not this check); sec-control-chars missed on color_text; sec-invisible-encoding missed on title_case

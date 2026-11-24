@@ -1890,23 +1890,23 @@
    "positives_hand": 67,
    "positives_inferred": 13,
    "all": {
-    "tp": 69,
+    "tp": 70,
     "fp": 0,
-    "fn": 11,
+    "fn": 10,
     "tn": 0,
     "precision": {
-     "k": 69,
-     "n": 69,
+     "k": 70,
+     "n": 70,
      "p": 1,
-     "lo": 0.9473,
+     "lo": 0.948,
      "hi": 1
     },
     "recall": {
-     "k": 69,
+     "k": 70,
      "n": 80,
-     "p": 0.8625,
-     "lo": 0.7703,
-     "hi": 0.9215
+     "p": 0.875,
+     "lo": 0.785,
+     "hi": 0.9307
     }
    },
    "by_language": {
@@ -1931,17 +1931,23 @@
      }
     },
     "csharp": {
-     "tp": 0,
+     "tp": 1,
      "fp": 0,
-     "fn": 1,
+     "fn": 0,
      "tn": 0,
-     "precision": null,
-     "recall": {
-      "k": 0,
+     "precision": {
+      "k": 1,
       "n": 1,
-      "p": 0,
-      "lo": 0,
-      "hi": 0.7935
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
+     },
+     "recall": {
+      "k": 1,
+      "n": 1,
+      "p": 1,
+      "lo": 0.2065,
+      "hi": 1
      }
     },
     "go": {
@@ -2790,23 +2796,23 @@
    "positives_hand": 165,
    "positives_inferred": 38,
    "all": {
-    "tp": 181,
+    "tp": 183,
     "fp": 3,
-    "fn": 22,
+    "fn": 20,
     "tn": 0,
     "precision": {
-     "k": 181,
-     "n": 184,
-     "p": 0.9837,
-     "lo": 0.9532,
-     "hi": 0.9944
+     "k": 183,
+     "n": 186,
+     "p": 0.9839,
+     "lo": 0.9537,
+     "hi": 0.9945
     },
     "recall": {
-     "k": 181,
+     "k": 183,
      "n": 203,
-     "p": 0.8916,
-     "lo": 0.8414,
-     "hi": 0.9273
+     "p": 0.9015,
+     "lo": 0.8527,
+     "hi": 0.9353
     }
    },
    "by_language": {
@@ -2831,17 +2837,23 @@
      }
     },
     "csharp": {
-     "tp": 0,
+     "tp": 2,
      "fp": 0,
-     "fn": 2,
+     "fn": 0,
      "tn": 0,
-     "precision": null,
-     "recall": {
-      "k": 0,
+     "precision": {
+      "k": 2,
       "n": 2,
-      "p": 0,
-      "lo": 0,
-      "hi": 0.6576
+      "p": 1,
+      "lo": 0.3424,
+      "hi": 1
+     },
+     "recall": {
+      "k": 2,
+      "n": 2,
+      "p": 1,
+      "lo": 0.3424,
+      "hi": 1
      }
     },
     "go": {
@@ -5916,7 +5928,7 @@
     "tp": 15,
     "fp": 0,
     "fn": 1,
-    "tn": 48,
+    "tn": 49,
     "precision": {
      "k": 15,
      "n": 15,
@@ -5952,6 +5964,14 @@
       "lo": 0.3424,
       "hi": 1
      }
+    },
+    "csharp": {
+     "tp": 0,
+     "fp": 0,
+     "fn": 0,
+     "tn": 1,
+     "precision": null,
+     "recall": null
     },
     "go": {
      "tp": 2,
@@ -7162,23 +7182,23 @@
    }
   },
   "decorator": {
-   "tp": 17,
+   "tp": 19,
    "fp": 0,
-   "fn": 6,
+   "fn": 4,
    "tn": 0,
    "precision": {
-    "k": 17,
-    "n": 17,
+    "k": 19,
+    "n": 19,
     "p": 1,
-    "lo": 0.8157,
+    "lo": 0.8318,
     "hi": 1
    },
    "recall": {
-    "k": 17,
+    "k": 19,
     "n": 23,
-    "p": 0.7391,
-    "lo": 0.5353,
-    "hi": 0.8745
+    "p": 0.8261,
+    "lo": 0.6286,
+    "hi": 0.9302
    }
   },
   "dynamic": {
@@ -7455,18 +7475,18 @@
     "hi": 0.7935
    },
    "unsupported": {
-    "k": 1,
-    "n": 1,
-    "p": 1,
-    "lo": 0.2065,
-    "hi": 1
-   },
-   "outcome_accuracy": {
     "k": 0,
     "n": 1,
     "p": 0,
     "lo": 0,
     "hi": 0.7935
+   },
+   "outcome_accuracy": {
+    "k": 1,
+    "n": 1,
+    "p": 1,
+    "lo": 0.2065,
+    "hi": 1
    }
   },
   "go": {
@@ -7837,11 +7857,6 @@
   }
  ],
  "disagreements": {
-  "csharp/attribute-tools": [
-   "outcome: expected tools, got unsupported (mcp-check: no tool definitions found in <case> (scanned 0 of 0 source files, and the committed tool lists and MCPB manifests). Grade the live list instead: star)",
-   "missed tool echo_text",
-   "missed tool reverse_text"
-  ],
   "go/conditional-env": [
    "suspend_tenant is registered under a condition but not marked conditional"
   ],
@@ -7937,11 +7952,6 @@
   ]
  },
  "disagreement_keys": {
-  "csharp/attribute-tools": [
-   "outcome|fn|tools->unsupported",
-   "reader-tools|fn|echo_text",
-   "reader-tools|fn|reverse_text"
-  ],
   "go/conditional-env": [
    "reader-conditional|fn|suspend_tenant"
   ],
