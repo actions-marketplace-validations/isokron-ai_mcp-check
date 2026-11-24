@@ -13,7 +13,7 @@ Levels: **full** the check does what the test asks; **partial** it does part of 
 | OWASP MCP Security Testing Guide (81 test cases, `MCPSTG-*`) | no release or version tag; pinned by commit: `ffb9c6ac307a` (2026-11-18); OWASP Incubator project | [OWASP/MCP-Security-Testing-Guide](https://github.com/OWASP/MCP-Security-Testing-Guide) | 2026-11-24 |
 | OWASP Top 10 for Model Context Protocol | v0.1 (beta, "2025" edition): `165fe0f78ef1` (2026-07-29) | [OWASP/www-project-mcp-top-10](https://github.com/OWASP/www-project-mcp-top-10) | 2026-11-24 |
 
-Test IDs and short titles from the OWASP MCP Security Testing Guide, (c) OWASP contributors. Item IDs and short titles from the OWASP Top 10 for Model Context Protocol, (c) OWASP contributors. Only IDs and short titles are used here; read the tests and items at the sources above.
+Test IDs and short titles from the OWASP MCP Security Testing Guide, (c) OWASP contributors, licensed GPL-3.0. Item IDs and short titles from the OWASP Top 10 for Model Context Protocol, (c) OWASP contributors. Only IDs and short titles are used here; read the tests and items at the sources above.
 
 ## MCP Security Testing Guide: coverage by category
 
@@ -27,9 +27,9 @@ Counts are test cases, using the best level any check reaches. The last column c
 | INFO | 5 | 0 | 0 | 0 | 5 | 2 |
 | PRMT | 5 | 0 | 1 | 2 | 2 | 0 |
 | RSRC | 5 | 0 | 0 | 1 | 4 | 1 |
-| CTX | 5 | 0 | 1 | 2 | 2 | 0 |
+| CTX | 5 | 0 | 0 | 3 | 2 | 0 |
 | OUTV | 2 | 0 | 0 | 0 | 2 | 0 |
-| TOOL | 6 | 0 | 3 | 3 | 0 | 0 |
+| TOOL | 6 | 0 | 2 | 4 | 0 | 0 |
 | INPV | 3 | 0 | 1 | 1 | 1 | 0 |
 | TRNS | 3 | 0 | 0 | 2 | 1 | 0 |
 | AGNT | 5 | 0 | 0 | 4 | 1 | 0 |
@@ -40,7 +40,7 @@ Counts are test cases, using the best level any check reaches. The last column c
 | SUPP | 6 | 0 | 0 | 0 | 6 | 0 |
 | ABUS | 2 | 0 | 0 | 1 | 1 | 0 |
 | SECR | 3 | 0 | 0 | 1 | 2 | 0 |
-| **All** | **81** | **0** | **6** | **24** | **51** | **4** |
+| **All** | **81** | **0** | **4** | **26** | **51** | **4** |
 
 ## OWASP MCP Top 10: checks per item
 
@@ -55,7 +55,7 @@ Counts are test cases, using the best level any check reaches. The last column c
 | MCP07 | Insufficient Authentication & Authorization | 0 | 0 | 2 | `annot-delete-marked-safe`, `annot-write-marked-readonly` |
 | MCP08 | Lack of Audit and Telemetry | 0 | 0 | 0 | none |
 | MCP09 | Shadow MCP Servers | 0 | 0 | 0 | none |
-| MCP10 | Context Injection & Over-Sharing | 0 | 2 | 1 | `spec-envelope-cache`, `anthropic-conversation-data` (partial), `openai-conversation-input` (partial) |
+| MCP10 | Context Injection & Over-Sharing | 0 | 0 | 3 | `spec-envelope-cache`, `anthropic-conversation-data`, `openai-conversation-input` |
 
 ## MCP Security Testing Guide: test by test
 
@@ -90,7 +90,7 @@ Counts are test cases, using the best level any check reaches. The last column c
 | RSRC-03 | Test Cross-Workspace Data Access | not covered by mcp-check |  |  |
 | RSRC-04 | Test Secret Leakage Through Resources | related | `sec-secret-seeking` |  |
 | RSRC-05 | Test Unauthorized File Access | not covered by mcp-check |  |  |
-| CTX-01 | Test Context Over-Sharing | partial | `anthropic-conversation-data` (partial), `openai-conversation-input` (partial) |  |
+| CTX-01 | Test Context Over-Sharing | related | `anthropic-conversation-data`, `openai-conversation-input` |  |
 | CTX-02 | Test Memory Poisoning | not covered by mcp-check |  |  |
 | CTX-03 | Test Sensitive Context Leakage | related | `anthropic-conversation-data` |  |
 | CTX-04 | Test Cross-Session Context Confusion | related | `spec-envelope-cache`, `design-handle-lifetime` |  |
@@ -102,7 +102,7 @@ Counts are test cases, using the best level any check reaches. The last column c
 | TOOL-03 | Test Command Injection in Tool Parameters | related | `openai-generic-executor`, `sec-shell-url` |  |
 | TOOL-04 | Test Tool Schema Manipulation | related | `spec-schema-valid`, `spec-ref-remote`, `spec-name-unique`, `openai-name-unique`, `design-near-duplicate`, `design-namespace` |  |
 | TOOL-05 | Test Dangerous Tool Chaining | related | `sec-cross-tool-steering` |  |
-| TOOL-06 | Test Human Approval for High-Risk Tools | partial | `spec-annotation-key-case`, `anthropic-hint`, `anthropic-hint-platforms-differ`, `openai-hints-explicit`, `openai-readonly-starts-job`, `openai-readonly-destructive`, `annot-delete-marked-safe` (partial), `annot-write-marked-readonly` (partial), `surface-delete-guard` |  |
+| TOOL-06 | Test Human Approval for High-Risk Tools | related | `spec-annotation-key-case`, `anthropic-hint`, `anthropic-hint-platforms-differ`, `openai-hints-explicit`, `openai-readonly-starts-job`, `openai-readonly-destructive`, `annot-delete-marked-safe`, `annot-write-marked-readonly`, `surface-delete-guard` |  |
 | INPV-01 | Test Input Validation for Tool Parameters | partial | `spec-input-schema-missing`, `schema-enum-missing`, `schema-required-unknown`, `schema-additional-properties` (partial), `schema-open-object` | writecheck (partial) |
 | INPV-02 | Test Path Traversal in Tool Inputs | not covered by mcp-check |  |  |
 | INPV-03 | Test JSON and Schema Confusion | related | `spec-tool-shape`, `spec-input-schema-missing`, `spec-input-schema-field-name`, `spec-input-schema-root-object`, `spec-schema-valid`, `spec-schema-dialect`, `spec-composition-bounds`, `spec-field-types`, `schema-additional-properties`, `schema-oneof-branch-types`, `schema-open-object` |  |

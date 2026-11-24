@@ -16,7 +16,7 @@
       "test_count": 81,
       "test_list_path": "03. MCP Threats and Attack Patterns/3.01 to 3.19",
       "repo_license_file": "GPL-3.0 (LICENSE in the repository)",
-      "attribution": "Test IDs and short titles from the OWASP MCP Security Testing Guide, (c) OWASP contributors.",
+      "attribution": "Test IDs and short titles from the OWASP MCP Security Testing Guide, (c) OWASP contributors, licensed GPL-3.0.",
       "tests": [
         {
           "id": "AUTHN-01",
@@ -653,7 +653,7 @@
       "mstg": [
         {
           "id": "CTX-01",
-          "level": "partial"
+          "level": "related"
         },
         {
           "id": "CTX-03",
@@ -667,7 +667,7 @@
       "top10": [
         {
           "id": "MCP10",
-          "level": "partial"
+          "level": "related"
         }
       ]
     },
@@ -732,7 +732,7 @@
       "mstg": [
         {
           "id": "CTX-01",
-          "level": "partial"
+          "level": "related"
         },
         {
           "id": "PRVC-01",
@@ -742,7 +742,7 @@
       "top10": [
         {
           "id": "MCP10",
-          "level": "partial"
+          "level": "related"
         }
       ]
     },
@@ -826,7 +826,7 @@
       "mstg": [
         {
           "id": "TOOL-06",
-          "level": "partial"
+          "level": "related"
         },
         {
           "id": "AUTHZ-02",
@@ -849,7 +849,7 @@
       "mstg": [
         {
           "id": "TOOL-06",
-          "level": "partial"
+          "level": "related"
         },
         {
           "id": "AUTHZ-02",
