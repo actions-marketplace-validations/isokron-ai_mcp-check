@@ -10,11 +10,16 @@ import { join, relative, sep } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import {
-  FORMAT, KNOWN_ANSWER_FILE, MARKER_RE, MAX_ITEMS, MAX_ITEMS_CHARS, PERMANENT, RESULT_PATH, SKIP_REASON, SKIP_REASON_RETRY, TRANSIENT,
+  FORMAT, KNOWN_ANSWER_FILE, MARKER_RE, MAX_ITEMS, MAX_ITEMS_CHARS, PERMANENT, RESULT_PATH, SKIP_REASON, TRANSIENT, skipReasonFor,
   InputProblem, buildBundle, forgeryControl, isDateTime, knownAnswerControl, knownAnswerFile, main, observationsOf,
   parseInputs, runShard, scanSubject, settingsDigest,
 } from '../corpus/scan-static.mjs';
 import * as guard from '../corpus/loop-guard.mjs';
+// tool-qa's own result contract and ingest checks, at the commit WORKER_KIT_REF pins (test/tool-qa/README.md).
+import { SKIP_REASONS, buildManifest, validateManifest } from './tool-qa/worker-kit/contract.mjs';
+import { readTar, writeTar } from './tool-qa/worker-kit/tar.mjs';
+import { checkBundle } from './tool-qa/ingest/forgery.mjs';
+import { scanFiles } from './tool-qa/ingest/redact.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const jsLiteral = {
@@ -98,7 +103,6 @@ const META_KEYS = ['subject', 'tools', 'oracles', 'settings_manifest_digest', 's
 const LABEL_RE = /^[a-z][a-z0-9_]{0,63}$/;
 const TEXT_CLAIM_RE = /["']?\b(attempt[_-]?id|run[_-]?key|fencing[_-]?(?:no|number)|fence)\b["']?\s*[:=]\s*["']?([A-Za-z0-9._-]{1,128})/gi;
 const IDENTITY_KEY = (k) => ['attempt_id', 'attemptid', 'run_key', 'runkey', 'fence', 'fencing_no', 'fencing_number', 'fencingno', 'fence_token'].includes(String(k).toLowerCase().replace(/[-\s]/g, '_'));
-const SKIP_REASONS = ['remote_only', 'no_runnable_artifact', 'unsupported_transport', 'build_failed_upstream', 'install_failed_registry', 'start_requires_credentials', 'no_local_backend', 'heavy_backend', 'timeout_start', 'cluster_member', 'quarantined', 'lane_disabled', 'policy_excluded', 'trace_unavailable', 'bridge_required'];
 const keysOf = (v, out = []) => {
   if (Array.isArray(v)) v.forEach((x) => keysOf(x, out));
   else if (v && typeof v === 'object') for (const [k, x] of Object.entries(v)) { out.push(k); keysOf(x, out); }
@@ -110,6 +114,25 @@ const objectsOf = (v, out = []) => {
   return out;
 };
 const docsOf = (path, text) => (path.endsWith('.json') ? [JSON.parse(text)] : path.endsWith('.ndjson') ? text.split('\n').filter(Boolean).map((l) => JSON.parse(l)) : null);
+
+/**
+ * What tool-qa itself does with one item's bundle, with its own code: the worker kit builds and validates the
+ * manifest from the meta file and packs the tar; ingest reads the tar back and runs its forgery checks (identity,
+ * file list, claims outside raw/, controls) and its secret scan outside raw/. Returns the manifest.
+ */
+function assertToolQa(files, meta, { identity = { attempt_id: 'att-1', fence: 10, run_key: key(0) } } = {}) {
+  const workflow = { repo: 'isokron-ai/mcp-check', file: '.github/workflows/scan-static.yml', sha: 'f'.repeat(40), run_id: 4242, run_attempt: 1 };
+  const list = [...files].map(([path, text]) => ({ path, data: Buffer.from(text) }));
+  const manifest = buildManifest({ identity, workflow, meta, files: list }); // throws if the manifest is invalid
+  assert.deepEqual(validateManifest(manifest).errors, []);
+  const tar = writeTar([{ path: 'manifest.json', data: Buffer.from(JSON.stringify(manifest)) }, ...list]);
+  const read = new Map(readTar(tar).filter((e) => e.path !== 'manifest.json').map((e) => [e.path, e.data]));
+  const exp = { ...identity, repo: workflow.repo, workflow_file: workflow.file, workflow_sha: workflow.sha, run_id: workflow.run_id, run_attempt: 1 };
+  assert.deepEqual(checkBundle(manifest, read, exp), [], 'tool-qa ingest forgery checks');
+  const outsideRaw = [['manifest.json', Buffer.from(JSON.stringify(manifest))], ...[...read].filter(([p]) => !p.startsWith('raw/'))];
+  assert.deepEqual(scanFiles(outsideRaw).map((h) => h.path + ' ' + h.rule), [], 'tool-qa secret scan outside raw/');
+  return manifest;
+}
 
 /** Asserts that one item's bundle and meta file pass the contract; returns the parsed result and observations. */
 function assertBundle(files, meta, { subjectText = [] } = {}) {
@@ -158,6 +181,7 @@ function assertBundle(files, meta, { subjectText = [] } = {}) {
     else assert.deepEqual([...text.matchAll(TEXT_CLAIM_RE)].map((m) => m[0]), [], 'an identity claim in ' + p);
   }
   assert.ok(inRaw, 'the marker came back in raw/');
+  assertToolQa(files, meta);
   const result = JSON.parse(files.get(RESULT_PATH));
   const obs = files.get('observations/static.ndjson').split('\n').filter(Boolean).map((l) => JSON.parse(l));
   return { result, obs };
@@ -269,7 +293,7 @@ test('scanSubject: every failure is a skip; one that may pass when asked again i
     assert.equal(s.grade, null, name);
     assert.equal(s.list, null, name);
     assert.ok((status === 'skipped' ? PERMANENT : TRANSIENT).includes(detail), name);
-    assert.equal(s.skip_reason, status === 'skipped' ? SKIP_REASON : SKIP_REASON_RETRY, name);
+    assert.equal(s.skip_reason, status === 'skipped' ? SKIP_REASON : detail === 'rate_limited' ? 'rate_limited' : 'upstream_unavailable', name);
   }
 });
 
@@ -361,7 +385,7 @@ test('runShard: one bundle per item, failed ones too; a rate limit stops reading
       assert.equal(result.status, 'skipped');
       const retry = i === '4' || i === '5';
       assert.equal(result.retryable, retry);
-      assert.deepEqual(meta.skips, [{ stage: 'static', reason: retry ? SKIP_REASON_RETRY : SKIP_REASON, evidence: RESULT_PATH }]);
+      assert.deepEqual(meta.skips, [{ stage: 'static', reason: retry ? skipReasonFor(result.detail) : SKIP_REASON, evidence: RESULT_PATH, retryable: retry }]);
       assert.equal(result.tool_count, null);
       assert.equal(obs[2].value, null);
     }
@@ -383,7 +407,7 @@ test('runShard: past the shard budget no subject is started (a retryable skip); 
   assert.deepEqual(r.items.map((x) => [x.status, x.detail]), [['graded', null], ['skipped', 'shard_deadline']]);
   assert.ok(!calls.some((c) => c.url.includes('/o/b')));
   const late = JSON.parse(readFileSync(join(out, '1', 'meta.json'), 'utf8'));
-  assert.deepEqual(late.skips, [{ stage: 'static', reason: SKIP_REASON_RETRY, evidence: RESULT_PATH }]);
+  assert.deepEqual(late.skips, [{ stage: 'static', reason: 'upstream_unavailable', evidence: RESULT_PATH, retryable: true }]);
   assertBundle(readTree(join(out, '1', 'bundle')), late);
 
   const out2 = join(tmp('bad'), 'out');
@@ -503,4 +527,33 @@ test('loop-guard: a stopped lane exits 0; a running lane needs a pinned worker-k
   const sh = spawnSync(process.execPath, [join(root, 'corpus', 'loop-guard.mjs'), '--lane', 'scan-static'], { encoding: 'utf8', env: { PATH: process.env.PATH } });
   assert.equal(sh.status, 0);
   assert.match(sh.stdout, /^proceed=false\nreason=loop_disabled\n/);
+});
+
+test('a rate-limited and an upstream-failed shard report retryable skips that tool-qa\'s own contract and ingest checks accept', async () => {
+  const out = join(tmp('retry'), 'out');
+  const r = await runShard({
+    shardId: 's', attemptId: 'att-1', items: itemsOf(['o/up', 'o/rl', 'o/next']), out,
+    fetch: fakeGithub({ 'o/up': { repo: 502 }, 'o/rl': { repo: 429 }, 'o/next': { files: jsLiteral } }),
+  });
+  assert.deepEqual(r.items.map((x) => [x.status, x.detail]), [['skipped', 'upstream_error'], ['skipped', 'rate_limited'], ['skipped', 'rate_limited']]);
+  const expected = ['upstream_unavailable', 'rate_limited', 'rate_limited'];
+  for (const i of [0, 1, 2]) {
+    const meta = JSON.parse(readFileSync(join(out, String(i), 'meta.json'), 'utf8'));
+    assert.deepEqual(meta.skips, [{ stage: 'static', reason: expected[i], evidence: RESULT_PATH, retryable: true }]);
+    assert.ok(!JSON.stringify(meta).includes('trace_unavailable'));
+    const manifest = assertToolQa(readTree(join(out, String(i), 'bundle')), meta, { identity: { attempt_id: 'att-1', fence: 10 + i, run_key: key(i) } });
+    // Every skip retryable: tool-qa records the item as retry_later and sends it out again.
+    assert.ok(manifest.skips.length > 0 && manifest.skips.every((s) => s.retryable === true));
+  }
+});
+
+test('a lasting failure keeps its non-retryable skip code', async () => {
+  const out = join(tmp('gone'), 'out');
+  await runShard({ shardId: 's', attemptId: 'att-1', items: itemsOf(['o/gone']), out, fetch: fakeGithub({}) });
+  const meta = JSON.parse(readFileSync(join(out, '0', 'meta.json'), 'utf8'));
+  assert.deepEqual(meta.skips, [{ stage: 'static', reason: 'no_runnable_artifact', evidence: RESULT_PATH, retryable: false }]);
+  const manifest = assertToolQa(readTree(join(out, '0', 'bundle')), meta);
+  assert.equal(manifest.skips[0].retryable, false);
+  for (const d of TRANSIENT) assert.ok(['rate_limited', 'upstream_unavailable'].includes(skipReasonFor(d)), d);
+  for (const d of PERMANENT) assert.equal(skipReasonFor(d), 'no_runnable_artifact', d);
 });

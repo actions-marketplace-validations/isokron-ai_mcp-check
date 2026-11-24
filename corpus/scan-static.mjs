@@ -11,8 +11,9 @@
 // (worker-kit/README.md) and <out-dir>/<i>/meta.json the meta file; the step outputs has_<i>, fence_<i> and
 // run_key_<i> name it for the worker-kit step that seals and uploads it as result-<attempt_id>-<i>.tar.age. A
 // subject that cannot be graded still reports, with a skip: SKIP_REASON when asking again will not help (gone,
-// empty, no tool found, ...), SKIP_REASON_RETRY when it may (a rate limit, an upstream error, the time limit);
-// results/ says which case it was. Exit 0 whatever the subjects did; 1 when the dispatch inputs are malformed
+// empty, no tool found, ...); rate_limited or upstream_unavailable, marked retryable, when it may (a rate limit, an
+// upstream error, the time limit), so tool-qa sends the item out again (retry_later); results/ says which case it
+// was. Exit 0 whatever the subjects did; 1 when the dispatch inputs are malformed
 // (nothing is read); 3 on a harness error, including a control that did not give its expected outcome (nothing is
 // reported); 2 on a usage error.
 //
@@ -66,12 +67,21 @@ export const PERMANENT = Object.freeze(['bad_subject', 'repo_unavailable', 'repo
 /** Why a subject has no grades for now; results/ marks the skip retryable. */
 export const TRANSIENT = Object.freeze(['rate_limited', 'upstream_error', 'timeout', 'read_failed', 'shard_deadline']);
 /**
- * The skip reasons (tool-qa worker-kit/contract.mjs SKIP_REASONS) a skipped item is recorded with. tool-qa has no
- * code for "nothing to grade here" or "the source could not be read this time"; the closest are used, and results/
- * holds the exact detail code and whether it is retryable.
+ * The skip reasons (tool-qa worker-kit/contract.mjs SKIP_REASONS) a skipped item is recorded with; results/ holds
+ * the exact detail code. A lasting failure is recorded as SKIP_REASON (not retryable). A passing one is recorded
+ * with `retryable: true`, as rate_limited (a GitHub rate limit) or upstream_unavailable (GitHub answered 5xx or
+ * something unreadable, the read broke off, the subject ran out of time, or the shard ran out of time before it
+ * started, which only happens when upstream calls are slow): tool-qa then sends the item out again after a backoff.
  */
 export const SKIP_REASON = 'no_runnable_artifact';
-export const SKIP_REASON_RETRY = 'trace_unavailable';
+export const SKIP_RATE_LIMITED = 'rate_limited';
+export const SKIP_UPSTREAM = 'upstream_unavailable';
+
+/** The skip reason a skip with this detail code is recorded with. */
+export function skipReasonFor(detail) {
+  if (!TRANSIENT.includes(detail)) return SKIP_REASON;
+  return detail === 'rate_limited' ? SKIP_RATE_LIMITED : SKIP_UPSTREAM;
+}
 /** A subject id the result manifest accepts (subject.id: no whitespace, at most 512 characters). */
 export const SUBJECT_ID_RE = /^[^\s]{1,512}$/;
 
@@ -236,7 +246,7 @@ const safeName = (s) => (typeof s === 'string' && /^[A-Za-z][A-Za-z0-9_]{0,63}$/
 
 /** A skipped scan that read nothing: a subject that is not owner/name, or one not started (detail). */
 export const notRead = (detail) => ({
-  status: 'skipped', detail, retryable: TRANSIENT.includes(detail), skip_reason: TRANSIENT.includes(detail) ? SKIP_REASON_RETRY : SKIP_REASON,
+  status: 'skipped', detail, retryable: TRANSIENT.includes(detail), skip_reason: skipReasonFor(detail),
   http_status: null, list_error: null, error_name: null, language_hint: null, repository: null, commit: null, listing: null, list: null, grade: null, raw: {},
 });
 
@@ -325,7 +335,7 @@ export async function scanSubject(subject, { fetch: fetchImpl = globalThis.fetch
     out.detail = detail;
     out.status = 'skipped';
     out.retryable = TRANSIENT.includes(detail);
-    out.skip_reason = out.retryable ? SKIP_REASON_RETRY : SKIP_REASON;
+    out.skip_reason = skipReasonFor(detail);
     out.http_status = e && Number.isInteger(e.status) ? e.status : null;
     out.list_error = e && typeof e.listError === 'string' && /^[a-z_]{1,40}$/.test(e.listError) ? e.listError : null;
     if (detail === 'reader_error') out.error_name = safeName((e && e.errorName) || (e && e.name));
@@ -479,7 +489,7 @@ export function buildBundle({ item, scan, controls, startedAt, finishedAt, diges
     settings_manifest_digest: digest,
     started_at: startedAt,
     finished_at: finishedAt,
-    skips: scan.status === 'skipped' ? [{ stage: STAGE, reason: scan.skip_reason || SKIP_REASON, evidence: RESULT_PATH }] : [],
+    skips: scan.status === 'skipped' ? [{ stage: STAGE, reason: scan.skip_reason || SKIP_REASON, evidence: RESULT_PATH, retryable: scan.retryable === true }] : [],
     controls: controls.map((c) => c.control),
   };
   return { files, meta };

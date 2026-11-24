@@ -129,13 +129,20 @@ gets its bundle, with the skip recorded. A bundle holds:
 The meta file names the subject (`owner/name` and the commit read), the engine version, a digest of the run
 settings, the start and finish times, the skips and the controls.
 
-Skip codes in the meta file come from the loop's fixed list. `no_runnable_artifact` means asking again will not
-help: `bad_subject`, `repo_unavailable` (gone, private or blocked), `repo_empty`, `no_tools`,
-`unsupported_language`, `names_only`, `multiple_servers`, `reader_limit`, `list_rejected`, `listing_too_large`
-or `reader_error`. `trace_unavailable` means the source could not be read this time: `rate_limited`,
-`upstream_error`, `read_failed`, `timeout` (90 seconds per subject) or `shard_deadline` (no subject is started
-after 32 minutes). The exact code is in `results/scan-static.json`. After a rate limit, the rest of the shard is
-not read and reports `rate_limited`.
+Skip codes in the meta file come from the loop's fixed list (tool-qa `worker-kit/contract.mjs`). Every skip
+says whether it is `retryable`.
+
+- `no_runnable_artifact`, not retryable: asking again will not help. `bad_subject`, `repo_unavailable` (gone,
+  private or blocked), `repo_empty`, `no_tools`, `unsupported_language`, `names_only`, `multiple_servers`,
+  `reader_limit`, `list_rejected`, `listing_too_large` or `reader_error`.
+- `rate_limited`, retryable: a GitHub rate limit. After one, the rest of the shard is not read and reports it
+  too.
+- `upstream_unavailable`, retryable: the source could not be read this time. `upstream_error` (5xx or an
+  unreadable answer), `read_failed`, `timeout` (90 seconds per subject) or `shard_deadline` (no subject is
+  started after 32 minutes; slow upstream calls are what use the budget up).
+
+The exact code is in `results/scan-static.json`. When every skip of an item is retryable, tool-qa records it as
+`retry_later` and sends it out again after a backoff (at most three times; then it keeps the skip).
 
 A subject that fails never fails the run. The run fails only on a malformed dispatch or a harness error, and
 then nothing is uploaded.
