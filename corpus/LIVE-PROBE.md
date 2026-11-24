@@ -46,7 +46,16 @@ The run is named `shard <shard_id>`.
      For both provenance kinds the lane itself checks the signature: the leaf certificate chains to Sigstore's
      public Fulcio authority (pinned in `corpus/fixtures/live-probe/sigstore-fulcio.json`), was issued to GitHub
      Actions (OIDC issuer extension) for the subject's repository (Source Repository URI extension and the SAN), and
-     the DSSE signature over the statement verifies with it. Not checked here: the transparency log (Rekor) entry,
+     the DSSE signature over the statement verifies with it. The extensions are read from the certificate's own
+     `tbsCertificate.extensions` (a certificate that is not well-formed DER, or names an extension twice, is
+     refused). A package signed by a shared reusable workflow has that workflow in its SAN, not the subject: it is
+     accepted only when the Source Repository URI is still the subject, the Build Signer URI (extension 9) is the SAN
+     and is a release tag of a workflow on this allowlist (`TRUSTED_REUSABLE_SIGNERS`):
+     - `https://github.com/slsa-framework/slsa-github-generator/.github/workflows/` (the SLSA GitHub generator)
+
+     `results/live-probe.json` says which (`install.provenance_signer`: `repository_workflow` or
+     `trusted_reusable_workflow`). The install is pinned to the version whose provenance was checked (the attested
+     document's own version), so a `latest` that moves in between cannot swap the package. Not checked here: the transparency log (Rekor) entry,
      that the signing time fell inside the certificate's ten-minute validity, and the freshness of the pinned root
      (no TUF update); the registry checked the first two when it accepted the attestation. Anything else is
      skipped as `unverified_registry_entry`, with the reason in `results/live-probe.json` (`unverified`).
@@ -60,8 +69,7 @@ The run is named `shard <shard_id>`.
    - **npm install scripts run**, inside the sandbox's install container: gVisor with syscall tracing, egress only
      through the allowlist proxy to the npm registry. What they did is in the bundle (the install container's trace
      summary and every proxy request in `raw/telemetry.jsonl`, the counts in `install_phase_behaviour`). A native
-     module that needs a prebuilt binary from GitHub, or a compiler, still fails to install: the sandbox's node image
-     has no toolchain and GitHub is not on the allowlist (below, "Native modules").
+     module is built from source in the sandbox's build image (below, "Native modules").
 3. **Sandbox** (`corpus/live-probe-sandbox.sh`), the one in
    [isokron-ai/mcp-surface-corpus](https://github.com/isokron-ai/mcp-surface-corpus) at `SURFACE_CORPUS_REF`, used as
    it is: gVisor (`runsc`) with syscall tracing, user 65534, no capabilities, a read-only root, an install network
@@ -152,20 +160,11 @@ kernel bug) and ran on the host under another user or another name would not be 
 artifact upload token in the steps after it. The runner is discarded after the job and holds no secret; ingest's
 identity, file and claim checks still apply to anything uploaded.
 
-## Native modules (needs a change in mcp-surface-corpus)
+## Native modules
 
-A server whose dependency builds a native module (better-sqlite3, for example, as in kronicle-lite) cannot run here
-yet. Its install script first fetches a prebuilt binary from GitHub, which the install proxy refuses and logs, then
-falls back to building with node-gyp, which needs python3, make, a C++ compiler and the Node headers: the sandbox's
-`node:24-bookworm-slim` image has none of them. The driver change that would make it work, with no new egress:
-
-1. `images.json`: a `node24-build` image, `docker.io/library/node:24-bookworm` (the full image: python3, make, g++,
-   and the headers under `/usr/local/include/node`), pinned by digest at the same Node release as `node24`, so the
-   built module matches the run image's ABI and glibc (both Debian bookworm).
-2. `src/targets.mjs` `launchPlan`: for an npm target with `install_scripts: true`, install in `node24-build` and run
-   in `node24` as now; add `npm_config_nodedir=/usr/local` to the install env so node-gyp uses the image's headers
-   instead of downloading them from nodejs.org. The proxy's allowlist stays the npm registry only.
-3. A driver test and a CI example target with a native module.
-
-Allowing GitHub's release hosts on the install allowlist would also work for prebuilt binaries, but it opens the
-install network to arbitrary downloads from GitHub; the build image does not.
+An npm subject installs with its install scripts on. Since mcp-surface-corpus 73a2669 (`SURFACE_CORPUS_REF`), such an
+install runs in the full Debian image of the same Node release as the run image (`node24-build`: compilers, make,
+python3 and the Node headers), with `npm_config_nodedir=/usr/local` and `npm_config_build_from_source=true`, so a
+native module (better-sqlite3 in kronicle-lite, for example) builds from source against those headers; the server then
+runs in the slim image as before. The install network still reaches only the npm registry: prebuilt binaries are not
+fetched.
