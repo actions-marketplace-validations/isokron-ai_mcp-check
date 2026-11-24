@@ -604,7 +604,7 @@
       if (!suffix) { suffix = new Map(); paths.forEach((p) => { const seg = p.split('/'); for (let k = 0; k < seg.length; k++) { const key = seg.slice(k).join('/'); if (!suffix.has(key)) suffix.set(key, []); suffix.get(key).push(p); } }); }
       return suffix.get(c);
     };
-    const ctxOf = (p) => { const src = text.get(p); const zn = zodNamesIn(src); return { zodNames: zn, zod: zn.size > 0, fl: tsFlavour(src, sdk) }; };
+    const ctxOf = (p) => { const src = text.get(p); const zn = zodNamesIn(src); return { zodNames: zn, zod: zn.size > 0, fl: tsFlavour(src, typeof sdk === 'function' ? sdk(p) : sdk) }; };
     const exportValue = (p, name, depth) => {
       if (!p || depth > 6) return null;
       const ex = mod(p).exports;
@@ -759,13 +759,26 @@
   // A TypeScript or JavaScript file that builds an McpServer and sets its own tools/list handler on it
   // (mcpServer.server.setRequestHandler(ListToolsRequestSchema, …) under SDK 1.x, (…, 'tools/list', …) under 2.x): the
   // server lists its tools its own way, so the reader cannot tell what the SDK would have added to them (R-RD-04).
-  // Only the McpServer's own inner server counts (x.server.setRequestHandler, x not `this`: this.server is how a class
-  // holds a low-level Server), in a file that imports McpServer from the SDK. Returns 'wrap' when the new handler calls
-  // the SDK's (read from _requestHandlers), which keeps what the SDK adds except what the wrapper rewrites, else 'replace'.
+  // Only the McpServer's own inner server counts (x.server.setRequestHandler, or this.x.server.setRequestHandler for a class
+  // that holds the McpServer; this.server.setRequestHandler is how a class holds a low-level Server), in a file that
+  // imports McpServer from the SDK. Returns 'wrap' when the new handler calls the SDK's (read from _requestHandlers),
+  // which keeps what the SDK adds except what the wrapper rewrites, else 'replace'. Linear in the text: the SDK module
+  // specifiers are found first and only the import clause before each one (at most IMPORT_WINDOW characters) is read.
+  const IMPORT_WINDOW = 2000;
+  const SDK_SPECIFIER = /(?:\bfrom\s*|\brequire\s*\(\s*)['"]@modelcontextprotocol\/(?:sdk|server)(?:\/[^'"\n]*)?['"]/g;
+  const LIST_OVERRIDE = /(?:^|[^\w$.])(?:this\s*\.\s*)?(?!this\b)[A-Za-z_$][\w$]*\s*\.\s*server\s*\.\s*setRequestHandler\s*\(\s*(?:[\w$.]*ListToolsRequestSchema\b|['"`]tools\/list['"`])/;
+  function importsMcpServer(text) {
+    SDK_SPECIFIER.lastIndex = 0; let m;
+    while ((m = SDK_SPECIFIER.exec(text))) {
+      const win = text.slice(Math.max(0, m.index - IMPORT_WINDOW), m.index);
+      const k = Math.max(win.lastIndexOf('import'), win.lastIndexOf('const'), win.lastIndexOf('let'), win.lastIndexOf('var'));
+      if (k >= 0 && /\bMcpServer\b/.test(win.slice(k))) return true;
+    }
+    return false;
+  }
   function customListHandler(path, text) {
-    if (!/\.(ts|mts|cts|js|mjs|cjs)$/.test(path) || typeof text !== 'string' || text.indexOf('setRequestHandler') < 0) return null;
-    if (!/\bimport\b[^;]*?\bMcpServer\b[^;]*?\bfrom\s*['"]@modelcontextprotocol\/(?:sdk|server)\b/.test(text)) return null;
-    if (!/(?:^|[^\w$.])(?!this\b)[A-Za-z_$][\w$]*\.server\s*\.setRequestHandler\s*\(\s*(?:[\w$.]*ListToolsRequestSchema\b|['"`]tools\/list['"`])/.test(text)) return null;
+    if (!/\.(ts|mts|cts|js|mjs|cjs)$/.test(path) || typeof text !== 'string' || text.indexOf('setRequestHandler') < 0 || text.indexOf('McpServer') < 0) return null;
+    if (!LIST_OVERRIDE.test(text) || !importsMcpServer(text)) return null;
     return /\b_requestHandlers\b/.test(text) ? 'wrap' : 'replace';
   }
   // Calls that take a tool: the SDK's (registerTool, tool, addTool) and project helpers named like one (scopedTool,
@@ -2144,12 +2157,18 @@
     const text = new Map(all);
     const sdk = Object.assign({}, detectSdk(text), opts.sdk || {});
     const readable = plan.src.map((p) => [p, text.get(p)]).filter(([, x]) => typeof x === 'string' && x.length <= 600000);
-    const custom = readable.map(([p, x]) => customListHandler(p, x)).filter(Boolean);
-    if (custom.length) sdk.customList = custom.includes('replace') ? 'replace' : 'wrap';
+    // a tools/list handler of the server's own applies to its package (the nearest folder with a package.json), not to
+    // other servers of the repository (R-RD-04)
+    const pkgDirs = paths.filter((p) => /(^|\/)package\.json$/.test(p) && !SKIP_DIR.test(p)).map((p) => (p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : ''));
+    const pkgOf = (p) => { let best = null; pkgDirs.forEach((d) => { if ((d === '' || p.startsWith(d + '/')) && (best === null || d.length > best.length)) best = d; }); return best === null ? '' : best; };
+    const customBy = new Map();
+    readable.forEach(([p, x]) => { const c = customListHandler(p, x); if (!c) return; const r = pkgOf(p); if (customBy.get(r) !== 'replace') customBy.set(r, c); });
+    const sdkMemo = new Map();
+    const sdkFor = (p) => { if (!customBy.size) return sdk; const r = pkgOf(p); if (!customBy.has(r)) return sdk; if (!sdkMemo.has(r)) sdkMemo.set(r, Object.assign({}, sdk, { customList: customBy.get(r) })); return sdkMemo.get(r); };
     const candidates = readable.filter(([, x]) => TOOL_HINT.test(x));
     const srcList = candidates.slice(0, opts.maxSourceFiles || MAX_TOOL_FILES);
     const consts = collectGlobalConsts(readable);
-    const mods = moduleConsts(readable, consts, sdk);
+    const mods = moduleConsts(readable, consts, sdkFor);
     const pyConsts = pyGlobalConsts(readable); const pyRegs = pyRegistrars(readable); const mounts = pyMounts(readable);
     const bases = toolBases(readable);
     const found = []; const byName = new Set();
@@ -2158,7 +2177,7 @@
       let ts = [];
       try {
         const js = /\.(ts|mts|cts|js|mjs|cjs)$/.test(p);
-        ts = extractFromFile(p, t, js ? { sdk, consts: mods.seedFor(p), tokens: mods.tokens(p), classTools: bases, workBudget: opts.workBudget } : { sdk, pyConsts, pyRegistrars: pyRegs });
+        ts = extractFromFile(p, t, js ? { sdk: sdkFor(p), consts: mods.seedFor(p), tokens: mods.tokens(p), classTools: bases, workBudget: opts.workBudget } : { sdk, pyConsts, pyRegistrars: pyRegs });
       } catch (e) { ts = []; ts.unresolved = [{ line: null }]; } // a file the reader fails on counts as one unread registration
       (ts.unresolved || []).forEach((u) => unresolved.push(Object.assign({ path: p }, u)));
       (ts.overBudget || []).forEach((u) => overBudget.push(Object.assign({ path: p }, u)));
@@ -2736,5 +2755,5 @@
     return null;
   }
 
-  return { publicTools, fromGitHub, fromDirectory, fromCatalogSnap, serverPackages, notServerFolder, constructsServer, ownServerNames, normName, fromRegistry, extractFromFile, extractJs, extractPy, planFiles, detectSdk, collectGlobalConsts, analyseRepo, markConditionals, parseRepoRef, toolsFromJson, fromMcpbManifest, tokenize, commandFor };
+  return { customListHandler, publicTools, fromGitHub, fromDirectory, fromCatalogSnap, serverPackages, notServerFolder, constructsServer, ownServerNames, normName, fromRegistry, extractFromFile, extractJs, extractPy, planFiles, detectSdk, collectGlobalConsts, analyseRepo, markConditionals, parseRepoRef, toolsFromJson, fromMcpbManifest, tokenize, commandFor };
 });

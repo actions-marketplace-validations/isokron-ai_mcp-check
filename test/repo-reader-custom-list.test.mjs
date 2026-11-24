@@ -106,3 +106,41 @@ test("R-RD-04: a handler that wraps the SDK's own keeps execution, and still wri
   assert.equal(got[0].inputSchema.$schema, undefined);
   assert.deepEqual(got[0].execution, { taskSupport: 'forbidden' });
 });
+
+test('R-RD-04: a class that holds the McpServer (this.mcp.server / this.server.server) counts as an override', () => {
+  for (const holder of ['this.mcp.server', 'this.server.server']) {
+    const cls = [
+      "import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';",
+      "import { ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';",
+      "import { register } from './tools.js';",
+      "export class App { constructor() { const m = new McpServer({ name: 'a', version: '1' }); register(m); " + holder.replace(/\.server$/, '') + " = m; " + holder + ".setRequestHandler(ListToolsRequestSchema, () => ({ tools: defs })); } }",
+    ].join('\n');
+    const got = read({ 'package.json': PKG, 'src/tools.ts': REGISTER, 'src/index.ts': cls });
+    assert.equal(got[0].inputSchema.$schema, undefined, holder);
+    assert.equal(got[0].execution, undefined, holder);
+  }
+});
+
+test('R-RD-04: in a monorepo the override applies to its own package only', () => {
+  const got = R.analyseRepo(new Map(Object.entries({
+    'packages/a/package.json': PKG, 'packages/a/src/tools.ts': REGISTER, 'packages/a/src/index.ts': OVERRIDE,
+    'packages/b/package.json': PKG, 'packages/b/src/tools.ts': REGISTER.replace("'lookup'", "'other'"), 'packages/b/src/index.ts': PLAIN,
+  }))).found.map((x) => x.tool);
+  const by = Object.fromEntries(got.map((t) => [t.name, t]));
+  assert.equal(by.lookup.inputSchema.$schema, undefined);
+  assert.equal(by.other.inputSchema.$schema, 'http://json-schema.org/draft-07/schema#');
+  assert.deepEqual(by.other.execution, { taskSupport: 'forbidden' });
+});
+
+test('R-RD-04: the override check is linear in the text (400 KB of semicolon-free imports, McpServer and setRequestHandler)', () => {
+  const unit = 'import a from "b"\nconst McpServer = x\nimport c from "d"\nfoo.server.setRequestHandler(Other, f)\nimport McpServer\nthis.mcp.server .setRequestHandler(X)\n';
+  const big = unit.repeat(Math.ceil(400000 / unit.length));
+  const time = (text) => { const t0 = performance.now(); const r = R.customListHandler('src/big.ts', text); return [performance.now() - t0, r]; };
+  const [small] = time(big.slice(0, 48000));
+  const [large, r1] = time(big);
+  assert.equal(r1, null);
+  assert.ok(large < 500, 'took ' + Math.round(large) + ' ms for 400 KB');
+  assert.ok(large < small * 30 + 50, 'not linear: ' + Math.round(small) + ' ms for 48 KB, ' + Math.round(large) + ' ms for 400 KB');
+  const [, r2] = time(big + "import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'\nm.server.setRequestHandler(ListToolsRequestSchema, f)\n");
+  assert.equal(r2, 'replace');
+});
