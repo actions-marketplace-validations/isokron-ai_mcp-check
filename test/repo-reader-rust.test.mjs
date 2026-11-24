@@ -461,3 +461,47 @@ test('a poisoned description passed through one, two or three helpers above one 
     assert.equal(j.sections.security.grade, 'F', k);
   }
 });
+
+test('R-RD-03: a helper that returns json!({ "name": name, … }) from its parameters: each call with literal arguments is a tool', () => {
+  const r = read({ 'src/mcp.rs': `
+use serde_json::{json, Value};
+const DOC: &str = "Which element to act on.";
+
+fn tool(name: &str, description: &str, properties: Value, required: &[&str]) -> Value {
+    json!({
+        "name": name,
+        "description": description,
+        "inputSchema": { "type": "object", "properties": properties, "required": required, "additionalProperties": false },
+    })
+}
+
+fn tools() -> Vec<Value> {
+    let target = json!({ "description": DOC, "type": ["string", "object"] });
+    vec![
+        tool("x_tap", "Tap an element.", json!({ "target": target, "twice": { "type": "boolean" } }), &["target"]),
+        tool("x_apps", "List the apps.", json!({}), &[]),
+    ]
+}
+
+async fn handle(method: &str) -> Value {
+    match method { "tools/list" => json!({ "tools": tools() }), _ => json!({}) }
+}
+` });
+  const t = byName(r);
+  assert.deepEqual(Object.keys(t).sort(), ['x_apps', 'x_tap']);
+  assert.equal(t.x_tap.description, 'Tap an element.');
+  assert.deepEqual(t.x_tap.inputSchema, { type: 'object', properties: { target: { description: 'Which element to act on.', type: ['string', 'object'] }, twice: { type: 'boolean' } }, required: ['target'], additionalProperties: false });
+  assert.deepEqual(t.x_apps.inputSchema, { type: 'object', properties: {}, required: [], additionalProperties: false });
+  assert.equal(r.unresolved.length, 0, 'the helper itself is not an unresolved tool');
+});
+
+test('R-RD-03: a json! helper called with a name the reader cannot work out is counted as unresolved, never invented', () => {
+  const r = read({ 'src/mcp.rs': `
+use serde_json::{json, Value};
+fn tool(name: &str, description: &str) -> Value { json!({ "name": name, "description": description, "inputSchema": { "type": "object" } }) }
+fn tools(names: Vec<String>) -> Vec<Value> { names.iter().map(|n| tool(n, "Generated.")).collect() }
+fn fixed() -> Value { tool("fixed_one", "Fixed.") }
+` });
+  assert.deepEqual(r.found.map((x) => x.tool.name), ['fixed_one']);
+  assert.ok(r.unresolved.length >= 1, JSON.stringify(r.unresolved));
+});

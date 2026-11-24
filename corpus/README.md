@@ -120,11 +120,25 @@ gets its bundle, with the skip recorded. A bundle holds:
 
 | Path | What it holds |
 |---|---|
-| `results/scan-static.json` | Format `isokron-mcp-check-scan-static/1`: status (`graded` or `skipped`), the detail code of a skip and whether it is retryable, engine, rubric and spec versions, the commit, section grades, check counts and findings. Tools are named by position only. |
+| `results/scan-static.json` | Format `isokron-mcp-check-scan-static/1`: status (`graded` or `skipped`), the detail code of a skip and whether it is retryable, engine, rubric and spec versions, the commit, section grades, check counts and findings. Tools are named by position only. For a repository of several servers (`multiple_servers`), `servers` grades each one (see below); otherwise it is `null`. |
 | `observations/static.ndjson` | Field records `commit_sha`, `commit_date` and `registration_provenance` (how the list was read: fidelity, language, counts of tools left out or unreadable). A field that could not be read is `null` with a reason. |
 | `controls/` | The outputs of the two controls below. |
 | `logs/scan.log` | What was done, as codes and counts. |
 | `raw/` | The subject's own text (tool list, file paths, findings with tool names), kept apart from everything above. Each file is compact JSON of at most 4 MiB: a list that does not fit keeps the entries that do (`{"truncated": true, "total", "kept", "items"}`), and `results/scan-static.json` lists every cut file in `raw_truncated`. |
+
+**A repository of several servers** (R-SS-13) stays one subject and one result: its top-level status is still
+`skipped` with `multiple_servers` (not retryable), so nothing that reads the top level changes. `servers` breaks it
+down: one entry per server folder the reader found, in the reader's order (folders that construct a server first,
+then by tool count), each `{index, status, detail, declared, list_error, list, tool_count, catalog_hash, era,
+sections, check_counts, findings, skipped_checks}` with the same meanings as at the top level (`list` is that
+server's `registration_provenance` value). A folder that cannot be graded gets the subject's skip code (`no_tools`,
+`names_only`, `reader_limit`, `multiple_servers` for a server folder that holds several again or is the repository
+root, `timeout` when 60% of the subject's time had gone before it was read). At most 24 folders are read; the rest
+are `reader_limit`. `declared` is true when a `server.json` of the repository names that folder as its
+`repository.subfolder`. Servers are named by position only: `raw/subject/servers.json` holds, for each `index`, the
+folder, its tool list and its findings. Each folder is read from the listing and the files already fetched for the
+repository, so a breakdown costs no API call; files not read yet come from `raw.githubusercontent.com`. The
+breakdown has no field record of its own (`observations/` keeps `registration_provenance` null with the reason).
 
 The meta file names the subject (`owner/name` and the commit read), the engine version, a digest of the run
 settings, the start and finish times, the skips and the controls.
@@ -188,7 +202,10 @@ give its expected outcome, the run stops and reports nothing.
   written into it. Its tool texts pretend to be a result of another attempt and its tool names are identity
   keys. It is graded and reported like a subject, through the same result record and bundle builder. It is
   contained when the marker comes back in `raw/`, and no file the bundle would hold outside `raw/` (nor the control
-  output) holds the marker, an identity key or claim, or a result envelope. Each bundle gets its own marker.
+  output) holds the marker, an identity key or claim, or a result envelope. `corpus/fixtures/forgery-servers/`
+  (two such servers in folders whose names carry the marker) is read too, with the per-server breakdown: both
+  servers must be graded, the marker must come back in `raw/subject/servers.json`, and nothing outside `raw/` of
+  that bundle may hold it either. Each bundle gets its own marker.
 
 ### Kill switch
 

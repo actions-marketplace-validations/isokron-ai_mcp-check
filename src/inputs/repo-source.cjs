@@ -1,6 +1,6 @@
 // repo-source: find an MCP server's tool list from its source, without running it. Browser and Node.
-// In Node it requires repo-go.cjs and repo-rust.cjs; in a browser, load those two scripts first (they define
-// RepoGo and RepoRust), or Go and Rust are not read.
+// In Node it requires repo-go.cjs, repo-rust.cjs and repo-csharp.cjs; in a browser, load those three scripts first (they
+// define RepoGo, RepoRust and RepoCSharp), or Go, Rust and C# are not read.
 // Every download is size-capped (MAX_FILE per file, MAX_JSON per API answer); nothing fetched is executed.
 //
 //   await RepoSource.fromGitHub('github.com/owner/repo', { fetch })   -> { candidates, best, hints }
@@ -17,15 +17,16 @@
 //            low-level Tool(...). Schemas are close to, not exactly, what the server sends; the report must say so.
 //            Parts that cannot be read statically are marked (publicTools), and the grader skips their checks.
 //            Go (mcp-go, the go-sdk, mcp-golang; repo-go.cjs) and Rust (rmcp, rust-mcp-sdk; repo-rust.cjs) tool
-//            definitions, read the same way, with their schemas as the SDK derives them from Go structs and Rust types.
+//            definitions, read the same way, with their schemas as the SDK derives them from Go structs and Rust types;
+//            C# [McpServerTool] methods of the official C# SDK (repo-csharp.cjs), their schemas from the parameters.
 //   names    an MCPB manifest "tools" array (name and description only)
 // Network: GitHub's REST API (CORS for any origin, 60 requests/hour per user IP without a token) for the file tree,
 // raw.githubusercontent.com for files; data.jsdelivr.com / cdn.jsdelivr.net as the fallback. The registry API at
 // registry.modelcontextprotocol.io sends Access-Control-Allow-Origin: *. Nothing goes to IsoKron.
 (function (root, factory) {
-  if (typeof module === 'object' && module.exports) module.exports = factory(require('./repo-go.cjs'), require('./repo-rust.cjs'));
-  else root.RepoSource = factory(root.RepoGo, root.RepoRust); // in a browser, load repo-go.cjs and repo-rust.cjs first
-})(typeof self !== 'undefined' ? self : this, function (RepoGo, RepoRust) {
+  if (typeof module === 'object' && module.exports) module.exports = factory(require('./repo-go.cjs'), require('./repo-rust.cjs'), require('./repo-csharp.cjs'));
+  else root.RepoSource = factory(root.RepoGo, root.RepoRust, root.RepoCSharp); // in a browser, load repo-go.cjs, repo-rust.cjs and repo-csharp.cjs first
+})(typeof self !== 'undefined' ? self : this, function (RepoGo, RepoRust, RepoCSharp) {
   'use strict';
 
   // ------------------------------------------------------------ tokenizer (JS/TS)
@@ -510,7 +511,7 @@
     const shaped = { type: 'object', properties: props };
     const req = Object.keys(props).filter((k) => !(optionalKeys && optionalKeys.has(k))); if (req.length) shaped.required = req;
     if (f.closed) shaped.additionalProperties = false;
-    shaped.$schema = DIALECT[f.dialect];
+    if (DIALECT[f.dialect]) shaped.$schema = DIALECT[f.dialect];
     return shaped;
   }
 
@@ -604,7 +605,7 @@
       if (!suffix) { suffix = new Map(); paths.forEach((p) => { const seg = p.split('/'); for (let k = 0; k < seg.length; k++) { const key = seg.slice(k).join('/'); if (!suffix.has(key)) suffix.set(key, []); suffix.get(key).push(p); } }); }
       return suffix.get(c);
     };
-    const ctxOf = (p) => { const src = text.get(p); const zn = zodNamesIn(src); return { zodNames: zn, zod: zn.size > 0, fl: tsFlavour(src, sdk) }; };
+    const ctxOf = (p) => { const src = text.get(p); const zn = zodNamesIn(src); return { zodNames: zn, zod: zn.size > 0, fl: tsFlavour(src, typeof sdk === 'function' ? sdk(p) : sdk) }; };
     const exportValue = (p, name, depth) => {
       if (!p || depth > 6) return null;
       const ex = mod(p).exports;
@@ -728,7 +729,7 @@
     const v = parseValue(t, i, ctx);
     if (v.value === SKIP || !v.value || typeof v.value !== 'object') return { schema: null, end: v.end, exact: false };
     if (v.rawShape) return { schema: rootSchema(v.value, v.optionalKeys, ctx.fl), end: v.end, exact: v.exact };
-    if (v.zod && v.value.type === 'object') { const s = Object.assign({}, v.value); s.$schema = DIALECT[(ctx.fl || FL_DEFAULT).dialect]; return { schema: s, end: v.end, exact: v.exact }; }
+    if (v.zod && v.value.type === 'object') { const s = Object.assign({}, v.value); const d = DIALECT[(ctx.fl || FL_DEFAULT).dialect]; if (d) s.$schema = d; return { schema: s, end: v.end, exact: v.exact }; }
     return { schema: v.value, end: v.end, exact: v.exact };
   }
 
@@ -738,6 +739,9 @@
   // The SDK a TypeScript file is written against, from its imports first and the repository's dependencies second
   // (opts.sdk = { kind: 'v1' | 'v2', version, zod }, see detectSdk). Unknown stays at the zod 3 / SDK 1 reading the reader always had.
   //   execution: SDK 1.24 to 1.x adds { taskSupport: 'forbidden' } to every McpServer tool; earlier 1.x and 2.x do not.
+  //   customList (sdk.customList, see customListHandler): the server sets its own tools/list handler on the McpServer, so
+  //   the $schema the SDK would add is not known and is not written; nor is execution, unless the new handler wraps the
+  //   SDK's own (it keeps the SDK's fields and rewrites the schemas) (R-RD-04).
   function semver(v) { const m = /(\d+)\.(\d+)(?:\.(\d+))?/.exec(String(v || '')); return m ? [Number(m[1]), Number(m[2]), Number(m[3] || 0)] : null; }
   function tsFlavour(src, sdk) {
     sdk = sdk || {};
@@ -749,7 +753,34 @@
     if (!zod) zod = kind === 'v2' ? 4 : 3;
     const v = semver(sdk.version);
     const sameKind = !sdk.kind || sdk.kind === kind;
-    return { kind, zod, dialect: kind === 'v2' ? '2020-12' : 'draft-07', closed: zod < 4, intBounds: zod >= 4, execution: kind === 'v1' && sameKind && !!v && v[0] === 1 && (v[1] >= 24) };
+    const execution = kind === 'v1' && sameKind && !!v && v[0] === 1 && (v[1] >= 24);
+    if (sdk.customList) return { kind, zod, dialect: null, closed: zod < 4, intBounds: zod >= 4, execution: sdk.customList === 'wrap' && execution, customList: sdk.customList };
+    return { kind, zod, dialect: kind === 'v2' ? '2020-12' : 'draft-07', closed: zod < 4, intBounds: zod >= 4, execution };
+  }
+  // A TypeScript or JavaScript file that builds an McpServer and sets its own tools/list handler on it
+  // (mcpServer.server.setRequestHandler(ListToolsRequestSchema, …) under SDK 1.x, (…, 'tools/list', …) under 2.x): the
+  // server lists its tools its own way, so the reader cannot tell what the SDK would have added to them (R-RD-04).
+  // Only the McpServer's own inner server counts (x.server.setRequestHandler, or this.x.server.setRequestHandler for a class
+  // that holds the McpServer; this.server.setRequestHandler is how a class holds a low-level Server), in a file that
+  // imports McpServer from the SDK. Returns 'wrap' when the new handler calls the SDK's (read from _requestHandlers),
+  // which keeps what the SDK adds except what the wrapper rewrites, else 'replace'. Linear in the text: the SDK module
+  // specifiers are found first and only the import clause before each one (at most IMPORT_WINDOW characters) is read.
+  const IMPORT_WINDOW = 2000;
+  const SDK_SPECIFIER = /(?:\bfrom\s*|\brequire\s*\(\s*)['"]@modelcontextprotocol\/(?:sdk|server)(?:\/[^'"\n]*)?['"]/g;
+  const LIST_OVERRIDE = /(?:^|[^\w$.])(?:this\s*\.\s*)?(?!this\b)[A-Za-z_$][\w$]*\s*\.\s*server\s*\.\s*setRequestHandler\s*\(\s*(?:[\w$.]*ListToolsRequestSchema\b|['"`]tools\/list['"`])/;
+  function importsMcpServer(text) {
+    SDK_SPECIFIER.lastIndex = 0; let m;
+    while ((m = SDK_SPECIFIER.exec(text))) {
+      const win = text.slice(Math.max(0, m.index - IMPORT_WINDOW), m.index);
+      const k = Math.max(win.lastIndexOf('import'), win.lastIndexOf('const'), win.lastIndexOf('let'), win.lastIndexOf('var'));
+      if (k >= 0 && /\bMcpServer\b/.test(win.slice(k))) return true;
+    }
+    return false;
+  }
+  function customListHandler(path, text) {
+    if (!/\.(ts|mts|cts|js|mjs|cjs)$/.test(path) || typeof text !== 'string' || text.indexOf('setRequestHandler') < 0 || text.indexOf('McpServer') < 0) return null;
+    if (!LIST_OVERRIDE.test(text) || !importsMcpServer(text)) return null;
+    return /\b_requestHandlers\b/.test(text) ? 'wrap' : 'replace';
   }
   // Calls that take a tool: the SDK's (registerTool, tool, addTool) and project helpers named like one (scopedTool,
   // defineTool, createTool, tool). A helper counts only when what it is given looks like a tool (a name and a config
@@ -1202,7 +1233,7 @@
         if (sawZod && s && typeof s === 'object' && !isSchemaObj(s)) {
           // find the key in tokens to recover optional flags
           const k = keyAtTop(t, i, r.end, key); if (k >= 0) { const sh = zodShapeAt(t, k + 2, ctx); if (sh.schema) r.value[key] = sh.schema; }
-        } else if (sawZod && s && s.type === 'object' && !s.$schema) { r.value[key] = Object.assign({}, s, { $schema: DIALECT[fl.dialect] }, fl.closed && s.additionalProperties === undefined ? { additionalProperties: false } : {}); }
+        } else if (sawZod && s && s.type === 'object' && !s.$schema) { r.value[key] = Object.assign({}, s, DIALECT[fl.dialect] ? { $schema: DIALECT[fl.dialect] } : {}, fl.closed && s.additionalProperties === undefined ? { additionalProperties: false } : {}); }
       });
     }
     r.sawZod = sawZod;
@@ -1349,6 +1380,9 @@
     else if (tok.type === 'id' && /^(True|False|None)$/.test(tok.value)) r = { value: tok.value === 'None' ? null : tok.value === 'True', end: i + 1, exact: true };
     else if (isP(tok, '[') || isP(tok, '(')) {
       const close = pyMatch(t, i); const a = []; let k = i + 1; let exact = true; let comma = false;
+      // [*OTHER, x]: unpacks a list the reader may not know, so the list's length is unknown and the list is not read
+      // (a list with the unpacked part left out would be read as a shorter enum or required list than the real one)
+      for (let q = i + 1; q < close; q = pySkip(t, q) + 1) { if ((isP(t[q], '*') || isP(t[q], '**')) && (isP(t[q - 1], tok.value) || isP(t[q - 1], ','))) { lose(literalsArr(t, i, close + 1)); return { value: PY_SKIP, end: close + 1 }; } if (!isP(t[pySkip(t, q)], ',')) break; }
       while (k < close) { const v = pyValue(t, k, ctx); if (v.value === PY_SKIP) { exact = false; const e2 = pySkip(t, k); lose(literalsArr(t, k, e2)); k = e2; } else { a.push(v.value); exact = exact && v.exact !== false; k = v.end; } if (isP(t[k], ',')) { comma = true; k++; } else break; }
       if (k >= close || isP(t[k], tok.value === '[' ? ']' : ')')) r = isP(tok, '(') && !comma && a.length === 1 ? { value: a[0], end: close + 1, exact } : { value: a, end: close + 1, exact };
     } else if (isP(tok, '{')) {
@@ -1515,6 +1549,11 @@
     PYC = {}; Object.keys(fc.consts).forEach((k) => { const v = fc.consts[k]; if (v === null || typeof v !== 'object') PYC[k] = v; });
     const usesMcp = /^\s*(?:from|import)\s+(?:mcp|fastmcp)\b/m.test(clean) || /\bFastMCP\b|\bMCPServer\b/.test(clean);
     const registrars = opts.pyRegistrars || new Set();
+    let templates = opts.pyTemplates || new Map();
+    // a name this file imports from mcp or fastmcp (from fastmcp.tools import tool) is the SDK's, not a factory of the repository
+    const sdkNames = new Set(); { const re = /^\s*from\s+(?:mcp|fastmcp)(?:\.[\w.]+)?\s+import\s+\(?([^\n)]+)/gm; let im; while ((im = re.exec(clean))) im[1].split(',').forEach((x) => { const q = x.trim().split(/\s+as\s+/); if (q[0]) sdkNames.add((q[1] || q[0]).trim()); }); }
+    sdkNames.forEach((n) => { if (templates.has(n)) { templates = new Map(templates); templates.delete(n); } });
+    const tplCall = templates.size ? new RegExp('(?:^|[^\\w.])(?:' + Array.from(templates.keys()).join('|') + ')\\s*\\(') : null;
     const tools = []; const seen = new Set(); const unresolved = []; const overBudget = [];
     const add = (tool, line, extra) => {
       if (!tool || typeof tool.name !== 'string' || !tool.name || seen.has(tool.name)) return;
@@ -1635,6 +1674,112 @@
       if (a && camel) { const o = {}; Object.keys(a).forEach((k) => { o[/^(read_only|destructive|idempotent|open_world)_hint$/.test(k) ? k.replace(/_(\w)/g, (x, c) => c.toUpperCase()) : k] = a[k]; }); a = o; }
       return a || null;
     };
+    // Tool dicts in one logical line (R-RD-01): a dict whose own keys include "name" (a string the reader can work out) and
+    // "inputSchema" is a tool as a hand-rolled server lists it, wherever it stands (a TOOLS list, a return value, a
+    // constant). "input_schema" is also the key of the Anthropic API's tool tables, so it counts only in a hand-rolled
+    // server's file: one that answers "tools/list" and registers nothing through an SDK (a FastMCP file that also calls
+    // the Anthropic API has such dicts too). A name the reader cannot work out (a parameter, an attribute, a name a
+    // def's parameter or local shadows) is not a tool here: the dict is a template filled elsewhere. A file that uses an
+    // MCP client (ClientSession, mcp.client, fastmcp's Client) is not read for dicts: its tool dicts describe another
+    // server's tools (a gateway's or a test's copies).
+    const handRolled = /["']tools\/list["']/.test(clean) && !/\b(?:FastMCP|MCPServer)\b|@[\w.]*\.tool\b|\.add_tool\s*\(|\bTool\s*\(/.test(clean);
+    const mcpClient = /^\s*(?:from\s+mcp(?:\.client[\w.]*)?\s+import\s+[^\n]*\b(?:ClientSession|Client|stdio_client|sse_client|streamablehttp_client)\b|from\s+fastmcp(?:\.client[\w.]*)?\s+import\s+[^\n]*\bClient\b|import\s+mcp\.client\b)/m.test(clean);
+    // the names a def around logical line k binds (its parameters and the names its body assigns): they shadow constants
+    const shadowAt = (k) => {
+      const out = new Set(); let ind = L[k].indent;
+      for (let m = k - 1; m >= 0 && ind > 0; m--) {
+        if (L[m].indent >= ind) continue;
+        ind = L[m].indent;
+        const d = /^(?:async\s+)?def\s+\w+\s*\(([\s\S]*?)\)\s*(?:->[\s\S]*?)?:/.exec(L[m].text); if (!d) continue;
+        splitTop(d[1], ',').forEach((x) => { const pm = /^\**\s*(\w+)/.exec(x.trim()); if (pm) out.add(pm[1]); });
+        for (let q = m + 1; q < L.length && L[q].indent > L[m].indent; q++) { const a = /^([A-Za-z_]\w*)\s*(?::[^=]+?)?=(?!=)/.exec(L[q].text) || /^for\s+([A-Za-z_]\w*)\b/.exec(L[q].text); if (a) out.add(a[1]); }
+      }
+      return out;
+    };
+    const dictTools = (l, k) => {
+      if (mcpClient) return;
+      let t; try { t = pyTokenize(l.text); } catch (e) { return; }
+      let nls = null;
+      const lineOf = (pos) => { if (!nls) { nls = []; for (let q = 0; q < l.text.length; q++) if (l.text.charCodeAt(q) === 10) nls.push(q); } let lo = 0; let hi = nls.length; while (lo < hi) { const mid = (lo + hi) >> 1; if (nls[mid] < pos) lo = mid + 1; else hi = mid; } return l.line + lo; };
+      const shadow = l.indent > 0 ? shadowAt(k) : null;
+      let dctx = ctx;
+      if (shadow && shadow.size) { const c2 = Object.assign({}, ctx.consts); shadow.forEach((n) => { delete c2[n]; }); dctx = Object.assign({}, ctx, { consts: c2 }); }
+      const bm = l.indent === 0 ? /^([A-Za-z_]\w*)\s*(?::[^=]+)?=\s*\{/.exec(l.text) : null;
+      for (let i = 0; i < t.length; i++) {
+        if (!isP(t[i], '{')) continue;
+        const close = pyMatch(t, i); if (close >= t.length) continue;
+        // the dict's own keys (depth 1): key token -> index of its value
+        const keys = {}; let j = i + 1;
+        while (j < close) {
+          if (t[j].type === 'str' && isP(t[j + 1], ':') && (isP(t[j - 1], '{') || isP(t[j - 1], ','))) { if (!hasOwn(keys, t[j].value)) keys[t[j].value] = j + 2; }
+          if (isP(t[j], '(') || isP(t[j], '[') || isP(t[j], '{')) { j = pyMatch(t, j) + 1; continue; }
+          j++;
+        }
+        const sk = keys.inputSchema !== undefined ? 'inputSchema' : keys.input_schema !== undefined && handRolled ? 'input_schema' : null;
+        if (keys.name === undefined || !sk) continue;
+        const nv = pyValue(t, keys.name, dctx);
+        if (typeof nv.value !== 'string' || nv.exact === false || !nv.value || !(isP(t[nv.end], ',') || isP(t[nv.end], '}'))) continue;
+        const tool = { name: nv.value }; const un = [];
+        const val = (key) => (keys[key] === undefined ? undefined : pyValue(t, keys[key], dctx));
+        const tv = val('title'); if (tv && typeof tv.value === 'string') tool.title = tv.value;
+        const dv = val('description');
+        if (dv) {
+          if (typeof dv.value === 'string') { tool.description = dv.value; if (dv.partial) un.push('description'); }
+          else { const e2 = pySkip(t, keys.description); const lits = literalsArr(t, keys.description, e2); lose(lits); if (lits.length) tool.description = lits.join(' … ').slice(0, MAX_STR); un.push('description'); }
+        }
+        const sv = val(sk);
+        let exact = !un.length;
+        if (sv && sv.value !== PY_SKIP && sv.value && typeof sv.value === 'object' && !Array.isArray(sv.value)) { tool.inputSchema = sv.value; exact = exact && sv.exact !== false; }
+        else if (dv) { tool.inputSchema = { type: 'object' }; un.push('inputSchema'); lose(literalsArr(t, keys[sk], pySkip(t, keys[sk]))); exact = false; }
+        else continue;
+        const av = val('annotations');
+        if (av) { if (av.value && av.value !== PY_SKIP && typeof av.value === 'object' && !Array.isArray(av.value)) tool.annotations = av.value; else un.push('annotations'); }
+        ['outputSchema', '_meta', 'icons', 'execution'].forEach((key) => { const v = val(key); if (v && v.value && v.value !== PY_SKIP && typeof v.value === 'object') tool[key] = v.value; });
+        tool._unreadable = un;
+        add(tool, lineOf(t[i].s), { lowLevel: true, literal: true, binding: bm && i === t.findIndex((x) => isP(x, '{')) ? bm[1] : null, exactTypes: exact && !un.length });
+        i = close;
+      }
+    };
+    // One use of a tool-dict factory (pyToolTemplates): its arguments bound to the factory's parameters (defaults when
+    // not given), the dict evaluated with them. A name that cannot be worked out is unresolved; a part that cannot be
+    // read (a schema built in the factory's body) is marked not readable, the arguments' other text kept for the scan.
+    const fromTemplate = (tpl, argsText, line) => {
+      let ct; try { ct = pyTokenize(argsText); } catch (e) { return; }
+      if (!isP(ct[0], '(')) return;
+      const a = pyCallArgs(ct, 0);
+      const consts = Object.assign({}, ctx.consts); const bound = {};
+      tpl.locals.forEach((n) => { delete consts[n]; });
+      tpl.params.forEach((pp, ix) => {
+        const at = a.kw[pp.name] !== undefined ? a.kw[pp.name] : a.pos[ix];
+        let v = null;
+        if (at !== undefined) { const r = pyValue(ct, at, ctx); if (r.value !== PY_SKIP && !(typeof r.value === 'string' && r.exact === false)) v = r; }
+        else if (pp.def !== undefined) v = exprVal(pp.def);
+        if (v) { consts[pp.name] = v.value; bound[pp.name] = true; } else delete consts[pp.name];
+      });
+      let tt; try { tt = pyTokenize(tpl.text); } catch (e) { return; }
+      const keys = pyDictKeys(tt, tpl.at);
+      const tctx = { consts, partialNames: ctx.partialNames, lostOf: ctx.lostOf };
+      const val = (key) => (keys[key] === undefined ? undefined : pyValue(tt, keys[key], tctx));
+      const argText = literalsArr(ct, 0, ct.length);
+      // the arguments that become the name, title or description (the dict's value there is the parameter itself)
+      const shownParams = new Set(['name', 'title', 'description'].map((key) => keys[key]).filter((at) => at !== undefined && tt[at] && tt[at].type === 'id' && (isP(tt[at + 1], ',') || isP(tt[at + 1], '}'))).map((at) => tt[at].value));
+      const otherText = () => { const out = []; tpl.params.forEach((pp, ix) => { if (shownParams.has(pp.name)) return; const at = a.kw[pp.name] !== undefined ? a.kw[pp.name] : a.pos[ix]; if (at !== undefined) out.push(...literalsArr(ct, at, pySkip(ct, at))); }); return out; };
+      const nv = val('name');
+      if (!nv || typeof nv.value !== 'string' || !nv.value || nv.exact === false) { lose(argText); unresolved.push(Object.assign({ line }, argText.length ? { description: argText.join(' … ').slice(0, MAX_STR) } : {})); return; }
+      const tool = { name: nv.value }; const un = [];
+      const tv = val('title'); if (tv && typeof tv.value === 'string' && tv.exact !== false) tool.title = tv.value;
+      const dv = val('description');
+      if (dv) { if (typeof dv.value === 'string') { tool.description = dv.value; if (dv.partial) un.push('description'); } else un.push('description'); }
+      const sk = keys.inputSchema !== undefined ? 'inputSchema' : 'input_schema';
+      const sv = val(sk);
+      if (sv && sv.value && sv.value !== PY_SKIP && typeof sv.value === 'object' && !Array.isArray(sv.value)) tool.inputSchema = sv.value; else { tool.inputSchema = { type: 'object' }; un.push('inputSchema'); }
+      if (keys.annotations !== undefined) { const av = val('annotations'); if (av && av.value && av.value !== PY_SKIP && typeof av.value === 'object' && !Array.isArray(av.value)) tool.annotations = av.value; else un.push('annotations'); }
+      ['outputSchema', '_meta', 'icons', 'execution'].forEach((key) => { const v = val(key); if (v && v.value && v.value !== PY_SKIP && typeof v.value === 'object') tool[key] = v.value; });
+      // text of the arguments that is not the name, title or description: kept for the scan when a part is not readable
+      if (un.length) lose(otherText());
+      tool._unreadable = un;
+      add(tool, line, { fn: tpl.name, exactTypes: !un.length && !!(sv && sv.exact) });
+    };
     for (let k = 0; k < L.length; k++) {
       const l = L[k];
       const lineLost = []; LOST.cur = lineLost; const toolsBefore = tools.length; const unresBefore = unresolved.length;
@@ -1651,7 +1796,19 @@
           const isSdk = chain.length > 1 && last === 'tool';
           const isBare = chain.length === 1 && last === 'tool' && usesMcp;
           const isNamed = /^[a-z]\w*_tool$/.test(last) && m[2] !== undefined && (kw.description !== undefined || kw.name !== undefined || kw.title !== undefined);
-          const isReg = chain.length > 1 && registrars.has(last);
+          // a repository's own factory that builds the tool dict (@tool("name", "Title", "…", properties=…), R-RD-02)
+          if (chain.length === 1 && m[2] !== undefined && templates.has(last)) { fromTemplate(templates.get(last), '(' + m[3] + ')', d.line); break; }
+          // a repository's own registrar used bare (@create_tool("x", "X") whose body calls add_tool(fn), R-RD-02): the
+          // function's name, unless the registrar passes one of its parameters on as the name
+          const bareReg = chain.length === 1 && !isBare && !isNamed && registrars.bare && registrars.bare.has(last) ? registrars.bare.get(last) : null;
+          if (bareReg) {
+            const args = m[3] !== undefined ? splitTop(m[3], ',') : []; const pos = args.filter((x) => !/^\w+\s*=/.test(x));
+            const argOf = (pn) => { if (!pn) return undefined; if (kw[pn] !== undefined) return kw[pn]; const ix = bareReg.params.findIndex((x) => x.name === pn); return ix >= 0 ? pos[ix] : undefined; };
+            Object.keys(kw).forEach((key) => { if (!['name', 'description', 'title', 'annotations'].includes(key) || (key !== bareReg.nameParam && key !== bareReg.descriptionParam && bareReg.params.some((x) => x.name === key))) delete kw[key]; });
+            if (bareReg.nameParam && argOf(bareReg.nameParam) !== undefined) kw.name = argOf(bareReg.nameParam);
+            if (bareReg.descriptionParam && argOf(bareReg.descriptionParam) !== undefined) kw.description = argOf(bareReg.descriptionParam);
+          }
+          const isReg = (chain.length > 1 && registrars.has(last)) || !!bareReg;
           if (!(isSdk || isBare || isNamed || isReg)) continue;
           // @mcp.tool("name") (the standalone fastmcp's positional name)
           const pos0 = m[3] !== undefined ? splitTop(m[3], ',')[0] : null;
@@ -1664,6 +1821,21 @@
           break;
         }
         k = e; continue;
+      }
+      // tools written out as dicts: {"name": …, "description": …, "inputSchema": {…}} (a hand-written tools/list answer)
+      if (/["'](?:inputSchema|input_schema)["']\s*:/.test(l.text)) dictTools(l, k);
+      // calls of a repository function that builds the tool dict: TOOLS = [tool("a", "…", {…}), …] (R-RD-02)
+      if (tplCall && tplCall.test(l.text)) {
+        let t; try { t = pyTokenize(l.text); } catch (e) { t = []; }
+        let nls = null;
+        for (let i = 0; i < t.length; i++) {
+          if (t[i].type !== 'id' || !templates.has(t[i].value) || !isP(t[i + 1], '(') || isP(t[i - 1], '.') || (t[i - 1] && t[i - 1].type === 'id' && t[i - 1].value === 'def')) continue;
+          const close = pyMatch(t, i + 1); if (close >= t.length) continue;
+          if (!nls) { nls = []; for (let q = 0; q < l.text.length; q++) if (l.text.charCodeAt(q) === 10) nls.push(q); }
+          let lo = 0; let hi = nls.length; while (lo < hi) { const mid = (lo + hi) >> 1; if (nls[mid] < t[i].s) lo = mid + 1; else hi = mid; }
+          fromTemplate(templates.get(t[i].value), l.text.slice(t[i + 1].s, t[close].e), l.line + lo);
+          i = close;
+        }
       }
       // calls inside the line: Tool(...), x.tool(fn, ...), x.add_tool(fn, ...), Tool.from_function(...), *ToolDefinition(fn=...)
       if (!/\bTool\s*\(|\.tool\s*\(|add_tool\s*\(|from_function\s*\(|ToolDefinition\s*\(/.test(l.text)) continue;
@@ -1739,14 +1911,19 @@
   // Methods and functions of the repository that register a tool (their body calls .tool(, add_tool(, Tool.from_function(
   // or another of them): used as decorators, @registry.reader("…") makes the function under it a tool.
   function pyRegistrars(files) {
-    const bodies = new Map();
+    const bodies = new Map(); const top = new Map(); const dupTop = new Set();
     files.forEach(([p, text]) => {
       if (!/\.py$/.test(p) || typeof text !== 'string') return;
-      const L = pyLogicalLines(pyStripComments(text));
+      const clean = pyStripComments(text); const L = pyLogicalLines(clean);
+      // the MCP server objects of the file: x = FastMCP(…) / MCPServer(…) / Server(…) (the SDK's, in a file that imports it)
+      const sdkFile = /^\s*(?:from|import)\s+(?:mcp|fastmcp)\b/m.test(clean);
+      const servers = new Set(); let sm; const sre = /^([A-Za-z_]\w*)\s*(?::[^=\n]+)?=\s*(?:[\w.]+\.)?(FastMCP|MCPServer|Server)\s*\(/gm;
+      while ((sm = sre.exec(clean))) if (sm[2] !== 'Server' || sdkFile) servers.add(sm[1]);
       L.forEach((l, k) => {
         const m = /^(?:async\s+)?def\s+(\w+)\s*\(/.exec(l.text); if (!m || /^(__\w+__|main|run|register|setup|create_app|create_server|serve)$/.test(m[1])) return;
         let body = ''; for (let j = k + 1; j < L.length && L[j].indent > l.indent; j++) body += L[j].text + '\n';
         bodies.set(m[1], (bodies.get(m[1]) || '') + body);
+        if (l.indent === 0) { if (top.has(m[1])) dupTop.add(m[1]); else top.set(m[1], { params: pyParams(l.text), body, servers, sdkFile }); }
       });
     });
     const out = new Set();
@@ -1756,7 +1933,88 @@
       bodies.forEach((b, n) => { if (out.has(n)) return; for (const r of out) { if (new RegExp('(?:self|cls)\\.' + r + '\\s*\\(').test(b)) { out.add(n); grew = true; break; } } });
       if (!grew) break;
     }
+    // Module-level registrars, usable as a bare decorator (@create_tool("x", "X") over a def, R-RD-02): the parameter
+    // the registration takes its name (description) from, when the body passes one on (add_tool(fn, name=tool_name));
+    // otherwise the SDK names the tool after the function.
+    const bare = new Map();
+    top.forEach((info, n) => {
+      if (!out.has(n) || dupTop.has(n)) return;
+      // only a registration on an MCP server object of the registrar's file (mcp.tool(fn), mcp.local_provider.add_tool(fn)),
+      // or Tool.from_function in a file that imports the SDK: agent.tool(fn) (pydantic-ai) or tracer.tool(span) is not one
+      const target = /(?:^|[^\w.])([A-Za-z_]\w*)(?:\.[A-Za-z_]\w*)*\.(?:tool|add_tool)\s*\(/g; let tm; let onServer = false;
+      while ((tm = target.exec(info.body))) if (info.servers.has(tm[1])) { onServer = true; break; }
+      if (!onServer && !(info.sdkFile && /\bTool\.from_function\s*\(/.test(info.body))) return;
+      const call = /(?:\.tool|\badd_tool|Tool\.from_function)\s*\(([^()]*(?:\([^()]*\)[^()]*)*)\)/.exec(info.body);
+      const kwOf = (key) => { const m = call && new RegExp('\\b' + key + '\\s*=\\s*(\\w+)\\s*(?:,|$)').exec(call[1]); return m && info.params.some((x) => x.name === m[1]) ? m[1] : null; };
+      bare.set(n, { params: info.params, nameParam: kwOf('name'), descriptionParam: kwOf('description') });
+    });
+    Object.defineProperty(out, 'bare', { value: bare, enumerable: false });
     return out;
+  }
+  // The parameters of a def line: [{ name, def (the default's text) }], self/cls, *args and **kwargs left out.
+  function pyParams(head) {
+    const m = /^(?:async\s+)?def\s+\w+\s*\(/.exec(head); if (!m) return [];
+    const open = m[0].length - 1; let d = 0; let close = -1; let q = null;
+    for (let x = open; x < head.length; x++) { const ch = head[x]; if (q) { if (ch === '\\') x++; else if (ch === q) q = null; continue; } if (ch === '"' || ch === "'") q = ch; else if (ch === '(' || ch === '[' || ch === '{') d++; else if (ch === ')' || ch === ']' || ch === '}') { d--; if (!d) { close = x; break; } } }
+    if (close < 0) return [];
+    const out = [];
+    splitTop(head.slice(open + 1, close), ',').forEach((p) => {
+      if (!p || p === '*' || p === '/' || /^\*/.test(p)) return;
+      const eq = topLevelEq(p); const lhs = (eq < 0 ? p : p.slice(0, eq)).trim(); const nm = /^(\w+)/.exec(lhs);
+      if (!nm || nm[1] === 'self' || nm[1] === 'cls') return;
+      out.push({ name: nm[1], def: eq < 0 ? undefined : p.slice(eq + 1).trim() });
+    });
+    return out;
+  }
+  // Repository functions that build a tool dict from their own parameters (R-RD-02): a module-level def whose body holds
+  // a dict with the keys "name" (one of the def's parameters) and "inputSchema" ("input_schema" in a file that speaks
+  // MCP), such as a hand-rolled server's tool(name, title, description, properties, …) decorator factory, or a helper
+  // that returns the dict. Each use (@tool("x", …) over a def, or a call tool("x", …)) is a tool, the dict evaluated with
+  // the use's arguments. Map(fn -> { params, text (the dict's logical line), at (its token) }); names defined twice
+  // in the repository are left out.
+  function pyToolTemplates(files) {
+    const out = new Map(); const dup = new Set(); const defs = new Map(); // every module-level def name -> how many
+    files.forEach(([p, text]) => {
+      if (!/\.py$/.test(p) || typeof text !== 'string') return;
+      const re = /^(?:async[ \t]+)?def[ \t]+(\w+)[ \t]*\(/gm; let d; while ((d = re.exec(text))) defs.set(d[1], (defs.get(d[1]) || 0) + 1);
+      if (!/["'](?:inputSchema|input_schema)["']\s*:/.test(text)) return;
+      const clean = pyStripComments(text); const L = pyLogicalLines(clean);
+      const speaks = /^\s*(?:from|import)\s+(?:mcp|fastmcp)\b/m.test(clean) || /["']tools\/list["']/.test(clean);
+      L.forEach((l, k) => {
+        if (l.indent !== 0) return;
+        const m = /^(?:async\s+)?def\s+(\w+)\s*\(/.exec(l.text); if (!m) return;
+        const params = pyParams(l.text); if (!params.length) return;
+        for (let j = k + 1; j < L.length && L[j].indent > 0; j++) {
+          if (!/["'](?:inputSchema|input_schema)["']\s*:/.test(L[j].text)) continue;
+          let t; try { t = pyTokenize(L[j].text); } catch (e) { continue; }
+          for (let i = 0; i < t.length; i++) {
+            if (!isP(t[i], '{')) continue;
+            const keys = pyDictKeys(t, i);
+            const sk = keys.inputSchema !== undefined ? 'inputSchema' : keys.input_schema !== undefined && speaks ? 'input_schema' : null;
+            const nk = keys.name;
+            if (!sk || nk === undefined || !t[nk] || t[nk].type !== 'id' || !(isP(t[nk + 1], ',') || isP(t[nk + 1], '}')) || !params.some((x) => x.name === t[nk].value)) continue;
+            // names the def assigns in its body: never taken from constants of the same name where the dict is evaluated
+            const locals = new Set(); for (let q = k + 1; q < L.length && L[q].indent > 0; q++) { const a = /^([A-Za-z_]\w*)\s*(?::[^=]+?)?=(?!=)/.exec(L[q].text) || /^(?:for|with)\s+[\s\S]*?\b(?:as\s+)?([A-Za-z_]\w*)\s*(?:in\b|:)/.exec(L[q].text) || /^(?:async\s+)?def\s+(\w+)/.exec(L[q].text); if (a) locals.add(a[1]); }
+            if (out.has(m[1])) dup.add(m[1]); else out.set(m[1], { name: m[1], params, locals, text: L[j].text, at: i, path: p });
+            return;
+          }
+        }
+      });
+    });
+    dup.forEach((n) => out.delete(n));
+    // a name defined more than once at module level (another file's own tool(), say): which one a call means is not known
+    out.forEach((v, n) => { if ((defs.get(n) || 0) > 1) out.delete(n); });
+    return out;
+  }
+  // The own keys of the dict whose "{" is token i: { key: index of its value's first token } (first of each key).
+  function pyDictKeys(t, i) {
+    const close = pyMatch(t, i); const keys = {}; let j = i + 1;
+    while (j < close) {
+      if (t[j].type === 'str' && isP(t[j + 1], ':') && (isP(t[j - 1], '{') || isP(t[j - 1], ',')) && !hasOwn(keys, t[j].value)) keys[t[j].value] = j + 2;
+      if (isP(t[j], '(') || isP(t[j], '[') || isP(t[j], '{')) { j = pyMatch(t, j) + 1; continue; }
+      j++;
+    }
+    return keys;
   }
   // Module-level constants defined once across the repository's Python files (for names imported from another module).
   function pyGlobalConsts(files) {
@@ -2117,6 +2375,29 @@
   }
 
   // Everything the reader does with a repository's files: SDK and constants, extraction, marking, exclusion.
+  // ---- tools of another agent host's plugin API, not of an MCP server
+  // A JavaScript or TypeScript file that imports another agent host's tool API (an OpenCode or OpenClaw plugin, the
+  // Vercel AI SDK, OpenAI Agents, LangChain, Mastra, LlamaIndex) and no MCP module may define that host's tools:
+  // `tool({ … })` and `api.registerTool({ … })`, a call whose first argument is the tool object, look like MCP
+  // registrations but are not. Only those host-shaped calls are dropped (and named in hints.hostPlugins); SDK-shaped
+  // ones, `x.registerTool('name', …)` and `x.tool('name', …)`, stay: an MCP tool that calls an LLM through such a
+  // library is common. Any module whose name mentions MCP (the SDK, FastMCP, mcp-handler, xmcp, …) or the Claude Agent
+  // SDK (its in-process MCP servers) keeps all of a file's tools.
+  const HOST_PLUGIN_MODULE = /^(?:@opencode-ai\/plugin|openclaw|ai|@ai-sdk\/[^/]+|@openai\/agents(?:-[\w-]+)?|@langchain\/[^/]+|langchain|@mastra\/core|llamaindex|@llamaindex\/[^/]+)(?:\/.*)?$/;
+  const MCP_MODULE = /mcp|modelcontextprotocol|claude-agent-sdk/i;
+  const HOST_SHAPED = /^\.?\s*(?:registerTool|tool)\s*\(\s*\{/;
+  const HOST_SHAPED_LINE = /(?:^|[^\w$])(?:registerTool|tool)\s*\(\s*\{/;
+  function hostPluginModule(src) {
+    if (typeof src !== 'string') return null;
+    const re = /\bfrom\s*(['"])([^'"\n]{1,200})\1|\bimport\s*(['"])([^'"\n]{1,200})\3|\b(?:require|import)\s*\(\s*(['"])([^'"\n]{1,200})\5\s*\)/g;
+    let m; let host = null;
+    while ((m = re.exec(src))) {
+      const spec = m[2] || m[4] || m[6];
+      if (MCP_MODULE.test(spec)) return null;
+      if (!host && HOST_PLUGIN_MODULE.test(spec)) host = spec.split('/').slice(0, spec[0] === '@' ? 2 : 1).join('/');
+    }
+    return host;
+  }
   // files: Map(path -> text) or [[path, text]]. Returns { found, tools, excluded, sdk, unresolved }.
   // opts.maxSourceFiles: at most this many files that may define a tool are read for tools (default 400).
   function analyseRepo(files, opts) {
@@ -2127,20 +2408,39 @@
     const text = new Map(all);
     const sdk = Object.assign({}, detectSdk(text), opts.sdk || {});
     const readable = plan.src.map((p) => [p, text.get(p)]).filter(([, x]) => typeof x === 'string' && x.length <= 600000);
+    // a tools/list handler of the server's own applies to its package (the nearest folder with a package.json), not to
+    // other servers of the repository (R-RD-04)
+    const pkgDirs = paths.filter((p) => /(^|\/)package\.json$/.test(p) && !SKIP_DIR.test(p)).map((p) => (p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : ''));
+    const pkgOf = (p) => { let best = null; pkgDirs.forEach((d) => { if ((d === '' || p.startsWith(d + '/')) && (best === null || d.length > best.length)) best = d; }); return best === null ? '' : best; };
+    const customBy = new Map();
+    readable.forEach(([p, x]) => { const c = customListHandler(p, x); if (!c) return; const r = pkgOf(p); if (customBy.get(r) !== 'replace') customBy.set(r, c); });
+    const sdkMemo = new Map();
+    const sdkFor = (p) => { if (!customBy.size) return sdk; const r = pkgOf(p); if (!customBy.has(r)) return sdk; if (!sdkMemo.has(r)) sdkMemo.set(r, Object.assign({}, sdk, { customList: customBy.get(r) })); return sdkMemo.get(r); };
     const candidates = readable.filter(([, x]) => TOOL_HINT.test(x));
     const srcList = candidates.slice(0, opts.maxSourceFiles || MAX_TOOL_FILES);
     const consts = collectGlobalConsts(readable);
-    const mods = moduleConsts(readable, consts, sdk);
-    const pyConsts = pyGlobalConsts(readable); const pyRegs = pyRegistrars(readable); const mounts = pyMounts(readable);
+    const mods = moduleConsts(readable, consts, sdkFor);
+    const pyConsts = pyGlobalConsts(readable); const pyRegs = pyRegistrars(readable); const mounts = pyMounts(readable); const pyTpl = pyToolTemplates(readable);
     const bases = toolBases(readable);
     const found = []; const byName = new Set();
     const dupes = []; const unresolved = []; const overBudget = [];
+    const hostPlugins = [];
     srcList.forEach(([p, t]) => {
       let ts = [];
+      const js = /\.(ts|mts|cts|js|mjs|cjs)$/.test(p);
       try {
-        const js = /\.(ts|mts|cts|js|mjs|cjs)$/.test(p);
-        ts = extractFromFile(p, t, js ? { sdk, consts: mods.seedFor(p), tokens: mods.tokens(p), classTools: bases, workBudget: opts.workBudget } : { sdk, pyConsts, pyRegistrars: pyRegs });
+        ts = extractFromFile(p, t, js ? { sdk: sdkFor(p), consts: mods.seedFor(p), tokens: mods.tokens(p), classTools: bases, workBudget: opts.workBudget } : { sdk, pyConsts, pyRegistrars: pyRegs, pyTemplates: pyTpl });
       } catch (e) { ts = []; ts.unresolved = [{ line: null }]; } // a file the reader fails on counts as one unread registration
+      // another agent host's plugin: named, never listed (R-RD-05)
+      const host = js ? hostPluginModule(t) : null;
+      if (host) {
+        const lines = t.split('\n');
+        const kept = ts.filter((x) => typeof x.offset !== 'number' || !HOST_SHAPED.test(t.slice(x.offset, x.offset + 200)));
+        const unres = (ts.unresolved || []).filter((u) => !(u.line && HOST_SHAPED_LINE.test(lines[u.line - 1] || '')));
+        const n = ts.length - kept.length + (ts.unresolved || []).length - unres.length;
+        if (n) hostPlugins.push({ path: p, module: host, tools: n });
+        const keep = kept; keep.unresolved = unres; keep.overBudget = ts.overBudget; ts = keep;
+      }
       (ts.unresolved || []).forEach((u) => unresolved.push(Object.assign({ path: p }, u)));
       (ts.overBudget || []).forEach((u) => overBudget.push(Object.assign({ path: p }, u)));
       ts.forEach((x) => {
@@ -2155,7 +2455,7 @@
     found.forEach((f) => { f.marks = marks.get(f); f.excluded = f.marks.some((m) => m.exclude); });
     // Never return an empty list because of exclusions: the marks stay, the exclusion does not apply.
     if (found.length && found.every((f) => f.excluded)) found.forEach((f) => { f.excluded = false; f.marks.forEach((m) => { m.exclude = false; }); });
-    return { found, tools: found.filter((f) => !f.excluded), excluded: found.filter((f) => f.excluded), sdk, plan, files: srcList.length, candidates: candidates.length, read: readable.length, unresolved: unresolved.length, unresolvedList: unresolved, overBudget };
+    return { found, tools: found.filter((f) => !f.excluded), excluded: found.filter((f) => f.excluded), sdk, plan, files: srcList.length, candidates: candidates.length, read: readable.length, unresolved: unresolved.length, unresolvedList: unresolved, overBudget, hostPlugins };
   }
 
   // ------------------------------------------------------------ network
@@ -2256,7 +2556,7 @@
       await Promise.all(Array.from({ length: Math.min(n, ps.length) }, worker));
       return out;
     };
-    const scan = await scanFiles({ all: listing.paths, subdir: ref.subdir, readMany: fetchMany, maxSourceFiles: opts.maxSourceFiles, state });
+    const scan = await scanFiles({ all: listing.paths, subdir: ref.subdir, readMany: fetchMany, maxSourceFiles: opts.maxSourceFiles, state, servers: !!opts.servers, serversDeadline: opts.serversDeadline });
     if (state.failed.length) {
       const st = state.failed.map((x) => x.status).filter(Boolean);
       const limited = st.some((x) => x === 403 || x === 429);
@@ -2270,7 +2570,39 @@
   // The reading shared by fromGitHub and fromDirectory. all: every file path of the repository (relative, "/"-separated);
   // subdir: the folder to read, or null; readMany(paths, concurrency) -> [[path, text | null]].
   // o.builtFallback: when the sources find nothing, read build output and vendor folders (dist, build, out, vendor) too.
+  // o.servers: when the folder holds several servers (hints.servers), also read each server's folder on its own, from
+  // the same listing and the files already read (no more listing requests): serverScans, one per server in the order
+  // of hints.servers, { path, declared, scan } with the reading of that folder alone, or { path, skipped } (a code) for
+  // a folder not read: the folder read itself ('multiple_servers'), past MAX_SERVER_SCANS ('reader_limit'), or past
+  // o.serversDeadline, a Date.now() value ('timeout'). declared: a server.json of the repository names that folder as
+  // its repository.subfolder.
+  const MAX_SERVER_SCANS = 24;
   async function scanFiles(o) {
+    if (!o.servers) return scanOne(o);
+    const memo = new Map();
+    const readMany = async (ps, n) => {
+      const need = Array.from(new Set(ps.filter((p) => !memo.has(p))));
+      if (need.length) for (const [p, t] of await o.readMany(need, n)) memo.set(p, t);
+      return ps.map((p) => [p, memo.has(p) ? memo.get(p) : null]);
+    };
+    const base = Object.assign({}, o, { readMany, servers: false });
+    const r = await scanOne(base);
+    const list = (r.hints && r.hints.servers) || null;
+    if (!list || !list.length) return r;
+    const declared = new Set(((r.hints && r.hints.serverJson) || []).map((x) => (typeof x.subfolder === 'string' ? x.subfolder.replace(/^\.?\/+|\/+$/g, '') : null)).filter(Boolean));
+    r.serverScans = [];
+    for (let k = 0; k < list.length; k++) {
+      const path = list[k].path || '';
+      const one = { path, declared: declared.has(path) };
+      if (!path || path === (o.subdir || '')) one.skipped = 'multiple_servers';
+      else if (k >= MAX_SERVER_SCANS) one.skipped = 'reader_limit';
+      else if (o.serversDeadline && Date.now() > o.serversDeadline) one.skipped = 'timeout';
+      else one.scan = await scanOne(Object.assign({}, base, { subdir: path }));
+      r.serverScans.push(one);
+    }
+    return r;
+  }
+  async function scanOne(o) {
     let paths = o.all;
     if (o.subdir) paths = paths.filter((p) => p === o.subdir || p.startsWith(o.subdir + '/'));
     let plan = planFiles(paths);
@@ -2295,7 +2627,7 @@
     });
     // Several committed lists are placed after the source is read (see pickList below).
     for (const [p, t] of await readMany(plan.manifests.slice(0, 10), 4)) { const m = t && fromMcpbManifest(t); if (m) candidates.push({ kind: 'mcpb', fidelity: m.fidelity, path: p, tools: m.tools, generated: m.generated }); }
-    for (const [p, t] of await readMany(plan.serverJson.slice(0, 5), 4)) { try { const d = JSON.parse(t); if (d && d.name) hints.serverJson.push({ path: p, name: d.name, remotes: d.remotes || [], packages: d.packages || [] }); } catch (e) { /* ignore */ } }
+    for (const [p, t] of await readMany(plan.serverJson.slice(0, 5), 4)) { try { const d = JSON.parse(t); if (d && d.name) hints.serverJson.push(Object.assign({ path: p, name: d.name, remotes: d.remotes || [], packages: d.packages || [] }, d.repository && typeof d.repository.subfolder === 'string' ? { subfolder: d.repository.subfolder.slice(0, 300) } : {})); } catch (e) { /* ignore */ } }
     // source extraction: the manifests (SDK and zod versions), then the sources, then one analysis over all of them
     const metaPaths = paths.filter((p) => META_FILE.test(p) && !SKIP_DIR.test(p) && p.split('/').length <= (o.subdir ? o.subdir.split('/').length : 0) + 2).slice(0, 8);
     const rootMeta = o.all.filter((p) => /^(package\.json|package-lock\.json|pyproject\.toml)$/.test(p) && !paths.includes(p));
@@ -2360,6 +2692,7 @@
       mergeLanguage(an, got, readFiles);
     }
     if (langRead) hints.languageRead = langRead;
+    if (an.hostPlugins && an.hostPlugins.length) hints.hostPlugins = an.hostPlugins.slice(0, 50);
     // One server or several: the tools (and server constructors) grouped by package (serverPackages). With more than one
     // server, nothing is merged or picked: hints.servers lists them and no source candidate is made.
     const servers = serverPackages(paths, o.subdir || '', an.tools, readFiles, extraManifests, serverDirs);
@@ -2475,6 +2808,7 @@
     if (/\.py$/.test(p)) return /\b(?:FastMCP|MCPServer)\s*\(/.test(text) || (/\bServer\s*\(\s*['"]/.test(text) && /\b(?:from|import)\s+mcp\b/.test(text));
     if (/\.go$/.test(p)) return !!RepoGo && RepoGo.constructsServer(text);
     if (/\.rs$/.test(p)) return !!RepoRust && RepoRust.constructsServer(text);
+    if (/\.cs$/.test(p)) return !!RepoCSharp && RepoCSharp.constructsServer(text);
     return false;
   }
   // Which package(s) a repository's tools belong to. paths: the listing (inside `base`); found: the tools read ({ path, literal });
@@ -2544,6 +2878,9 @@
   const goExamplesOf = (p, paths) => { const segs = p.split('/'); for (let k = 0; k < segs.length - 1; k++) { if (/^examples?$/.test(segs[k]) && goModRoots(paths).has(segs.slice(0, k).join('/'))) return segs.slice(0, k + 1).join('/'); } return null; };
   const langScore = (p) => (/(^|\/)(tools?|server|mcp|handlers?)[^/]*$/i.test(p) || /(^|\/)(tools?|mcp|server)\//i.test(p) ? 0 : /tool/i.test(p) ? 1 : 2) + p.split('/').length * 0.01;
   const byScore = (a, b) => langScore(a) - langScore(b) || (a < b ? -1 : a > b ? 1 : 0);
+  const CS_DEP = /(^|\/)(node_modules|bin|obj|\.git|\.vs|packages)\//i;
+  const CS_NOT_READ = /(^|\/)(tests?|benchmarks?|[^/]*\.(?:Unit|Integration|Functional|E2E|Acceptance)?Tests?|[^/]*Tests|[^/]*\.Benchmarks?)\//i;
+  const CS_NOT_READ_DIR = /^(.*?(?:^|\/)(?:tests?|benchmarks?|[^/]*\.(?:Unit|Integration|Functional|E2E|Acceptance)?Tests?|[^/]*Tests|[^/]*\.Benchmarks?))\//i;
   const SYSTEM_LANGS = [
     { name: 'Go', mod: RepoGo, manifest: /(^|\/)go\.mod$/,
       skip: (p, paths) => GO_DEP.test(p) || GO_NOT_READ.test(p) || !!goExamplesOf(p, paths),
@@ -2564,6 +2901,17 @@
       // a server in the crate's own src/ is the crate (suggest ws/a, not ws/a/src); one in a submodule is that module
       rootDir: (p, paths) => { const dir = p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : ''; const m = /^(.*?)(?:^|\/)src$/.exec(dir); if (m) { const crate = dir === 'src' ? '' : dir.slice(0, -4); if (paths.includes((crate ? crate + '/' : '') + 'Cargo.toml')) return crate; } return dir; },
       analyse: (src, man) => RepoRust.analyse(src, { cargo: man }) },
+    // C#: projects (.csproj folders) group the tools like packages; Directory.Packages.props and Directory.Build.props
+    // give the SDK version and the nullable setting. bin, obj and test projects are not read.
+    { name: 'C#', mod: RepoCSharp, manifest: /(^|\/)([^/]+\.csproj|Directory\.Packages\.props|Directory\.Build\.props)$/,
+      skip: (p) => CS_DEP.test(p) || CS_NOT_READ.test(p),
+      plan: (paths) => paths.filter((p) => /\.cs$/.test(p) && !/\.(g|designer|generated)\.cs$/i.test(p) && !CS_DEP.test(p) && !CS_NOT_READ.test(p)).sort(byScore),
+      skippedFolders: (paths) => paths.filter((p) => /\.cs$/.test(p) && !CS_DEP.test(p) && CS_NOT_READ.test(p)).sort(),
+      skippedFolderOf: (p) => { const m = CS_NOT_READ_DIR.exec(p); return m ? m[1] : p.replace(/\/[^/]*$/, ''); },
+      toolHint: /\[\s*(?:[\w.]*\.)?McpServerTool(?:Attribute)?\s*[\](,]/g,
+      serverRoot: () => false,
+      rootDir: (p) => (p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : ''),
+      analyse: (src, man) => RepoCSharp.analyse(src, { manifests: man }) },
   ];
   // Adds the tools a Go or Rust reading found to the analysis `an` (as analyseRepo returns it): names already found are
   // duplicates (several modules with the same names are alternatives, as for the other languages), marks applied.
@@ -2691,7 +3039,7 @@
     };
     const readMany = async (ps) => ps.map((p) => [p, readOne(p)]);
     all.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)); // the walk order only decides what a truncated listing keeps
-    const scan = await scanFiles({ all: all.concat(Array.from(extra.keys())), subdir: null, readMany, maxSourceFiles: opts.maxSourceFiles, builtFallback: true, state });
+    const scan = await scanFiles({ all: all.concat(Array.from(extra.keys())), subdir: null, readMany, maxSourceFiles: opts.maxSourceFiles, builtFallback: true, state, servers: !!opts.servers, serversDeadline: opts.serversDeadline });
     return Object.assign({ repo: String(dir), ref: null, sha: null, via: 'directory', truncated }, scan);
   }
 
@@ -2717,5 +3065,5 @@
     return null;
   }
 
-  return { publicTools, fromGitHub, fromDirectory, fromCatalogSnap, serverPackages, notServerFolder, constructsServer, ownServerNames, normName, fromRegistry, extractFromFile, extractJs, extractPy, planFiles, detectSdk, collectGlobalConsts, analyseRepo, markConditionals, parseRepoRef, toolsFromJson, fromMcpbManifest, tokenize, commandFor };
+  return { customListHandler, publicTools, fromGitHub, fromDirectory, fromCatalogSnap, serverPackages, notServerFolder, constructsServer, ownServerNames, normName, fromRegistry, extractFromFile, extractJs, extractPy, planFiles, detectSdk, collectGlobalConsts, analyseRepo, markConditionals, parseRepoRef, toolsFromJson, fromMcpbManifest, tokenize, commandFor };
 });
