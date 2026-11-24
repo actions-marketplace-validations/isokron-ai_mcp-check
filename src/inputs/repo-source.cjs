@@ -2556,7 +2556,7 @@
       await Promise.all(Array.from({ length: Math.min(n, ps.length) }, worker));
       return out;
     };
-    const scan = await scanFiles({ all: listing.paths, subdir: ref.subdir, readMany: fetchMany, maxSourceFiles: opts.maxSourceFiles, state });
+    const scan = await scanFiles({ all: listing.paths, subdir: ref.subdir, readMany: fetchMany, maxSourceFiles: opts.maxSourceFiles, state, servers: !!opts.servers, serversDeadline: opts.serversDeadline });
     if (state.failed.length) {
       const st = state.failed.map((x) => x.status).filter(Boolean);
       const limited = st.some((x) => x === 403 || x === 429);
@@ -2570,7 +2570,39 @@
   // The reading shared by fromGitHub and fromDirectory. all: every file path of the repository (relative, "/"-separated);
   // subdir: the folder to read, or null; readMany(paths, concurrency) -> [[path, text | null]].
   // o.builtFallback: when the sources find nothing, read build output and vendor folders (dist, build, out, vendor) too.
+  // o.servers: when the folder holds several servers (hints.servers), also read each server's folder on its own, from
+  // the same listing and the files already read (no more listing requests): serverScans, one per server in the order
+  // of hints.servers, { path, declared, scan } with the reading of that folder alone, or { path, skipped } (a code) for
+  // a folder not read: the folder read itself ('multiple_servers'), past MAX_SERVER_SCANS ('reader_limit'), or past
+  // o.serversDeadline, a Date.now() value ('timeout'). declared: a server.json of the repository names that folder as
+  // its repository.subfolder.
+  const MAX_SERVER_SCANS = 24;
   async function scanFiles(o) {
+    if (!o.servers) return scanOne(o);
+    const memo = new Map();
+    const readMany = async (ps, n) => {
+      const need = Array.from(new Set(ps.filter((p) => !memo.has(p))));
+      if (need.length) for (const [p, t] of await o.readMany(need, n)) memo.set(p, t);
+      return ps.map((p) => [p, memo.has(p) ? memo.get(p) : null]);
+    };
+    const base = Object.assign({}, o, { readMany, servers: false });
+    const r = await scanOne(base);
+    const list = (r.hints && r.hints.servers) || null;
+    if (!list || !list.length) return r;
+    const declared = new Set(((r.hints && r.hints.serverJson) || []).map((x) => (typeof x.subfolder === 'string' ? x.subfolder.replace(/^\.?\/+|\/+$/g, '') : null)).filter(Boolean));
+    r.serverScans = [];
+    for (let k = 0; k < list.length; k++) {
+      const path = list[k].path || '';
+      const one = { path, declared: declared.has(path) };
+      if (!path || path === (o.subdir || '')) one.skipped = 'multiple_servers';
+      else if (k >= MAX_SERVER_SCANS) one.skipped = 'reader_limit';
+      else if (o.serversDeadline && Date.now() > o.serversDeadline) one.skipped = 'timeout';
+      else one.scan = await scanOne(Object.assign({}, base, { subdir: path }));
+      r.serverScans.push(one);
+    }
+    return r;
+  }
+  async function scanOne(o) {
     let paths = o.all;
     if (o.subdir) paths = paths.filter((p) => p === o.subdir || p.startsWith(o.subdir + '/'));
     let plan = planFiles(paths);
@@ -2595,7 +2627,7 @@
     });
     // Several committed lists are placed after the source is read (see pickList below).
     for (const [p, t] of await readMany(plan.manifests.slice(0, 10), 4)) { const m = t && fromMcpbManifest(t); if (m) candidates.push({ kind: 'mcpb', fidelity: m.fidelity, path: p, tools: m.tools, generated: m.generated }); }
-    for (const [p, t] of await readMany(plan.serverJson.slice(0, 5), 4)) { try { const d = JSON.parse(t); if (d && d.name) hints.serverJson.push({ path: p, name: d.name, remotes: d.remotes || [], packages: d.packages || [] }); } catch (e) { /* ignore */ } }
+    for (const [p, t] of await readMany(plan.serverJson.slice(0, 5), 4)) { try { const d = JSON.parse(t); if (d && d.name) hints.serverJson.push(Object.assign({ path: p, name: d.name, remotes: d.remotes || [], packages: d.packages || [] }, d.repository && typeof d.repository.subfolder === 'string' ? { subfolder: d.repository.subfolder.slice(0, 300) } : {})); } catch (e) { /* ignore */ } }
     // source extraction: the manifests (SDK and zod versions), then the sources, then one analysis over all of them
     const metaPaths = paths.filter((p) => META_FILE.test(p) && !SKIP_DIR.test(p) && p.split('/').length <= (o.subdir ? o.subdir.split('/').length : 0) + 2).slice(0, 8);
     const rootMeta = o.all.filter((p) => /^(package\.json|package-lock\.json|pyproject\.toml)$/.test(p) && !paths.includes(p));
@@ -3007,7 +3039,7 @@
     };
     const readMany = async (ps) => ps.map((p) => [p, readOne(p)]);
     all.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)); // the walk order only decides what a truncated listing keeps
-    const scan = await scanFiles({ all: all.concat(Array.from(extra.keys())), subdir: null, readMany, maxSourceFiles: opts.maxSourceFiles, builtFallback: true, state });
+    const scan = await scanFiles({ all: all.concat(Array.from(extra.keys())), subdir: null, readMany, maxSourceFiles: opts.maxSourceFiles, builtFallback: true, state, servers: !!opts.servers, serversDeadline: opts.serversDeadline });
     return Object.assign({ repo: String(dir), ref: null, sha: null, via: 'directory', truncated }, scan);
   }
 
