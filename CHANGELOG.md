@@ -2,6 +2,16 @@
 
 All notable changes to `@isokron/mcp-check` and the `isokron-ai/mcp-check` Action. The package follows [semantic versioning](https://semver.org/); the grading rubric has its own version (`rubric_version`), noted with each release.
 
+## Unreleased
+
+- **Reader: Python tools made by a repository's own factories (R-RD-02).**
+  - A module-level registrar used as a bare decorator (`@create_tool("x", "X")` over a def, where `create_tool`'s body calls `add_tool`, `.tool(` or `Tool.from_function`) now makes the decorated function a tool, as `@registry.method(…)` already did. It is named after the function, or after the argument the registrar passes on as `name=`.
+  - A module-level function that builds the tool dict from its own parameters (`{"name": name, "description": description, "inputSchema": …}`) is followed to its uses. A use is a decorator over a def (a hand-rolled server's `@tool("get_status", "Status", "…", properties=…)`) or a call (`TOOLS = [tool("a", "…", {…})]`). Each use is a tool, evaluated with the use's arguments and the parameters' defaults.
+  - What the factory computes in its body (a schema or annotations assembled from locals) is marked not readable, and the other arguments' text is scanned for hidden instructions.
+  - A name the reader cannot work out is counted as unresolved.
+  - A name defined more than once at module level in the repository is not used as a factory.
+  - Found on alondmnt/joplin-mcp and jackson-cmd/zeus-options-terminal, which the loop reported as having no tools.
+
 ## 1.3.1 (2026-11-22)
 
 Docs and metadata only; no change to the reader, the engine or the rubric (2.2.0).

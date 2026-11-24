@@ -1515,6 +1515,8 @@
     PYC = {}; Object.keys(fc.consts).forEach((k) => { const v = fc.consts[k]; if (v === null || typeof v !== 'object') PYC[k] = v; });
     const usesMcp = /^\s*(?:from|import)\s+(?:mcp|fastmcp)\b/m.test(clean) || /\bFastMCP\b|\bMCPServer\b/.test(clean);
     const registrars = opts.pyRegistrars || new Set();
+    const templates = opts.pyTemplates || new Map();
+    const tplCall = templates.size ? new RegExp('(?:^|[^\\w.])(?:' + Array.from(templates.keys()).join('|') + ')\\s*\\(') : null;
     const tools = []; const seen = new Set(); const unresolved = []; const overBudget = [];
     const add = (tool, line, extra) => {
       if (!tool || typeof tool.name !== 'string' || !tool.name || seen.has(tool.name)) return;
@@ -1635,6 +1637,46 @@
       if (a && camel) { const o = {}; Object.keys(a).forEach((k) => { o[/^(read_only|destructive|idempotent|open_world)_hint$/.test(k) ? k.replace(/_(\w)/g, (x, c) => c.toUpperCase()) : k] = a[k]; }); a = o; }
       return a || null;
     };
+    // One use of a tool-dict factory (pyToolTemplates): its arguments bound to the factory's parameters (defaults when
+    // not given), the dict evaluated with them. A name that cannot be worked out is unresolved; a part that cannot be
+    // read (a schema built in the factory's body) is marked not readable, the arguments' other text kept for the scan.
+    const fromTemplate = (tpl, argsText, line) => {
+      let ct; try { ct = pyTokenize(argsText); } catch (e) { return; }
+      if (!isP(ct[0], '(')) return;
+      const a = pyCallArgs(ct, 0);
+      const consts = Object.assign({}, ctx.consts); const bound = {};
+      tpl.locals.forEach((n) => { delete consts[n]; });
+      tpl.params.forEach((pp, ix) => {
+        const at = a.kw[pp.name] !== undefined ? a.kw[pp.name] : a.pos[ix];
+        let v = null;
+        if (at !== undefined) { const r = pyValue(ct, at, ctx); if (r.value !== PY_SKIP && !(typeof r.value === 'string' && r.exact === false)) v = r; }
+        else if (pp.def !== undefined) v = exprVal(pp.def);
+        if (v) { consts[pp.name] = v.value; bound[pp.name] = true; } else delete consts[pp.name];
+      });
+      let tt; try { tt = pyTokenize(tpl.text); } catch (e) { return; }
+      const keys = pyDictKeys(tt, tpl.at);
+      const tctx = { consts, partialNames: ctx.partialNames, lostOf: ctx.lostOf };
+      const val = (key) => (keys[key] === undefined ? undefined : pyValue(tt, keys[key], tctx));
+      const argText = literalsArr(ct, 0, ct.length);
+      // the arguments that become the name, title or description (the dict's value there is the parameter itself)
+      const shownParams = new Set(['name', 'title', 'description'].map((key) => keys[key]).filter((at) => at !== undefined && tt[at] && tt[at].type === 'id' && (isP(tt[at + 1], ',') || isP(tt[at + 1], '}'))).map((at) => tt[at].value));
+      const otherText = () => { const out = []; tpl.params.forEach((pp, ix) => { if (shownParams.has(pp.name)) return; const at = a.kw[pp.name] !== undefined ? a.kw[pp.name] : a.pos[ix]; if (at !== undefined) out.push(...literalsArr(ct, at, pySkip(ct, at))); }); return out; };
+      const nv = val('name');
+      if (!nv || typeof nv.value !== 'string' || !nv.value || nv.exact === false) { lose(argText); unresolved.push(Object.assign({ line }, argText.length ? { description: argText.join(' … ').slice(0, MAX_STR) } : {})); return; }
+      const tool = { name: nv.value }; const un = [];
+      const tv = val('title'); if (tv && typeof tv.value === 'string' && tv.exact !== false) tool.title = tv.value;
+      const dv = val('description');
+      if (dv) { if (typeof dv.value === 'string') { tool.description = dv.value; if (dv.partial) un.push('description'); } else un.push('description'); }
+      const sk = keys.inputSchema !== undefined ? 'inputSchema' : 'input_schema';
+      const sv = val(sk);
+      if (sv && sv.value && sv.value !== PY_SKIP && typeof sv.value === 'object' && !Array.isArray(sv.value)) tool.inputSchema = sv.value; else { tool.inputSchema = { type: 'object' }; un.push('inputSchema'); }
+      if (keys.annotations !== undefined) { const av = val('annotations'); if (av && av.value && av.value !== PY_SKIP && typeof av.value === 'object' && !Array.isArray(av.value)) tool.annotations = av.value; else un.push('annotations'); }
+      ['outputSchema', '_meta', 'icons', 'execution'].forEach((key) => { const v = val(key); if (v && v.value && v.value !== PY_SKIP && typeof v.value === 'object') tool[key] = v.value; });
+      // text of the arguments that is not the name, title or description: kept for the scan when a part is not readable
+      if (un.length) lose(otherText());
+      tool._unreadable = un;
+      add(tool, line, { fn: tpl.name, exactTypes: !un.length && !!(sv && sv.exact) });
+    };
     for (let k = 0; k < L.length; k++) {
       const l = L[k];
       const lineLost = []; LOST.cur = lineLost; const toolsBefore = tools.length; const unresBefore = unresolved.length;
@@ -1651,7 +1693,19 @@
           const isSdk = chain.length > 1 && last === 'tool';
           const isBare = chain.length === 1 && last === 'tool' && usesMcp;
           const isNamed = /^[a-z]\w*_tool$/.test(last) && m[2] !== undefined && (kw.description !== undefined || kw.name !== undefined || kw.title !== undefined);
-          const isReg = chain.length > 1 && registrars.has(last);
+          // a repository's own factory that builds the tool dict (@tool("name", "Title", "…", properties=…), R-RD-02)
+          if (chain.length === 1 && m[2] !== undefined && templates.has(last)) { fromTemplate(templates.get(last), '(' + m[3] + ')', d.line); break; }
+          // a repository's own registrar used bare (@create_tool("x", "X") whose body calls add_tool(fn), R-RD-02): the
+          // function's name, unless the registrar passes one of its parameters on as the name
+          const bareReg = chain.length === 1 && !isBare && !isNamed && registrars.bare && registrars.bare.has(last) ? registrars.bare.get(last) : null;
+          if (bareReg) {
+            const args = m[3] !== undefined ? splitTop(m[3], ',') : []; const pos = args.filter((x) => !/^\w+\s*=/.test(x));
+            const argOf = (pn) => { if (!pn) return undefined; if (kw[pn] !== undefined) return kw[pn]; const ix = bareReg.params.findIndex((x) => x.name === pn); return ix >= 0 ? pos[ix] : undefined; };
+            Object.keys(kw).forEach((key) => { if (!['name', 'description', 'title', 'annotations'].includes(key) || (key !== bareReg.nameParam && key !== bareReg.descriptionParam && bareReg.params.some((x) => x.name === key))) delete kw[key]; });
+            if (bareReg.nameParam && argOf(bareReg.nameParam) !== undefined) kw.name = argOf(bareReg.nameParam);
+            if (bareReg.descriptionParam && argOf(bareReg.descriptionParam) !== undefined) kw.description = argOf(bareReg.descriptionParam);
+          }
+          const isReg = (chain.length > 1 && registrars.has(last)) || !!bareReg;
           if (!(isSdk || isBare || isNamed || isReg)) continue;
           // @mcp.tool("name") (the standalone fastmcp's positional name)
           const pos0 = m[3] !== undefined ? splitTop(m[3], ',')[0] : null;
@@ -1664,6 +1718,17 @@
           break;
         }
         k = e; continue;
+      }
+      // calls of a repository function that builds the tool dict: TOOLS = [tool("a", "…", {…}), …] (R-RD-02)
+      if (tplCall && tplCall.test(l.text)) {
+        let t; try { t = pyTokenize(l.text); } catch (e) { t = []; }
+        for (let i = 0; i < t.length; i++) {
+          if (t[i].type !== 'id' || !templates.has(t[i].value) || !isP(t[i + 1], '(') || isP(t[i - 1], '.') || (t[i - 1] && t[i - 1].type === 'id' && t[i - 1].value === 'def')) continue;
+          const close = pyMatch(t, i + 1); if (close >= t.length) continue;
+          let ln = l.line; for (let q = 0; q < t[i].s; q++) if (l.text.charCodeAt(q) === 10) ln++;
+          fromTemplate(templates.get(t[i].value), l.text.slice(t[i + 1].s, t[close].e), ln);
+          i = close;
+        }
       }
       // calls inside the line: Tool(...), x.tool(fn, ...), x.add_tool(fn, ...), Tool.from_function(...), *ToolDefinition(fn=...)
       if (!/\bTool\s*\(|\.tool\s*\(|add_tool\s*\(|from_function\s*\(|ToolDefinition\s*\(/.test(l.text)) continue;
@@ -1739,7 +1804,7 @@
   // Methods and functions of the repository that register a tool (their body calls .tool(, add_tool(, Tool.from_function(
   // or another of them): used as decorators, @registry.reader("…") makes the function under it a tool.
   function pyRegistrars(files) {
-    const bodies = new Map();
+    const bodies = new Map(); const top = new Map(); const dupTop = new Set();
     files.forEach(([p, text]) => {
       if (!/\.py$/.test(p) || typeof text !== 'string') return;
       const L = pyLogicalLines(pyStripComments(text));
@@ -1747,6 +1812,7 @@
         const m = /^(?:async\s+)?def\s+(\w+)\s*\(/.exec(l.text); if (!m || /^(__\w+__|main|run|register|setup|create_app|create_server|serve)$/.test(m[1])) return;
         let body = ''; for (let j = k + 1; j < L.length && L[j].indent > l.indent; j++) body += L[j].text + '\n';
         bodies.set(m[1], (bodies.get(m[1]) || '') + body);
+        if (l.indent === 0) { if (top.has(m[1])) dupTop.add(m[1]); else top.set(m[1], { params: pyParams(l.text), body }); }
       });
     });
     const out = new Set();
@@ -1756,7 +1822,83 @@
       bodies.forEach((b, n) => { if (out.has(n)) return; for (const r of out) { if (new RegExp('(?:self|cls)\\.' + r + '\\s*\\(').test(b)) { out.add(n); grew = true; break; } } });
       if (!grew) break;
     }
+    // Module-level registrars, usable as a bare decorator (@create_tool("x", "X") over a def, R-RD-02): the parameter
+    // the registration takes its name (description) from, when the body passes one on (add_tool(fn, name=tool_name));
+    // otherwise the SDK names the tool after the function.
+    const bare = new Map();
+    top.forEach((info, n) => {
+      if (!out.has(n) || dupTop.has(n)) return;
+      const call = /(?:\.tool|\badd_tool|Tool\.from_function)\s*\(([^()]*(?:\([^()]*\)[^()]*)*)\)/.exec(info.body);
+      const kwOf = (key) => { const m = call && new RegExp('\\b' + key + '\\s*=\\s*(\\w+)\\s*(?:,|$)').exec(call[1]); return m && info.params.some((x) => x.name === m[1]) ? m[1] : null; };
+      bare.set(n, { params: info.params, nameParam: kwOf('name'), descriptionParam: kwOf('description') });
+    });
+    Object.defineProperty(out, 'bare', { value: bare, enumerable: false });
     return out;
+  }
+  // The parameters of a def line: [{ name, def (the default's text) }], self/cls, *args and **kwargs left out.
+  function pyParams(head) {
+    const m = /^(?:async\s+)?def\s+\w+\s*\(/.exec(head); if (!m) return [];
+    const open = m[0].length - 1; let d = 0; let close = -1; let q = null;
+    for (let x = open; x < head.length; x++) { const ch = head[x]; if (q) { if (ch === '\\') x++; else if (ch === q) q = null; continue; } if (ch === '"' || ch === "'") q = ch; else if (ch === '(' || ch === '[' || ch === '{') d++; else if (ch === ')' || ch === ']' || ch === '}') { d--; if (!d) { close = x; break; } } }
+    if (close < 0) return [];
+    const out = [];
+    splitTop(head.slice(open + 1, close), ',').forEach((p) => {
+      if (!p || p === '*' || p === '/' || /^\*/.test(p)) return;
+      const eq = topLevelEq(p); const lhs = (eq < 0 ? p : p.slice(0, eq)).trim(); const nm = /^(\w+)/.exec(lhs);
+      if (!nm || nm[1] === 'self' || nm[1] === 'cls') return;
+      out.push({ name: nm[1], def: eq < 0 ? undefined : p.slice(eq + 1).trim() });
+    });
+    return out;
+  }
+  // Repository functions that build a tool dict from their own parameters (R-RD-02): a module-level def whose body holds
+  // a dict with the keys "name" (one of the def's parameters) and "inputSchema" ("input_schema" in a file that speaks
+  // MCP), such as a hand-rolled server's tool(name, title, description, properties, …) decorator factory, or a helper
+  // that returns the dict. Each use (@tool("x", …) over a def, or a call tool("x", …)) is a tool, the dict evaluated with
+  // the use's arguments. Map(fn -> { params, text (the dict's logical line), at (its token) }); names defined twice
+  // in the repository are left out.
+  function pyToolTemplates(files) {
+    const out = new Map(); const dup = new Set(); const defs = new Map(); // every module-level def name -> how many
+    files.forEach(([p, text]) => {
+      if (!/\.py$/.test(p) || typeof text !== 'string') return;
+      const re = /^(?:async[ \t]+)?def[ \t]+(\w+)[ \t]*\(/gm; let d; while ((d = re.exec(text))) defs.set(d[1], (defs.get(d[1]) || 0) + 1);
+      if (!/["'](?:inputSchema|input_schema)["']\s*:/.test(text)) return;
+      const clean = pyStripComments(text); const L = pyLogicalLines(clean);
+      const speaks = /^\s*(?:from|import)\s+(?:mcp|fastmcp)\b/m.test(clean) || /["']tools\/list["']/.test(clean);
+      L.forEach((l, k) => {
+        if (l.indent !== 0) return;
+        const m = /^(?:async\s+)?def\s+(\w+)\s*\(/.exec(l.text); if (!m) return;
+        const params = pyParams(l.text); if (!params.length) return;
+        for (let j = k + 1; j < L.length && L[j].indent > 0; j++) {
+          if (!/["'](?:inputSchema|input_schema)["']\s*:/.test(L[j].text)) continue;
+          let t; try { t = pyTokenize(L[j].text); } catch (e) { continue; }
+          for (let i = 0; i < t.length; i++) {
+            if (!isP(t[i], '{')) continue;
+            const keys = pyDictKeys(t, i);
+            const sk = keys.inputSchema !== undefined ? 'inputSchema' : keys.input_schema !== undefined && speaks ? 'input_schema' : null;
+            const nk = keys.name;
+            if (!sk || nk === undefined || !t[nk] || t[nk].type !== 'id' || !(isP(t[nk + 1], ',') || isP(t[nk + 1], '}')) || !params.some((x) => x.name === t[nk].value)) continue;
+            // names the def assigns in its body: never taken from constants of the same name where the dict is evaluated
+            const locals = new Set(); for (let q = k + 1; q < L.length && L[q].indent > 0; q++) { const a = /^([A-Za-z_]\w*)\s*(?::[^=]+?)?=(?!=)/.exec(L[q].text) || /^(?:for|with)\s+[\s\S]*?\b(?:as\s+)?([A-Za-z_]\w*)\s*(?:in\b|:)/.exec(L[q].text) || /^(?:async\s+)?def\s+(\w+)/.exec(L[q].text); if (a) locals.add(a[1]); }
+            if (out.has(m[1])) dup.add(m[1]); else out.set(m[1], { name: m[1], params, locals, text: L[j].text, at: i, path: p });
+            return;
+          }
+        }
+      });
+    });
+    dup.forEach((n) => out.delete(n));
+    // a name defined more than once at module level (another file's own tool(), say): which one a call means is not known
+    out.forEach((v, n) => { if ((defs.get(n) || 0) > 1) out.delete(n); });
+    return out;
+  }
+  // The own keys of the dict whose "{" is token i: { key: index of its value's first token } (first of each key).
+  function pyDictKeys(t, i) {
+    const close = pyMatch(t, i); const keys = {}; let j = i + 1;
+    while (j < close) {
+      if (t[j].type === 'str' && isP(t[j + 1], ':') && (isP(t[j - 1], '{') || isP(t[j - 1], ',')) && !hasOwn(keys, t[j].value)) keys[t[j].value] = j + 2;
+      if (isP(t[j], '(') || isP(t[j], '[') || isP(t[j], '{')) { j = pyMatch(t, j) + 1; continue; }
+      j++;
+    }
+    return keys;
   }
   // Module-level constants defined once across the repository's Python files (for names imported from another module).
   function pyGlobalConsts(files) {
@@ -2131,7 +2273,7 @@
     const srcList = candidates.slice(0, opts.maxSourceFiles || MAX_TOOL_FILES);
     const consts = collectGlobalConsts(readable);
     const mods = moduleConsts(readable, consts, sdk);
-    const pyConsts = pyGlobalConsts(readable); const pyRegs = pyRegistrars(readable); const mounts = pyMounts(readable);
+    const pyConsts = pyGlobalConsts(readable); const pyRegs = pyRegistrars(readable); const mounts = pyMounts(readable); const pyTpl = pyToolTemplates(readable);
     const bases = toolBases(readable);
     const found = []; const byName = new Set();
     const dupes = []; const unresolved = []; const overBudget = [];
@@ -2139,7 +2281,7 @@
       let ts = [];
       try {
         const js = /\.(ts|mts|cts|js|mjs|cjs)$/.test(p);
-        ts = extractFromFile(p, t, js ? { sdk, consts: mods.seedFor(p), tokens: mods.tokens(p), classTools: bases, workBudget: opts.workBudget } : { sdk, pyConsts, pyRegistrars: pyRegs });
+        ts = extractFromFile(p, t, js ? { sdk, consts: mods.seedFor(p), tokens: mods.tokens(p), classTools: bases, workBudget: opts.workBudget } : { sdk, pyConsts, pyRegistrars: pyRegs, pyTemplates: pyTpl });
       } catch (e) { ts = []; ts.unresolved = [{ line: null }]; } // a file the reader fails on counts as one unread registration
       (ts.unresolved || []).forEach((u) => unresolved.push(Object.assign({ path: p }, u)));
       (ts.overBudget || []).forEach((u) => overBudget.push(Object.assign({ path: p }, u)));
