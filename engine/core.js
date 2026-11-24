@@ -257,8 +257,8 @@
     fix: 'Remove the characters. "Copy fixed tool list" strips them.' });
   def({ id: 'sec-control-chars', section: 'security', affects: ['security'], severity: 'attention', title: 'No control characters in metadata', src: 'owasp', anchor: '',
     quote: 'Treat the entire tool schema as a potential injection surface — not just the description field.',
-    explain: 'Control characters other than tab, line feed and carriage return have no place in tool metadata and can hide or reorder text in logs and terminals.',
-    fix: 'Remove the characters. "Copy fixed tool list" strips them.' });
+    explain: 'Control characters other than tab, line feed and carriage return have no place in tool metadata and can hide or reorder text in logs and terminals. The message names ANSI terminal escape sequences specifically: CSI (ESC [, such as ESC[31m or ESC[2K), OSC (ESC ], including OSC 8 hyperlinks that show one label over another address) and the single-byte C1 forms (U+0080 to U+009F). A client that prints tool metadata to a terminal runs them, so they can recolor, erase or overwrite text a reviewer reads, or relabel a link.',
+    fix: 'Remove the characters (the raw ESC byte, not the visible text of an example). "Copy fixed tool list" strips them.' });
   def({ id: 'sec-homoglyph', section: 'security', affects: ['security', 'anthropic', 'openai'], severity: 'blocking', severities: ['attention'], title: 'No look-alike letters from other scripts', src: 'openai', anchor: '',
     quote: 'Plugin and tool metadata must not seek secrets or protected context, direct unauthorized data transfers or actions, override platform instructions or safeguards, conceal behavior, or impersonate another party.',
     explain: 'A tool name with non-ASCII letters (for example a Cyrillic "а" in "reаd_file") can impersonate another tool. In a name this is blocking; a word that mixes Latin with Cyrillic or Greek letters in a title or description is marked for attention.',
@@ -291,6 +291,11 @@
     quote: 'Plugin and tool metadata must not seek secrets or protected context, direct unauthorized data transfers or actions, override platform instructions or safeguards, conceal behavior, or impersonate another party.',
     explain: 'The text names SSH keys, cloud credential files or MCP client configuration, asks the model to read or send a .env file, or asks it to send credentials or conversation content somewhere. A .env file named without that (for example as the output of a tool that writes one) is attention. Single tokens such as enum values and event names are not read as requests.',
     fix: 'Remove the wording. A tool should never ask the model for secrets it holds or can reach.' });
+
+  def({ id: 'sec-shell-url', section: 'security', affects: ['security', 'anthropic', 'openai'], severity: 'blocking', severities: ['attention'], title: 'No URLs with shell syntax in metadata', src: 'owasp', anchor: '',
+    quote: 'Treat the entire tool schema as a potential injection surface — not just the description field.',
+    explain: 'A URL-like string (scheme://…) in a description, default, enum or example contains shell syntax: command substitution $( ) or a backtick, "&&", or a newline followed by a command. That is the shape of CVE-2025-6514, where mcp-remote passed a crafted authorization endpoint to a shell. A client that hands the value to a shell or an "open" helper runs it. A ";" or "|" in the address or path (before any ? or #) is attention. "&" between query parameters, "|" and ";" inside a query, and ";key=value" path parameters are not read.',
+    fix: 'Remove the shell syntax. Percent-encode any such character that belongs in the address ($ as %24, ( as %28, a backtick as %60, ; as %3B, | as %7C), and never ask a client to run or open a URL it did not validate.' });
 
   // --- Schema and description quality (design grade only)
   def({ id: 'schema-param-description', section: 'quality', affects: ['quality'], severity: 'advice', title: 'Every argument has a description', src: 'openaiMeta', anchor: '',
@@ -703,6 +708,48 @@
   const RE_BIDI = /[‪-‮⁦-⁩]/;
   const RE_ZW = /[​-‏⁠-⁤﻿᠎­͏؜ᅟᅠㅤﾠ]/;
   const RE_CTRL = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/;
+  // ANSI terminal escape sequences: CSI (ESC [ or U+009B), OSC (ESC ] or U+009D; OSC 8 is a hyperlink), and any other ESC pair.
+  // Every quantifier is bounded or runs over a class that excludes ESC, so a run of ESC bytes is read in linear time.
+  const RE_ANSI = /\u001B\[[0-?]{0,64}[ -\/]{0,16}[@-~]|\u009B[0-?]{0,64}[ -\/]{0,16}[@-~]|\u001B\][^\u0007\u001B\u009C]{0,300}(?:\u0007|\u001B\\|\u009C)?|\u009D[^\u0007\u001B\u009C]{0,300}(?:\u0007|\u009C)?|\u001B[@-Z\\^_c-~]/g;
+  const showCtrl = (x) => x.replace(/[\u0000-\u001F\u007F-\u009F]/g, (c) => (c === '\u001B' ? '␛' : '\\x' + c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0')));
+  function controlMessage(value) {
+    const seqs = value.match(RE_ANSI) || [];
+    const rest = (seqs.length ? value.replace(RE_ANSI, '') : value).match(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g) || [];
+    const parts = [];
+    if (seqs.length) {
+      const kind = (q) => (/^(\u001B\]|\u009D)8;/.test(q) ? 'OSC 8 hyperlink' : /^(\u001B\]|\u009D)/.test(q) ? 'OSC' : /^(\u001B\[|\u009B)/.test(q) ? 'CSI' : 'escape');
+      const kinds = seqs.map(kind).filter((k, i, a) => a.indexOf(k) === i);
+      parts.push('ANSI terminal escape sequences (' + kinds.join(', ') + '; ' + clip(seqs.slice(0, 3).map(showCtrl).join(' '), 80) + ') can recolor, erase or relabel text when a client prints the metadata in a terminal');
+    }
+    if (rest.length) parts.push('control characters ' + clip(rest.filter((c, i, a) => a.indexOf(c) === i).map((c) => 'U+' + c.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0')).join(' '), 60));
+    return parts.length ? parts.join('; ').replace(/^./, (c) => c.toUpperCase()) + '.' : 'Control characters.';
+  }
+  // URL-like strings with shell syntax (the shape of CVE-2025-6514). One pass over scheme:// tokens; a token ends at whitespace.
+  const RE_URL_TOKEN = /\b[a-z][a-z0-9+.-]{1,15}:\/\/[^\s\u0000-\u001F\u007F-\u009F]*/gi;
+  const RE_AFTER_NEWLINE = /[ \t]*(?:[;|&$`<>(]|(?:sudo\s+)?(?:curl|wget|sh|bash|zsh|nc|ncat|rm|cat|python3?|node|perl|ruby|powershell|pwsh|cmd|touch|chmod|eval|echo|open|xdg-open)(?![\w-]))/iy;
+  function shellUrl(value) {
+    if (value.length < 8 || value.indexOf('://') < 0) return null;
+    RE_URL_TOKEN.lastIndex = 0;
+    let m;
+    while ((m = RE_URL_TOKEN.exec(value))) {
+      // entities (&amp;) and trailing sentence punctuation are not part of the address
+      const tok = m[0].replace(/&(?:#\d{1,7}|#x[0-9a-f]{1,6}|[a-z][a-z0-9]{1,31});/gi, '_').replace(/[.,;:!?)\]}>'"*]+$/, '');
+      const q = tok.search(/[?#]/);
+      const head = (q < 0 ? tok : tok.slice(0, q)).replace(/^[a-z][a-z0-9+.-]*:\/\//i, '');
+      if (tok.indexOf('$(') >= 0) return { sev: 'blocking', what: 'command substitution $( )', tok: value.slice(m.index, m.index + 90) };
+      const bt = tok.indexOf('`');
+      // a backtick that closes a code span after the address is not inside it; one followed by more address characters is
+      if (bt >= 0 && /^`[^\s.,;:!?)\]}>'"`*]/.test(tok.slice(bt))) return { sev: 'blocking', what: 'a backtick command', tok: value.slice(m.index, m.index + 90) };
+      if (tok.indexOf('&&') >= 0) return { sev: 'blocking', what: '"&&"', tok: value.slice(m.index, m.index + 90) };
+      const end = m.index + m[0].length;
+      if (value[end] === '\n' || value[end] === '\r') {
+        RE_AFTER_NEWLINE.lastIndex = value[end] === '\r' && value[end + 1] === '\n' ? end + 2 : end + 1;
+        if (RE_AFTER_NEWLINE.test(value)) return { sev: 'blocking', what: 'a newline followed by a command', tok: value.slice(m.index, m.index + 90) };
+      }
+      if (/\||;(?![\w.~%-]+=)/.test(head)) return { sev: 'attention', what: '"' + (head.indexOf('|') >= 0 ? '|' : ';') + '" in the address', tok: value.slice(m.index, m.index + 90) };
+    }
+    return null;
+  }
   const STRIP_RE = /[\u{E0000}-\u{E007F}\u{E0100}-\u{E01EF}‪-‮⁦-⁩​-‏⁠-⁤﻿᠎­͏؜ᅟᅠㅤﾠ\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/gu;
   const RE_LATIN = /\p{Script=Latin}/u;
   const RE_CONFUSABLE = /[\p{Script=Cyrillic}\p{Script=Greek}\p{Script=Armenian}\p{Script=Cherokee}]/u;
@@ -759,7 +806,7 @@
       if (RE_TAGS.test(value)) { const d = decodeTags(value); once('sec-invisible-encoding', 'blocking', 'Invisible tag or variation-selector characters' + (d.trim() ? '; hidden text reads: "' + clip(d, 120) + '"' : '') + '.', path); }
       if (RE_BIDI.test(value)) once('sec-bidi-controls', 'blocking', 'Bidirectional override or isolate characters.', path);
       if (RE_ZW.test(value)) once('sec-zero-width', 'attention', 'Zero-width or other invisible characters: ' + clip(visible(value).match(/\\u\{[0-9A-F]+\}/g).filter((v, i, a) => a.indexOf(v) === i).join(' '), 60) + '.', path);
-      if (RE_CTRL.test(value)) once('sec-control-chars', 'attention', 'Control characters.', path);
+      if (RE_CTRL.test(value)) once('sec-control-chars', 'attention', controlMessage(value), path);
       if (path === 'name' || path === 'name (key)') {
         if (/[^\x00-\x7F]/.test(value) && /\p{L}/u.test(value.replace(/[\x00-\x7F]/g, ''))) once('sec-homoglyph', 'blocking', 'The tool name contains non-ASCII letters (' + Array.from(new Set(value.replace(/[\x00-\x7F]/g, ''))).map((c) => 'U+' + c.codePointAt(0).toString(16).toUpperCase().padStart(4, '0')).join(', ') + ') that can imitate another tool\'s name.', path);
       } else if (!key) {
@@ -767,6 +814,8 @@
         if (mixed.length) once('sec-homoglyph', 'attention', 'Words mix Latin with look-alike letters from another script: ' + clip(mixed.slice(0, 3).join(', '), 60) + '.', path);
       }
       if (key) return;
+      const su = shellUrl(value);
+      if (su) once('sec-shell-url', su.sev, 'URL with ' + su.what + ': "' + clip(showCtrl(su.tok), 80) + '".', path);
       // The phrase checks below (instructions, steering, outside instructions, asking for secrets) read the text with blank
       // and invisible characters as spaces, and a run of words joined by - _ or / ("ignore-all-previous-instructions") as
       // words. A short identifier (an enum value or event name such as "post-update-password") is still read for instructions,

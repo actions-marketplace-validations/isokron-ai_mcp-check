@@ -4,6 +4,12 @@ All notable changes to `@isokron/mcp-check` and the `isokron-ai/mcp-check` Actio
 
 ## Unreleased
 
+### Terminal escape sequences and shell syntax in URLs (loop upgrade 19)
+
+- **`sec-control-chars`** now names ANSI terminal escape sequences when it finds them (CSI, OSC including OSC 8 hyperlinks, and the single-byte C1 forms) and shows them, instead of the bare "Control characters." The check already flagged ESC; no new check ID, so existing cases keep their reading. Severity is unchanged (attention).
+- **New check `sec-shell-url`** (security; blocking, attention for `;` or `|` in the address): a URL-like string in a description, default, enum or example with command substitution `$( )`, a backtick command, `&&`, or a newline followed by a command, the shape of CVE-2025-6514. `&` between query parameters, `|` and `;` inside a query, `;key=value` path parameters and written-out examples are not read.
+- The rubric version is not bumped in this change (a new check is a minor bump, to be made with the web checker's copy of the engine); `engine/VENDORED.json` records the new `core.js` hash and the web checker needs the same engine change.
+
 ### Reading C#
 
 `--repo`, `--repo-dir`, `--registry` (when it falls back to the source), the zero-config Action and the loop worker (`corpus/scan-static.mjs`) now read the tools of C# servers built with the official C# SDK (`ModelContextProtocol`), the way the SDK lists them. No rubric change; the engine is not changed. Lists read this way are graded and labelled approximate like other lists read from source; the `Source:` line says "derived: reproduced from C# SDK registrations", and the JSON report's `source.language` is `c#`.

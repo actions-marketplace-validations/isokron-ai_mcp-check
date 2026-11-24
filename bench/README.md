@@ -32,8 +32,9 @@ stops being true.
   to the cases, to see whether the benchmark notices. [`MUTANTS.md`](MUTANTS.md) is the committed result, with
   every surviving mutant listed as a test gap.
 - **Known gaps**: cases that reproduce something mcp-check cannot see yet are scored like any other case and listed
-  in the score's "Known gaps" section, never counted as passes. The first is the shape of CVE-2025-6514
-  (`cases/real-world/cve-2025-6514-shape`).
+  in the score's "Known gaps" section, never counted as passes. The shape of CVE-2025-6514 (`cases/real-world/cve-2025-6514-shape`) was the first; the
+  part mcp-check can see (shell syntax in a URL in a description) is covered by `sec-shell-url`, and the case's note
+  says what stays out of reach.
 
 Nothing here runs a server or touches the network: `--repo-dir` reads files only.
 

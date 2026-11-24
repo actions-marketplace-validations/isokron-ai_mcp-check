@@ -13,7 +13,7 @@ export const UNSUPPORTED = new Set(['unsupported', 'none']);
 export const CORE_CHECKS = [
   'sec-instruction-phrases', 'sec-instruction-markup', 'sec-html-comment', 'sec-zero-width', 'sec-bidi-controls',
   'sec-cross-tool-steering', 'sec-secret-seeking', 'sec-external-instructions', 'sec-encoded-blob', 'sec-homoglyph',
-  'sec-invisible-encoding', 'sec-control-chars',
+  'sec-invisible-encoding', 'sec-control-chars', 'sec-shell-url',
   'annot-write-marked-readonly', 'annot-delete-marked-safe', 'spec-name-charset', 'spec-name-length',
 ];
 /** Checks of the list as a whole (not of one tool), scored on every case that lists tools; truth "none" by default. */
