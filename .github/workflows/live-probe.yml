@@ -1,0 +1,296 @@
+# Loop worker (internal): the live-probe lane of isokron-ai/tool-qa. The tool-qa pump dispatches it with shard_id,
+# attempt_id and items (tool-qa docs/INTERFACES.md, "Worker dispatch"); each item is a public GitHub repository,
+# owner/name, with the run_key and fence its result must quote. corpus/live-probe.mjs works out each subject's install
+# method from its published package (the official MCP Registry entry, else the seed list), the sandbox of
+# isokron-ai/mcp-surface-corpus (at SURFACE_CORPUS_REF) installs and starts it under gVisor with deny-by-default egress
+# and speaks MCP to it (initialize, then the list methods; no tool is ever called), and the live tool list is graded
+# with this repository's engine as `mcp-check -- <server>` grades it. tool-qa's worker-kit then seals one bundle per
+# item to tool-qa's ingest key and uploads it as result-<attempt_id>-<i>.tar.age. Every item gets a bundle: a subject
+# that could not be installed, started or listed reports a skip. corpus/LIVE-PROBE.md describes the lane.
+#
+# What is public: the log names items by position and says runnable, graded or skipped with a code; the sandbox
+# driver prints only "run finished, exit N" lines. No grade is printed. The bundles are encrypted before upload.
+#
+# Security: workflow_dispatch only, from main; permissions: {} at the top and contents: read for the jobs that check
+# out code; no secrets (the job's own token reads public repository facts and only api.github.com sees it; no
+# container gets it). The inputs reach steps through env: only and are checked whole before anything is read. Third-
+# party servers run only inside the sandbox's containers, never as a step; the sandbox proves itself (self test and
+# its telemetry check) before any target, and is swept and checked gone before the first upload step starts. A control
+# that does not give its expected outcome stops the job before any upload. The kill switch (corpus/loop-guard.mjs:
+# LOOP_ENABLED, LOOP_PAUSE_UNTIL, LANE_LIVE_PROBE_ENABLED) stops the lane without failing a run. Actions are pinned by
+# full SHA.
+
+name: live-probe
+
+on:
+  workflow_dispatch:
+    inputs:
+      shard_id:
+        description: Shard id from the tool-qa pump, such as live-probe-3f2a9c01b7d4.
+        required: true
+        type: string
+      attempt_id:
+        description: Attempt id from the tool-qa pump; every result quotes it.
+        required: true
+        type: string
+      items:
+        description: 'JSON list of 1 to 10 {"subject": "owner/name", "run_key": "<64 hex>", "fence": <n>}.'
+        required: true
+        type: string
+
+run-name: shard ${{ inputs.shard_id }}
+
+permissions: {}
+
+concurrency:
+  group: live-probe-${{ inputs.shard_id }}
+  cancel-in-progress: false
+
+env:
+  # The isokron-ai/tool-qa commit whose worker-kit seals and uploads the bundles (and whose seed list names each
+  # subject's packages). Every worker-kit step below names this same commit (test/live-probe.test.mjs checks).
+  WORKER_KIT_REF: 'b1f25a9b0b7655f45eb353f31562a93d9319d5a4'
+  # The isokron-ai/mcp-surface-corpus commit whose sandbox and driver run the servers (its main).
+  SURFACE_CORPUS_REF: '97bd96cae93b894fa3f891e3c05514a7c4bc0432'
+
+jobs:
+  guard:
+    if: github.repository == 'isokron-ai/mcp-check' && github.ref == 'refs/heads/main'
+    name: live-probe-guard
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      proceed: ${{ steps.guard.outputs.proceed }}
+    steps:
+      # First, before anything is checked out: LOOP_ENABLED must be exactly "true". Off is a notice, not a failure.
+      - id: enabled
+        name: Kill switch (LOOP_ENABLED)
+        env:
+          LOOP_ENABLED: ${{ vars.LOOP_ENABLED }}
+        run: |
+          if [[ "$LOOP_ENABLED" == "true" ]]; then echo "on=true" >> "$GITHUB_OUTPUT"
+          else echo "::notice title=live-probe::LOOP_ENABLED is not \"true\"; the loop is off and nothing is run"; fi
+      - if: steps.enabled.outputs.on == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: corpus/loop-guard.mjs
+          sparse-checkout-cone-mode: false
+      - id: guard
+        if: steps.enabled.outputs.on == 'true'
+        name: Kill switch (pause, lane switch, worker-kit pin)
+        env:
+          LOOP_ENABLED: ${{ vars.LOOP_ENABLED }}
+          LOOP_PAUSE_UNTIL: ${{ vars.LOOP_PAUSE_UNTIL }}
+          LANE_LIVE_PROBE_ENABLED: ${{ vars.LANE_LIVE_PROBE_ENABLED }}
+        run: node corpus/loop-guard.mjs --lane live-probe
+
+  # The pinned sandbox's own conformance check (mcp-surface-corpus's reusable workflow, at SURFACE_CORPUS_REF), on a
+  # runner of its own: gVisor, the firewall and the hostile self test, passed only when its telemetry recomputes a pass.
+  sandbox:
+    needs: guard
+    if: needs.guard.outputs.proceed == 'true'
+    permissions:
+      contents: read
+    uses: isokron-ai/mcp-surface-corpus/.github/workflows/sandbox-conformance.yml@97bd96cae93b894fa3f891e3c05514a7c4bc0432 # SURFACE_CORPUS_REF
+    with:
+      mutations: false
+      artifact-prefix: live-probe-sandbox
+
+  probe:
+    needs: [guard, sandbox]
+    if: needs.guard.outputs.proceed == 'true' && needs.sandbox.outputs.verdict == 'pass'
+    name: live-probe
+    runs-on: ubuntu-24.04
+    # Below the pump's lease for a shard of 10: 1.5 x (4 + 10 x 2) + 10 = 46 minutes, with the guard and the conformance
+    # check (about 3 minutes) before it. No subject runs past minute 34 of this job (the deadline step); those not
+    # reached report a retryable skip (shard_deadline).
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    steps:
+      # The switches again, first: one turned off after the guard job stops the run before anything is read.
+      - name: Kill switch, again (LOOP_ENABLED, LANE_LIVE_PROBE_ENABLED)
+        env:
+          LOOP_ENABLED: ${{ vars.LOOP_ENABLED }}
+          LANE_LIVE_PROBE_ENABLED: ${{ vars.LANE_LIVE_PROBE_ENABLED }}
+        run: |
+          if [[ "$LOOP_ENABLED" != "true" ]]; then echo "::error title=live-probe::LOOP_ENABLED was switched off after the guard job; nothing is run"; exit 1; fi
+          if [[ -n "$LANE_LIVE_PROBE_ENABLED" && "$LANE_LIVE_PROBE_ENABLED" != "true" ]]; then echo "::error title=live-probe::the live-probe lane was switched off after the guard job; nothing is run"; exit 1; fi
+      - name: Check the inputs
+        env:
+          SHARD_ID: ${{ inputs.shard_id }}
+          ATTEMPT_ID: ${{ inputs.attempt_id }}
+          ITEMS: ${{ inputs.items }}
+        run: |
+          # Whole-string checks: a newline or control character anywhere fails the match. corpus/live-probe.mjs
+          # checks the items in full (JSON, 1 to 10 entries, run_key, fence) before anything is read.
+          id_re='^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$'
+          items_re='^\[[^[:cntrl:]]+\]$'
+          if [[ ! "$SHARD_ID" =~ $id_re ]]; then echo "::error title=live-probe::shard_id is malformed"; exit 1; fi
+          if [[ ! "$ATTEMPT_ID" =~ $id_re ]]; then echo "::error title=live-probe::attempt_id is malformed"; exit 1; fi
+          if [[ ! "$ITEMS" =~ $items_re ]] || [ "${#ITEMS}" -gt 60000 ]; then echo "::error title=live-probe::items must be one line of JSON, a list of at most 60000 characters"; exit 1; fi
+      - id: deadline
+        name: Deadline for the subjects
+        run: echo "at=$(( $(date +%s) + 34 * 60 ))" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          package-manager-cache: false
+      - name: Check out the sandbox (isokron-ai/mcp-surface-corpus)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: isokron-ai/mcp-surface-corpus
+          ref: ${{ env.SURFACE_CORPUS_REF }}
+          path: surface-corpus
+          persist-credentials: false
+      - name: Check out the seed list and worker kit (isokron-ai/tool-qa)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: isokron-ai/tool-qa
+          ref: ${{ env.WORKER_KIT_REF }}
+          path: tool-qa
+          sparse-checkout: |
+            history/seed-v1.json
+            worker-kit/
+            ingest/
+            scripts/lib/yaml-lite.mjs
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      # Before any target, on this runner: the same sandbox guard (gVisor, the firewall, the hostile self test and its
+      # telemetry check), from the commit SURFACE_CORPUS_REF pins. It fails the job unless the verdict is pass.
+      - id: guard
+        name: Sandbox guard on this runner (mcp-surface-corpus sandbox-guard)
+        uses: isokron-ai/mcp-surface-corpus/sandbox-guard@97bd96cae93b894fa3f891e3c05514a7c4bc0432 # SURFACE_CORPUS_REF
+        with:
+          out: ${{ runner.temp }}/live-probe/selftest
+      # Registry and GitHub reads only (JSON, fixed hosts): nothing of a subject is fetched to run here.
+      - id: plan
+        name: Resolve each subject's install method
+        env:
+          SHARD_ID: ${{ inputs.shard_id }}
+          ATTEMPT_ID: ${{ inputs.attempt_id }}
+          ITEMS: ${{ inputs.items }}
+        run: node corpus/live-probe.mjs plan "$RUNNER_TEMP/live-probe" --msc surface-corpus --seed tool-qa/history/seed-v1.json
+      # Every subject runs in the sandbox's containers, never in this shell. The step ends only after the sandbox is
+      # gone: no container or volume at all, no process of uid 65534, no runsc process.
+      - id: sandbox
+        name: Run the controls and subjects in the sandbox
+        env:
+          # Read-only token, for the GitHub API's rate limit when the driver reads repository facts; sent to
+          # api.github.com only, never to a container.
+          GH_TOKEN: ${{ github.token }}
+          DEADLINE: ${{ steps.deadline.outputs.at }}
+          GUARD_VERDICT: ${{ steps.guard.outputs.verdict }}
+          GUARD_SHA: ${{ steps.guard.outputs.sandbox-sha }}
+        run: corpus/live-probe-sandbox.sh "$RUNNER_TEMP/live-probe" surface-corpus "$DEADLINE"
+      - id: bundle
+        name: Check the controls and build the bundles
+        run: node corpus/live-probe.mjs bundle "$RUNNER_TEMP/live-probe"
+      # One step per item (at most 10, the shard size; has_<i> is set for every dispatched item). One item's failed
+      # upload does not stop the others. A control that failed stops the bundle step, and then nothing is uploaded.
+      - name: Seal and upload item 0
+        if: ${{ !cancelled() && steps.bundle.outcome == 'success' && steps.plan.outputs.has_0 == 'true' }}
+        uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # WORKER_KIT_REF
+        with:
+          bundle-dir: ${{ runner.temp }}/live-probe/out/0/bundle
+          meta-file: ${{ runner.temp }}/live-probe/out/0/meta.json
+          attempt-id: ${{ inputs.attempt_id }}
+          item-index: '0'
+          fence: ${{ steps.plan.outputs.fence_0 }}
+          run-key: ${{ steps.plan.outputs.run_key_0 }}
+      - name: Seal and upload item 1
+        if: ${{ !cancelled() && steps.bundle.outcome == 'success' && steps.plan.outputs.has_1 == 'true' }}
+        uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # WORKER_KIT_REF
+        with:
+          bundle-dir: ${{ runner.temp }}/live-probe/out/1/bundle
+          meta-file: ${{ runner.temp }}/live-probe/out/1/meta.json
+          attempt-id: ${{ inputs.attempt_id }}
+          item-index: '1'
+          fence: ${{ steps.plan.outputs.fence_1 }}
+          run-key: ${{ steps.plan.outputs.run_key_1 }}
+      - name: Seal and upload item 2
+        if: ${{ !cancelled() && steps.bundle.outcome == 'success' && steps.plan.outputs.has_2 == 'true' }}
+        uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # WORKER_KIT_REF
+        with:
+          bundle-dir: ${{ runner.temp }}/live-probe/out/2/bundle
+          meta-file: ${{ runner.temp }}/live-probe/out/2/meta.json
+          attempt-id: ${{ inputs.attempt_id }}
+          item-index: '2'
+          fence: ${{ steps.plan.outputs.fence_2 }}
+          run-key: ${{ steps.plan.outputs.run_key_2 }}
+      - name: Seal and upload item 3
+        if: ${{ !cancelled() && steps.bundle.outcome == 'success' && steps.plan.outputs.has_3 == 'true' }}
+        uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # WORKER_KIT_REF
+        with:
+          bundle-dir: ${{ runner.temp }}/live-probe/out/3/bundle
+          meta-file: ${{ runner.temp }}/live-probe/out/3/meta.json
+          attempt-id: ${{ inputs.attempt_id }}
+          item-index: '3'
+          fence: ${{ steps.plan.outputs.fence_3 }}
+          run-key: ${{ steps.plan.outputs.run_key_3 }}
+      - name: Seal and upload item 4
+        if: ${{ !cancelled() && steps.bundle.outcome == 'success' && steps.plan.outputs.has_4 == 'true' }}
+        uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # WORKER_KIT_REF
+        with:
+          bundle-dir: ${{ runner.temp }}/live-probe/out/4/bundle
+          meta-file: ${{ runner.temp }}/live-probe/out/4/meta.json
+          attempt-id: ${{ inputs.attempt_id }}
+          item-index: '4'
+          fence: ${{ steps.plan.outputs.fence_4 }}
+          run-key: ${{ steps.plan.outputs.run_key_4 }}
+      - name: Seal and upload item 5
+        if: ${{ !cancelled() && steps.bundle.outcome == 'success' && steps.plan.outputs.has_5 == 'true' }}
+        uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # WORKER_KIT_REF
+        with:
+          bundle-dir: ${{ runner.temp }}/live-probe/out/5/bundle
+          meta-file: ${{ runner.temp }}/live-probe/out/5/meta.json
+          attempt-id: ${{ inputs.attempt_id }}
+          item-index: '5'
+          fence: ${{ steps.plan.outputs.fence_5 }}
+          run-key: ${{ steps.plan.outputs.run_key_5 }}
+      - name: Seal and upload item 6
+        if: ${{ !cancelled() && steps.bundle.outcome == 'success' && steps.plan.outputs.has_6 == 'true' }}
+        uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # WORKER_KIT_REF
+        with:
+          bundle-dir: ${{ runner.temp }}/live-probe/out/6/bundle
+          meta-file: ${{ runner.temp }}/live-probe/out/6/meta.json
+          attempt-id: ${{ inputs.attempt_id }}
+          item-index: '6'
+          fence: ${{ steps.plan.outputs.fence_6 }}
+          run-key: ${{ steps.plan.outputs.run_key_6 }}
+      - name: Seal and upload item 7
+        if: ${{ !cancelled() && steps.bundle.outcome == 'success' && steps.plan.outputs.has_7 == 'true' }}
+        uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # WORKER_KIT_REF
+        with:
+          bundle-dir: ${{ runner.temp }}/live-probe/out/7/bundle
+          meta-file: ${{ runner.temp }}/live-probe/out/7/meta.json
+          attempt-id: ${{ inputs.attempt_id }}
+          item-index: '7'
+          fence: ${{ steps.plan.outputs.fence_7 }}
+          run-key: ${{ steps.plan.outputs.run_key_7 }}
+      - name: Seal and upload item 8
+        if: ${{ !cancelled() && steps.bundle.outcome == 'success' && steps.plan.outputs.has_8 == 'true' }}
+        uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # WORKER_KIT_REF
+        with:
+          bundle-dir: ${{ runner.temp }}/live-probe/out/8/bundle
+          meta-file: ${{ runner.temp }}/live-probe/out/8/meta.json
+          attempt-id: ${{ inputs.attempt_id }}
+          item-index: '8'
+          fence: ${{ steps.plan.outputs.fence_8 }}
+          run-key: ${{ steps.plan.outputs.run_key_8 }}
+      - name: Seal and upload item 9
+        if: ${{ !cancelled() && steps.bundle.outcome == 'success' && steps.plan.outputs.has_9 == 'true' }}
+        uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # WORKER_KIT_REF
+        with:
+          bundle-dir: ${{ runner.temp }}/live-probe/out/9/bundle
+          meta-file: ${{ runner.temp }}/live-probe/out/9/meta.json
+          attempt-id: ${{ inputs.attempt_id }}
+          item-index: '9'
+          fence: ${{ steps.plan.outputs.fence_9 }}
+          run-key: ${{ steps.plan.outputs.run_key_9 }}
