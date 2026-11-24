@@ -124,7 +124,7 @@ gets its bundle, with the skip recorded. A bundle holds:
 | `observations/static.ndjson` | Field records `commit_sha`, `commit_date` and `registration_provenance` (how the list was read: fidelity, language, counts of tools left out or unreadable). A field that could not be read is `null` with a reason. |
 | `controls/` | The outputs of the two controls below. |
 | `logs/scan.log` | What was done, as codes and counts. |
-| `raw/` | The subject's own text (tool list, file paths, findings with tool names), kept apart from everything above. |
+| `raw/` | The subject's own text (tool list, file paths, findings with tool names), kept apart from everything above. Each file is compact JSON of at most 4 MiB: a list that does not fit keeps the entries that do (`{"truncated": true, "total", "kept", "items"}`), and `results/scan-static.json` lists every cut file in `raw_truncated`. |
 
 The meta file names the subject (`owner/name` and the commit read), the engine version, a digest of the run
 settings, the start and finish times, the skips and the controls.
@@ -134,9 +134,13 @@ says whether it is `retryable`.
 
 - `no_runnable_artifact`, not retryable: asking again will not help. `bad_subject`, `repo_unavailable` (gone,
   private or blocked), `repo_empty`, `no_tools`, `unsupported_language`, `names_only`, `multiple_servers`,
-  `reader_limit`, `list_rejected`, `listing_too_large` or `reader_error`.
+  `reader_limit`, `list_rejected`, `listing_too_large`, `reader_error`, or `bundle_error` (the full bundle could
+  not be built or written, for example over tool-qa's size caps; a minimal one was: results, observations, logs
+  and controls, no subject `raw/`). A 403 counts as `repo_unavailable` unless GitHub marks it as a rate limit
+  (`x-ratelimit-remaining: 0` or `retry-after`).
 - `rate_limited`, retryable: a GitHub rate limit. After one, the rest of the shard is not read and reports it
-  too.
+  too. The shard also stops early, before a subject starts, when GitHub says fewer than three API calls per
+  subject still to read are left.
 - `upstream_unavailable`, retryable: the source could not be read this time. `upstream_error` (5xx or an
   unreadable answer), `read_failed`, `timeout` (90 seconds per subject) or `shard_deadline` (no subject is
   started after 32 minutes; slow upstream calls are what use the budget up).
@@ -144,8 +148,13 @@ says whether it is `retryable`.
 The exact code is in `results/scan-static.json`. When every skip of an item is retryable, tool-qa records it as
 `retry_later` and sends it out again after a backoff (at most three times; then it keeps the skip).
 
-A subject that fails never fails the run. The run fails only on a malformed dispatch or a harness error, and
-then nothing is uploaded.
+A subject that fails never fails the run. Each subject runs in its own worker thread, stopped after 90 seconds
+plus 5 of grace whatever it is doing (its requests go through the main thread). Each item's step outputs
+(`has_<i>`, `fence_<i>`, `run_key_<i>`) are written as soon as its bundle is, after `controls_ok=true`; the scan
+step has its own 37-minute limit, and the upload steps need `controls_ok` and no `controls_failed`, not the scan
+step's success. So a scan step that is stopped still uploads every bundle it finished. The run fails only on a
+malformed dispatch or a harness error (a control that fails says `controls_failed=true` first), and then
+nothing more is uploaded.
 
 ### Controls
 
@@ -156,17 +165,20 @@ give its expected outcome, the run stops and reports nothing.
   list hides an instruction. Its tool count, catalog hash, section grades and check IDs must equal
   `corpus/fixtures/known-answer.json`. A broken reader or grader shows here first. After a deliberate rubric
   change, regenerate the file with `node corpus/scan-static.mjs known-answer > corpus/fixtures/known-answer.json`
-  and review the diff.
+  and review the diff. The fixture is read twice: from its folder, and served as a GitHub repository to the same
+  reader the subjects go through (`fromGitHub`, with a stub fetch and no network). Both must give the answer.
 - **Forgery** (`forgery`, expected `contained`): `corpus/fixtures/forgery/` is read with a fresh random marker
   written into it. Its tool texts pretend to be a result of another attempt and its tool names are identity
-  keys. It is contained when the marker comes back in `raw/` only, and the control output holds neither the
-  marker nor any identity key. Each bundle gets its own marker.
+  keys. It is graded and reported like a subject, through the same result record and bundle builder. It is
+  contained when the marker comes back in `raw/`, and no file the bundle would hold outside `raw/` (nor the control
+  output) holds the marker, an identity key or claim, or a result envelope. Each bundle gets its own marker.
 
 ### Kill switch
 
 The first step checks the repository variable `LOOP_ENABLED`; anything but exactly `true` ends the run with a
 notice, not a failure, before anything is checked out. `corpus/loop-guard.mjs` then applies `LOOP_PAUSE_UNTIL`
 (an ISO 8601 time; the lane does nothing until then, and a value that cannot be read also stops it) and
-`LANE_SCAN_STATIC_ENABLED` (set and not `true` turns this lane off). The env value `WORKER_KIT_REF` in the
+`LANE_SCAN_STATIC_ENABLED` (set and not `true` turns this lane off). The scan job checks `LOOP_ENABLED` and
+`LANE_SCAN_STATIC_ENABLED` again in its first step, since they may change after the guard job. The env value `WORKER_KIT_REF` in the
 workflow must be the tool-qa commit that every worker-kit step uses. While it is the all-zero placeholder, a run
 that would proceed fails at the guard, before anything is read.

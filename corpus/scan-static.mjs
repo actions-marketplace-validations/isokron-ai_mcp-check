@@ -21,11 +21,12 @@
 // written under raw/ only. results/, controls/, observations/ and logs/ hold our own codes, counts, grades and
 // check ids, never a key or a value taken from a subject, and never an attempt identity.
 import { createHash, randomBytes } from 'node:crypto';
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { performance } from 'node:perf_hooks';
+import { Worker, isMainThread } from 'node:worker_threads';
 import { fileURLToPath } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 import M from '../src/engine.js';
@@ -54,6 +55,16 @@ export const SUBJECT_TIMEOUT_MS = 90 * 1000;
 export const SHARD_BUDGET_MS = 32 * 60 * 1000;
 export const STAGE = 'static';
 export const RESULT_PATH = 'results/scan-static.json';
+/**
+ * Size caps (R-SS-01). Each raw/ file is written compact and cut to RAW_FILE_CAP: a list keeps the entries that fit
+ * and says how many there were, and results/ names every file that was cut (raw_truncated). A subject's raw/ holds
+ * at most four such files, so a bundle stays far under tool-qa's caps (worker-kit/contract.mjs: 8 MiB per file,
+ * 64 MiB per bundle). A bundle that still breaks them (or cannot be built or written at all) is replaced by a
+ * minimal one: results, observations, logs and controls, no subject raw/, skipped as bundle_error.
+ */
+export const RAW_FILE_CAP = 4 * 1024 * 1024;
+export const BUNDLE_FILE_CAP = 8 * 1024 * 1024;
+export const BUNDLE_CAP = 60 * 1024 * 1024;
 const SECTIONS = ['spec', 'anthropic', 'openai', 'security', 'quality', 'surface'];
 const FIXTURES = fileURLToPath(new URL('./fixtures/', import.meta.url));
 export const KNOWN_ANSWER_FILE = join(FIXTURES, 'known-answer.json');
@@ -63,7 +74,7 @@ const SHA_RE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 const DATE_TIME_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(\.\d{1,9})?(Z|[+-](\d{2}):(\d{2}))$/;
 
 /** Why a subject has no grades, when that will not change by asking again. bad_subject: not a GitHub owner/name. */
-export const PERMANENT = Object.freeze(['bad_subject', 'repo_unavailable', 'repo_empty', 'no_tools', 'unsupported_language', 'names_only', 'multiple_servers', 'reader_limit', 'list_rejected', 'listing_too_large', 'reader_error']);
+export const PERMANENT = Object.freeze(['bad_subject', 'repo_unavailable', 'repo_empty', 'no_tools', 'unsupported_language', 'names_only', 'multiple_servers', 'reader_limit', 'list_rejected', 'listing_too_large', 'reader_error', 'bundle_error']);
 /** Why a subject has no grades for now; results/ marks the skip retryable. */
 export const TRANSIENT = Object.freeze(['rate_limited', 'upstream_error', 'timeout', 'read_failed', 'shard_deadline']);
 /**
@@ -213,7 +224,8 @@ async function readBody(res, cap) {
 /** An HTTP failure from the GitHub API, as a detail code. */
 export function httpDetail(status, header, body) {
   if (status === 429 || (status === 403 && (header('x-ratelimit-remaining') === '0' || header('retry-after') != null || /rate limit/i.test(body)))) return 'rate_limited';
-  if (status === 404 || status === 410 || status === 451 || (status === 403 && /blocked/i.test(body))) return 'repo_unavailable';
+  // Any other 403 is a refusal of this repository (blocked, or forbidden to us): asking again will not help (R-SS-07).
+  if (status === 404 || status === 410 || status === 451 || status === 403) return 'repo_unavailable';
   return 'upstream_error';
 }
 
@@ -230,13 +242,18 @@ async function ghJson(f, path, token) {
   try { return JSON.parse(await readBody(res, API_CAP)); } catch { throw fail('upstream_error', { status: res.status }); }
 }
 
-/** A failure of the reader (RepoSource.fromGitHub), as a detail code. */
-function readDetail(e, aborted) {
+/**
+ * A failure of the reader (RepoSource.fromGitHub), as a detail code. The reader calls any 403 or 429 a rate limit;
+ * here a 403 is one only when GitHub said so (x-ratelimit-remaining 0, or retry-after) on a refused answer this
+ * subject got (`refused`); otherwise it is a refusal of the repository, which is permanent (R-SS-07).
+ */
+export function readDetail(e, aborted, refused = null) {
   if (aborted || (e && e.name === 'AbortError')) return 'timeout';
-  if (e && e.code === 'rate_limited') return 'rate_limited';
+  const limited = !!refused && (refused.status === 429 || refused.remaining === '0' || refused.retryAfter != null);
+  if (e && (e.status === 429 || ((e.code === 'rate_limited' || e.status === 403) && limited))) return 'rate_limited';
+  if (e && (e.code === 'rate_limited' || e.status === 403)) return 'repo_unavailable';
   if (e && e.code === 'incomplete') return 'read_failed';
   if (e && e.code === 'too_large') return 'listing_too_large';
-  if (e && (e.status === 403 || e.status === 429)) return 'rate_limited';
   if (e && Number.isInteger(e.status)) return 'upstream_error';
   if (e && (e.name === 'SyntaxError' || (e.name === 'TypeError' && /fetch failed|network/i.test(String(e.message))))) return 'upstream_error';
   return 'reader_error';
@@ -261,7 +278,15 @@ export async function scanSubject(subject, { fetch: fetchImpl = globalThis.fetch
     repository: null, commit: null, listing: null, list: null, grade: null, raw: {},
   };
   const ctl = new AbortController();
-  const f = (url, init = {}) => fetchImpl(url, { ...init, signal: ctl.signal });
+  let refused = null; // the last 403 or 429 this subject got, with GitHub's rate-limit headers
+  const f = async (url, init = {}) => {
+    const res = await fetchImpl(url, { ...init, signal: ctl.signal });
+    if (res && (res.status === 403 || res.status === 429)) {
+      const h = (k) => (res.headers && typeof res.headers.get === 'function' ? res.headers.get(k) : null);
+      refused = { status: res.status, remaining: h('x-ratelimit-remaining'), retryAfter: h('retry-after') };
+    }
+    return res;
+  };
   let phase = 'repo';
   const work = (async () => {
     const [owner, name] = subject.split('/');
@@ -289,7 +314,7 @@ export async function scanSubject(subject, { fetch: fetchImpl = globalThis.fetch
     phase = 'read';
     let r;
     try { r = await Repo.fromGitHub('github.com/' + full + '/tree/' + sha, { fetch: f, githubToken: token || undefined, noFallback: true }); } catch (e) {
-      throw fail(readDetail(e, ctl.signal.aborted), { status: Number.isInteger(e && e.status) ? e.status : undefined, errorName: e && e.name });
+      throw fail(readDetail(e, ctl.signal.aborted, refused), { status: Number.isInteger(e && e.status) ? e.status : undefined, errorName: e && e.name });
     }
     const s = r.scanned || {};
     out.listing = { via: r.via === 'github' ? 'github' : null, truncated: !!r.truncated, source_files: Number.isInteger(s.sourceTotal) ? s.sourceTotal : null, files_read: Number.isInteger(s.read) ? s.read : Number.isInteger(s.source) ? s.source : null, budget_hit: !!s.budgetHit };
@@ -356,9 +381,49 @@ const answerOf = (summary) => ({
   checks: Object.keys(summary.check_counts).sort(),
 });
 
-/** The known-answer control's answer, read and graded from corpus/fixtures/known-answer/. */
-export async function knownAnswer() {
-  const r = await Repo.fromDirectory(join(FIXTURES, 'known-answer'));
+/** A commit id for the known-answer fixture served as a GitHub repository (any 40 hex will do: nothing is fetched). */
+const FIXTURE_SHA = 'f'.repeat(40);
+const FIXTURE_REPO = 'isokron-fixture/known-answer';
+
+/**
+ * A fetch that serves a folder as the GitHub repository FIXTURE_REPO at FIXTURE_SHA: the recursive tree from the
+ * API and each file from raw.githubusercontent.com, the two hosts the reader uses. No network (R-SS-04).
+ */
+export function fixtureFetch(dir) {
+  const paths = [];
+  const walk = (abs, rel) => {
+    for (const e of readdirSync(abs, { withFileTypes: true }).sort((x, y) => (x.name < y.name ? -1 : 1))) {
+      const r = rel ? rel + '/' + e.name : e.name;
+      if (e.isDirectory()) walk(join(abs, e.name), r);
+      else if (e.isFile()) paths.push(r);
+    }
+  };
+  walk(dir, '');
+  const tree = { sha: FIXTURE_SHA, truncated: false, tree: paths.map((p) => ({ path: p, type: 'blob', size: statSync(join(dir, ...p.split('/'))).size })) };
+  const rawBase = 'https://raw.githubusercontent.com/' + FIXTURE_REPO + '/' + FIXTURE_SHA + '/';
+  return async (url) => {
+    const u = String(url);
+    if (u === API + '/repos/' + FIXTURE_REPO + '/git/trees/' + FIXTURE_SHA + '?recursive=1') {
+      return new Response(JSON.stringify(tree), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    if (u.startsWith(rawBase)) {
+      const rel = u.slice(rawBase.length).split('/').map(decodeURIComponent).join('/');
+      if (paths.includes(rel)) return new Response(readFileSync(join(dir, ...rel.split('/'))), { status: 200 });
+    }
+    return new Response('not found', { status: 404 });
+  };
+}
+
+/**
+ * The known-answer control's answer, read and graded from corpus/fixtures/known-answer/: from the folder
+ * (via 'directory'), or served as a GitHub repository through fromGitHub, the reader the subjects go through
+ * (via 'github').
+ */
+export async function knownAnswer({ via = 'directory' } = {}) {
+  const dir = join(FIXTURES, 'known-answer');
+  const r = via === 'github'
+    ? await Repo.fromGitHub('github.com/' + FIXTURE_REPO + '/tree/' + FIXTURE_SHA, { fetch: fixtureFetch(dir), noFallback: true })
+    : await Repo.fromDirectory(dir);
   const u = usableList(r);
   if (!u.candidate) throw new Error('known-answer fixture: no list read (' + u.problem + ')');
   return answerOf(gradeCandidate(u.candidate).summary);
@@ -369,12 +434,16 @@ export async function knownAnswerFile() {
   return { format: CONTROL_FORMAT, control: 'known-answer', rubric_version: M.RUBRIC_VERSION, answer: await knownAnswer() };
 }
 
-/** { control, files }: kind known_bad (the fixture hides an instruction), expected "match". */
+/**
+ * { control, files }: kind known_bad (the fixture hides an instruction), expected "match": the fixture read from
+ * its folder and read through fromGitHub must both give the committed answer.
+ */
 export async function knownAnswerControl({ expectedFile = KNOWN_ANSWER_FILE } = {}) {
   const expected = JSON.parse(readFileSync(expectedFile, 'utf8')).answer;
   const observed = await knownAnswer();
-  const match = isDeepStrictEqual(observed, expected);
-  const output = { format: CONTROL_FORMAT, control: 'known-answer', engine_version: VERSION, rubric_version: M.RUBRIC_VERSION, match, expected, observed };
+  const observedGithub = await knownAnswer({ via: 'github' });
+  const match = isDeepStrictEqual(observed, expected) && isDeepStrictEqual(observedGithub, expected);
+  const output = { format: CONTROL_FORMAT, control: 'known-answer', engine_version: VERSION, rubric_version: M.RUBRIC_VERSION, match, expected, observed, observed_github: observedGithub };
   return {
     control: { kind: 'known_bad', expected: 'match', observed: match ? 'match' : 'mismatch', output: 'controls/known-answer.json' },
     files: { 'controls/known-answer.json': json(output) },
@@ -388,32 +457,73 @@ function keysOf(v, out = new Set()) {
   return out;
 }
 const IDENTITY_KEY = (k) => /^(attempt_?id|run_?key|fence|fencing_?(no|number)|fence_?token)$/.test(String(k).toLowerCase().replace(/[-\s]/g, '_'));
+// What tool-qa's ingest takes for an identity claim in text (ingest/forgery.mjs TEXT_CLAIM_RE).
+const TEXT_CLAIM_RE = /["']?\b(attempt[_-]?id|run[_-]?key|fencing[_-]?(?:no|number)|fence)\b["']?\s*[:=]\s*["']?([A-Za-z0-9._-]{1,128})/i;
+
+/** What a bundle file outside raw/ shows that it must not: the marker, an identity key or claim, an envelope. */
+function leakIn(path, text, marker) {
+  if (text.includes(marker)) return 'marker';
+  let docs = null;
+  try {
+    if (path.endsWith('.json')) docs = [JSON.parse(text)];
+    else if (path.endsWith('.ndjson')) docs = text.split('\n').filter(Boolean).map((l) => JSON.parse(l));
+  } catch { docs = null; }
+  if (!docs) return TEXT_CLAIM_RE.test(text) ? 'identity_claim' : null;
+  for (const d of docs) {
+    const keys = keysOf(d);
+    if ([...keys].some(IDENTITY_KEY)) return 'identity_key';
+    if (keys.has('schema_version') && keys.has('files')) return 'envelope';
+  }
+  return null;
+}
+
+/** A scan of what the reader read (`r`), as scanSubject records a graded subject; for the controls. */
+function scanOfRead(r) {
+  const u = usableList(r);
+  const s = r.scanned || {};
+  const scan = { ...notRead('no_tools'), raw: {} };
+  scan.listing = { via: r.via === 'github' ? 'github' : null, truncated: !!r.truncated, source_files: Number.isInteger(s.sourceTotal) ? s.sourceTotal : null, files_read: Number.isInteger(s.read) ? s.read : Number.isInteger(s.source) ? s.source : null, budget_hit: !!s.budgetHit };
+  scan.raw.scan = { scanned: r.scanned || null, hints: r.hints || null };
+  if (!u.candidate) return scan;
+  scan.raw.tools = u.candidate.tools;
+  const g = gradeCandidate(u.candidate);
+  Object.assign(scan, { status: 'graded', detail: null, retryable: false, skip_reason: null, grade: g.summary, list: provenanceOf(u.candidate, r, g.summary.tool_count) });
+  scan.raw.report = { provenance: repoProvenance(u.candidate).provenance, files: u.candidate.files || [u.candidate.path], findings: g.report.findings };
+  return scan;
+}
 
 /**
- * The forgery control: corpus/fixtures/forgery/ with a fresh marker, read and graded like a subject. Its tool texts
- * are a result envelope of another attempt and its names are identity keys. Contained: the marker came back in the
- * captured list (raw/control-forgery/), and the output holds neither the marker nor any identity key or envelope.
+ * The forgery control: corpus/fixtures/forgery/ with a fresh marker, read, graded and reported like a subject,
+ * through resultOf and buildBundle (R-SS-03). Its tool texts are a result envelope of another attempt and its names
+ * are identity keys. Contained: the marker came back in raw/, and no file the bundle would hold outside raw/ (nor
+ * the control output) holds the marker, an identity key or claim, or an envelope.
  */
 export async function forgeryControl({ marker = newMarker(), tmp = tmpdir() } = {}) {
   if (!MARKER_RE.test(marker)) throw new Error('forgery control: bad marker');
   const dir = mkdtempSync(join(tmp, 'scan-static-forgery-'));
   try {
     for (const name of readdirSync(join(FIXTURES, 'forgery'))) writeFileSync(join(dir, name), readFileSync(join(FIXTURES, 'forgery', name), 'utf8').split('__MARKER__').join(marker));
-    const r = await Repo.fromDirectory(dir);
-    const u = usableList(r);
-    const rawText = json({ tools: u.candidate ? u.candidate.tools : null });
-    let output = { format: CONTROL_FORMAT, control: 'forgery', status: 'not_read' };
-    if (u.candidate) {
-      const g = gradeCandidate(u.candidate).summary;
-      output = { format: CONTROL_FORMAT, control: 'forgery', status: 'graded', tool_count: g.tool_count, catalog_hash: g.catalog_hash, grades: answerOf(g).grades, check_counts: g.check_counts, findings: g.findings };
-    }
+    const scan = scanOfRead(await Repo.fromDirectory(dir));
+    const at = new Date(0).toISOString();
+    const item = { index: 0, subject: 'control/forgery', repo: 'control/forgery', run_key: '0'.repeat(64), fence: 1 };
+    const { files } = buildBundle({ item, scan, controls: [], startedAt: at, finishedAt: at });
+    const outside = Object.entries(files).filter(([p]) => !p.startsWith('raw/'));
+    const leaks = outside.map(([p, text]) => [p, leakIn(p, text, marker)]).filter(([, why]) => why);
+    const rawHasMarker = Object.entries(files).some(([p, text]) => p.startsWith('raw/') && text.includes(marker));
+    const g = scan.grade;
+    const output = {
+      format: CONTROL_FORMAT, control: 'forgery', status: scan.status,
+      tool_count: g ? g.tool_count : null, catalog_hash: g ? g.catalog_hash : null, grades: g ? answerOf(g).grades : null,
+      check_counts: g ? g.check_counts : null, findings: g ? g.findings : null,
+      files_checked: outside.length, leaks: leaks.map(([p, why]) => ({ path: p, why })),
+    };
     const outText = json(output);
-    const keys = keysOf(output);
-    const observed = !u.candidate || output.tool_count < 2 || !rawText.includes(marker) ? 'not_read'
-      : outText.includes(marker) || [...keys].some(IDENTITY_KEY) || (keys.has('schema_version') && keys.has('files')) ? 'leaked' : 'contained';
+    const outLeak = leakIn('controls/forgery.json', outText, marker);
+    const observed = scan.status !== 'graded' || g.tool_count < 2 || !rawHasMarker ? 'not_read'
+      : leaks.length || outLeak ? 'leaked' : 'contained';
     return {
       control: { kind: 'forgery', expected: 'contained', observed, output: 'controls/forgery.json', marker },
-      files: { 'controls/forgery.json': outText, 'raw/control-forgery/tools.json': rawText },
+      files: { 'controls/forgery.json': outText, 'raw/control-forgery/tools.json': rawText({ tools: scan.raw.tools ?? null }).text },
     };
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -466,22 +576,134 @@ export function resultOf(item, scan, scannedAt) {
 
 const logLine = (at, text) => at + ' ' + STAGE + ': ' + text;
 
-/** { files, meta } of one reported item. files: bundle path -> text. */
-export function buildBundle({ item, scan, controls, startedAt, finishedAt, digest = settingsDigest() }) {
+const OVER = Symbol('over the cap');
+
+/**
+ * Compact JSON of `value`, or null as soon as it would pass `cap` characters. It never builds more than about `cap`
+ * characters, however large the value is once expanded (a constant shared by every tool serialises once per use).
+ */
+export function jsonUpTo(value, cap) {
+  const parts = [];
+  let n = 0;
+  const put = (s) => {
+    n += s.length;
+    if (n > cap) throw OVER;
+    parts.push(s);
+  };
+  const walk = (v, depth) => {
+    if (depth > 200) throw OVER;
+    if (typeof v === 'string') {
+      if (v.length > cap - n) throw OVER;
+      put(JSON.stringify(v));
+    } else if (v === null || typeof v === 'boolean' || typeof v === 'number') {
+      put(JSON.stringify(v));
+    } else if (Array.isArray(v)) {
+      put('[');
+      for (let i = 0; i < v.length; i++) {
+        if (i) put(',');
+        const x = v[i];
+        walk(x === undefined || typeof x === 'function' || typeof x === 'symbol' ? null : x, depth + 1);
+      }
+      put(']');
+    } else if (typeof v === 'object') {
+      if (typeof v.toJSON === 'function') { walk(v.toJSON(), depth); return; }
+      put('{');
+      let first = true;
+      for (const k of Object.keys(v)) {
+        const x = v[k];
+        if (x === undefined || typeof x === 'function' || typeof x === 'symbol') continue;
+        put((first ? '' : ',') + JSON.stringify(k) + ':');
+        first = false;
+        walk(x, depth + 1);
+      }
+      put('}');
+    } else {
+      put('null');
+    }
+  };
+  try {
+    walk(value, 0);
+    return parts.join('');
+  } catch (e) {
+    if (e === OVER) return null;
+    throw e;
+  }
+}
+
+/**
+ * One raw/ file (R-SS-01): compact JSON of `value`, at most `cap` bytes. When it does not fit, a list keeps the
+ * entries that do, as {truncated: true, cap_bytes, total, kept, items}; anything else keeps nothing.
+ * @returns {{ text: string, truncated: boolean }}
+ */
+export function rawText(value, cap = RAW_FILE_CAP) {
+  const whole = jsonUpTo(value, cap - 1);
+  if (whole !== null && Buffer.byteLength(whole) < cap) return { text: whole + '\n', truncated: false };
+  const list = Array.isArray(value) ? value : null;
+  const kept = [];
+  let used = 160; // the wrapper
+  if (list) {
+    for (const x of list) {
+      const s = jsonUpTo(x === undefined ? null : x, cap - used);
+      if (s === null) break;
+      const b = Buffer.byteLength(s) + 1;
+      if (used + b > cap) break;
+      kept.push(s);
+      used += b;
+    }
+  }
+  return {
+    text: '{"truncated":true,"cap_bytes":' + cap + ',"total":' + (list ? list.length : 'null') + ',"kept":' + kept.length + ',"items":[' + kept.join(',') + ']}\n',
+    truncated: true,
+  };
+}
+
+/** The raw/ files of one subject: { files, truncated } (paths of the files that were cut). */
+function rawFiles(raw, cap) {
   const files = {};
-  files[RESULT_PATH] = json(resultOf(item, scan, finishedAt));
+  const truncated = [];
+  const add = (path, value) => {
+    if (value === undefined) return;
+    const r = rawText(value, cap);
+    files[path] = r.text;
+    if (r.truncated) truncated.push(path);
+  };
+  if (raw.repo) add('raw/subject/repo.json', raw.repo);
+  add('raw/subject/tools.json', raw.tools);
+  if (raw.scan) add('raw/subject/scan.json', raw.scan);
+  if (raw.report) add('raw/subject/report.json', raw.report);
+  return { files, truncated };
+}
+
+/** The bundle breaks a size cap of tool-qa's (thrown by buildBundle; the item then gets a minimal bundle). */
+export class BundleTooLarge extends Error {
+  constructor(message) { super(message); this.name = 'BundleTooLarge'; }
+}
+
+/**
+ * { files, meta } of one reported item. files: bundle path -> text. Throws BundleTooLarge when a file is over
+ * fileCap or the files are over bundleCap together.
+ */
+export function buildBundle({ item, scan, controls, startedAt, finishedAt, digest = settingsDigest(), rawCap = RAW_FILE_CAP, fileCap = BUNDLE_FILE_CAP, bundleCap = BUNDLE_CAP }) {
+  const raw = rawFiles(scan.raw || {}, rawCap);
+  const files = {};
+  files[RESULT_PATH] = json({ ...resultOf(item, scan, finishedAt), raw_truncated: raw.truncated });
   files['observations/static.ndjson'] = observationsOf(scan);
   const log = [logLine(startedAt, 'started; mcp-check ' + VERSION + ', rubric ' + M.RUBRIC_VERSION)];
   if (scan.commit) log.push(logLine(finishedAt, 'default branch head read'));
   if (scan.listing) log.push(logLine(finishedAt, 'listing via ' + scan.listing.via + (scan.listing.truncated ? ' (cut short by GitHub)' : '') + '; ' + scan.listing.files_read + ' of ' + scan.listing.source_files + ' source files read'));
   log.push(logLine(finishedAt, scan.status === 'graded' ? 'graded: ' + scan.grade.tool_count + ' tools' : 'skipped: ' + scan.detail + (scan.retryable ? ' (retryable)' : '')));
+  if (raw.truncated.length) log.push(logLine(finishedAt, 'raw files cut to ' + rawCap + ' bytes: ' + raw.truncated.join(', ')));
   for (const c of controls) log.push(logLine(finishedAt, 'control ' + c.control.kind + ': ' + c.control.observed));
   files['logs/scan.log'] = log.join('\n') + '\n';
-  if (scan.raw.repo) files['raw/subject/repo.json'] = json(scan.raw.repo);
-  if (scan.raw.tools !== undefined) files['raw/subject/tools.json'] = json(scan.raw.tools);
-  if (scan.raw.scan) files['raw/subject/scan.json'] = json(scan.raw.scan);
-  if (scan.raw.report) files['raw/subject/report.json'] = json(scan.raw.report);
+  Object.assign(files, raw.files);
   for (const c of controls) Object.assign(files, c.files);
+  let total = 0;
+  for (const [p, text] of Object.entries(files)) {
+    const n = Buffer.byteLength(text);
+    if (n > fileCap) throw new BundleTooLarge(p + ' would be ' + n + ' bytes, over ' + fileCap);
+    total += n;
+  }
+  if (total > bundleCap) throw new BundleTooLarge('the bundle would be ' + total + ' bytes, over ' + bundleCap);
   const meta = {
     subject: { id: item.subject, repo: item.repo, sha: scan.commit ? scan.commit.sha : null },
     tools: [{ name: 'mcp-check', version: VERSION }],
@@ -495,7 +717,7 @@ export function buildBundle({ item, scan, controls, startedAt, finishedAt, diges
   return { files, meta };
 }
 
-function writeItem(dir, { files, meta }) {
+export function writeItem(dir, { files, meta }) {
   for (const [p, text] of Object.entries(files)) {
     const file = join(dir, 'bundle', ...p.split('/'));
     mkdirSync(dirname(file), { recursive: true });
@@ -505,41 +727,171 @@ function writeItem(dir, { files, meta }) {
 }
 
 /**
- * Scans a shard and writes <out>/<i>/ for every item. Returns { outputs, items } where outputs are the
- * step output lines and items says, per item, what happened (no grades). Throws InputProblem on malformed inputs
- * (before anything is read or written) and Error on a harness problem.
+ * Build and write one item's bundle; never throws for the subject's sake (R-SS-01). When the full bundle cannot be
+ * built or written (too large, a string past what the runtime can hold, a write error), the folder is cleared and a
+ * minimal bundle written instead: results, observations, logs and controls, no subject raw/, a non-retryable
+ * bundle_error skip. Only a failure of that minimal bundle throws (a harness error).
+ * @returns {{ scan: object, fallback: string|null }} the scan as reported, and why the fallback was used
  */
-export async function runShard({ shardId, attemptId, items, out, fetch: fetchImpl = globalThis.fetch, token = null, now = () => new Date(), marker = newMarker, tmp = tmpdir(), log = () => {}, budgetMs = SHARD_BUDGET_MS, timeoutMs = SUBJECT_TIMEOUT_MS, clock = () => performance.now(), knownAnswerExpected = KNOWN_ANSWER_FILE }) {
+export function reportItem(dir, { item, scan, controls, startedAt, finishedAt, digest, write = writeItem, ...caps }) {
+  try {
+    write(dir, buildBundle({ item, scan, controls, startedAt, finishedAt, digest, ...caps }));
+    return { scan, fallback: null };
+  } catch (e) {
+    rmSync(dir, { recursive: true, force: true });
+    const why = safeName(e && e.name) || 'Error';
+    const minimal = { ...notRead('bundle_error'), error_name: why, commit: scan.commit, repository: scan.repository };
+    writeItem(dir, buildBundle({ item, scan: minimal, controls, startedAt, finishedAt, digest }));
+    return { scan: minimal, fallback: why };
+  }
+}
+
+// ------------------------------------------------------------------ one subject in its own thread
+
+const WORKER_URL = new URL('./scan-subject-worker.mjs', import.meta.url);
+/** A subject's thread gets this long past SUBJECT_TIMEOUT_MS to stop on its own before it is terminated. */
+export const SUBJECT_GRACE_MS = 5 * 1000;
+/** Largest answer body handed to a subject's thread (the reader's own caps are lower). */
+const PROXY_BODY_CAP = 16 * 1024 * 1024;
+const PASSED_HEADERS = ['content-length', 'content-type', 'x-ratelimit-remaining', 'x-ratelimit-limit', 'x-ratelimit-reset', 'retry-after', 'location', 'etag'];
+
+async function readCappedBody(res, cap) {
+  if (res.body && typeof res.body.getReader === 'function') {
+    const reader = res.body.getReader();
+    const chunks = [];
+    let n = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      n += value.byteLength;
+      chunks.push(value);
+      if (n > cap) { try { await reader.cancel(); } catch { /* ignore */ } break; }
+    }
+    return Buffer.concat(chunks.map((c) => Buffer.from(c.buffer, c.byteOffset, c.byteLength)));
+  }
+  if (typeof res.arrayBuffer === 'function') return Buffer.from(await res.arrayBuffer()).subarray(0, cap + 1);
+  return Buffer.from(String(await res.text()).slice(0, cap + 1));
+}
+
+/**
+ * scanSubject() in a worker thread, terminated at timeoutMs + SUBJECT_GRACE_MS whatever it is doing (R-SS-02): the
+ * subject's own timer cannot interrupt synchronous work (reading or grading a crafted source), terminate() can.
+ * The thread has no environment and no network of its own: its requests go through `fetch` here (so the caller
+ * sees every answer, onResponse(url, status, header)). Never throws.
+ */
+export function scanInWorker(subject, { fetch: fetchImpl = globalThis.fetch, token = null, timeoutMs = SUBJECT_TIMEOUT_MS, graceMs = SUBJECT_GRACE_MS, onResponse = () => {}, workerUrl = WORKER_URL } = {}) {
+  return new Promise((resolve) => {
+    const inflight = new Map();
+    let settled = false;
+    let worker;
+    let timer = null;
+    const finish = (out) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      for (const c of inflight.values()) c.abort();
+      if (worker) worker.terminate().catch(() => {});
+      resolve(out);
+    };
+    const failed = (detail, name) => ({ ...notRead(detail), error_name: safeName(name) });
+    try {
+      worker = new Worker(workerUrl, { workerData: { subject, token, timeoutMs }, env: {} });
+    } catch (e) {
+      finish(failed('reader_error', e && e.name));
+      return;
+    }
+    timer = setTimeout(() => finish(notRead('timeout')), timeoutMs + graceMs);
+    worker.on('message', (m) => {
+      if (!m || typeof m !== 'object') return;
+      if (m.type === 'done') { finish(m.out); return; }
+      if (m.type === 'abort') { inflight.get(m.id)?.abort(); inflight.delete(m.id); return; }
+      if (m.type !== 'fetch') return;
+      const ctl = new AbortController();
+      inflight.set(m.id, ctl);
+      (async () => {
+        try {
+          const res = await fetchImpl(m.url, { headers: m.headers || {}, redirect: m.redirect || 'follow', credentials: 'omit', signal: ctl.signal });
+          const get = (k) => (res.headers && typeof res.headers.get === 'function' ? res.headers.get(k) : null);
+          const headers = {};
+          for (const k of PASSED_HEADERS) { const v = get(k); if (v !== null && v !== undefined) headers[k] = String(v); }
+          onResponse(m.url, res.status, get);
+          const body = res.status === 204 || res.status === 304 ? null : await readCappedBody(res, PROXY_BODY_CAP);
+          if (!settled) worker.postMessage({ type: 'response', id: m.id, status: res.status, headers, body });
+        } catch (e) {
+          if (!settled) worker.postMessage({ type: 'response', id: m.id, error: { name: String((e && e.name) || 'Error'), message: String((e && e.message) || e).slice(0, 300) } });
+        } finally {
+          inflight.delete(m.id);
+        }
+      })();
+    });
+    worker.once('error', (e) => finish(failed('reader_error', e && e.name)));
+    worker.once('exit', () => finish(failed('reader_error', 'WorkerExit')));
+  });
+}
+
+/**
+ * Scans a shard and writes <out>/<i>/ for every item. Returns { outputs, items } where outputs are the step output
+ * lines and items says, per item, what happened (no grades). onOutputs(lines) is called with each item's lines as
+ * soon as its bundle is written (R-SS-02), and with controls_ok=true once the controls passed, so the uploads can
+ * start on whatever was written if the step is stopped. A control that fails later calls it with
+ * controls_failed=true before throwing. Throws InputProblem on malformed inputs (before anything is read or
+ * written) and Error on a harness problem.
+ */
+export async function runShard({ shardId, attemptId, items, out, fetch: fetchImpl = globalThis.fetch, token = null, now = () => new Date(), marker = newMarker, tmp = tmpdir(), log = () => {}, budgetMs = SHARD_BUDGET_MS, timeoutMs = SUBJECT_TIMEOUT_MS, clock = () => performance.now(), knownAnswerExpected = KNOWN_ANSWER_FILE, onOutputs = () => {}, isolate = true, workerUrl, graceMs = SUBJECT_GRACE_MS, caps = {}, write }) {
   const input = parseInputs({ shardId, attemptId, items });
   if (existsSync(out) && readdirSync(out).length) throw new Error('the output folder is not empty');
   const t0 = clock();
   const digest = settingsDigest();
+  const outputs = [];
+  const emit = (lines) => { outputs.push(...lines); onOutputs(lines); };
+  const controlFailed = (what) => {
+    emit(['controls_failed=true']);
+    return new Error(what);
+  };
   // The controls run before any subject: a pipeline that fails them reports nothing.
   const known = await knownAnswerControl({ expectedFile: knownAnswerExpected });
-  if (known.control.observed !== known.control.expected) throw new Error('the known-answer control gave ' + known.control.observed + ': the grades of corpus/fixtures/known-answer/ are not the ones in known-answer.json');
+  if (known.control.observed !== known.control.expected) throw controlFailed('the known-answer control gave ' + known.control.observed + ': the grades of corpus/fixtures/known-answer/ are not the ones in known-answer.json');
   const first = await forgeryControl({ marker: marker(), tmp });
-  if (first.control.observed !== first.control.expected) throw new Error('the forgery control gave ' + first.control.observed);
-  const outputs = [];
+  if (first.control.observed !== first.control.expected) throw controlFailed('the forgery control gave ' + first.control.observed);
+  emit(['controls_ok=true']);
+  // What GitHub says is left of the token's API budget (R-SS-07).
+  let remaining = null;
+  const onResponse = (url, status, get) => {
+    if (!String(url).startsWith(API + '/')) return;
+    const r = Number(get('x-ratelimit-remaining'));
+    if (get('x-ratelimit-remaining') !== null && Number.isFinite(r)) remaining = r;
+  };
+  const tracked = async (url, init) => {
+    const res = await fetchImpl(url, init);
+    onResponse(url, res && res.status, (k) => (res && res.headers && typeof res.headers.get === 'function' ? res.headers.get(k) : null));
+    return res;
+  };
   const done = [];
   let stop = null;
   for (const item of input.items) {
     const i = item.index;
     if (!stop && clock() - t0 > budgetMs) stop = 'shard_deadline';
+    // Each subject takes a few API calls: stop before the budget runs dry, not after (R-SS-07).
+    const left = input.items.filter((x) => x.index >= i && x.repo).length;
+    if (!stop && item.repo && remaining !== null && remaining < 3 * left) stop = 'rate_limited';
     let scan;
     const startedAt = now().toISOString();
     if (stop) scan = notRead(stop);
     else if (!item.repo) scan = notRead('bad_subject');
     else {
-      scan = await scanSubject(item.repo, { fetch: fetchImpl, token, timeoutMs });
+      scan = isolate
+        ? await scanInWorker(item.repo, { fetch: fetchImpl, token, timeoutMs, graceMs, onResponse, workerUrl })
+        : await scanSubject(item.repo, { fetch: tracked, token, timeoutMs });
       if (scan.detail === 'rate_limited') stop = 'rate_limited'; // the next subjects would hit it too: they are not read
     }
     const finishedAt = now().toISOString();
     const forgery = i === input.items[0].index ? first : await forgeryControl({ marker: marker(), tmp });
-    if (forgery.control.observed !== forgery.control.expected) throw new Error('the forgery control gave ' + forgery.control.observed);
-    writeItem(join(out, String(i)), buildBundle({ item, scan, controls: [forgery, known], startedAt, finishedAt, digest }));
-    outputs.push('has_' + i + '=true', 'fence_' + i + '=' + item.fence, 'run_key_' + i + '=' + item.run_key);
-    log('item ' + i + ': ' + scan.status + (scan.detail ? ' (' + scan.detail + (scan.retryable ? ', retryable' : '') + ')' : ''));
-    done.push({ index: i, status: scan.status, detail: scan.detail });
+    if (forgery.control.observed !== forgery.control.expected) throw controlFailed('the forgery control gave ' + forgery.control.observed);
+    const reported = reportItem(join(out, String(i)), { item, scan, controls: [forgery, known], startedAt, finishedAt, digest, write, ...caps });
+    emit(['has_' + i + '=true', 'fence_' + i + '=' + item.fence, 'run_key_' + i + '=' + item.run_key]);
+    const s = reported.scan;
+    log('item ' + i + ': ' + s.status + (s.detail ? ' (' + s.detail + (s.retryable ? ', retryable' : '') + ')' : '') + (reported.fallback ? '; full bundle failed (' + reported.fallback + '), minimal bundle written' : ''));
+    done.push({ index: i, status: s.status, detail: s.detail });
   }
   return { outputs, items: done };
 }
@@ -550,12 +902,16 @@ export async function main(argv, env, { fetch: fetchImpl = globalThis.fetch, std
   if (argv.length === 1 && argv[0] === 'known-answer') { stdout.write(json(await knownAnswerFile())); return 0; }
   if (argv.length !== 2 || argv[0] !== 'run') { stdout.write('usage: node corpus/scan-static.mjs run <out-dir> | known-answer\n'); return 2; }
   try {
+    // Each item's outputs go out as soon as its bundle is written (R-SS-02): if the step is stopped part-way, the
+    // upload steps still find every bundle that was finished.
+    const put = (lines) => {
+      const text = lines.length ? lines.join('\n') + '\n' : '';
+      if (env.GITHUB_OUTPUT) appendFileSync(env.GITHUB_OUTPUT, text); else stdout.write(text);
+    };
     const res = await runShard({
       shardId: env.SHARD_ID, attemptId: env.ATTEMPT_ID, items: env.ITEMS, out: argv[1],
-      fetch: fetchImpl, token: env.GITHUB_TOKEN || null, log: (s) => stdout.write(s + '\n'),
+      fetch: fetchImpl, token: env.GITHUB_TOKEN || null, log: (s) => stdout.write(s + '\n'), onOutputs: put,
     });
-    const lines = res.outputs.length ? res.outputs.join('\n') + '\n' : '';
-    if (env.GITHUB_OUTPUT) appendFileSync(env.GITHUB_OUTPUT, lines); else stdout.write(lines);
     stdout.write(res.items.filter((x) => x.status === 'graded').length + ' of ' + res.items.length + ' items graded; every item has a bundle\n');
     return 0;
   } catch (e) {
@@ -565,6 +921,6 @@ export async function main(argv, env, { fetch: fetchImpl = globalThis.fetch, std
   }
 }
 
-if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isMainThread && process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
   process.exitCode = await main(process.argv.slice(2), process.env);
 }

@@ -8,11 +8,13 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync
 import { tmpdir } from 'node:os';
 import { join, relative, sep } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
 import {
   FORMAT, KNOWN_ANSWER_FILE, MARKER_RE, MAX_ITEMS, MAX_ITEMS_CHARS, PERMANENT, RESULT_PATH, SKIP_REASON, TRANSIENT, skipReasonFor,
   InputProblem, buildBundle, forgeryControl, isDateTime, knownAnswerControl, knownAnswerFile, main, observationsOf,
   parseInputs, runShard, scanSubject, settingsDigest,
+  RAW_FILE_CAP, fixtureFetch, httpDetail, jsonUpTo, knownAnswer, notRead, rawText, readDetail, reportItem, scanInWorker, writeItem,
 } from '../corpus/scan-static.mjs';
 import * as guard from '../corpus/loop-guard.mjs';
 // tool-qa's own result contract and ingest checks, at the commit WORKER_KIT_REF pins (test/tool-qa/README.md).
@@ -351,7 +353,7 @@ test('runShard: one bundle per item, failed ones too; a rate limit stops reading
   const logs = [];
   const r = await runShard({ shardId: 's-1', attemptId: 'att-1', items, out, fetch: fakeGithub(subjects, calls), token: TOKEN, log: (s) => logs.push(s) });
   assert.deepEqual(r.items.map((x) => [x.index, x.status, x.detail]), [[0, 'graded', null], [1, 'skipped', 'repo_unavailable'], [2, 'skipped', 'no_tools'], [3, 'skipped', 'bad_subject'], [4, 'skipped', 'rate_limited'], [5, 'skipped', 'rate_limited']]);
-  assert.deepEqual(r.outputs, [0, 1, 2, 3, 4, 5].flatMap((i) => ['has_' + i + '=true', 'fence_' + i + '=' + (10 + i), 'run_key_' + i + '=' + key(i)]));
+  assert.deepEqual(r.outputs, ['controls_ok=true', ...[0, 1, 2, 3, 4, 5].flatMap((i) => ['has_' + i + '=true', 'fence_' + i + '=' + (10 + i), 'run_key_' + i + '=' + key(i)])]);
   assert.deepEqual(readdirSync(out).sort(), ['0', '1', '2', '3', '4', '5']);
   assert.ok(!calls.some((c) => c.url.includes('/o/after')), 'nothing is read after a rate limit');
   assert.ok(!calls.some((c) => c.url.includes('weird')), 'a subject that is not owner/name is not read');
@@ -455,7 +457,7 @@ test('main: exit codes, step outputs in GITHUB_OUTPUT, and no input echoed in an
   const o3 = sink();
   const env = { SHARD_ID: 's', ATTEMPT_ID: 'a', ITEMS: itemsOf(['o/r', 'o/gone']), GITHUB_OUTPUT: ghOut, GITHUB_TOKEN: TOKEN };
   assert.equal(await main(['run', join(dir, 'out')], env, { stdout: o3, fetch: fakeGithub({ 'o/r': { files: jsLiteral } }) }), 0);
-  assert.equal(readFileSync(ghOut, 'utf8'), ['has_0=true', 'fence_0=10', 'run_key_0=' + key(0), 'has_1=true', 'fence_1=11', 'run_key_1=' + key(1)].join('\n') + '\n');
+  assert.equal(readFileSync(ghOut, 'utf8'), ['controls_ok=true', 'has_0=true', 'fence_0=10', 'run_key_0=' + key(0), 'has_1=true', 'fence_1=11', 'run_key_1=' + key(1)].join('\n') + '\n');
   assert.match(o3.text, /1 of 2 items graded; every item has a bundle/);
   assert.ok(!o3.text.includes(TOKEN));
 
@@ -556,4 +558,193 @@ test('a lasting failure keeps its non-retryable skip code', async () => {
   assert.equal(manifest.skips[0].retryable, false);
   for (const d of TRANSIENT) assert.ok(['rate_limited', 'upstream_unavailable'].includes(skipReasonFor(d)), d);
   for (const d of PERMANENT) assert.equal(skipReasonFor(d), 'no_runnable_artifact', d);
+});
+
+// ---- regressions (REGRESSIONS.md) ----
+
+/** A server whose 500 tools all use one large constant schema: about 70 KB of source, 23 MB once expanded. */
+function sharedConstantRepo(tools = 500) {
+  const props = Array.from({ length: 300 }, (_, i) => `    p${i}: { type: 'string', description: 'Field ${i} of the shared request shape, described at some length here.' },`).join('\n');
+  const list = Array.from({ length: tools }, (_, i) => `  { name: 'tool_${i}', description: 'Tool ${i}.', inputSchema: SHARED },`).join('\n');
+  return {
+    'package.json': '{ "name": "shared-fixture", "private": true, "dependencies": { "@modelcontextprotocol/sdk": "1.20.0" } }',
+    'lib/server.js': "const { Server } = require('@modelcontextprotocol/sdk/server/index.js');\n"
+      + "const { ListToolsRequestSchema } = require('@modelcontextprotocol/sdk/types.js');\n"
+      + `const SHARED = {\n  type: 'object',\n  properties: {\n${props}\n  },\n};\nconst TOOLS = [\n${list}\n];\n`
+      + "const server = new Server({ name: 'x', version: '1.0.0' }, { capabilities: { tools: {} } });\n"
+      + 'server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }));\n',
+  };
+}
+
+test('R-SS-01: a constant shared by every tool gives a raw/ file cut to the cap, marked raw_truncated, and a bundle tool-qa accepts', async () => {
+  const files = sharedConstantRepo();
+  assert.ok(files['lib/server.js'].length < 100 * 1024);
+  const out = join(tmp('shared'), 'out');
+  const r = await runShard({ shardId: 's', attemptId: 'att-1', items: itemsOf(['o/shared', 'o/good']), out, fetch: fakeGithub({ 'o/shared': { files }, 'o/good': { files: jsLiteral } }) });
+  // The list is too large to grade (list_rejected), but its raw/ capture is kept, cut to the cap; the shard goes on.
+  assert.deepEqual(r.items.map((x) => [x.status, x.detail]), [['skipped', 'list_rejected'], ['graded', null]], 'both items still report');
+  const bundle = readTree(join(out, '0', 'bundle'));
+  const meta = JSON.parse(readFileSync(join(out, '0', 'meta.json'), 'utf8'));
+  for (const [p, text] of bundle) assert.ok(Buffer.byteLength(text) <= RAW_FILE_CAP + 64 || !p.startsWith('raw/'), p);
+  const tools = bundle.get('raw/subject/tools.json');
+  assert.ok(Buffer.byteLength(tools) <= RAW_FILE_CAP);
+  const cut = JSON.parse(tools);
+  assert.equal(cut.truncated, true);
+  assert.equal(cut.total, 500);
+  assert.ok(cut.kept > 0 && cut.kept < 500 && cut.items.length === cut.kept);
+  assert.equal(JSON.parse(bundle.get(RESULT_PATH)).raw_truncated.includes('raw/subject/tools.json'), true);
+  assertBundle(bundle, meta);
+});
+
+test('R-SS-01: 5,000 tools sharing a constant: no RangeError, the raw file is cut, nothing over the caps', () => {
+  const shared = { type: 'object', properties: Object.fromEntries(Array.from({ length: 300 }, (_, i) => ['p' + i, { type: 'string', description: 'x'.repeat(200) }])) };
+  const scan = { ...notRead('no_tools'), raw: { tools: Array.from({ length: 5000 }, (_, i) => ({ name: 'tool_' + i, inputSchema: shared })) } };
+  // Expanded, that is 5,000 x about 70 KB: hundreds of megabytes, past what one string can hold.
+  const t0 = performance.now();
+  const r = rawText(scan.raw.tools);
+  assert.ok(performance.now() - t0 < 5000);
+  assert.equal(r.truncated, true);
+  assert.ok(Buffer.byteLength(r.text) <= RAW_FILE_CAP);
+  const item = { index: 0, subject: 'o/r', repo: 'o/r', run_key: key(0), fence: 10 };
+  const { files } = buildBundle({ item, scan, controls: [], startedAt: DATE, finishedAt: DATE });
+  assert.deepEqual(JSON.parse(files[RESULT_PATH]).raw_truncated, ['raw/subject/tools.json']);
+  assert.equal(jsonUpTo({ a: [1, 'x', null, true] }, 100), '{"a":[1,"x",null,true]}');
+  assert.equal(jsonUpTo('x'.repeat(50), 10), null);
+});
+
+test('R-SS-01: a bundle that cannot be built or written falls back to a minimal one, and the shard goes on', async () => {
+  const item = { index: 0, subject: 'o/r', repo: 'o/r', run_key: key(0), fence: 10 };
+  const forgery = await forgeryControl({ marker: 'm'.repeat(32) });
+  const known = await knownAnswerControl();
+  const scan = { ...notRead('no_tools'), raw: { tools: [{ name: 'a' }] } };
+  // A write error: the folder is cleared and the minimal bundle written.
+  const dir = join(tmp('fallback'), '0');
+  let n = 0;
+  const flaky = (d, b) => {
+    mkdirSync(join(d, 'bundle', 'raw'), { recursive: true });
+    writeFileSync(join(d, 'bundle', 'raw', 'half-written.json'), '{');
+    n += 1;
+    throw Object.assign(new Error('ENOSPC: no space left on device'), { name: 'Error', code: 'ENOSPC' });
+  };
+  const r = reportItem(dir, { item, scan, controls: [forgery, known], startedAt: DATE, finishedAt: DATE, write: flaky });
+  assert.equal(n, 1);
+  assert.equal(r.fallback, 'Error');
+  assert.equal(r.scan.detail, 'bundle_error');
+  const bundle = readTree(join(dir, 'bundle'));
+  assert.ok(!bundle.has('raw/half-written.json'), 'the half-written bundle is gone');
+  assert.ok(![...bundle.keys()].some((p) => p.startsWith('raw/subject/')), 'no subject raw/');
+  assert.ok(bundle.has(RESULT_PATH) && bundle.has('observations/static.ndjson') && bundle.has('controls/forgery.json'));
+  const meta = JSON.parse(readFileSync(join(dir, 'meta.json'), 'utf8'));
+  assert.deepEqual(meta.skips, [{ stage: 'static', reason: 'no_runnable_artifact', evidence: RESULT_PATH, retryable: false }]);
+  assertBundle(bundle, meta);
+  // Too large: a results file over the per-file cap.
+  const big = reportItem(join(tmp('big'), '0'), { item, scan, controls: [forgery, known], startedAt: DATE, finishedAt: DATE, fileCap: 1000 });
+  assert.equal(big.fallback, 'BundleTooLarge');
+  // In a shard: the failing item gets its minimal bundle, the next one its full bundle.
+  const out = join(tmp('fallback-shard'), 'out');
+  let calls = 0;
+  const once = (d, b) => { calls += 1; if (calls === 1) throw new RangeError('Invalid string length'); writeItem(d, b); };
+  const res = await runShard({ shardId: 's', attemptId: 'att-1', items: itemsOf(['o/a', 'o/b']), out, fetch: fakeGithub({ 'o/a': { files: jsLiteral }, 'o/b': { files: jsLiteral } }), write: once });
+  assert.deepEqual(res.items.map((x) => [x.status, x.detail]), [['skipped', 'bundle_error'], ['graded', null]]);
+});
+
+test('R-SS-02: each item\'s outputs go out as soon as its bundle is written, after controls_ok', async () => {
+  const events = [];
+  const fetch = fakeGithub({ 'o/a': { files: jsLiteral }, 'o/b': { files: jsLiteral } });
+  const out = join(tmp('outputs'), 'out');
+  await runShard({
+    shardId: 's', attemptId: 'att-1', items: itemsOf(['o/a', 'o/b']), out,
+    fetch: async (url, init) => { if (/\/repos\/o\/[ab]$/.test(String(url))) events.push('read ' + String(url).slice(-3)); return fetch(url, init); },
+    onOutputs: (lines) => events.push(lines.join(' ')),
+  });
+  assert.deepEqual(events, ['controls_ok=true', 'read o/a', 'has_0=true fence_0=10 run_key_0=' + key(0), 'read o/b', 'has_1=true fence_1=11 run_key_1=' + key(1)]);
+});
+
+test('R-SS-02: a subject stuck in synchronous work is stopped by terminating its thread', async () => {
+  const stuck = new URL('data:text/javascript,for (;;) {}');
+  const t0 = performance.now();
+  const scan = await scanInWorker('o/r', { fetch: fakeGithub({}), timeoutMs: 100, graceMs: 100, workerUrl: stuck });
+  assert.ok(performance.now() - t0 < 5000);
+  assert.equal(scan.status, 'skipped');
+  assert.equal(scan.detail, 'timeout');
+  assert.equal(scan.retryable, true);
+  // In a shard: that item reports a retryable skip and the next one is still read.
+  const out = join(tmp('stuck'), 'out');
+  const r = await runShard({ shardId: 's', attemptId: 'att-1', items: itemsOf(['o/a']), out, fetch: fakeGithub({ 'o/a': { files: jsLiteral } }), timeoutMs: 100, graceMs: 100, workerUrl: stuck });
+  assert.deepEqual(r.items.map((x) => [x.status, x.detail]), [['skipped', 'timeout']]);
+  // The real thread: the same answer as scanning in this thread.
+  const real = await scanInWorker('o/a', { fetch: fakeGithub({ 'o/a': { files: jsLiteral } }) });
+  const here = await scanSubject('o/a', { fetch: fakeGithub({ 'o/a': { files: jsLiteral } }) });
+  assert.equal(real.status, 'graded');
+  assert.deepEqual(real.grade, here.grade);
+});
+
+test('R-SS-02: a control that fails says controls_failed=true before the harness error', async () => {
+  const dir = tmp('bad-answer');
+  const wrong = join(dir, 'known-answer.json');
+  writeFileSync(wrong, JSON.stringify({ answer: { tool_count: -1 } }));
+  const lines = [];
+  await assert.rejects(runShard({ shardId: 's', attemptId: 'att-1', items: itemsOf(['o/a']), out: join(dir, 'out'), fetch: fakeGithub({}), knownAnswerExpected: wrong, onOutputs: (l) => lines.push(...l) }), /known-answer control/);
+  assert.deepEqual(lines, ['controls_failed=true']);
+});
+
+test('R-SS-03: the forgery control is reported through resultOf and buildBundle, and every file outside raw/ is checked', async () => {
+  const marker = 'scanstatic-' + 'a'.repeat(32);
+  const c = await forgeryControl({ marker });
+  assert.equal(c.control.observed, 'contained');
+  const output = JSON.parse(c.files['controls/forgery.json']);
+  assert.ok(output.files_checked >= 3, 'results, observations and logs at least');
+  assert.deepEqual(output.leaks, []);
+  assert.ok(output.tool_count >= 2);
+  assert.ok(c.files['raw/control-forgery/tools.json'].includes(marker));
+  assert.ok(!c.files['controls/forgery.json'].includes(marker));
+});
+
+test('R-SS-04: the known-answer fixture is also read through fromGitHub, from a stub with no network', async () => {
+  const fromDir = await knownAnswer();
+  const fromGitHub = await knownAnswer({ via: 'github' });
+  assert.deepEqual(fromGitHub, fromDir);
+  assert.deepEqual(fromGitHub, JSON.parse(readFileSync(KNOWN_ANSWER_FILE, 'utf8')).answer);
+  const control = await knownAnswerControl();
+  assert.equal(control.control.observed, 'match');
+  assert.deepEqual(JSON.parse(control.files['controls/known-answer.json']).observed_github, fromGitHub);
+  // The stub answers only the two hosts the reader uses for that one repository and commit.
+  const f = fixtureFetch(join(root, 'corpus', 'fixtures', 'known-answer'));
+  assert.equal((await f('https://api.github.com/repos/someone/else')).status, 404);
+  assert.equal((await f('https://example.com/')).status, 404);
+});
+
+test('R-SS-07: a 403 is a rate limit only when GitHub says so; otherwise the repository is refused, for good', () => {
+  const h = (o) => (k) => (k in o ? o[k] : null);
+  assert.equal(httpDetail(403, h({ 'x-ratelimit-remaining': '0' }), ''), 'rate_limited');
+  assert.equal(httpDetail(403, h({ 'retry-after': '60' }), ''), 'rate_limited');
+  assert.equal(httpDetail(403, h({}), 'You have exceeded a secondary rate limit'), 'rate_limited');
+  assert.equal(httpDetail(429, h({}), ''), 'rate_limited');
+  assert.equal(httpDetail(403, h({ 'x-ratelimit-remaining': '4000' }), 'Resource not accessible'), 'repo_unavailable');
+  const e403 = Object.assign(new Error('HTTP 403'), { status: 403, code: 'rate_limited' });
+  assert.equal(readDetail(e403, false, { status: 403, remaining: '0', retryAfter: null }), 'rate_limited');
+  assert.equal(readDetail(e403, false, { status: 403, remaining: null, retryAfter: '30' }), 'rate_limited');
+  assert.equal(readDetail(e403, false, { status: 403, remaining: '4000', retryAfter: null }), 'repo_unavailable');
+  assert.equal(readDetail(e403, false, null), 'repo_unavailable');
+  assert.equal(readDetail({ status: 429 }, false, null), 'rate_limited');
+  assert.ok(PERMANENT.includes('repo_unavailable'));
+});
+
+test('R-SS-07: a shard stops before the API budget runs dry, with retryable skips for the rest', async () => {
+  const subjects = { 'o/a': { files: jsLiteral }, 'o/b': { files: jsLiteral }, 'o/c': { files: jsLiteral }, 'o/d': { files: jsLiteral } };
+  const fetch = fakeGithub(subjects);
+  let remaining = 9;
+  const counted = async (url, init) => {
+    const r = await fetch(url, init);
+    if (!String(url).startsWith('https://api.github.com/')) return r;
+    remaining -= 1;
+    const get = r.headers.get;
+    return { ...r, headers: { get: (k) => (k.toLowerCase() === 'x-ratelimit-remaining' ? String(remaining) : get(k)) } };
+  };
+  const out = join(tmp('budget-early'), 'out');
+  const r = await runShard({ shardId: 's', attemptId: 'att-1', items: itemsOf(['o/a', 'o/b', 'o/c', 'o/d']), out, fetch: counted });
+  // Each subject takes 3 API calls. After o/a, 6 are left, under 3 x 3 subjects: stop.
+  assert.deepEqual(r.items.map((x) => [x.status, x.detail]), [['graded', null], ['skipped', 'rate_limited'], ['skipped', 'rate_limited'], ['skipped', 'rate_limited']]);
+  const meta = JSON.parse(readFileSync(join(out, '1', 'meta.json'), 'utf8'));
+  assert.deepEqual(meta.skips, [{ stage: 'static', reason: 'rate_limited', evidence: RESULT_PATH, retryable: true }]);
 });

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 
@@ -87,8 +88,9 @@ test('scan-static: dispatch only, the pump\'s three inputs, kill switch first, i
   assert.match(job('guard'), /LOOP_ENABLED: \$\{\{ vars\.LOOP_ENABLED \}\}\n(?:.*\n)*?        run: node corpus\/loop-guard\.mjs --lane scan-static/);
   assert.match(job('scan'), /needs: guard\n    if: needs\.guard\.outputs\.proceed == 'true'/);
   const steps = job('scan').split('\n      - ');
-  assert.match(steps[1], /^name: Check the inputs\n/, 'the inputs are checked before anything is checked out or read');
-  assert.equal((steps[1].match(/\[\[ ! "\$[A-Z_]+" =~ \$[a-z_]+ \]\]/g) || []).length, 3, 'all three inputs, as whole strings');
+  assert.match(steps[1], /^name: Kill switch, again /, 'R-SS-06: the switches are checked again first');
+  assert.match(steps[2], /^name: Check the inputs\n/, 'the inputs are checked before anything is checked out or read');
+  assert.equal((steps[2].match(/\[\[ ! "\$[A-Z_]+" =~ \$[a-z_]+ \]\]/g) || []).length, 3, 'all three inputs, as whole strings');
   // The worker-kit: one step per item index 0..24, all at the same commit as WORKER_KIT_REF.
   const ref = /\n  WORKER_KIT_REF: '([0-9a-f]{40})'\n/.exec(y)[1];
   const kit = steps.filter((s) => /uses: isokron-ai\/tool-qa\/worker-kit@/.test(s));
@@ -96,9 +98,47 @@ test('scan-static: dispatch only, the pump\'s three inputs, kill switch first, i
   kit.forEach((s, i) => {
     assert.match(s, new RegExp('uses: isokron-ai/tool-qa/worker-kit@' + ref + '( #.*)?\\n'), 'item ' + i + ' names WORKER_KIT_REF');
     assert.match(s, new RegExp("steps\\.scan\\.outputs\\.has_" + i + " == 'true'"));
+    // R-SS-02: gated on the controls, not on the scan step's success.
+    assert.match(s, /if: \$\{\{ !cancelled\(\) && steps\.scan\.outputs\.controls_ok == 'true' && steps\.scan\.outputs\.controls_failed != 'true' && /);
+    assert.ok(!/steps\.scan\.outcome/.test(s), 'item ' + i + ' does not need the scan step to succeed');
     assert.match(s, new RegExp("item-index: '" + i + "'\\n"));
     assert.match(s, new RegExp('fence: \\$\\{\\{ steps\\.scan\\.outputs\\.fence_' + i + ' \\}\\}'));
     assert.match(s, new RegExp('run-key: \\$\\{\\{ steps\\.scan\\.outputs\\.run_key_' + i + ' \\}\\}'));
     assert.match(s, new RegExp('/scan-static/' + i + '/bundle\\n'));
+    assert.match(s, new RegExp('\\n {10}meta-file: \\$\\{\\{ runner\\.temp \\}\\}/scan-static/' + i + '/meta\\.json\\n'), 'R-SS-05: item ' + i + ' seals its own meta file');
+  });
+  const scanStep = steps.find((s) => s.startsWith('id: scan\n'));
+  assert.match(scanStep, /\n        timeout-minutes: (\d+)\n/, 'R-SS-02: the scan step has its own limit');
+  const stepLimit = Number(/\n        timeout-minutes: (\d+)\n/.exec(scanStep)[1]);
+  const jobLimit = Number(/\n    timeout-minutes: (\d+)\n/.exec(job('scan'))[1]);
+  assert.ok(stepLimit >= 34 && stepLimit <= jobLimit - 6, 'past the 32-minute budget and a last subject, and room left for the uploads');
+});
+
+test('R-SS-06: the scan job checks LOOP_ENABLED and the lane switch again, before anything else', () => {
+  const y = wf['scan-static.yml'];
+  const scan = y.split(/\n  (?=[a-z-]+:\n    )/).find((j) => j.startsWith('scan:'));
+  const step = scan.split('\n      - ')[1];
+  assert.match(step, /LOOP_ENABLED: \$\{\{ vars\.LOOP_ENABLED \}\}/);
+  assert.match(step, /LANE_SCAN_STATIC_ENABLED: \$\{\{ vars\.LANE_SCAN_STATIC_ENABLED \}\}/);
+  const script = /run: \|\n((?: {10}.*\n?)+)/.exec(step)[1].replace(/^ {10}/gm, '');
+  const run = (env) => spawnSync('bash', ['-e', '-c', script], { env: { PATH: process.env.PATH, ...env }, encoding: 'utf8' });
+  assert.equal(run({ LOOP_ENABLED: 'true' }).status, 0, 'lane unset means on');
+  assert.equal(run({ LOOP_ENABLED: 'true', LANE_SCAN_STATIC_ENABLED: 'true' }).status, 0);
+  const off = run({ LOOP_ENABLED: 'false' });
+  assert.equal(off.status, 1);
+  assert.match(off.stdout, /LOOP_ENABLED was switched off/);
+  assert.equal(run({}).status, 1);
+  const lane = run({ LOOP_ENABLED: 'true', LANE_SCAN_STATIC_ENABLED: 'false' });
+  assert.equal(lane.status, 1);
+  assert.match(lane.stdout, /lane was switched off/);
+});
+
+test('R-SS-05: each of the 25 worker-kit steps seals the bundle and the meta file of its own item', () => {
+  const steps = wf['scan-static.yml'].split('\n      - ').filter((s) => /uses: isokron-ai\/tool-qa\/worker-kit@/.test(s));
+  assert.equal(steps.length, 25);
+  steps.forEach((s, i) => {
+    assert.match(s, new RegExp("item-index: '" + i + "'\\n"));
+    assert.match(s, new RegExp('\\n {10}bundle-dir: \\$\\{\\{ runner\\.temp \\}\\}/scan-static/' + i + '/bundle\\n'));
+    assert.match(s, new RegExp('\\n {10}meta-file: \\$\\{\\{ runner\\.temp \\}\\}/scan-static/' + i + '/meta\\.json\\n'));
   });
 });
