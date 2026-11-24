@@ -1,6 +1,6 @@
 # mcp-check benchmark score
 
-80 cases with trusted labels, plus 5 faulty-oracle cases (labels deliberately wrong, scored apart). Intervals are Wilson 95%.
+87 cases with trusted labels, plus 5 faulty-oracle cases (labels deliberately wrong, scored apart). Intervals are Wilson 95%.
 
 ## Per check: measured against hand-written labels
 
@@ -8,36 +8,37 @@ Every positive of these checks comes from a case whose labels were written by ha
 
 | Check | TP | FP | FN | TN | Precision | Recall |
 |---|---:|---:|---:|---:|---|---|
-| `abstain` | 4 | 0 | 1 | 75 | 100.0% [51.0–100.0] | 80.0% [37.5–96.4] |
-| `annot-delete-marked-safe` | 3 | 0 | 0 | 203 | 100.0% [43.9–100.0] | 100.0% [43.9–100.0] |
-| `annot-write-marked-readonly` | 3 | 1 | 0 | 202 | 75.0% [30.1–95.4] | 100.0% [43.9–100.0] |
+| `abstain` | 5 | 0 | 0 | 82 | 100.0% [56.5–100.0] | 100.0% [56.5–100.0] |
+| `annot-delete-marked-safe` | 3 | 0 | 0 | 215 | 100.0% [43.9–100.0] | 100.0% [43.9–100.0] |
+| `annot-write-marked-readonly` | 3 | 0 | 0 | 215 | 100.0% [43.9–100.0] | 100.0% [43.9–100.0] |
 | `gap-shell-injectable-url` | 0 | 0 | 1 | 1 | n/a | 0.0% [0.0–79.3] |
-| `openai-name-unique` | 1 | 0 | 1 | 72 | 100.0% [20.6–100.0] | 50.0% [9.4–90.5] |
-| `outcome` | 70 | 0 | 10 | 0 | 100.0% [94.8–100.0] | 87.5% [78.5–93.1] |
-| `reader-annotations` | 112 | 0 | 2 | 0 | 100.0% [96.7–100.0] | 98.3% [93.8–99.5] |
-| `reader-conditional` | 2 | 0 | 1 | 0 | 100.0% [34.2–100.0] | 66.7% [20.8–93.8] |
-| `reader-description` | 113 | 0 | 1 | 0 | 100.0% [96.7–100.0] | 99.1% [95.2–99.8] |
-| `reader-params` | 112 | 0 | 2 | 0 | 100.0% [96.7–100.0] | 98.3% [93.8–99.5] |
-| `reader-required` | 112 | 0 | 2 | 0 | 100.0% [96.7–100.0] | 98.3% [93.8–99.5] |
-| `reader-tools` | 183 | 3 | 20 | 0 | 98.4% [95.4–99.5] | 90.1% [85.3–93.5] |
-| `sec-bidi-controls` | 6 | 0 | 1 | 199 | 100.0% [61.0–100.0] | 85.7% [48.7–97.4] |
-| `sec-control-chars` | 3 | 1 | 2 | 200 | 75.0% [30.1–95.4] | 60.0% [23.1–88.2] |
-| `sec-cross-tool-steering` | 3 | 0 | 0 | 203 | 100.0% [43.9–100.0] | 100.0% [43.9–100.0] |
-| `sec-encoded-blob` | 6 | 0 | 0 | 200 | 100.0% [61.0–100.0] | 100.0% [61.0–100.0] |
-| `sec-external-instructions` | 6 | 0 | 0 | 200 | 100.0% [61.0–100.0] | 100.0% [61.0–100.0] |
-| `sec-homoglyph` | 7 | 0 | 1 | 198 | 100.0% [64.6–100.0] | 87.5% [52.9–97.8] |
-| `sec-html-comment` | 6 | 0 | 0 | 200 | 100.0% [61.0–100.0] | 100.0% [61.0–100.0] |
-| `sec-instruction-markup` | 3 | 0 | 0 | 203 | 100.0% [43.9–100.0] | 100.0% [43.9–100.0] |
-| `sec-instruction-phrases` | 7 | 0 | 0 | 199 | 100.0% [64.6–100.0] | 100.0% [64.6–100.0] |
-| `sec-invisible-encoding` | 3 | 0 | 2 | 201 | 100.0% [43.9–100.0] | 60.0% [23.1–88.2] |
-| `sec-secret-seeking` | 7 | 0 | 0 | 199 | 100.0% [64.6–100.0] | 100.0% [64.6–100.0] |
-| `sec-zero-width` | 6 | 0 | 0 | 200 | 100.0% [61.0–100.0] | 100.0% [61.0–100.0] |
-| `security-cap` | 15 | 0 | 1 | 49 | 100.0% [79.6–100.0] | 93.8% [71.7–98.9] |
-| `severity` | 217 | 0 | 0 | 0 | 100.0% [98.3–100.0] | 100.0% [98.3–100.0] |
-| `spec-input-schema-missing` | 0 | 0 | 1 | 1 | n/a | 0.0% [0.0–79.3] |
-| `spec-name-charset` | 3 | 0 | 1 | 202 | 100.0% [43.9–100.0] | 75.0% [30.1–95.4] |
-| `spec-name-length` | 2 | 0 | 0 | 204 | 100.0% [34.2–100.0] | 100.0% [34.2–100.0] |
-| `spec-name-unique` | 1 | 0 | 1 | 72 | 100.0% [20.6–100.0] | 50.0% [9.4–90.5] |
+| `openai-name-unique` | 2 | 0 | 0 | 79 | 100.0% [34.2–100.0] | 100.0% [34.2–100.0] |
+| `outcome` | 80 | 0 | 7 | 0 | 100.0% [95.4–100.0] | 92.0% [84.3–96.0] |
+| `reader-annotations` | 127 | 0 | 0 | 0 | 100.0% [97.1–100.0] | 100.0% [97.1–100.0] |
+| `reader-conditional` | 3 | 0 | 0 | 0 | 100.0% [43.9–100.0] | 100.0% [43.9–100.0] |
+| `reader-description` | 127 | 0 | 0 | 0 | 100.0% [97.1–100.0] | 100.0% [97.1–100.0] |
+| `reader-params` | 127 | 0 | 0 | 0 | 100.0% [97.1–100.0] | 100.0% [97.1–100.0] |
+| `reader-required` | 127 | 0 | 0 | 0 | 100.0% [97.1–100.0] | 100.0% [97.1–100.0] |
+| `reader-tools` | 201 | 0 | 14 | 0 | 100.0% [98.1–100.0] | 93.5% [89.4–96.1] |
+| `sec-bidi-controls` | 7 | 0 | 0 | 211 | 100.0% [64.6–100.0] | 100.0% [64.6–100.0] |
+| `sec-control-chars` | 5 | 0 | 0 | 213 | 100.0% [56.5–100.0] | 100.0% [56.5–100.0] |
+| `sec-cross-tool-steering` | 3 | 0 | 0 | 215 | 100.0% [43.9–100.0] | 100.0% [43.9–100.0] |
+| `sec-encoded-blob` | 6 | 0 | 0 | 212 | 100.0% [61.0–100.0] | 100.0% [61.0–100.0] |
+| `sec-external-instructions` | 6 | 0 | 0 | 212 | 100.0% [61.0–100.0] | 100.0% [61.0–100.0] |
+| `sec-homoglyph` | 8 | 0 | 0 | 210 | 100.0% [67.6–100.0] | 100.0% [67.6–100.0] |
+| `sec-html-comment` | 6 | 0 | 0 | 212 | 100.0% [61.0–100.0] | 100.0% [61.0–100.0] |
+| `sec-instruction-markup` | 3 | 0 | 0 | 215 | 100.0% [43.9–100.0] | 100.0% [43.9–100.0] |
+| `sec-instruction-phrases` | 7 | 0 | 0 | 211 | 100.0% [64.6–100.0] | 100.0% [64.6–100.0] |
+| `sec-invisible-encoding` | 5 | 0 | 0 | 213 | 100.0% [56.5–100.0] | 100.0% [56.5–100.0] |
+| `sec-secret-seeking` | 7 | 0 | 0 | 211 | 100.0% [64.6–100.0] | 100.0% [64.6–100.0] |
+| `sec-zero-width` | 6 | 0 | 0 | 212 | 100.0% [61.0–100.0] | 100.0% [61.0–100.0] |
+| `security-cap` | 16 | 0 | 0 | 58 | 100.0% [80.6–100.0] | 100.0% [80.6–100.0] |
+| `severity` | 228 | 0 | 0 | 0 | 100.0% [98.3–100.0] | 100.0% [98.3–100.0] |
+| `spec-input-schema-field-name` | 2 | 0 | 0 | 5 | 100.0% [34.2–100.0] | 100.0% [34.2–100.0] |
+| `spec-input-schema-missing` | 1 | 0 | 0 | 1 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
+| `spec-name-charset` | 4 | 0 | 0 | 214 | 100.0% [51.0–100.0] | 100.0% [51.0–100.0] |
+| `spec-name-length` | 2 | 0 | 0 | 216 | 100.0% [34.2–100.0] | 100.0% [34.2–100.0] |
+| `spec-name-unique` | 2 | 0 | 0 | 79 | 100.0% [34.2–100.0] | 100.0% [34.2–100.0] |
 
 ## Per check: inferred labels, self-consistency only
 
@@ -70,7 +71,6 @@ Every positive of these checks comes from a `truth_level: inferred` case, whose 
 | `schema-required-unknown` | 1 | 0 | 0 | 4 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `schema-response-format` | 2 | 0 | 0 | 5 | 100.0% [34.2–100.0] | 100.0% [34.2–100.0] |
 | `schema-vague-param` | 3 | 0 | 0 | 7 | 100.0% [43.9–100.0] | 100.0% [43.9–100.0] |
-| `spec-input-schema-field-name` | 1 | 0 | 0 | 4 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `spec-input-schema-root-object` | 1 | 0 | 0 | 4 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `spec-meta-key` | 1 | 0 | 0 | 1 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `spec-meta-reserved` | 1 | 0 | 0 | 1 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
@@ -92,12 +92,11 @@ Only false positives can be measured for these.
 | `abstain` | committed-list | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `abstain` | go | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `abstain` | python | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
-| `abstain` | rust | 0 | 0 | 1 | n/a | 0.0% [0.0–79.3] |
+| `abstain` | rust | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `abstain` | typescript | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `annot-delete-marked-safe` | go | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `annot-delete-marked-safe` | python | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `annot-delete-marked-safe` | typescript | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
-| `annot-write-marked-readonly` | committed-list | 0 | 1 | 0 | 0.0% [0.0–79.3] | n/a |
 | `annot-write-marked-readonly` | go | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `annot-write-marked-readonly` | python | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `annot-write-marked-readonly` | typescript | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
@@ -133,7 +132,7 @@ Only false positives can be measured for these.
 | `openai-hints-explicit` | typescript | 3 | 0 | 0 | 100.0% [43.9–100.0] | 100.0% [43.9–100.0] |
 | `openai-name-promotional` | committed-list | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `openai-name-unique` | committed-list | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
-| `openai-name-unique` | typescript | 0 | 0 | 1 | n/a | 0.0% [0.0–79.3] |
+| `openai-name-unique` | typescript | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `openai-precise-location` | committed-list | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `openai-readonly-destructive` | committed-list | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `openai-readonly-destructive` | go | 2 | 0 | 0 | 100.0% [34.2–100.0] | 100.0% [34.2–100.0] |
@@ -144,57 +143,57 @@ Only false positives can be measured for these.
 | `openai-retry` | python | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `openai-retry` | rust | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `openai-retry` | typescript | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
-| `outcome` | committed-list | 8 | 0 | 1 | 100.0% [67.6–100.0] | 88.9% [56.5–98.0] |
+| `outcome` | committed-list | 10 | 0 | 0 | 100.0% [72.3–100.0] | 100.0% [72.3–100.0] |
 | `outcome` | csharp | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
-| `outcome` | go | 11 | 0 | 0 | 100.0% [74.1–100.0] | 100.0% [74.1–100.0] |
+| `outcome` | go | 12 | 0 | 0 | 100.0% [75.8–100.0] | 100.0% [75.8–100.0] |
 | `outcome` | java | 0 | 0 | 1 | n/a | 0.0% [0.0–79.3] |
 | `outcome` | javascript | 5 | 0 | 0 | 100.0% [56.5–100.0] | 100.0% [56.5–100.0] |
 | `outcome` | kotlin | 0 | 0 | 1 | n/a | 0.0% [0.0–79.3] |
 | `outcome` | php | 0 | 0 | 1 | n/a | 0.0% [0.0–79.3] |
-| `outcome` | python | 13 | 0 | 2 | 100.0% [77.2–100.0] | 86.7% [62.1–96.3] |
+| `outcome` | python | 15 | 0 | 2 | 100.0% [79.6–100.0] | 88.2% [65.7–96.7] |
 | `outcome` | ruby | 0 | 0 | 1 | n/a | 0.0% [0.0–79.3] |
-| `outcome` | rust | 8 | 0 | 1 | 100.0% [67.6–100.0] | 88.9% [56.5–98.0] |
+| `outcome` | rust | 10 | 0 | 0 | 100.0% [72.3–100.0] | 100.0% [72.3–100.0] |
 | `outcome` | swift | 0 | 0 | 1 | n/a | 0.0% [0.0–79.3] |
-| `outcome` | typescript | 24 | 0 | 1 | 100.0% [86.2–100.0] | 96.0% [80.5–99.3] |
+| `outcome` | typescript | 27 | 0 | 0 | 100.0% [87.5–100.0] | 100.0% [87.5–100.0] |
 | `reader-annotations` | committed-list | 4 | 0 | 0 | 100.0% [51.0–100.0] | 100.0% [51.0–100.0] |
-| `reader-annotations` | go | 18 | 0 | 0 | 100.0% [82.4–100.0] | 100.0% [82.4–100.0] |
+| `reader-annotations` | go | 20 | 0 | 0 | 100.0% [83.9–100.0] | 100.0% [83.9–100.0] |
 | `reader-annotations` | javascript | 8 | 0 | 0 | 100.0% [67.6–100.0] | 100.0% [67.6–100.0] |
-| `reader-annotations` | python | 24 | 0 | 0 | 100.0% [86.2–100.0] | 100.0% [86.2–100.0] |
-| `reader-annotations` | rust | 13 | 0 | 0 | 100.0% [77.2–100.0] | 100.0% [77.2–100.0] |
-| `reader-annotations` | typescript | 45 | 0 | 2 | 100.0% [92.1–100.0] | 95.7% [85.8–98.8] |
-| `reader-conditional` | go | 0 | 0 | 1 | n/a | 0.0% [0.0–79.3] |
+| `reader-annotations` | python | 27 | 0 | 0 | 100.0% [87.5–100.0] | 100.0% [87.5–100.0] |
+| `reader-annotations` | rust | 15 | 0 | 0 | 100.0% [79.6–100.0] | 100.0% [79.6–100.0] |
+| `reader-annotations` | typescript | 53 | 0 | 0 | 100.0% [93.2–100.0] | 100.0% [93.2–100.0] |
+| `reader-conditional` | go | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `reader-conditional` | python | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `reader-conditional` | typescript | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `reader-description` | committed-list | 4 | 0 | 0 | 100.0% [51.0–100.0] | 100.0% [51.0–100.0] |
-| `reader-description` | go | 18 | 0 | 0 | 100.0% [82.4–100.0] | 100.0% [82.4–100.0] |
+| `reader-description` | go | 20 | 0 | 0 | 100.0% [83.9–100.0] | 100.0% [83.9–100.0] |
 | `reader-description` | javascript | 8 | 0 | 0 | 100.0% [67.6–100.0] | 100.0% [67.6–100.0] |
-| `reader-description` | python | 23 | 0 | 1 | 100.0% [85.7–100.0] | 95.8% [79.8–99.3] |
-| `reader-description` | rust | 13 | 0 | 0 | 100.0% [77.2–100.0] | 100.0% [77.2–100.0] |
-| `reader-description` | typescript | 47 | 0 | 0 | 100.0% [92.4–100.0] | 100.0% [92.4–100.0] |
+| `reader-description` | python | 27 | 0 | 0 | 100.0% [87.5–100.0] | 100.0% [87.5–100.0] |
+| `reader-description` | rust | 15 | 0 | 0 | 100.0% [79.6–100.0] | 100.0% [79.6–100.0] |
+| `reader-description` | typescript | 53 | 0 | 0 | 100.0% [93.2–100.0] | 100.0% [93.2–100.0] |
 | `reader-params` | committed-list | 4 | 0 | 0 | 100.0% [51.0–100.0] | 100.0% [51.0–100.0] |
-| `reader-params` | go | 18 | 0 | 0 | 100.0% [82.4–100.0] | 100.0% [82.4–100.0] |
+| `reader-params` | go | 20 | 0 | 0 | 100.0% [83.9–100.0] | 100.0% [83.9–100.0] |
 | `reader-params` | javascript | 8 | 0 | 0 | 100.0% [67.6–100.0] | 100.0% [67.6–100.0] |
-| `reader-params` | python | 24 | 0 | 0 | 100.0% [86.2–100.0] | 100.0% [86.2–100.0] |
-| `reader-params` | rust | 13 | 0 | 0 | 100.0% [77.2–100.0] | 100.0% [77.2–100.0] |
-| `reader-params` | typescript | 45 | 0 | 2 | 100.0% [92.1–100.0] | 95.7% [85.8–98.8] |
+| `reader-params` | python | 27 | 0 | 0 | 100.0% [87.5–100.0] | 100.0% [87.5–100.0] |
+| `reader-params` | rust | 15 | 0 | 0 | 100.0% [79.6–100.0] | 100.0% [79.6–100.0] |
+| `reader-params` | typescript | 53 | 0 | 0 | 100.0% [93.2–100.0] | 100.0% [93.2–100.0] |
 | `reader-required` | committed-list | 4 | 0 | 0 | 100.0% [51.0–100.0] | 100.0% [51.0–100.0] |
-| `reader-required` | go | 18 | 0 | 0 | 100.0% [82.4–100.0] | 100.0% [82.4–100.0] |
+| `reader-required` | go | 20 | 0 | 0 | 100.0% [83.9–100.0] | 100.0% [83.9–100.0] |
 | `reader-required` | javascript | 8 | 0 | 0 | 100.0% [67.6–100.0] | 100.0% [67.6–100.0] |
-| `reader-required` | python | 24 | 0 | 0 | 100.0% [86.2–100.0] | 100.0% [86.2–100.0] |
-| `reader-required` | rust | 13 | 0 | 0 | 100.0% [77.2–100.0] | 100.0% [77.2–100.0] |
-| `reader-required` | typescript | 45 | 0 | 2 | 100.0% [92.1–100.0] | 95.7% [85.8–98.8] |
-| `reader-tools` | committed-list | 34 | 0 | 2 | 100.0% [89.8–100.0] | 94.4% [81.9–98.5] |
+| `reader-required` | python | 27 | 0 | 0 | 100.0% [87.5–100.0] | 100.0% [87.5–100.0] |
+| `reader-required` | rust | 15 | 0 | 0 | 100.0% [79.6–100.0] | 100.0% [79.6–100.0] |
+| `reader-required` | typescript | 53 | 0 | 0 | 100.0% [93.2–100.0] | 100.0% [93.2–100.0] |
+| `reader-tools` | committed-list | 38 | 0 | 0 | 100.0% [90.8–100.0] | 100.0% [90.8–100.0] |
 | `reader-tools` | csharp | 2 | 0 | 0 | 100.0% [34.2–100.0] | 100.0% [34.2–100.0] |
-| `reader-tools` | go | 27 | 0 | 0 | 100.0% [87.5–100.0] | 100.0% [87.5–100.0] |
+| `reader-tools` | go | 29 | 0 | 0 | 100.0% [88.3–100.0] | 100.0% [88.3–100.0] |
 | `reader-tools` | java | 0 | 0 | 2 | n/a | 0.0% [0.0–65.8] |
 | `reader-tools` | javascript | 18 | 0 | 0 | 100.0% [82.4–100.0] | 100.0% [82.4–100.0] |
 | `reader-tools` | kotlin | 0 | 0 | 2 | n/a | 0.0% [0.0–65.8] |
 | `reader-tools` | php | 0 | 0 | 2 | n/a | 0.0% [0.0–65.8] |
-| `reader-tools` | python | 32 | 1 | 5 | 97.0% [84.7–99.5] | 86.5% [72.0–94.1] |
+| `reader-tools` | python | 36 | 0 | 4 | 100.0% [90.4–100.0] | 90.0% [77.0–96.0] |
 | `reader-tools` | ruby | 0 | 0 | 2 | n/a | 0.0% [0.0–65.8] |
-| `reader-tools` | rust | 22 | 2 | 0 | 91.7% [74.2–97.7] | 100.0% [85.1–100.0] |
+| `reader-tools` | rust | 24 | 0 | 0 | 100.0% [86.2–100.0] | 100.0% [86.2–100.0] |
 | `reader-tools` | swift | 0 | 0 | 2 | n/a | 0.0% [0.0–65.8] |
-| `reader-tools` | typescript | 48 | 0 | 3 | 100.0% [92.6–100.0] | 94.1% [84.1–98.0] |
+| `reader-tools` | typescript | 54 | 0 | 0 | 100.0% [93.4–100.0] | 100.0% [93.4–100.0] |
 | `reader-unreadable` | typescript | 3 | 0 | 0 | 100.0% [43.9–100.0] | 100.0% [43.9–100.0] |
 | `schema-additional-properties` | committed-list | 2 | 0 | 0 | 100.0% [34.2–100.0] | 100.0% [34.2–100.0] |
 | `schema-enum-missing` | committed-list | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
@@ -219,13 +218,13 @@ Only false positives can be measured for these.
 | `sec-bidi-controls` | committed-list | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `sec-bidi-controls` | go | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `sec-bidi-controls` | javascript | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
-| `sec-bidi-controls` | python | 1 | 0 | 1 | 100.0% [20.6–100.0] | 50.0% [9.4–90.5] |
+| `sec-bidi-controls` | python | 2 | 0 | 0 | 100.0% [34.2–100.0] | 100.0% [34.2–100.0] |
 | `sec-bidi-controls` | rust | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `sec-bidi-controls` | typescript | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `sec-control-chars` | committed-list | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `sec-control-chars` | go | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
-| `sec-control-chars` | javascript | 0 | 1 | 1 | 0.0% [0.0–79.3] | 0.0% [0.0–79.3] |
-| `sec-control-chars` | python | 0 | 0 | 1 | n/a | 0.0% [0.0–79.3] |
+| `sec-control-chars` | javascript | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
+| `sec-control-chars` | python | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `sec-control-chars` | rust | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `sec-cross-tool-steering` | go | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `sec-cross-tool-steering` | javascript | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
@@ -245,7 +244,7 @@ Only false positives can be measured for these.
 | `sec-homoglyph` | committed-list | 2 | 0 | 0 | 100.0% [34.2–100.0] | 100.0% [34.2–100.0] |
 | `sec-homoglyph` | go | 2 | 0 | 0 | 100.0% [34.2–100.0] | 100.0% [34.2–100.0] |
 | `sec-homoglyph` | javascript | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
-| `sec-homoglyph` | python | 1 | 0 | 1 | 100.0% [20.6–100.0] | 50.0% [9.4–90.5] |
+| `sec-homoglyph` | python | 2 | 0 | 0 | 100.0% [34.2–100.0] | 100.0% [34.2–100.0] |
 | `sec-homoglyph` | rust | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `sec-html-comment` | committed-list | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `sec-html-comment` | go | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
@@ -263,8 +262,8 @@ Only false positives can be measured for these.
 | `sec-instruction-phrases` | typescript | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `sec-invisible-encoding` | committed-list | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `sec-invisible-encoding` | go | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
-| `sec-invisible-encoding` | javascript | 0 | 0 | 1 | n/a | 0.0% [0.0–79.3] |
-| `sec-invisible-encoding` | python | 0 | 0 | 1 | n/a | 0.0% [0.0–79.3] |
+| `sec-invisible-encoding` | javascript | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
+| `sec-invisible-encoding` | python | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `sec-invisible-encoding` | rust | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `sec-secret-seeking` | committed-list | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `sec-secret-seeking` | go | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
@@ -281,28 +280,28 @@ Only false positives can be measured for these.
 | `security-cap` | committed-list | 2 | 0 | 0 | 100.0% [34.2–100.0] | 100.0% [34.2–100.0] |
 | `security-cap` | go | 2 | 0 | 0 | 100.0% [34.2–100.0] | 100.0% [34.2–100.0] |
 | `security-cap` | javascript | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
-| `security-cap` | python | 3 | 0 | 1 | 100.0% [43.9–100.0] | 75.0% [30.1–95.4] |
+| `security-cap` | python | 4 | 0 | 0 | 100.0% [51.0–100.0] | 100.0% [51.0–100.0] |
 | `security-cap` | rust | 2 | 0 | 0 | 100.0% [34.2–100.0] | 100.0% [34.2–100.0] |
 | `security-cap` | typescript | 5 | 0 | 0 | 100.0% [56.5–100.0] | 100.0% [56.5–100.0] |
-| `severity` | committed-list | 70 | 0 | 0 | 100.0% [94.8–100.0] | 100.0% [94.8–100.0] |
+| `severity` | committed-list | 72 | 0 | 0 | 100.0% [94.9–100.0] | 100.0% [94.9–100.0] |
 | `severity` | go | 35 | 0 | 0 | 100.0% [90.1–100.0] | 100.0% [90.1–100.0] |
-| `severity` | javascript | 23 | 0 | 0 | 100.0% [85.7–100.0] | 100.0% [85.7–100.0] |
-| `severity` | python | 36 | 0 | 0 | 100.0% [90.4–100.0] | 100.0% [90.4–100.0] |
+| `severity` | javascript | 25 | 0 | 0 | 100.0% [86.7–100.0] | 100.0% [86.7–100.0] |
+| `severity` | python | 41 | 0 | 0 | 100.0% [91.4–100.0] | 100.0% [91.4–100.0] |
 | `severity` | rust | 22 | 0 | 0 | 100.0% [85.1–100.0] | 100.0% [85.1–100.0] |
-| `severity` | typescript | 31 | 0 | 0 | 100.0% [89.0–100.0] | 100.0% [89.0–100.0] |
-| `spec-input-schema-field-name` | committed-list | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
-| `spec-input-schema-missing` | committed-list | 0 | 0 | 1 | n/a | 0.0% [0.0–79.3] |
+| `severity` | typescript | 33 | 0 | 0 | 100.0% [89.6–100.0] | 100.0% [89.6–100.0] |
+| `spec-input-schema-field-name` | committed-list | 2 | 0 | 0 | 100.0% [34.2–100.0] | 100.0% [34.2–100.0] |
+| `spec-input-schema-missing` | committed-list | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `spec-input-schema-root-object` | committed-list | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `spec-meta-key` | committed-list | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `spec-meta-reserved` | committed-list | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `spec-name-charset` | committed-list | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `spec-name-charset` | go | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
-| `spec-name-charset` | python | 0 | 0 | 1 | n/a | 0.0% [0.0–79.3] |
+| `spec-name-charset` | python | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `spec-name-charset` | typescript | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `spec-name-length` | committed-list | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `spec-name-length` | javascript | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `spec-name-unique` | committed-list | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
-| `spec-name-unique` | typescript | 0 | 0 | 1 | n/a | 0.0% [0.0–79.3] |
+| `spec-name-unique` | typescript | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `surface-delete-guard` | committed-list | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `surface-delete-guard` | javascript | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
 | `surface-retry-key` | committed-list | 2 | 0 | 0 | 100.0% [34.2–100.0] | 100.0% [34.2–100.0] |
@@ -317,37 +316,38 @@ Rows with no positive and no finding in a language are left out of this table; t
 
 | Language | Cases | Outcome right | Abstained (observed) | Abstain expected | Unsupported or none (observed) | Unsupported expected |
 |---|---:|---|---|---:|---|---:|
-| committed-list | 9 | 88.9% [56.5–98.0] | 11.1% [2.0–43.5] | 1 | 11.1% [2.0–43.5] | 0 |
+| committed-list | 10 | 100.0% [72.3–100.0] | 10.0% [1.8–40.4] | 1 | 0.0% [0.0–27.8] | 0 |
 | csharp | 1 | 100.0% [20.6–100.0] | 0.0% [0.0–79.3] | 0 | 0.0% [0.0–79.3] | 0 |
-| go | 11 | 100.0% [74.1–100.0] | 9.1% [1.6–37.7] | 1 | 0.0% [0.0–25.9] | 0 |
+| go | 12 | 100.0% [75.8–100.0] | 8.3% [1.5–35.4] | 1 | 0.0% [0.0–24.3] | 0 |
 | java | 1 | 0.0% [0.0–79.3] | 0.0% [0.0–79.3] | 0 | 100.0% [20.6–100.0] | 0 |
 | javascript | 5 | 100.0% [56.5–100.0] | 0.0% [0.0–43.5] | 0 | 0.0% [0.0–43.5] | 0 |
 | kotlin | 1 | 0.0% [0.0–79.3] | 0.0% [0.0–79.3] | 0 | 100.0% [20.6–100.0] | 0 |
 | php | 1 | 0.0% [0.0–79.3] | 0.0% [0.0–79.3] | 0 | 100.0% [20.6–100.0] | 0 |
-| python | 15 | 86.7% [62.1–96.3] | 6.7% [1.2–29.8] | 1 | 13.3% [3.7–37.9] | 0 |
+| python | 17 | 88.2% [65.7–96.7] | 5.9% [1.1–27.0] | 1 | 11.8% [3.3–34.3] | 0 |
 | ruby | 1 | 0.0% [0.0–79.3] | 0.0% [0.0–79.3] | 0 | 100.0% [20.6–100.0] | 0 |
-| rust | 9 | 88.9% [56.5–98.0] | 0.0% [0.0–29.9] | 1 | 0.0% [0.0–29.9] | 0 |
+| rust | 10 | 100.0% [72.3–100.0] | 10.0% [1.8–40.4] | 1 | 0.0% [0.0–27.8] | 0 |
 | swift | 1 | 0.0% [0.0–79.3] | 0.0% [0.0–79.3] | 0 | 100.0% [20.6–100.0] | 0 |
-| typescript | 25 | 96.0% [80.5–99.3] | 4.0% [0.7–19.5] | 1 | 8.0% [2.2–25.0] | 1 |
+| typescript | 27 | 100.0% [87.5–100.0] | 3.7% [0.7–18.3] | 1 | 3.7% [0.7–18.3] | 1 |
 
 ## Tool reading per idiom
 
 | Idiom | TP | FP | FN | Precision | Recall |
 |---|---:|---:|---:|---|---|
-| adversarial | 82 | 1 | 1 | 98.8% [93.5–99.8] | 98.8% [93.5–99.8] |
-| aliasing | 3 | 0 | 1 | 100.0% [43.9–100.0] | 75.0% [30.1–95.4] |
-| conditional | 5 | 0 | 0 | 100.0% [56.5–100.0] | 100.0% [56.5–100.0] |
-| decorator | 19 | 0 | 4 | 100.0% [83.2–100.0] | 82.6% [62.9–93.0] |
+| adversarial | 85 | 0 | 0 | 100.0% [95.7–100.0] | 100.0% [95.7–100.0] |
+| aliasing | 4 | 0 | 0 | 100.0% [51.0–100.0] | 100.0% [51.0–100.0] |
+| conditional | 7 | 0 | 0 | 100.0% [64.6–100.0] | 100.0% [64.6–100.0] |
+| decorator | 22 | 0 | 4 | 100.0% [85.1–100.0] | 84.6% [66.5–93.8] |
 | dynamic | 2 | 0 | 0 | 100.0% [34.2–100.0] | 100.0% [34.2–100.0] |
 | explicit-registration | 2 | 0 | 4 | 100.0% [34.2–100.0] | 33.3% [9.7–70.0] |
-| generated | 4 | 0 | 4 | 100.0% [51.0–100.0] | 50.0% [21.5–78.5] |
+| generated | 8 | 0 | 2 | 100.0% [67.6–100.0] | 80.0% [49.0–94.3] |
 | imported | 8 | 0 | 0 | 100.0% [67.6–100.0] | 100.0% [67.6–100.0] |
-| indirection | 18 | 0 | 0 | 100.0% [82.4–100.0] | 100.0% [82.4–100.0] |
+| indirection | 22 | 0 | 0 | 100.0% [85.1–100.0] | 100.0% [85.1–100.0] |
 | low-level | 9 | 0 | 2 | 100.0% [70.1–100.0] | 81.8% [52.3–94.9] |
-| macro | 11 | 2 | 0 | 84.6% [57.8–95.7] | 100.0% [74.1–100.0] |
+| macro | 13 | 0 | 0 | 100.0% [77.2–100.0] | 100.0% [77.2–100.0] |
 | misleading-names | 12 | 0 | 0 | 100.0% [75.8–100.0] | 100.0% [75.8–100.0] |
-| monorepo | 0 | 2 | 0 | 0.0% [0.0–65.8] | n/a |
-| partial-invalid | 10 | 0 | 2 | 100.0% [72.3–100.0] | 83.3% [55.2–95.3] |
+| monorepo | 1 | 0 | 0 | 100.0% [20.6–100.0] | 100.0% [20.6–100.0] |
+| partial-invalid | 14 | 0 | 0 | 100.0% [78.5–100.0] | 100.0% [78.5–100.0] |
+| split-modules | 2 | 0 | 0 | 100.0% [34.2–100.0] | 100.0% [34.2–100.0] |
 | straight-line | 40 | 0 | 0 | 100.0% [91.2–100.0] | 100.0% [91.2–100.0] |
 | wrapper | 8 | 0 | 4 | 100.0% [67.6–100.0] | 66.7% [39.1–86.2] |
 
@@ -369,22 +369,11 @@ Each of these has a label that is wrong on purpose. The scorer must disagree wit
 
 ## Every disagreement
 
-- **go/conditional-env**: suspend_tenant is registered under a condition but not marked conditional
 - **java/spring-tool-methods**: outcome: expected tools, got none (mcp-check: no tool definitions found in <case> (scanned 0 of 0 source files, and the committed tool lists and MCPB manifests). Grade the live list instead: star); missed tool city_temperature; missed tool city_humidity
-- **javascript/poison-escapes**: sec-control-chars raised on title_case (truth: not this check); sec-control-chars missed on color_text; sec-invisible-encoding missed on title_case
 - **kotlin/sdk-add-tool**: outcome: expected tools, got unsupported (mcp-check: no tool definitions found in <case> (scanned 0 of 0 source files, and the committed tool lists and MCPB manifests). Grade the live list instead: star); missed tool roll_die; missed tool flip_coin
-- **lists/checks-schemas**: annot-write-marked-readonly raised on resolve_names (truth: not this check)
-- **lists/malformed-entry**: outcome: expected tools, got none (mcp-check: no tool definitions found in <case> (scanned 0 of 0 source files, and the committed tool lists and MCPB manifests). Grade the live list instead: star); missed tool ping_host; missed tool traceroute_host; spec-input-schema-missing missed on ping_host
 - **php/attribute-tools**: outcome: expected tools, got unsupported (mcp-check: no tool definitions found in <case> (scanned 0 of 0 source files, and the committed tool lists and MCPB manifests). Grade the live list instead: star); missed tool add_integers; missed tool subtract_integers
 - **python/class-methods**: outcome: expected tools, got none (mcp-check: no tool definitions found in <case> (scanned 1 of 1 source files, and the committed tool lists and MCPB manifests). Grade the live list instead: star); missed tool distance_km; missed tool bearing_deg
-- **python/docstring-unicode-escape**: sec-bidi-controls missed on list_folders; blocking security finding labelled, but the grades are not capped at F (security A, anthropic F, openai D); reader description of list_folders: expected "Lists the folders under a root.\u202eesrever\u202c", got "Lists the folders under a root.u202eesreveru202c"
 - **python/generated-loop**: outcome: expected tools, got none (mcp-check: no tool definitions found in <case> (scanned 1 of 1 source files, and the committed tool lists and MCPB manifests). Grade the live list instead: star); missed tool to_celsius; missed tool to_fahrenheit
-- **python/poison-escapes**: missed tool lookup_аccount; phantom tool lookup_u0430ccount; sec-control-chars missed on color_text; sec-homoglyph missed on lookup_аccount; sec-invisible-encoding missed on title_case; spec-name-charset missed on lookup_аccount
 - **real-world/cve-2025-6514-shape**: gap-shell-injectable-url missed on connect_account
 - **ruby/tool-classes**: outcome: expected tools, got unsupported (mcp-check: no tool definitions found in <case> (scanned 0 of 0 source files, and the committed tool lists and MCPB manifests). Grade the live list instead: star); missed tool ping_host; missed tool host_uptime
-- **rust/two-handlers**: outcome: expected multiple, got tools; phantom tool alpha_status; phantom tool beta_status
 - **swift/sdk-tools**: outcome: expected tools, got unsupported (mcp-check: no tool definitions found in <case> (scanned 0 of 0 source files, and the committed tool lists and MCPB manifests). Grade the live list instead: star); missed tool utc_now; missed tool unix_time
-- **typescript/alias-server-variable**: missed tool ping_service
-- **typescript/duplicate-and-bad-names**: openai-name-unique missed on the list; spec-name-unique missed on the list
-- **typescript/factory-function**: reader params of get_key: expected ["key"], got []; reader required of get_key: expected ["key"], got []; reader annotations of get_key: expected {"readOnlyHint":true}, got {}; reader params of touch_key: expected ["key"], got []; reader required of touch_key: expected ["key"], got []; reader annotations of touch_key: expected {"readOnlyHint":false}, got {}
-- **typescript/generated-template-names**: outcome: expected tools, got none (mcp-check: no tool definitions found in <case> (scanned 1 of 1 source files, and the committed tool lists and MCPB manifests). Grade the live list instead: star); missed tool list_invoices; missed tool list_customers
