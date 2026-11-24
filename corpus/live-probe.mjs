@@ -1103,7 +1103,7 @@ export function oracleFor(dir, item, reader, ctx) {
   }
   if (found) raw.push(['raw/oracles.json', Buffer.from(json(found.rec))]);
   const summary = {
-    status: j.status, mode: j.mode, why: j.why,
+    status: j.status, mode: j.mode, why: j.why, ms: j.ms,
     clients: j.clients.map((c) => ({ client: c.client, outcome: c.outcome, protocol: c.protocol_negotiated, tool_count: c.tool_count })),
     conformance: j.conformance ? Object.fromEntries(Object.entries(j.conformance.summary).map(([k, v]) => [k, { pass: v.pass, fail: v.fail, expected_fail: v.expected_fail, not_applicable: v.not_applicable, bridge_excluded: v.bridge_excluded, scenarios_run: v.scenarios_run }])) : null,
     disagreements: j.disagreements.map((d) => d.class + ' ' + d.kind + ' ' + d.oracle_a + ' ' + d.oracle_b),
@@ -1209,6 +1209,13 @@ export function buildItem(item, ctx) {
     oracle = oracleFor(dir, item, reader, ctx);
     lines.push(...oracle.lines);
     result.oracles = oracle.summary;
+    // The driver times its probe around the probe option, so its probe_ms holds the oracle stage too (R-ORC-02):
+    // step_telemetry keeps the two apart.
+    const oms = oracle.summary ? int(oracle.summary.ms) : null;
+    if (oms !== null) {
+      result.timing.oracle_ms = oms;
+      if (result.timing.probe_ms !== null) result.timing.probe_ms = Math.max(0, result.timing.probe_ms - oms);
+    }
     // The captured bytes: the tools/list answers, each probe whole, the static read, the registry entry, the logs.
     const raw = [];
     if (primary) raw.push(['raw/tools-list.json', Buffer.from(json(primary.lists['tools/list'].raw_pages))]);

@@ -461,3 +461,28 @@ test('R-ORC-01: a client SDK that writes out an annotation default (Go: idempote
   const k = judgeOracles(rec, { reader, pins: PINS }).disagreements.map((x) => `${x.class} ${x.oracle_a} ${x.oracle_b} ${x.kind}`);
   assert.deepEqual(k, ['D4 reader client:go catalog', 'D4 client:typescript-v1 client:go catalog']);
 });
+
+test('R-ORC-02: the driver\'s probe time holds the oracle stage (it runs inside the probe option); step_telemetry keeps the two apart', () => {
+  // The self test on GitHub: probe_ms went from about 1 s to 12.4 s for mcp-check with the stage on.
+  const w = mkdtempSync(join(tmpdir(), 'live-probe-oracle-t-'));
+  const put = (p, s) => { mkdirSync(join(w, p, '..'), { recursive: true }); writeFileSync(join(w, p), typeof s === 'string' ? s : JSON.stringify(s)); };
+  const fx = (f) => readFileSync(join(LPFX, f), 'utf8');
+  const MARKER = 'liveprobe-' + 'ef'.repeat(16);
+  const resolution = { status: 'runnable', detail: null, registry: null, choice: null, candidates: [], launch: { kind: 'npm' }, subdir: null, seed_packages: 1 };
+  put('plan.json', { format: LP.PLAN_FORMAT, shard_id: 's', attempt_id: 'attempt-1', marker: MARKER, planned_at: '2026-11-24T10:00:00.000Z', subject_timeout_s: 147, runnable: 1, items: [{ index: 0, subject: 'isokron-ai/mcp-check', repo: 'isokron-ai/mcp-check', run_key: '1'.repeat(64), fence: 1, target_id: 's001', target: { id: 's001', launch: { kind: 'npm' } }, resolution, resolve_ms: 1 }] });
+  put('sandbox.json', { oracles_installed: false, selftest_check_rc: 0, swept: true, left: { labelled: 0, containers: 0, volumes: 0, uid_65534_processes: 0, runsc_processes: 0 } });
+  put('selftest/results.json', { cases: [{ case: 'direct-ip', blocked: true, logged: true, pass: true }], passed: 1, total: 1 });
+  put('driver-controls/s901/probe-bare.json', fx('probe-known.json'));
+  put('driver-controls/s902/probe-bare.json', fx('probe-forgery.json').split('liveprobe-MARKERMARKERMARKER0000').join(MARKER));
+  const rec = JSON.parse(fx('record-ok.json')); rec.timing = { ...(rec.timing || {}), probe_ms: 12472 };
+  put('driver-subjects/s001/record.json', rec);
+  put('driver-subjects/s001/probe-bare.json', fx('probe-known.json'));
+  const o = JSON.parse(fx('oracles-known.json')); o.ms = 11296;
+  put('driver-subjects/s001/oracles.json', o);
+  LP.bundleShard({ work: w });
+  const r = JSON.parse(readFileSync(join(w, 'out', '0', 'bundle', 'results', 'live-probe.json'), 'utf8'));
+  assert.equal(r.timing.oracle_ms, 11296);
+  assert.equal(r.timing.probe_ms, 12472 - 11296);
+  const st = readFileSync(join(w, 'out', '0', 'bundle', 'observations', 'live.ndjson'), 'utf8').trim().split('\n').map((l) => JSON.parse(l)).find((x) => x.field === 'step_telemetry').value;
+  assert.deepEqual([st.probe_ms, st.oracle_ms], [1176, 11296]);
+});
