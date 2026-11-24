@@ -838,3 +838,23 @@ test('R-SS-11: a list too large to hold as one string is list_rejected (too_larg
   assert.equal(scan.list_error, 'too_large');
   assert.equal(scan.retryable, false);
 });
+
+test('R-SS-12: only a RangeError about size is a too-large list; a stack overflow while grading stays reader_error', async () => {
+  const { gradeError } = await import('../corpus/scan-static.mjs');
+  for (const msg of ['Invalid string length', 'Array buffer allocation failed']) {
+    const f = gradeError(new RangeError(msg));
+    assert.equal(f.detail, 'list_rejected', msg);
+    assert.equal(f.listError, 'too_large', msg);
+  }
+  const deep = new RangeError('Maximum call stack size exceeded');
+  assert.equal(gradeError(deep), deep, 'returned as it is');
+  const other = new TypeError('x is not a function');
+  assert.equal(gradeError(other), other);
+  const { InputError } = await import('../src/limits.js');
+  assert.equal(gradeError(new InputError('too_many_tools', 'n')).listError, 'too_many_tools');
+  // A real stack overflow is returned unchanged, so scanSubject's catch-all records it as reader_error.
+  let overflow;
+  try { const f = () => f(); f(); } catch (e) { overflow = e; }
+  assert.ok(overflow instanceof RangeError && !/Invalid string length|allocation failed/i.test(overflow.message));
+  assert.equal(gradeError(overflow), overflow);
+});
