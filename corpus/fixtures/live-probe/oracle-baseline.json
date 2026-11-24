@@ -1,0 +1,131 @@
+{
+ "about": "The expected oracle results (corpus/LIVE-PROBE.md, Oracles) of our own servers: the known-answer control (@isokron/mcp-check 1.3.1, the same server as the subject isokron-ai/mcp-check) and the T0 subjects the self test runs (corpus/fixtures/live-probe/selftest-shard.json). For each SDK client: the outcome, the negotiated protocol and, where the version is pinned, the engine's catalog hash; for the conformance suite: the scenarios run per spec revision and every failure that is expected (spec-revision/scenario/check), so any other failure, or a baselined one that passes, fails the self test; and the disagreements expected (none). The subjects' entries are also written into each of their bundles (results oracles.baseline_problems). Re-record only by a reviewed commit, with the reason in REGRESSIONS.md or the pull request.",
+ "controls": {
+  "known_good": {
+   "clients": {
+    "typescript-v1": {
+     "outcome": "listed",
+     "protocol_negotiated": "2025-11-25",
+     "catalog_sha256": "3b6986dcdac856b5a8baaf4836be4c726f8076da7bca547fe4e186931cf02919",
+     "tool_count": 3
+    },
+    "typescript-v2": {
+     "outcome": "listed",
+     "protocol_negotiated": "2025-11-25",
+     "catalog_sha256": "3b6986dcdac856b5a8baaf4836be4c726f8076da7bca547fe4e186931cf02919",
+     "tool_count": 3
+    },
+    "python": {
+     "outcome": "listed",
+     "protocol_negotiated": "2025-11-25",
+     "catalog_sha256": "3b6986dcdac856b5a8baaf4836be4c726f8076da7bca547fe4e186931cf02919",
+     "tool_count": 3
+    },
+    "go": {
+     "outcome": "listed",
+     "protocol_negotiated": "2025-11-25",
+     "catalog_sha256": "3b6986dcdac856b5a8baaf4836be4c726f8076da7bca547fe4e186931cf02919",
+     "tool_count": 3
+    }
+   },
+   "expected_failures": [
+    "2026-07-28/tools-list/wire-schema-valid"
+   ],
+   "scenarios_run": {
+    "2025-11-25": 5,
+    "2026-07-28": 3
+   },
+   "disagreements": []
+  }
+ },
+ "subjects": {
+  "isokron-ai/mcp-check": {
+   "clients": {
+    "typescript-v1": {
+     "outcome": "listed",
+     "protocol_negotiated": "2025-11-25",
+     "catalog_sha256": "3b6986dcdac856b5a8baaf4836be4c726f8076da7bca547fe4e186931cf02919",
+     "tool_count": 3
+    },
+    "typescript-v2": {
+     "outcome": "listed",
+     "protocol_negotiated": "2025-11-25",
+     "catalog_sha256": "3b6986dcdac856b5a8baaf4836be4c726f8076da7bca547fe4e186931cf02919",
+     "tool_count": 3
+    },
+    "python": {
+     "outcome": "listed",
+     "protocol_negotiated": "2025-11-25",
+     "catalog_sha256": "3b6986dcdac856b5a8baaf4836be4c726f8076da7bca547fe4e186931cf02919",
+     "tool_count": 3
+    },
+    "go": {
+     "outcome": "listed",
+     "protocol_negotiated": "2025-11-25",
+     "catalog_sha256": "3b6986dcdac856b5a8baaf4836be4c726f8076da7bca547fe4e186931cf02919",
+     "tool_count": 3
+    }
+   },
+   "expected_failures": [
+    "2026-07-28/tools-list/wire-schema-valid"
+   ],
+   "scenarios_run": {
+    "2025-11-25": 5,
+    "2026-07-28": 3
+   },
+   "disagreements": []
+  },
+  "isokron-ai/kronicle-lite": {
+   "clients": {
+    "typescript-v1": {
+     "outcome": "listed",
+     "protocol_negotiated": "2025-11-25"
+    },
+    "typescript-v2": {
+     "outcome": "listed",
+     "protocol_negotiated": "2025-11-25"
+    },
+    "python": {
+     "outcome": "listed",
+     "protocol_negotiated": "2026-07-28"
+    },
+    "go": {
+     "outcome": "listed",
+     "protocol_negotiated": "2026-07-28"
+    }
+   },
+   "expected_failures": [],
+   "scenarios_run": {
+    "2025-11-25": 5,
+    "2026-07-28": 3
+   },
+   "disagreements": []
+  },
+  "isokron-ai/sea-lite": {
+   "clients": {
+    "typescript-v1": {
+     "outcome": "listed",
+     "protocol_negotiated": "2025-11-25"
+    },
+    "typescript-v2": {
+     "outcome": "listed",
+     "protocol_negotiated": "2025-11-25"
+    },
+    "python": {
+     "outcome": "listed",
+     "protocol_negotiated": "2026-07-28"
+    },
+    "go": {
+     "outcome": "listed",
+     "protocol_negotiated": "2026-07-28"
+    }
+   },
+   "expected_failures": [],
+   "scenarios_run": {
+    "2025-11-25": 5,
+    "2026-07-28": 3
+   },
+   "disagreements": []
+  }
+ }
+}

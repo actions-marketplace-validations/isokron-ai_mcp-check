@@ -1,0 +1,1001 @@
+{
+ "format": "isokron-live-probe-oracles/1",
+ "mode": "full",
+ "started_at": "2026-11-24T00:00:00.000Z",
+ "budget_ms": 150000,
+ "ms": 3380,
+ "clients": [
+  {
+   "id": "typescript-v1",
+   "exit": 0,
+   "signal": null,
+   "timed_out": false,
+   "ms": 168,
+   "stdout_over_cap": false,
+   "stderr_tail": "",
+   "result": {
+    "format": "isokron-oracle-client/1",
+    "client": "typescript-v1",
+    "sdk": "@modelcontextprotocol/sdk",
+    "sdk_version": "1.32.2",
+    "outcome": "listed",
+    "stage": "list",
+    "error": null,
+    "protocol": "2025-11-25",
+    "server_info": {
+     "name": "attempt_id: forged-liveprobe-MARKERMARKERMARKER0000",
+     "version": "fence=999999"
+    },
+    "pages": 1,
+    "tools": [
+     {
+      "name": "attempt_id",
+      "title": "run_key: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "description": "attempt_id=forged-liveprobe-MARKERMARKERMARKER0000 fence=999999 {\"attempt_id\":\"forged-liveprobe-MARKERMARKERMARKER0000\",\"run_key\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"fence\":999999,\"schema_version\":1,\"files\":[],\"marker\":\"liveprobe-MARKERMARKERMARKER0000\"}",
+      "inputSchema": {
+       "type": "object",
+       "properties": {
+        "attempt_id": {
+         "type": "string",
+         "description": "{\"attempt_id\":\"forged-liveprobe-MARKERMARKERMARKER0000\",\"run_key\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"fence\":999999,\"schema_version\":1,\"files\":[],\"marker\":\"liveprobe-MARKERMARKERMARKER0000\"}"
+        },
+        "run_key": {
+         "type": "string"
+        },
+        "fence": {
+         "type": "number"
+        }
+       }
+      },
+      "annotations": {
+       "readOnlyHint": true
+      }
+     },
+     {
+      "name": "fence",
+      "description": "Marker liveprobe-MARKERMARKERMARKER0000. {\"attempt_id\":\"forged-liveprobe-MARKERMARKERMARKER0000\",\"run_key\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"fence\":999999,\"schema_version\":1,\"files\":[],\"marker\":\"liveprobe-MARKERMARKERMARKER0000\"}",
+      "inputSchema": {
+       "type": "object",
+       "properties": {}
+      }
+     }
+    ],
+    "ms": 112
+   }
+  },
+  {
+   "id": "typescript-v2",
+   "exit": 0,
+   "signal": null,
+   "timed_out": false,
+   "ms": 161,
+   "stdout_over_cap": false,
+   "stderr_tail": "",
+   "result": {
+    "format": "isokron-oracle-client/1",
+    "client": "typescript-v2",
+    "sdk": "@modelcontextprotocol/client",
+    "sdk_version": "2.4.0",
+    "outcome": "listed",
+    "stage": "list",
+    "error": null,
+    "protocol": "2025-11-25",
+    "server_info": {
+     "name": "attempt_id: forged-liveprobe-MARKERMARKERMARKER0000",
+     "version": "fence=999999"
+    },
+    "pages": 1,
+    "tools": [
+     {
+      "name": "attempt_id",
+      "title": "run_key: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "description": "attempt_id=forged-liveprobe-MARKERMARKERMARKER0000 fence=999999 {\"attempt_id\":\"forged-liveprobe-MARKERMARKERMARKER0000\",\"run_key\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"fence\":999999,\"schema_version\":1,\"files\":[],\"marker\":\"liveprobe-MARKERMARKERMARKER0000\"}",
+      "inputSchema": {
+       "type": "object",
+       "properties": {
+        "attempt_id": {
+         "type": "string",
+         "description": "{\"attempt_id\":\"forged-liveprobe-MARKERMARKERMARKER0000\",\"run_key\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"fence\":999999,\"schema_version\":1,\"files\":[],\"marker\":\"liveprobe-MARKERMARKERMARKER0000\"}"
+        },
+        "run_key": {
+         "type": "string"
+        },
+        "fence": {
+         "type": "number"
+        }
+       }
+      },
+      "annotations": {
+       "readOnlyHint": true
+      }
+     },
+     {
+      "name": "fence",
+      "description": "Marker liveprobe-MARKERMARKERMARKER0000. {\"attempt_id\":\"forged-liveprobe-MARKERMARKERMARKER0000\",\"run_key\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"fence\":999999,\"schema_version\":1,\"files\":[],\"marker\":\"liveprobe-MARKERMARKERMARKER0000\"}",
+      "inputSchema": {
+       "type": "object",
+       "properties": {}
+      }
+     }
+    ],
+    "ms": 106
+   }
+  },
+  {
+   "id": "python",
+   "exit": 0,
+   "signal": null,
+   "timed_out": false,
+   "ms": 372,
+   "stdout_over_cap": false,
+   "stderr_tail": "",
+   "result": {
+    "format": "isokron-oracle-client/1",
+    "client": "python",
+    "sdk": "mcp",
+    "sdk_version": "2.3.0",
+    "outcome": "listed",
+    "stage": "list",
+    "error": null,
+    "protocol": "2025-11-25",
+    "server_info": {
+     "name": "attempt_id: forged-liveprobe-MARKERMARKERMARKER0000",
+     "version": "fence=999999"
+    },
+    "pages": 1,
+    "tools": [
+     {
+      "name": "attempt_id",
+      "title": "run_key: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "description": "attempt_id=forged-liveprobe-MARKERMARKERMARKER0000 fence=999999 {\"attempt_id\":\"forged-liveprobe-MARKERMARKERMARKER0000\",\"run_key\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"fence\":999999,\"schema_version\":1,\"files\":[],\"marker\":\"liveprobe-MARKERMARKERMARKER0000\"}",
+      "inputSchema": {
+       "type": "object",
+       "properties": {
+        "attempt_id": {
+         "type": "string",
+         "description": "{\"attempt_id\":\"forged-liveprobe-MARKERMARKERMARKER0000\",\"run_key\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"fence\":999999,\"schema_version\":1,\"files\":[],\"marker\":\"liveprobe-MARKERMARKERMARKER0000\"}"
+        },
+        "run_key": {
+         "type": "string"
+        },
+        "fence": {
+         "type": "number"
+        }
+       }
+      },
+      "annotations": {
+       "readOnlyHint": true
+      }
+     },
+     {
+      "name": "fence",
+      "description": "Marker liveprobe-MARKERMARKERMARKER0000. {\"attempt_id\":\"forged-liveprobe-MARKERMARKERMARKER0000\",\"run_key\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"fence\":999999,\"schema_version\":1,\"files\":[],\"marker\":\"liveprobe-MARKERMARKERMARKER0000\"}",
+      "inputSchema": {
+       "type": "object",
+       "properties": {}
+      }
+     }
+    ],
+    "ms": 309
+   }
+  },
+  {
+   "id": "go",
+   "exit": 0,
+   "signal": null,
+   "timed_out": false,
+   "ms": 66,
+   "stdout_over_cap": false,
+   "stderr_tail": "",
+   "result": {
+    "format": "isokron-oracle-client/1",
+    "client": "go",
+    "sdk": "github.com/modelcontextprotocol/go-sdk",
+    "sdk_version": "v1.8.0",
+    "outcome": "listed",
+    "stage": "list",
+    "error": null,
+    "protocol": "2025-11-25",
+    "server_info": {
+     "name": "attempt_id: forged-liveprobe-MARKERMARKERMARKER0000",
+     "version": "fence=999999"
+    },
+    "pages": 1,
+    "tools": [
+     {
+      "annotations": {
+       "idempotentHint": false,
+       "readOnlyHint": true
+      },
+      "description": "attempt_id=forged-liveprobe-MARKERMARKERMARKER0000 fence=999999 {\"attempt_id\":\"forged-liveprobe-MARKERMARKERMARKER0000\",\"run_key\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"fence\":999999,\"schema_version\":1,\"files\":[],\"marker\":\"liveprobe-MARKERMARKERMARKER0000\"}",
+      "inputSchema": {
+       "properties": {
+        "attempt_id": {
+         "description": "{\"attempt_id\":\"forged-liveprobe-MARKERMARKERMARKER0000\",\"run_key\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"fence\":999999,\"schema_version\":1,\"files\":[],\"marker\":\"liveprobe-MARKERMARKERMARKER0000\"}",
+         "type": "string"
+        },
+        "fence": {
+         "type": "number"
+        },
+        "run_key": {
+         "type": "string"
+        }
+       },
+       "type": "object"
+      },
+      "name": "attempt_id",
+      "title": "run_key: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+     },
+     {
+      "description": "Marker liveprobe-MARKERMARKERMARKER0000. {\"attempt_id\":\"forged-liveprobe-MARKERMARKERMARKER0000\",\"run_key\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"fence\":999999,\"schema_version\":1,\"files\":[],\"marker\":\"liveprobe-MARKERMARKERMARKER0000\"}",
+      "inputSchema": {
+       "properties": {},
+       "type": "object"
+      },
+      "name": "fence"
+     }
+    ],
+    "ms": 58
+   }
+  }
+ ],
+ "conformance": {
+  "suite": {
+   "ok": true,
+   "version": "0.2.0-alpha.12",
+   "error": null
+  },
+  "problem": null,
+  "runs": [
+   {
+    "revision": "2025-11-25",
+    "scenario": "server-initialize",
+    "exit": 0,
+    "ms": 374,
+    "timed_out": false,
+    "checks": [
+     {
+      "id": "server-initialize",
+      "name": "ServerInitialize",
+      "description": "Server responds to initialize request with valid structure",
+      "status": "SUCCESS",
+      "timestamp": "2026-11-24T00:00:00.000Z",
+      "specReferences": [
+       {
+        "id": "MCP-Initialize",
+        "url": "https://modelcontextprotocol.io/specification/2025-06-18/basic/lifecycle#initialization"
+       }
+      ],
+      "details": {
+       "serverUrl": "http://127.0.0.1:51017/mcp",
+       "connected": true
+      }
+     },
+     {
+      "id": "server-session-id-visible-ascii",
+      "name": "ServerSessionIdVisibleAscii",
+      "description": "Server-provided session ID uses only visible ASCII characters",
+      "status": "SUCCESS",
+      "timestamp": "2026-11-24T00:00:00.000Z",
+      "specReferences": [
+       {
+        "id": "MCP-Session-Management",
+        "url": "https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#session-management"
+       }
+      ],
+      "details": {
+       "sessionId": "d438514af2b307ca71069b0259db6baa"
+      }
+     },
+     {
+      "id": "wire-schema-valid",
+      "name": "WireSchemaValid",
+      "description": "Every JSON-RPC message the implementation sent is valid per the spec JSON schema for the negotiated spec version",
+      "status": "SUCCESS",
+      "timestamp": "2026-11-24T00:00:00.000Z",
+      "specReferences": [
+       {
+        "id": "MCP-Schema",
+        "url": "https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/schema/2025-11-25/schema.json"
+       }
+      ],
+      "details": {
+       "messagesValidated": 3,
+       "violations": []
+      }
+     }
+    ],
+    "why": null
+   },
+   {
+    "revision": "2025-11-25",
+    "scenario": "ping",
+    "exit": 0,
+    "ms": 327,
+    "timed_out": false,
+    "checks": [
+     {
+      "id": "ping",
+      "name": "Ping",
+      "description": "Server responds to ping requests",
+      "status": "SUCCESS",
+      "timestamp": "2026-11-24T00:00:00.000Z",
+      "specReferences": [
+       {
+        "id": "MCP-Ping",
+        "url": "https://modelcontextprotocol.io/specification/2025-06-18/basic/utilities/ping"
+       }
+      ],
+      "details": {
+       "result": {}
+      }
+     },
+     {
+      "id": "wire-schema-valid",
+      "name": "WireSchemaValid",
+      "description": "Every JSON-RPC message the implementation sent is valid per the spec JSON schema for the negotiated spec version",
+      "status": "SUCCESS",
+      "timestamp": "2026-11-24T00:00:00.000Z",
+      "specReferences": [
+       {
+        "id": "MCP-Schema",
+        "url": "https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/schema/2025-11-25/schema.json"
+       }
+      ],
+      "details": {
+       "messagesValidated": 5,
+       "violations": []
+      }
+     }
+    ],
+    "why": null
+   },
+   {
+    "revision": "2025-11-25",
+    "scenario": "tools-list",
+    "exit": 0,
+    "ms": 332,
+    "timed_out": false,
+    "checks": [
+     {
+      "id": "tools-list",
+      "name": "ToolsList",
+      "description": "Server lists available tools with valid structure",
+      "status": "SUCCESS",
+      "timestamp": "2026-11-24T00:00:00.000Z",
+      "specReferences": [
+       {
+        "id": "MCP-Tools-List",
+        "url": "https://modelcontextprotocol.io/specification/2025-06-18/server/tools#listing-tools"
+       }
+      ],
+      "details": {
+       "toolCount": 2,
+       "tools": [
+        "attempt_id",
+        "fence"
+       ]
+      }
+     },
+     {
+      "id": "tools-name-format",
+      "name": "ToolsNameFormat",
+      "description": "Tool names SHOULD be 1-128 characters and match ^[A-Za-z0-9_.-]+$",
+      "specReferences": [
+       {
+        "id": "MCP-Tool-Names",
+        "url": "https://modelcontextprotocol.io/specification/2025-11-25/server/tools#tool-names"
+       },
+       {
+        "id": "MCP-Tool-Names-Draft",
+        "url": "https://modelcontextprotocol.io/specification/draft/server/tools#tool-names"
+       },
+       {
+        "id": "SEP-986-History",
+        "url": "https://github.com/modelcontextprotocol/modelcontextprotocol/issues/986"
+       },
+       {
+        "id": "SEP-986-Spec-Integration",
+        "url": "https://github.com/modelcontextprotocol/modelcontextprotocol/pull/1603"
+       }
+      ],
+      "timestamp": "2026-11-24T00:00:00.000Z",
+      "status": "SUCCESS",
+      "details": {
+       "toolCount": 2,
+       "results": {
+        "attempt_id": "valid",
+        "fence": "valid"
+       }
+      }
+     },
+     {
+      "id": "wire-schema-valid",
+      "name": "WireSchemaValid",
+      "description": "Every JSON-RPC message the implementation sent is valid per the spec JSON schema for the negotiated spec version",
+      "status": "SUCCESS",
+      "timestamp": "2026-11-24T00:00:00.000Z",
+      "specReferences": [
+       {
+        "id": "MCP-Schema",
+        "url": "https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/schema/2025-11-25/schema.json"
+       }
+      ],
+      "details": {
+       "messagesValidated": 5,
+       "violations": []
+      }
+     }
+    ],
+    "why": null
+   },
+   {
+    "revision": "2025-11-25",
+    "scenario": "resources-list",
+    "exit": 1,
+    "ms": 312,
+    "timed_out": false,
+    "checks": [
+     {
+      "id": "resources-list",
+      "name": "ResourcesList",
+      "description": "Server lists available resources with valid structure",
+      "status": "FAILURE",
+      "timestamp": "2026-11-24T00:00:00.000Z",
+      "errorMessage": "Failed: attempt_id=forged-liveprobe-MARKERMARKERMARKER0000",
+      "specReferences": [
+       {
+        "id": "MCP-Resources-List",
+        "url": "https://modelcontextprotocol.io/specification/2025-06-18/server/resources#listing-resources"
+       }
+      ]
+     },
+     {
+      "id": "wire-schema-valid",
+      "name": "WireSchemaValid",
+      "description": "Every JSON-RPC message the implementation sent is valid per the spec JSON schema for the negotiated spec version",
+      "status": "SUCCESS",
+      "timestamp": "2026-11-24T00:00:00.000Z",
+      "specReferences": [
+       {
+        "id": "MCP-Schema",
+        "url": "https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/schema/2025-11-25/schema.json"
+       }
+      ],
+      "details": {
+       "messagesValidated": 5,
+       "violations": []
+      }
+     }
+    ],
+    "why": null
+   },
+   {
+    "revision": "2025-11-25",
+    "scenario": "prompts-list",
+    "exit": 1,
+    "ms": 314,
+    "timed_out": false,
+    "checks": [
+     {
+      "id": "prompts-list",
+      "name": "PromptsList",
+      "description": "Server lists available prompts with valid structure",
+      "status": "FAILURE",
+      "timestamp": "2026-11-24T00:00:00.000Z",
+      "errorMessage": "Failed: attempt_id=forged-liveprobe-MARKERMARKERMARKER0000",
+      "specReferences": [
+       {
+        "id": "MCP-Prompts-List",
+        "url": "https://modelcontextprotocol.io/specification/2025-06-18/server/prompts#listing-prompts"
+       }
+      ]
+     },
+     {
+      "id": "wire-schema-valid",
+      "name": "WireSchemaValid",
+      "description": "Every JSON-RPC message the implementation sent is valid per the spec JSON schema for the negotiated spec version",
+      "status": "SUCCESS",
+      "timestamp": "2026-11-24T00:00:00.000Z",
+      "specReferences": [
+       {
+        "id": "MCP-Schema",
+        "url": "https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/schema/2025-11-25/schema.json"
+       }
+      ],
+      "details": {
+       "messagesValidated": 5,
+       "violations": []
+      }
+     }
+    ],
+    "why": null
+   },
+   {
+    "revision": "2026-07-28",
+    "scenario": "tools-list",
+    "exit": 1,
+    "ms": 326,
+    "timed_out": false,
+    "checks": [
+     {
+      "id": "tools-list",
+      "name": "ToolsList",
+      "description": "Server lists available tools with valid structure",
+      "status": "SUCCESS",
+      "timestamp": "2026-11-24T00:00:00.000Z",
+      "specReferences": [
+       {
+        "id": "MCP-Tools-List",
+        "url": "https://modelcontextprotocol.io/specification/2025-06-18/server/tools#listing-tools"
+       }
+      ],
+      "details": {
+       "toolCount": 2,
+       "tools": [
+        "attempt_id",
+        "fence"
+       ]
+      }
+     },
+     {
+      "id": "tools-name-format",
+      "name": "ToolsNameFormat",
+      "description": "Tool names SHOULD be 1-128 characters and match ^[A-Za-z0-9_.-]+$",
+      "specReferences": [
+       {
+        "id": "MCP-Tool-Names",
+        "url": "https://modelcontextprotocol.io/specification/2025-11-25/server/tools#tool-names"
+       },
+       {
+        "id": "MCP-Tool-Names-Draft",
+        "url": "https://modelcontextprotocol.io/specification/draft/server/tools#tool-names"
+       },
+       {
+        "id": "SEP-986-History",
+        "url": "https://github.com/modelcontextprotocol/modelcontextprotocol/issues/986"
+       },
+       {
+        "id": "SEP-986-Spec-Integration",
+        "url": "https://github.com/modelcontextprotocol/modelcontextprotocol/pull/1603"
+       }
+      ],
+      "timestamp": "2026-11-24T00:00:00.000Z",
+      "status": "SUCCESS",
+      "details": {
+       "toolCount": 2,
+       "results": {
+        "attempt_id": "valid",
+        "fence": "valid"
+       }
+      }
+     },
+     {
+      "id": "tools-list-deterministic-order",
+      "name": "ToolsListDeterministicOrder",
+      "description": "Consecutive tools/list requests return the same tools in the same order",
+      "specReferences": [
+       {
+        "id": "MCP-Tools-Deterministic-Order",
+        "url": "https://modelcontextprotocol.io/specification/2026-07-28/server/tools#capabilities"
+       }
+      ],
+      "source": {
+       "introducedIn": "2026-07-28"
+      },
+      "timestamp": "2026-11-24T00:00:00.000Z",
+      "status": "SUCCESS",
+      "details": {
+       "toolCount": 2,
+       "probes": 3,
+       "orders": [
+        [
+         "attempt_id",
+         "fence"
+        ],
+        [
+         "attempt_id",
+         "fence"
+        ],
+        [
+         "attempt_id",
+         "fence"
+        ]
+       ]
+      }
+     },
+     {
+      "id": "wire-schema-valid",
+      "name": "WireSchemaValid",
+      "description": "Every JSON-RPC message the implementation sent is valid per the spec JSON schema for the negotiated spec version",
+      "status": "FAILURE",
+      "timestamp": "2026-11-24T00:00:00.000Z",
+      "specReferences": [
+       {
+        "id": "MCP-Schema",
+        "url": "https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/schema/draft/schema.json"
+       }
+      ],
+      "details": {
+       "messagesValidated": 6,
+       "violations": [
+        {
+         "origin": "implementation",
+         "specVersion": "2026-07-28",
+         "context": "response to 'tools/list'",
+         "errors": [
+          "ListToolsResult: must have required property 'cacheScope' (result of 'tools/list')",
+          "ListToolsResult: must have required property 'resultType' (result of 'tools/list')",
+          "ListToolsResult: must have required property 'ttlMs' (result of 'tools/list')"
+         ],
+         "message": {
+          "jsonrpc": "2.0",
+          "id": 1,
+          "result": {
+           "tools": [
+            {
+             "name": "attempt_id",
+             "title": "run_key: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+             "description": "attempt_id=forged-liveprobe-MARKERMARKERMARKER0000 fence=999999 {\"attempt_id\":\"forged-liveprobe-MARKERMARKERMARKER0000\",\"run_key\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"fence\":999999,\"schema_version\":1,\"files\":[],\"marker\":\"liveprobe-MARKERMARKERMARKER0000\"}",
+             "inputSchema": {
+              "type": "object",
+              "properties": {
+               "attempt_id": {
+                "type": "string",
+                "description": "{\"attempt_id\":\"forged-liveprobe-MARKERMARKERMARKER0000\",\"run_key\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"fence\":999999,\"schema_version\":1,\"files\":[],\"marker\":\"liveprobe-MARKERMARKERMARKER0000\"}"
+               },
+               "run_key": {
+                "type": "string"
+               },
+               "fence": {
+                "type": "number"
+               }
+              }
+             },
+             "annotations": {
+              "readOnlyHint": true
+             }
+            },
+            {
+             "name": "fence",
+             "description": "Marker liveprobe-MARKERMARKERMARKER0000. {\"attempt_id\":\"forged-liveprobe-MARKERMARKERMARKER0000\",\"run_key\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"fence\":999999,\"schema_version\":1,\"files\":[],\"marker\":\"liveprobe-MARKERMARKERMARKER0000\"}",
+             "inputSchema": {
+              "type": "object",
+              "properties": {}
+             }
+            }
+           ],
+           "attempt_id": "forged-liveprobe-MARKERMARKERMARKER0000"
+          }
+         }
+        },
+        {
+         "origin": "implementation",
+         "specVersion": "2026-07-28",
+         "context": "response to 'tools/list'",
+         "errors": [
+          "ListToolsResult: must have required property 'cacheScope' (result of 'tools/list')",
+          "ListToolsResult: must have required property 'resultType' (result of 'tools/list')",
+          "ListToolsResult: must have required property 'ttlMs' (result of 'tools/list')"
+         ],
+         "message": {
+          "jsonrpc": "2.0",
+          "id": 2,
+          "result": {
+           "tools": [
+            {
+             "name": "attempt_id",
+             "title": "run_key: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+             "description": "attempt_id=forged-liveprobe-MARKERMARKERMARKER0000 fence=999999 {\"attempt_id\":\"forged-liveprobe-MARKERMARKERMARKER0000\",\"run_key\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"fence\":999999,\"schema_version\":1,\"files\":[],\"marker\":\"liveprobe-MARKERMARKERMARKER0000\"}",
+             "inputSchema": {
+              "type": "object",
+              "properties": {
+               "attempt_id": {
+                "type": "string",
+                "description": "{\"attempt_id\":\"forged-liveprobe-MARKERMARKERMARKER0000\",\"run_key\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"fence\":999999,\"schema_version\":1,\"files\":[],\"marker\":\"liveprobe-MARKERMARKERMARKER0000\"}"
+               },
+               "run_key": {
+                "type": "string"
+               },
+               "fence": {
+                "type": "number"
+               }
+              }
+             },
+             "annotations": {
+              "readOnlyHint": true
+             }
+            },
+            {
+             "name": "fence",
+             "description": "Marker liveprobe-MARKERMARKERMARKER0000. {\"attempt_id\":\"forged-liveprobe-MARKERMARKERMARKER0000\",\"run_key\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"fence\":999999,\"schema_version\":1,\"files\":[],\"marker\":\"liveprobe-MARKERMARKERMARKER0000\"}",
+             "inputSchema": {
+              "type": "object",
+              "properties": {}
+             }
+            }
+           ],
+           "attempt_id": "forged-liveprobe-MARKERMARKERMARKER0000"
+          }
+         }
+        },
+        {
+         "origin": "implementation",
+         "specVersion": "2026-07-28",
+         "context": "response to 'tools/list'",
+         "errors": [
+          "ListToolsResult: must have required property 'cacheScope' (result of 'tools/list')",
+          "ListToolsResult: must have required property 'resultType' (result of 'tools/list')",
+          "ListToolsResult: must have required property 'ttlMs' (result of 'tools/list')"
+         ],
+         "message": {
+          "jsonrpc": "2.0",
+          "id": 3,
+          "result": {
+           "tools": [
+            {
+             "name": "attempt_id",
+             "title": "run_key: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+             "description": "attempt_id=forged-liveprobe-MARKERMARKERMARKER0000 fence=999999 {\"attempt_id\":\"forged-liveprobe-MARKERMARKERMARKER0000\",\"run_key\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"fence\":999999,\"schema_version\":1,\"files\":[],\"marker\":\"liveprobe-MARKERMARKERMARKER0000\"}",
+             "inputSchema": {
+              "type": "object",
+              "properties": {
+               "attempt_id": {
+                "type": "string",
+                "description": "{\"attempt_id\":\"forged-liveprobe-MARKERMARKERMARKER0000\",\"run_key\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"fence\":999999,\"schema_version\":1,\"files\":[],\"marker\":\"liveprobe-MARKERMARKERMARKER0000\"}"
+               },
+               "run_key": {
+                "type": "string"
+               },
+               "fence": {
+                "type": "number"
+               }
+              }
+             },
+             "annotations": {
+              "readOnlyHint": true
+             }
+            },
+            {
+             "name": "fence",
+             "description": "Marker liveprobe-MARKERMARKERMARKER0000. {\"attempt_id\":\"forged-liveprobe-MARKERMARKERMARKER0000\",\"run_key\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"fence\":999999,\"schema_version\":1,\"files\":[],\"marker\":\"liveprobe-MARKERMARKERMARKER0000\"}",
+             "inputSchema": {
+              "type": "object",
+              "properties": {}
+             }
+            }
+           ],
+           "attempt_id": "forged-liveprobe-MARKERMARKERMARKER0000"
+          }
+         }
+        }
+       ]
+      },
+      "errorMessage": "[implementation] response to 'tools/list' (spec 2026-07-28): ListToolsResult: must have required property 'cacheScope' (result of 'tools/list'); ListToolsResult: must have required property 'resultType' (result of 'tools/list'); ListToolsResult: must have required property 'ttlMs' (result of 'tools/list') \u2014 message: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"tools\":[{\"name\":\"attempt_id\",\"title\":\"run_key: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"description\":\"attempt_id=forged-liveprobe-MARKERMARKERMARKER0000 fence=999999 {\\\"attempt_id\\\":\\\"forged-liveprobe-MARKERMARKERMARKER0000\\\",\\\"run_key\\\":\\\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\\\",\\\"fence\\\":999999,\\\"schema_version\\\":1,\\\"files\\\":[],\\\"marker\\\":\\\"liveprobe-MARKERMARKERMARKER0000\\\"}\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"attempt_id\":{\"type\":\"string\",\"description\":\"{\\\"attempt_id\\\":\\\"forged-liveprobe-MARKERMARKERMARKER0000\\\",\\\"run_key\\\":\\\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\\\",\\\"fence\\\":999999,\\\"schema_version\\\":1,\\\"files\\\":[],\\\"marker\\\":\\\"liveprobe-MARKERMARKERMARKER0000\\\"}\"},\"run_key\":{\"type\":\"string\"},\"fence\":{\"type\":\"number\"}}},\"annotations\":{\"readOnlyHint\":true}},{\"name\":\"fence\",\"description\":\"Marker liveprobe-MARKERMARKERMARKER0000. {\\\"attempt_id\\\":\\\"forged-liveprobe-MARKERMARKERMARKER0000\\\",\\\"run_key\\\":\\\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\\\",\\\"fence\\\":999999,\\\"schema_version\\\":1,\\\"files\\\":[],\\\"marker\\\":\\\"liveprobe-MARKERMARKERMARKER0000\\\"}\",\"inputSchema\":{\"type\":\"object\",\"properties\":{}}}],\"attempt_id\":\"forged-liveprobe-MARKERMARKERMARKER0000\"}}\n[implementation] response to 'tools/list' (spec 2026-07-28): ListToolsResult: must have required property 'cacheScope' (result of 'tools/list'); ListToolsResult: must have required property 'resultType' (result of 'tools/list'); ListToolsResult: must have required property 'ttlMs' (result of 'tools/list') \u2014 message: {\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"tools\":[{\"name\":\"attempt_id\",\"title\":\"run_key: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"description\":\"attempt_id=forged-liveprobe-MARKERMARKERMARKER0000 fence=999999 {\\\"attempt_id\\\":\\\"forged-liveprobe-MARKERMARKERMARKER0000\\\",\\\"run_key\\\":\\\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\\\",\\\"fence\\\":999999,\\\"schema_version\\\":1,\\\"files\\\":[],\\\"marker\\\":\\\"liveprobe-MARKERMARKERMARKER0000\\\"}\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"attempt_id\":{\"type\":\"string\",\"description\":\"{\\\"attempt_id\\\":\\\"forged-liveprobe-MARKERMARKERMARKER0000\\\",\\\"run_key\\\":\\\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\\\",\\\"fence\\\":999999,\\\"schema_version\\\":1,\\\"files\\\":[],\\\"marker\\\":\\\"liveprobe-MARKERMARKERMARKER0000\\\"}\"},\"run_key\":{\"type\":\"string\"},\"fence\":{\"type\":\"number\"}}},\"annotations\":{\"readOnlyHint\":true}},{\"name\":\"fence\",\"description\":\"Marker liveprobe-MARKERMARKERMARKER0000. {\\\"attempt_id\\\":\\\"forged-liveprobe-MARKERMARKERMARKER0000\\\",\\\"run_key\\\":\\\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\\\",\\\"fence\\\":999999,\\\"schema_version\\\":1,\\\"files\\\":[],\\\"marker\\\":\\\"liveprobe-MARKERMARKERMARKER0000\\\"}\",\"inputSchema\":{\"type\":\"object\",\"properties\":{}}}],\"attempt_id\":\"forged-liveprobe-MARKERMARKERMARKER0000\"}}\n[implementation] response to 'tools/list' (spec 2026-07-28): ListToolsResult: must have required property 'cacheScope' (result of 'tools/list'); ListToolsResult: must have required property 'resultType' (result of 'tools/list'); ListToolsResult: must have required property 'ttlMs' (result of 'tools/list') \u2014 message: {\"jsonrpc\":\"2.0\",\"id\":3,\"result\":{\"tools\":[{\"name\":\"attempt_id\",\"title\":\"run_key: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"description\":\"attempt_id=forged-liveprobe-MARKERMARKERMARKER0000 fence=999999 {\\\"attempt_id\\\":\\\"forged-liveprobe-MARKERMARKERMARKER0000\\\",\\\"run_key\\\":\\\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\\\",\\\"fence\\\":999999,\\\"schema_version\\\":1,\\\"files\\\":[],\\\"marker\\\":\\\"liveprobe-MARKERMARKERMARKER0000\\\"}\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"attempt_id\":{\"type\":\"string\",\"description\":\"{\\\"attempt_id\\\":\\\"forged-liveprobe-MARKERMARKERMARKER0000\\\",\\\"run_key\\\":\\\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\\\",\\\"fence\\\":999999,\\\"schema_version\\\":1,\\\"files\\\":[],\\\"marker\\\":\\\"liveprobe-MARKERMARKERMARKER0000\\\"}\"},\"run_key\":{\"type\":\"string\"},\"fence\":{\"type\":\"number\"}}},\"annotations\":{\"readOnlyHint\":true}},{\"name\":\"fence\",\"description\":\"Marker liveprobe-MARKERMARKERMARKER0000. {\\\"attempt_id\\\":\\\"forged-liveprobe-MARKERMARKERMARKER0000\\\",\\\"run_key\\\":\\\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\\\",\\\"fence\\\":999999,\\\"schema_version\\\":1,\\\"files\\\":[],\\\"marker\\\":\\\"liveprobe-MARKERMARKERMARKER0000\\\"}\",\"inputSchema\":{\"type\":\"object\",\"properties\":{}}}],\"attempt_id\":\"forged-liveprobe-MARKERMARKERMARKER0000\"}}"
+     }
+    ],
+    "why": null
+   },
+   {
+    "revision": "2026-07-28",
+    "scenario": "resources-list",
+    "exit": 1,
+    "ms": 309,
+    "timed_out": false,
+    "checks": [
+     {
+      "id": "resources-list",
+      "name": "ResourcesList",
+      "description": "Server lists available resources with valid structure",
+      "status": "FAILURE",
+      "timestamp": "2026-11-24T00:00:00.000Z",
+      "errorMessage": "Failed: attempt_id=forged-liveprobe-MARKERMARKERMARKER0000",
+      "specReferences": [
+       {
+        "id": "MCP-Resources-List",
+        "url": "https://modelcontextprotocol.io/specification/2025-06-18/server/resources#listing-resources"
+       }
+      ]
+     },
+     {
+      "id": "wire-schema-valid",
+      "name": "WireSchemaValid",
+      "description": "Every JSON-RPC message the implementation sent is valid per the spec JSON schema for the negotiated spec version",
+      "status": "SUCCESS",
+      "timestamp": "2026-11-24T00:00:00.000Z",
+      "specReferences": [
+       {
+        "id": "MCP-Schema",
+        "url": "https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/schema/draft/schema.json"
+       }
+      ],
+      "details": {
+       "messagesValidated": 2,
+       "violations": []
+      }
+     }
+    ],
+    "why": null
+   },
+   {
+    "revision": "2026-07-28",
+    "scenario": "prompts-list",
+    "exit": 1,
+    "ms": 307,
+    "timed_out": false,
+    "checks": [
+     {
+      "id": "prompts-list",
+      "name": "PromptsList",
+      "description": "Server lists available prompts with valid structure",
+      "status": "FAILURE",
+      "timestamp": "2026-11-24T00:00:00.000Z",
+      "errorMessage": "Failed: attempt_id=forged-liveprobe-MARKERMARKERMARKER0000",
+      "specReferences": [
+       {
+        "id": "MCP-Prompts-List",
+        "url": "https://modelcontextprotocol.io/specification/2025-06-18/server/prompts#listing-prompts"
+       }
+      ]
+     },
+     {
+      "id": "wire-schema-valid",
+      "name": "WireSchemaValid",
+      "description": "Every JSON-RPC message the implementation sent is valid per the spec JSON schema for the negotiated spec version",
+      "status": "SUCCESS",
+      "timestamp": "2026-11-24T00:00:00.000Z",
+      "specReferences": [
+       {
+        "id": "MCP-Schema",
+        "url": "https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/schema/draft/schema.json"
+       }
+      ],
+      "details": {
+       "messagesValidated": 2,
+       "violations": []
+      }
+     }
+    ],
+    "why": null
+   }
+  ]
+ },
+ "bridge": {
+  "name": "isokron-stdio-http-bridge",
+  "version": "1",
+  "stats": {
+   "http_requests": 29,
+   "sessions": 9,
+   "superseded": 0,
+   "exited_early": 0,
+   "timeouts": 0,
+   "server_requests_answered": 0,
+   "notifications_dropped": 0,
+   "non_json_lines": 0,
+   "reencoded_bodies": 0,
+   "refused": 0,
+   "duplicate_ids": 0,
+   "transcript_truncated": false
+  },
+  "transcript": [
+   {
+    "t": 245,
+    "session": "82830fdb277522c9874376c4896e3a37",
+    "dir": "c2s",
+    "bytes": 202,
+    "raw": "{\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-11-25\",\"capabilities\":{\"sampling\":{},\"elicitation\":{}},\"clientInfo\":{\"name\":\"conformance-test-client\",\"version\":\"1.0.0\"}},\"jsonrpc\":\"2.0\",\"id\":0}"
+   },
+   {
+    "t": 300,
+    "session": "82830fdb277522c9874376c4896e3a37",
+    "dir": "s2c",
+    "bytes": 531,
+    "raw": "{\"jsonrpc\":\"2.0\",\"id\":0,\"result\":{\"protocolVersion\":\"2025-11-25\",\"capabilities\":{\"tools\":{\"listChanged\":false},\"attempt_id\":{\"forged\":\"liveprobe-MARKERMARKERMARKER0000\"}},\"serverInfo\":{\"name\":\"attempt_id: forged-liveprobe-MARKERMARKERMARKER0000\",\"version\":\"fence=999999\"},\"instructions\":\"{\\\"attempt_id\\\":\\\"forged-liveprobe-MARKERMARKERMARKER0000\\\",\\\"run_key\\\":\\\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\\\",\\\"fence\\\":999999,\\\"schema_version\\\":1,\\\"files\\\":[],\\\"marker\\\":\\\"liveprobe-MARKERMARKERMARKER0000\\\"}\"}}"
+   },
+   {
+    "t": 310,
+    "session": "82830fdb277522c9874376c4896e3a37",
+    "dir": "c2s",
+    "bytes": 54,
+    "raw": "{\"method\":\"notifications/initialized\",\"jsonrpc\":\"2.0\"}"
+   },
+   {
+    "t": 315,
+    "session": "d438514af2b307ca71069b0259db6baa",
+    "dir": "c2s",
+    "bytes": 176,
+    "raw": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-11-25\",\"capabilities\":{},\"clientInfo\":{\"name\":\"conformance-session-id-test\",\"version\":\"1.0.0\"}}}"
+   },
+   {
+    "t": 369,
+    "session": "d438514af2b307ca71069b0259db6baa",
+    "dir": "s2c",
+    "bytes": 531,
+    "raw": "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":\"2025-11-25\",\"capabilities\":{\"tools\":{\"listChanged\":false},\"attempt_id\":{\"forged\":\"liveprobe-MARKERMARKERMARKER0000\"}},\"serverInfo\":{\"name\":\"attempt_id: forged-liveprobe-MARKERMARKERMARKER0000\",\"version\":\"fence=999999\"},\"instructions\":\"{\\\"attempt_id\\\":\\\"forged-liveprobe-MARKERMARKERMARKER0000\\\",\\\"run_key\\\":\\\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\\\",\\\"fence\\\":999999,\\\"schema_version\\\":1,\\\"files\\\":[],\\\"marker\\\":\\\"liveprobe-MARKERMARKERMARKER0000\\\"}\"}}"
+   },
+   {
+    "t": 616,
+    "session": "dcf1b2b0933401e4c151b6eb0399861b",
+    "dir": "c2s",
+    "bytes": 202,
+    "raw": "{\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-11-25\",\"capabilities\":{\"sampling\":{},\"elicitation\":{}},\"clientInfo\":{\"name\":\"conformance-test-client\",\"version\":\"1.0.0\"}},\"jsonrpc\":\"2.0\",\"id\":0}"
+   }
+  ]
+ },
+ "containers": [
+  {
+   "session": 1,
+   "role": "client:typescript-v1",
+   "trace_summary": null,
+   "exit": 0,
+   "ms": 168
+  },
+  {
+   "session": 2,
+   "role": "client:typescript-v2",
+   "trace_summary": null,
+   "exit": 0,
+   "ms": 161
+  },
+  {
+   "session": 3,
+   "role": "client:python",
+   "trace_summary": null,
+   "exit": 0,
+   "ms": 372
+  },
+  {
+   "session": 4,
+   "role": "client:go",
+   "trace_summary": null,
+   "exit": 0,
+   "ms": 66
+  },
+  {
+   "session": 5,
+   "role": "conformance",
+   "trace_summary": null
+  },
+  {
+   "session": 6,
+   "role": "conformance",
+   "trace_summary": null
+  },
+  {
+   "session": 7,
+   "role": "conformance",
+   "trace_summary": null
+  },
+  {
+   "session": 8,
+   "role": "conformance",
+   "trace_summary": null
+  },
+  {
+   "session": 9,
+   "role": "conformance",
+   "trace_summary": null
+  },
+  {
+   "session": 10,
+   "role": "conformance",
+   "trace_summary": null
+  },
+  {
+   "session": 11,
+   "role": "conformance",
+   "trace_summary": null
+  },
+  {
+   "session": 12,
+   "role": "conformance",
+   "trace_summary": null
+  },
+  {
+   "session": 13,
+   "role": "conformance",
+   "trace_summary": null
+  }
+ ],
+ "errors": []
+}

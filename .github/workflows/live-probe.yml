@@ -162,6 +162,12 @@ jobs:
             scripts/lib/yaml-lite.mjs
           sparse-checkout-cone-mode: false
           persist-credentials: false
+      # The oracle stage's SDK clients and the official conformance suite (corpus/oracles/install.mjs), before the sandbox
+      # guard and before any target: lockfile installs (npm ci, pip --require-hashes, go build -mod=readonly) whose every
+      # download goes through the sandbox's own allowlist proxy to the package registries. Nothing of a subject.
+      - id: oracles
+        name: Install the oracles (through the allowlist proxy)
+        run: node corpus/oracles/install.mjs "$RUNNER_TEMP/oracles" surface-corpus
       # Before any target, on this runner: the same sandbox guard (gVisor, the firewall, the hostile self test and its
       # telemetry check), from the commit SURFACE_CORPUS_REF pins. It fails the job unless the verdict is pass.
       - id: guard
@@ -188,6 +194,8 @@ jobs:
           DEADLINE: ${{ steps.deadline.outputs.at }}
           GUARD_VERDICT: ${{ steps.guard.outputs.verdict }}
           GUARD_SHA: ${{ steps.guard.outputs.sandbox-sha }}
+          # What the oracle install step installed; the driver runs the oracle stage only when it is there.
+          ORACLE_CLIENTS: ${{ runner.temp }}/oracles/clients.json
         run: corpus/live-probe-sandbox.sh "$RUNNER_TEMP/live-probe" surface-corpus "$DEADLINE"
       - id: bundle
         name: Check the controls and build the bundles
