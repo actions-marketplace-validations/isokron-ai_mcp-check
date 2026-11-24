@@ -416,7 +416,7 @@ test('R-LP-20: tool_count and tool_list_sha256 are written as fields of their ow
 test('R-LP-21: the sandbox at mcp-surface-corpus 73a2669 builds native modules, so kronicle-lite is expected to start in the self test', () => {
   for (const f of ['live-probe.yml', 'live-probe-selftest.yml']) assert.equal(wf(f).split(SANDBOX_PIN).length - 1, 3, f + ': the env pin, the conformance workflow and the guard');
   const shard = JSON.parse(readFileSync(join(root, 'corpus', 'fixtures', 'live-probe', 'selftest-shard.json'), 'utf8'));
-  assert.deepEqual(shard.items.find((x) => x.subject === 'isokron-ai/kronicle-lite').expect, { status: 'graded', min_tools: 1 });
+  assert.deepEqual(shard.items.find((x) => x.subject === 'isokron-ai/kronicle-lite').expect, { status: 'graded', min_tools: 1, oracles: true });
 });
 
 test('R-LP-22: the self test judges the bundles with the ingest tool-qa runs, whose registry declares every field the lane writes', () => {
@@ -425,10 +425,11 @@ test('R-LP-22: the self test judges the bundles with the ingest tool-qa runs, wh
   assert.ok(ref, 'INGEST_REF pinned to a full SHA');
   assert.match(y, new RegExp("repository: isokron-ai/tool-qa\\n          ref: \\$\\{\\{ env\\.INGEST_REF \\}\\}\\n          path: tool-qa-ingest\\n          sparse-checkout: \\|\\n            worker-kit/\\n            ingest/\\n            scripts/lib/yaml-lite\\.mjs\\n"));
   assert.match(y, /verify --ingest tool-qa-ingest tool-qa /);
-  // Every field the lane can write is declared, with its type, in the registry that ingest pins (mcp-results f2b16de).
+  // Every field the lane can write is declared, with its type, in the registry that ingest pins (mcp-results eb2972c,
+  // tool-qa #32: the oracle stage's fields too).
   const reg = registryTypes();
-  for (const [f, t] of Object.entries({ ...LP.FIELDS, ...LP.TOOL_LIST_FIELDS })) assert.equal(reg.get(f) && reg.get(f).type, t, f);
-  assert.equal(createHash('sha256').update(readFileSync(join(FX, 'fields-registry.yaml'))).digest('hex'), 'c79f5124d90bf5a8d2cb6e2e2a351228ceddc827ed52339990e9550a6b07d31f', 'the test copy is mcp-results f2b16de, as tool-qa pins it');
+  for (const [f, t] of Object.entries({ ...LP.FIELDS, ...LP.TOOL_LIST_FIELDS, ...LP.ORACLE_FIELDS })) assert.equal(reg.get(f) && reg.get(f).type, t, f);
+  assert.equal(createHash('sha256').update(readFileSync(join(FX, 'fields-registry.yaml'))).digest('hex'), '421fdec44853383939531e8c86cd4f1feadb47ddce72d7c36d252c4d0100e0e5', 'the test copy is mcp-results eb2972c, as tool-qa #32 pins it');
 });
 
 test('R-LP-23: the sandbox pin includes the install-network hostile cases and the proxy positive control (mcp-surface-corpus #9, #10)', () => {
@@ -457,8 +458,9 @@ test('live-probe plan: targets s001.., a target the sandbox refuses is a launch_
   assert.deepEqual(plan.items.map((x) => [x.target_id, x.resolution.status, x.resolution.detail]), [['s001', 'runnable', null], [null, 'skipped', 'launch_invalid'], [null, 'skipped', 'no_package']]);
   assert.equal(plan.runnable, 1);
   assert.equal(plan.subject_timeout_s, LP.SUBJECT_TIMEOUT_MAX_S);
-  assert.equal(plan.items[0].target.timeout_s, plan.subject_timeout_s);
-  assert.deepEqual(plan.items[0].target, { id: 's001', repo: 'a/one', ref: 'HEAD', registry: 'io.github.a/one', launch: { kind: 'npm', package: 'one', version: '1.2.3', install_scripts: true }, timeout_s: plan.subject_timeout_s });
+  // Each target's limit is its share of the budget plus the oracle stage's allowance (corpus/live-probe-driver.mjs).
+  assert.equal(plan.items[0].target.timeout_s, plan.subject_timeout_s + LP.ORACLE_ALLOWANCE_S);
+  assert.deepEqual(plan.items[0].target, { id: 's001', repo: 'a/one', ref: 'HEAD', registry: 'io.github.a/one', launch: { kind: 'npm', package: 'one', version: '1.2.3', install_scripts: true }, timeout_s: plan.subject_timeout_s + LP.ORACLE_ALLOWANCE_S });
   assert.equal(LP.subjectTimeout(10), 147);
   assert.ok(LP.subjectTimeout(10) * 10 <= LP.SUBJECT_BUDGET_S);
   const lists = LP.targetLists(plan, { node24Image: NODE24 });
@@ -585,7 +587,7 @@ test('live-probe bundle: the live grade, the static comparison and the field rec
   const recs = readFileSync(join(b, 'observations', 'live.ndjson'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
   for (const o of recs) {
     assert.ok(reg.has(o.field), o.field + ' is in the registry');
-    assert.equal(reg.get(o.field).type, { ...LP.FIELDS, ...LP.TOOL_LIST_FIELDS }[o.field], o.field + ' type');
+    assert.equal(reg.get(o.field).type, { ...LP.FIELDS, ...LP.TOOL_LIST_FIELDS, ...LP.ORACLE_FIELDS }[o.field], o.field + ' type');
     assert.equal(o.stage, 'live');
     if (o.value === null) assert.ok(o.why, o.field);
   }
@@ -809,7 +811,7 @@ test('live-probe self test workflow: runs on pull requests the same steps as the
   const between = (s) => s.slice(s.indexOf('      - id: deadline'), s.indexOf('      - id: bundle'));
   const norm = (s) => between(s).replace(/inputs\.shard_id/g, 'env.SHARD_ID').replace(/inputs\.attempt_id/g, 'env.ATTEMPT_ID').replace(/inputs\.items/g, 'env.ITEMS').replace(/      - name: The fixture items\n        run: .*\n/, '');
   assert.equal(norm(y), norm(w), 'the self test runs exactly the worker\'s steps');
-  assert.equal((y.match(/dry-run: 'true'/g) || []).length, 3);
+  assert.equal((y.match(/dry-run: 'true'/g) || []).length, 4);
   assert.match(y, /node corpus\/live-probe\.mjs verify --ingest tool-qa-ingest tool-qa corpus\/fixtures\/live-probe\/selftest-shard\.json/);
 });
 

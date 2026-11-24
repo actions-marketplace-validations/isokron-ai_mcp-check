@@ -11,6 +11,9 @@
 #      If it fails, nothing else runs.
 #   3. the controls (our own server from npm, and the forgery server) through the sandbox driver;
 #   4. the subjects through the sandbox driver, stopped at the deadline (the items left report a retryable skip);
+#      the driver is mcp-surface-corpus's bin/run-shard.mjs, run by corpus/live-probe-driver.mjs, which adds the
+#      oracle stage after each target's probe when ORACLE_CLIENTS names the clients corpus/oracles/install.mjs
+#      installed (corpus/LIVE-PROBE.md, "Oracles");
 #   5. a last sweep of every container, network and volume of the runs, and a check that none is left, so no
 #      target process exists when the upload steps start.
 #
@@ -29,6 +32,14 @@ deadline="${3:?deadline}"
 mkdir -p "$work"
 umask 077
 
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+oracles="${ORACLE_CLIENTS:-none}"
+oracles_installed=false
+if [ "$oracles" != none ] && [ -f "$oracles" ] && node -e '
+  const r = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+  const any = (r.conformance && r.conformance.ok) || Object.values(r.clients || {}).some((c) => c && c.ok);
+  process.exit(any ? 0 : 1);
+' "$oracles" 2>/dev/null; then oracles_installed=true; else oracles=none; fi
 install_rc=-1; guard_rc=-1; selftest_rc=-1; check_rc=-1; controls_rc=-1; subjects_rc=-1; swept=false
 left_labelled=-1; left_containers=-1; left_volumes=-1; uid_procs=-1; runsc_procs=-1
 gvisor=$(node -e 'process.stdout.write(String(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).release || ""))' "$msc/gvisor.json" 2>/dev/null || true)
@@ -38,10 +49,10 @@ write_state() {
   node -e '
     const [file, ...v] = process.argv.slice(1);
     const n = (x) => (/^-?[0-9]{1,4}$/.test(x) ? Number(x) : null);
-    const s = { install_rc: n(v[0]), guard_rc: n(v[1]), selftest_rc: n(v[2]), selftest_check_rc: n(v[3]), controls_rc: n(v[4]), subjects_rc: n(v[5]), swept: v[6] === "true", msc_commit: /^[0-9a-f]{40}$/.test(v[7]) ? v[7] : null, gvisor_release: v[8] || null, worker_kit_ref: /^[0-9a-f]{40}$/.test(v[9]) ? v[9] : null, left: { labelled: n(v[10]), containers: n(v[11]), volumes: n(v[12]), uid_65534_processes: n(v[13]), runsc_processes: n(v[14]) }, finished_at: new Date().toISOString() };
+    const s = { oracles_installed: v[15] === "true", install_rc: n(v[0]), guard_rc: n(v[1]), selftest_rc: n(v[2]), selftest_check_rc: n(v[3]), controls_rc: n(v[4]), subjects_rc: n(v[5]), swept: v[6] === "true", msc_commit: /^[0-9a-f]{40}$/.test(v[7]) ? v[7] : null, gvisor_release: v[8] || null, worker_kit_ref: /^[0-9a-f]{40}$/.test(v[9]) ? v[9] : null, left: { labelled: n(v[10]), containers: n(v[11]), volumes: n(v[12]), uid_65534_processes: n(v[13]), runsc_processes: n(v[14]) }, finished_at: new Date().toISOString() };
     require("fs").writeFileSync(file, JSON.stringify(s, null, 2) + "\n");
   ' "$work/sandbox.json" "$install_rc" "$guard_rc" "$selftest_rc" "$check_rc" "$controls_rc" "$subjects_rc" "$swept" "$msc_commit" "$gvisor" "${WORKER_KIT_REF:-}" \
-    "$left_labelled" "$left_containers" "$left_volumes" "$uid_procs" "$runsc_procs"
+    "$left_labelled" "$left_containers" "$left_volumes" "$uid_procs" "$runsc_procs" "$oracles_installed"
 }
 
 sweep() {
@@ -55,7 +66,7 @@ sweep() {
 drive() {
   local list="$1" out="$2" limit="$3"
   mkdir -p "$out/_shard"
-  timeout --kill-after=30 "$limit" node "$msc/bin/run-shard.mjs" --targets "$list" --out "$out" --lane ci \
+  timeout --kill-after=30 "$limit" node "$here/live-probe-driver.mjs" --msc "$msc" --oracles "$oracles" -- --targets "$list" --out "$out" --lane ci \
     2>>"$out/_shard/driver-stderr.log" | grep --line-buffered -E '^run finished, exit [0-9]+$'
   return "${PIPESTATUS[0]}"
 }
