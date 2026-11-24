@@ -18,6 +18,7 @@ All notable changes to `@isokron/mcp-check` and the `isokron-ai/mcp-check` Actio
 - **Linear time**: one tokenizer pass, one bracket pass and a work limit, as for Go and Rust; over it the list is refused as incomplete.
 - **Web checker.** `repo-source.cjs` now also loads `repo-csharp.cjs` (in a browser, `window.RepoCSharp` must be defined first; without it C# is not read). The isokron.ai web checker loads only the engine, so nothing changes there.
 - **Tests**: `test/repo-reader-csharp.test.mjs`, synthetic sources written from the SDK's documented forms (R-RD-06).
+- **Reader: an McpServer with its own tools/list handler (R-RD-04).** A TypeScript or JavaScript server that sets its own `tools/list` handler on its McpServer (`mcpServer.server.setRequestHandler(ListToolsRequestSchema, …)`, or `'tools/list'` under SDK 2) no longer gets the `$schema` the SDK would have added, and no `execution` field unless the new handler wraps the SDK's own. The reader cannot see what the handler lists, so it asserts neither, and `spec-schema-dialect` and `spec-execution-legacy` no longer fire on what the server does not send. Found on mcp-check's own server, which serves JSON Schema 2020-12 without `$schema` and was graded Spec C from source. `this.server.setRequestHandler` (a class holding a low-level `Server`) does not count; `this.mcp.server.setRequestHandler` (a class holding the McpServer) does. The override applies to its own package (the nearest folder with a `package.json`), not to other servers of the repository.
 
 ## 1.3.1 (2026-11-22)
 
