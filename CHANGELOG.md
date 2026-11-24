@@ -29,6 +29,9 @@ All notable changes to `@isokron/mcp-check` and the `isokron-ai/mcp-check` Actio
   - A name defined more than once at module level in the repository is not used as a factory.
   - A name the file imports from `mcp` or `fastmcp` (`from fastmcp.tools import tool`) is the SDK's, never a factory of the repository.
   - Found on alondmnt/joplin-mcp and jackson-cmd/zeus-options-terminal, which the loop reported as having no tools.
+### Reader
+
+- **Another agent host's plugin tools are not MCP tools (R-RD-05).** A JavaScript or TypeScript file that imports another agent host's tool API (an OpenCode `@opencode-ai/plugin` or OpenClaw `openclaw/plugin-sdk` plugin, the Vercel AI SDK `ai`, `@openai/agents`, LangChain, Mastra or LlamaIndex) and no MCP module no longer lists its host-shaped calls, `tool({ … })` and `api.registerTool({ … })` (a call whose first argument is the tool object): they define that host's tools. SDK-shaped registrations in the same file, `server.registerTool("name", …)` and `server.tool("name", …)`, are kept: an MCP tool that calls an LLM through one of these libraries is common. They used to be listed as MCP tools, could split a repository of one MCP server and its host plugins into "several servers" (nothing graded), and could hide an MCP tool of the same name in Go or Rust. The dropped calls' files are named in the scan (`hints.hostPlugins`) and in the "nothing found" message. A file that also imports any module whose name mentions MCP (the SDK, FastMCP, `mcp-handler`, …) or the Claude Agent SDK keeps its tools.
 
 ## 1.3.1 (2026-11-22)
 
