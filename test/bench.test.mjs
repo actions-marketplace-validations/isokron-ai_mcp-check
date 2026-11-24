@@ -2,23 +2,21 @@
 // The full mutant pass runs in .github/workflows/bench-mutants.yml; here one planted bug is enough to show it is caught.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadCases } from '../bench/lib/cases.mjs';
-import { compareCase, scoreAll, wilson } from '../bench/lib/score.mjs';
+import { CORE_CHECKS, CORE_SERVER_CHECKS, filesUnder, loadCases } from '../bench/lib/cases.mjs';
+import { compareCase, labelMap, scoreAll, wilson } from '../bench/lib/score.mjs';
 import { compare } from '../bench/gate.mjs';
 import { run } from '../bench/run.mjs';
 import { buildCopy, disagreementSet, lostKills, observeChild, patchTruth, sampleOf, withKillList } from '../bench/mutate.mjs';
-import { CORE_CHECKS, CORE_SERVER_CHECKS } from '../bench/lib/cases.mjs';
-import { labelMap } from '../bench/lib/score.mjs';
 import { observeAll } from '../bench/lib/observe.mjs';
 import { caseSetHashes, fileHashes } from '../bench/lib/holdout-guard.mjs';
-import { guard, LABEL } from '../bench/base-guard.mjs';
-import { createHash } from 'node:crypto';
+import { guard, LABEL, parseNameStatus } from '../bench/base-guard.mjs';
 import { tmpdir as osTmp } from 'node:os';
-import { TARGETS, mutantsOf } from '../bench/mutants/sites.mjs';
+import { TARGETS, applyMutant, mutantsOf } from '../bench/mutants/sites.mjs';
 import { tokenize } from '../bench/mutants/lexer.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
@@ -269,11 +267,10 @@ test('R-BENCH-14: a pull request cannot accept its own regressions: new misses, 
   const worse = { tp: 0, fn: 5, fp: 0, tn: 9, recall: wilson(0, 5), precision: null };
   const now = { case_set_hash: 'b', cases: 2, checks: { 'sec-zero-width': { all: worse, by_language: {} } }, disagreement_keys: { 'go/x': ['sec-zero-width|fn|t'] }, faulty_oracle: [] };
   assert.deepEqual(compare(now, now).failures, [], 'against its own baseline it passes');
-  const r = guard({ base, now, baseExpected: { killed: ['a', 'b'] }, expected: { killed: ['a'] }, guardChanged: ['bench/gate.mjs'] });
+  const r = guard({ base, now, baseExpected: { killed: ['a', 'b'] }, expected: { killed: ['a'] } });
   assert.ok(r.findings.includes('go/x: new miss against the base: sec-zero-width|fn|t'));
   assert.ok(r.findings.some((f) => /sec-zero-width \(all languages\): false negatives rose from 0 to 5 \(against the base\)/.test(f)));
   assert.ok(r.findings.includes('removed from the kill list (bench/mutants/expected.json): b'));
-  assert.ok(r.findings.includes('the gate or this guard changed: bench/gate.mjs'));
   assert.ok(!r.findings.some((f) => /case-set|cases or their truth changed|rebaseline: /.test(f)), 'a new case set and improvements are not regressions');
   // improvements only: nothing to report
   const better = { ...base, disagreement_keys: {} };
@@ -288,7 +285,7 @@ test('R-BENCH-14: a pull request cannot accept its own regressions: new misses, 
   assert.match(step, /PR_LABELS: \$\{\{ toJSON\(github\.event\.pull_request\.labels\.\*\.name\) \}\}/);
   assert.match(step, /git show "origin\/\$BASE_REF:bench\/baseline\.json"/);
   assert.match(step, /git show "origin\/\$BASE_REF:bench\/mutants\/expected\.json"/);
-  assert.match(step, /node bench\/base-guard\.mjs --base base-baseline\.json --base-expected base-expected\.json --score bench-score\.json/);
+  assert.match(step, /node bench\/base-guard\.mjs --base base-baseline\.json --base-expected base-expected\.json --score bench-score\.json --truth-changes truth-changes\.txt/);
   assert.ok(!/\$\{\{/.test(step.slice(step.indexOf('run: |'))), 'no expression inside the script');
   assert.match(y, /types: \[opened, synchronize, reopened, labeled, unlabeled\]/);
 });
@@ -309,4 +306,66 @@ test('R-BENCH-16: the holdout hash list names no private path, and tiny files ge
   assert.ok(!/research\/|company-audit|benchmark-holdout/.test(list.about), list.about);
   assert.equal(fileHashes(Buffer.from('{ "name": "x" }\n')).length, 1);
   assert.equal(fileHashes(Buffer.alloc(300, 'a')).length, 2);
+});
+
+test('R-BENCH-17: a label edited to match a new false alarm is caught: every case or truth file of the base that is changed or deleted is a finding', async () => {
+  // the reviewer's attack, replayed: a mutant raises anthropic-description on render_chart (whose description is built
+  // at run time and must be skipped); the pull request writes that false alarm into the truth as a label and
+  // rebaselines, so the per-case keys and the totals have nothing new to show
+  const base = mkdtempSync(join(tmpdir(), 'bench-test-'));
+  try {
+    const bad = buildCopy(base); const f = join(bad, 'src', 'unreadable.js');
+    const src = readFileSync(f, 'utf8');
+    const m = mutantsOf('src/unreadable.js', src).find((x) => x.id === 'unreadable.js:regex-drop-alt:df41a99409');
+    assert.ok(m, 'the reviewer\'s mutant still exists');
+    writeFileSync(f, applyMutant(src, m));
+    const pr = join(base, 'bench'); mkdirSync(pr);
+    cpSync(join(benchDir, 'cases'), join(pr, 'cases'), { recursive: true });
+    cpSync(join(benchDir, 'truth'), join(pr, 'truth'), { recursive: true });
+    const before = (await run({ root: bad, cases: pr })).score;
+    assert.ok((before.disagreement_keys['typescript/computed-parts'] || []).includes('anthropic-description|fp|render_chart'), 'the mutant raises the false alarm');
+    const tf = join(pr, 'truth', 'typescript', 'computed-parts.json');
+    const t = JSON.parse(readFileSync(tf, 'utf8'));
+    t.findings['anthropic-description'] = { ...(t.findings['anthropic-description'] || {}), render_chart: 'attention' };
+    writeFileSync(tf, JSON.stringify(t, null, 2) + '\n');
+    const now = (await run({ root: bad, cases: pr })).score; // the "rebaselined" score of the pull request
+    assert.deepEqual(compare(now, now).failures, [], 'it passes its own rebaselined gate');
+    const committed = baseline();
+    const plain = guard({ base: committed, now, baseExpected: null, expected: null });
+    assert.deepEqual(plain.findings, [], 'without the file check the attack is invisible');
+    // what the workflow passes: git diff --name-status --no-renames for bench/cases and bench/truth
+    const diff = [];
+    for (const sub of ['cases', 'truth']) {
+      const a = new Set(filesUnder(join(benchDir, sub))); const b = new Set(filesUnder(join(pr, sub)));
+      for (const p of a) if (!b.has(p)) diff.push('D\tbench/' + sub + '/' + p);
+      else if (!readFileSync(join(benchDir, sub, p)).equals(readFileSync(join(pr, sub, p)))) diff.push('M\tbench/' + sub + '/' + p);
+      for (const p of b) if (!a.has(p)) diff.push('A\tbench/' + sub + '/' + p);
+    }
+    assert.deepEqual(diff, ['M\tbench/truth/typescript/computed-parts.json']);
+    const r = guard({ base: committed, now, baseExpected: null, expected: null, truthChanges: parseNameStatus(diff.join('\n')) });
+    assert.deepEqual(r.findings, ['changed on the base: bench/truth/typescript/computed-parts.json']);
+  } finally { rmSync(base, { recursive: true, force: true }); }
+  // a deleted case is a finding too; a new one is free
+  const r2 = guard({ base: baseline(), now: baseline(), truthChanges: parseNameStatus('D\tbench/cases/go/x/main.go\nA\tbench/cases/go/y/main.go\nA\tbench/truth/go/y.json') });
+  assert.deepEqual(r2.findings, ['deleted on the base: bench/cases/go/x/main.go']);
+});
+
+test('R-BENCH-18: changes to the benchmark\'s machinery need the bench-rebaseline label, checked in the workflow itself, not by the guard', () => {
+  const y = readFileSync(join(root, '.github', 'workflows', 'ci.yml'), 'utf8');
+  const step = y.slice(y.indexOf("      - name: Against the base branch's baseline and kill list"), y.indexOf('\n  mutants:\n'));
+  const run = step.slice(step.indexOf('run: |'));
+  // the fixed list, in the workflow
+  const m = /grep -E '\^\(([^']+)\)'/.exec(run);
+  assert.ok(m, 'a fixed list of paths');
+  const listed = m[1].split('|').map((x) => x.replace(/\\\./g, '.'));
+  for (const p of ['.github/workflows/ci.yml', 'bench/gate.mjs', 'bench/base-guard.mjs', 'bench/run.mjs', 'bench/mutate.mjs', 'bench/lib/', 'bench/mutants/', 'test/bench.test.mjs']) assert.ok(listed.includes(p), p);
+  const re = new RegExp('^(' + m[1] + ')');
+  for (const p of ['bench/lib/score.mjs', 'bench/mutants/expected.json', '.github/workflows/ci.yml', 'bench/base-guard.mjs']) assert.ok(re.test(p), p);
+  for (const p of ['bench/cases/go/x/main.go', 'bench/README.md', 'src/cli.js']) assert.ok(!re.test(p), p);
+  assert.match(run, /git diff --name-only "origin\/\$BASE_REF\.\.\.HEAD" \| grep -E/);
+  assert.match(run, /jq -e 'any\(\.\[\]; \. == "bench-rebaseline"\)'/);
+  assert.match(run, /\[ "\$\{machinery_fail:-false\}" != true \]\s*$/, 'the step fails on it after the guard has written its summary');
+  assert.ok(run.indexOf('machinery=') < run.indexOf('node bench/base-guard.mjs'), 'decided before the guard runs');
+  assert.ok(!/guard-changed/.test(step + readFileSync(join(benchDir, 'base-guard.mjs'), 'utf8')), 'not routed through the guard');
+  assert.ok(!/\$\{\{/.test(run));
 });

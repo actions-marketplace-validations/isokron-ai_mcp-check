@@ -8,14 +8,17 @@
 //     case-set hash are not counted), and other losses the gate names (true positives or cases falling, a faulty-oracle
 //     case not caught, a check no longer scored);
 //   - mutant ids removed from bench/mutants/expected.json (a kill list may only grow);
-//   - changes to the gate or to this guard.
+//   - every case or truth file that exists on the base and is changed or deleted (a label edited to match a new false
+//     alarm, then rebaselined, would otherwise pass); adding new cases is free.
+// Changes to the gate, this guard, the scorer, the mutant pass, their tests and ci.yml are caught by the workflow step
+// itself, before this script runs, so a pull request that edits this file still trips it.
 // Everything found goes to the job summary. It fails (exit 1) when anything is found, unless the pull request has
 // the label bench-rebaseline, which only someone with write access can set: that label is the reviewed acceptance.
 // When the base branch has no bench/ yet (the pull request that adds it), there is nothing to compare and it passes.
 //
 //   node bench/base-guard.mjs --base <base baseline.json, may be empty> --base-expected <file, may be empty>
 //                            --score <this run's score.json> [--expected bench/mutants/expected.json]
-//                            [--guard-changed "<files>"]
+//                            [--truth-changes <file: git diff --name-status --no-renames output for bench/cases and bench/truth>]
 // The labels come from the environment variable PR_LABELS (a JSON array of names); the summary goes to
 // $GITHUB_STEP_SUMMARY when it is set.
 import { appendFileSync, existsSync, readFileSync } from 'node:fs';
@@ -29,7 +32,12 @@ export const LABEL = 'bench-rebaseline';
 const readJson = (p) => { if (!p || !existsSync(p)) return null; const t = readFileSync(p, 'utf8').trim(); return t ? JSON.parse(t) : null; };
 
 /** What got worse against the base. base: the base baseline (null when the base has no bench/). */
-export function guard({ base, now, baseExpected, expected, guardChanged = [] }) {
+/** git diff --name-status --no-renames output as [{ status, path }]. */
+export function parseNameStatus(text) {
+  return String(text || '').split('\n').map((l) => l.trim()).filter(Boolean).map((l) => { const [status, ...rest] = l.split(/\t/); return { status: status.trim(), path: rest.join('\t').trim() }; });
+}
+
+export function guard({ base, now, baseExpected, expected, truthChanges = [] }) {
   if (!base) return { skipped: 'the base branch has no bench/baseline.json: nothing to compare (the pull request that adds the benchmark)', findings: [] };
   const findings = [];
   const bk = base.disagreement_keys || {}; const nk = now.disagreement_keys || {};
@@ -44,7 +52,8 @@ export function guard({ base, now, baseExpected, expected, guardChanged = [] }) 
   }
   const now_ = new Set((expected && expected.killed) || []);
   for (const id of (baseExpected && baseExpected.killed) || []) if (!now_.has(id)) findings.push('removed from the kill list (bench/mutants/expected.json): ' + id);
-  for (const f of guardChanged) findings.push('the gate or this guard changed: ' + f);
+  // a case or a label that already existed on the base, changed or deleted (A: a new file, is free)
+  for (const c of truthChanges) if (c.status !== 'A' && /^bench\/(cases|truth)\//.test(c.path)) findings.push((c.status === 'D' ? 'deleted' : 'changed') + ' on the base: ' + c.path);
   return { skipped: null, findings: [...new Set(findings)] };
 }
 
@@ -58,7 +67,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   const r = guard({
     base: readJson(opt('--base')), now: readJson(opt('--score')), baseExpected: readJson(opt('--base-expected')),
     expected: readJson(opt('--expected', join(here, 'mutants', 'expected.json'))),
-    guardChanged: String(opt('--guard-changed', '')).split(/\s+/).filter(Boolean),
+    truthChanges: opt('--truth-changes') && existsSync(opt('--truth-changes')) ? parseNameStatus(readFileSync(opt('--truth-changes'), 'utf8')) : [],
   });
   const accepted = labels.includes(LABEL);
   const lines = ['## Benchmark against the base branch', ''];

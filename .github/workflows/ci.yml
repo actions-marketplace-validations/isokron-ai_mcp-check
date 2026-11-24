@@ -116,8 +116,9 @@ jobs:
       - name: The gate against bench/baseline.json
         run: node bench/gate.mjs --score bench-score.json
       # The gate above compares with the baseline of this pull request, which the pull request can rewrite. This
-      # compares with the base branch's baseline and kill list: anything worse fails unless a maintainer has added
-      # the bench-rebaseline label (bench/base-guard.mjs).
+      # compares with the base branch: anything worse, any case or truth file of the base changed or deleted, and any
+      # change to the benchmark's own machinery fails unless a maintainer has added the bench-rebaseline label.
+      # The machinery list is checked here in the workflow, not by bench/base-guard.mjs, so editing the guard trips it.
       - name: Against the base branch's baseline and kill list
         if: github.event_name == 'pull_request'
         env:
@@ -128,9 +129,23 @@ jobs:
           git rev-parse --verify --quiet "origin/$BASE_REF" > /dev/null || { echo "::error::base branch origin/$BASE_REF not fetched"; exit 1; }
           git show "origin/$BASE_REF:bench/baseline.json" > base-baseline.json 2>/dev/null || : > base-baseline.json
           git show "origin/$BASE_REF:bench/mutants/expected.json" > base-expected.json 2>/dev/null || : > base-expected.json
-          changed="$(git diff --name-only "origin/$BASE_REF...HEAD" -- bench/gate.mjs bench/base-guard.mjs | tr '\n' ' ')"
-          if [ ! -s base-baseline.json ]; then changed=""; fi
-          node bench/base-guard.mjs --base base-baseline.json --base-expected base-expected.json --score bench-score.json --guard-changed "$changed"
+          if [ ! -s base-baseline.json ]; then
+            echo "Skipped: the base branch has no bench/baseline.json (the pull request that adds the benchmark)." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          labelled=false
+          if printf '%s' "$PR_LABELS" | jq -e 'any(.[]; . == "bench-rebaseline")' > /dev/null; then labelled=true; fi
+          machinery="$(git diff --name-only "origin/$BASE_REF...HEAD" | grep -E '^(\.github/workflows/ci\.yml|bench/gate\.mjs|bench/base-guard\.mjs|bench/run\.mjs|bench/mutate\.mjs|bench/lib/|bench/mutants/|test/bench\.test\.mjs)' || true)"
+          if [ -n "$machinery" ]; then
+            { echo "## The benchmark's own machinery changed"; echo; printf -- '- `%s`\n' $machinery; echo; } >> "$GITHUB_STEP_SUMMARY"
+            if [ "$labelled" != true ]; then
+              for f in $machinery; do echo "::error::bench: the gate, guard, scorer, mutant pass or their CI changed: $f (needs the bench-rebaseline label)"; done
+              machinery_fail=true
+            fi
+          fi
+          git diff --name-status --no-renames "origin/$BASE_REF...HEAD" -- bench/cases bench/truth > truth-changes.txt
+          node bench/base-guard.mjs --base base-baseline.json --base-expected base-expected.json --score bench-score.json --truth-changes truth-changes.txt
+          [ "${machinery_fail:-false}" != true ]
 
   mutants:
     runs-on: ubuntu-latest

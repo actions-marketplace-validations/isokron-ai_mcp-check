@@ -68,7 +68,8 @@ test('R-BENCH-11: the bench gate and the mutant pass are required by ci-ok, and 
   const bench = y.slice(y.indexOf('\n  bench:\n'), y.indexOf('\n  mutants:\n'));
   assert.match(bench, /run: node bench\/run\.mjs --json bench-score\.json --md bench-score\.md\n/);
   assert.match(bench, /run: node bench\/gate\.mjs --score bench-score\.json\n/);
-  assert.ok(!/continue-on-error|\|\| true/.test(bench.replace(/cat bench-score\.md[^\n]*/, '')), 'the gate step cannot be skipped or softened');
+  assert.ok(!/continue-on-error/.test(bench), 'no step of the bench job can be softened');
+  assert.match(bench, /- name: The gate against bench\/baseline\.json\n {8}run: node bench\/gate\.mjs --score bench-score\.json\n/, 'the gate step is one plain command');
   const mut = y.slice(y.indexOf('\n  mutants:\n'), y.indexOf('\n  zero-config:\n'));
   assert.match(mut, /run: node bench\/mutate\.mjs --jobs 4 --json mutants\.json --md mutants\.md\n/);
   assert.match(mut, /grep -qE '\^\(src\/\|engine\/\|bench\/\)' changed\.txt/);

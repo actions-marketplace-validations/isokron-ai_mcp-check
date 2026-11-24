@@ -69,11 +69,17 @@ A failure names the check, the language and the numbers. The score's "Every disa
   `disagreement_keys` is a new miss being accepted. An improvement fails the gate too until it is rebaselined
   ("rebaseline: improvements not locked in"), so a reader fix that lands (C# support, for example) locks its gain in.
 - A pull request cannot accept its own regressions. On pull requests the `bench` job also compares the run with the
-  base branch's `bench/baseline.json` and `bench/mutants/expected.json` (`base-guard.mjs`): any new miss or false
-  alarm against the base, any other loss the gate names, any id removed from the kill list, and any change to
-  `gate.mjs` or `base-guard.mjs` is listed in the job summary and fails the job, unless a maintainer has reviewed the
-  diff and added the `bench-rebaseline` label (only people with write access can label). The pull request that adds
-  `bench/` has no base baseline and passes.
+  base branch's `bench/baseline.json` and `bench/mutants/expected.json` (`base-guard.mjs`). These are listed in the
+  job summary and fail the job, unless a maintainer has reviewed the diff and added the `bench-rebaseline` label
+  (only people with write access can label):
+  - any new miss or false alarm against the base, any other loss the gate names, any id removed from the kill list;
+  - any case or truth file that exists on the base and is changed or deleted (new cases are free), so a false alarm
+    cannot be written into a label and rebaselined away;
+  - any change to the benchmark's machinery: `.github/workflows/ci.yml`, `bench/gate.mjs`, `bench/base-guard.mjs`,
+    `bench/run.mjs`, `bench/mutate.mjs`, `bench/lib/`, `bench/mutants/` and `test/bench.test.mjs`. This list is
+    checked by the workflow step itself, not by `base-guard.mjs`, so a pull request that edits the guard still trips it.
+
+  The pull request that adds `bench/` has no base baseline and passes.
 - When the mutant pass fails, a mutant that the benchmark used to kill now survives (`mutants/expected.json`): a case
   or a label stopped catching that bug. Every id on the list runs in every pass, whether the quota picks it or not.
   After adding cases, `node bench/mutate.mjs --write-expected` rewrites the list; an id that leaves it needs the
