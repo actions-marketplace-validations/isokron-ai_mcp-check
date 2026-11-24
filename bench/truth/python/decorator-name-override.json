@@ -1,0 +1,38 @@
+{
+  "id": "python/decorator-name-override",
+  "language": "python",
+  "idioms": [
+    "decorator",
+    "misleading-names"
+  ],
+  "about": "decorators that rename the tool away from the function name",
+  "outcome": "tools",
+  "tools": [
+    "lookup_order",
+    "cancel_order"
+  ],
+  "details": {
+    "lookup_order": {
+      "description": "Returns the status and items of an order.",
+      "params": [
+        "order_id"
+      ],
+      "required": [
+        "order_id"
+      ],
+      "annotations": {}
+    },
+    "cancel_order": {
+      "description": "Cancels an order that has not shipped yet.",
+      "params": [
+        "order_id",
+        "reason"
+      ],
+      "required": [
+        "order_id",
+        "reason"
+      ],
+      "annotations": {}
+    }
+  }
+}

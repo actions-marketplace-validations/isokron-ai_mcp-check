@@ -7,6 +7,11 @@
 #               SARIF upload and no badge
 #   zero-config the Action with no inputs on this repository, exactly as the docs show it: it reads the
 #               tool definitions from src/server.js, runs nothing, and needs no setup-node or install
+#   bench       the adversarial benchmark (bench/README.md): scores every case and runs the gate (bench/gate.mjs)
+#               against bench/baseline.json: any new per-case miss or false alarm, a fall in coverage, or an
+#               improvement not locked into the baseline fails it
+#   mutants     the benchmark's mutant pass (bench/mutate.mjs), in full when src/, engine/ or bench/ changed (about
+#               two minutes), skipped with a notice otherwise; fails when a mutant on the kill list survives
 #   ci-ok       passes only if every job above succeeded: the one required status check
 #
 # No secrets, read-only token, no pull_request_target: a pull request from a fork runs with the same
@@ -16,6 +21,8 @@ name: ci
 
 on:
   pull_request:
+    # labeled and unlabeled too: the bench-rebaseline label changes the bench job's verdict
+    types: [opened, synchronize, reopened, labeled, unlabeled]
   push:
     branches: [main]
 
@@ -90,6 +97,98 @@ jobs:
           [ "$FILE_PASSED" = true ] && [ "$SERVER_PASSED" = true ] && [ "$SERVER_ANTHROPIC" = A ] \
             || { echo "::error::unexpected outputs: $FILE_PASSED $SERVER_PASSED $SERVER_ANTHROPIC"; exit 1; }
 
+  bench:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Score every case
+        run: node bench/run.mjs --json bench-score.json --md bench-score.md
+      - name: The score in the job summary
+        run: cat bench-score.md >> "$GITHUB_STEP_SUMMARY"
+      - name: The gate against bench/baseline.json
+        run: node bench/gate.mjs --score bench-score.json
+      # The gate above compares with the baseline of this pull request, which the pull request can rewrite. This
+      # compares with the base branch: anything worse, any case or truth file of the base changed or deleted, and any
+      # change to the benchmark's own machinery fails unless a maintainer has added the bench-rebaseline label.
+      # The machinery list is checked here in the workflow, not by bench/base-guard.mjs, so editing the guard trips it.
+      - name: Against the base branch's baseline and kill list
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: |
+          [[ "$BASE_REF" =~ ^[A-Za-z0-9._/-]+$ ]] || { echo "::error::unexpected base ref"; exit 1; }
+          git rev-parse --verify --quiet "origin/$BASE_REF" > /dev/null || { echo "::error::base branch origin/$BASE_REF not fetched"; exit 1; }
+          git show "origin/$BASE_REF:bench/baseline.json" > base-baseline.json 2>/dev/null || : > base-baseline.json
+          git show "origin/$BASE_REF:bench/mutants/expected.json" > base-expected.json 2>/dev/null || : > base-expected.json
+          if [ ! -s base-baseline.json ]; then
+            echo "Skipped: the base branch has no bench/baseline.json (the pull request that adds the benchmark)." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          labelled=false
+          if printf '%s' "$PR_LABELS" | jq -e 'any(.[]; . == "bench-rebaseline")' > /dev/null; then labelled=true; fi
+          machinery="$(git diff --name-only "origin/$BASE_REF...HEAD" | grep -E '^(\.github/workflows/ci\.yml|bench/gate\.mjs|bench/base-guard\.mjs|bench/run\.mjs|bench/mutate\.mjs|bench/lib/|bench/mutants/|test/bench\.test\.mjs)' || true)"
+          if [ -n "$machinery" ]; then
+            { echo "## The benchmark's own machinery changed"; echo; printf -- '- `%s`\n' $machinery; echo; } >> "$GITHUB_STEP_SUMMARY"
+            if [ "$labelled" != true ]; then
+              for f in $machinery; do echo "::error::bench: the gate, guard, scorer, mutant pass or their CI changed: $f (needs the bench-rebaseline label)"; done
+              machinery_fail=true
+            fi
+          fi
+          git diff --name-status --no-renames "origin/$BASE_REF...HEAD" -- bench/cases bench/truth > truth-changes.txt
+          node bench/base-guard.mjs --base base-baseline.json --base-expected base-expected.json --score bench-score.json --truth-changes truth-changes.txt
+          [ "${machinery_fail:-false}" != true ]
+
+  mutants:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Does this change touch reader, check or benchmark code?
+        id: scope
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          if [ "$EVENT" = pull_request ]; then
+            [[ "$BASE_REF" =~ ^[A-Za-z0-9._/-]+$ ]] || { echo "::error::unexpected base ref"; exit 1; }
+            range="origin/$BASE_REF...HEAD"
+          else
+            [[ "$BEFORE" =~ ^[0-9a-f]{40}$ ]] || { echo "run=true" >> "$GITHUB_OUTPUT"; exit 0; }
+            range="$BEFORE...HEAD"
+          fi
+          if ! git diff --name-only "$range" > changed.txt; then echo "run=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          if grep -qE '^(src/|engine/|bench/)' changed.txt; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::no change under src/, engine/ or bench/: the mutant pass is skipped"
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.scope.outputs.run == 'true'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+      - if: steps.scope.outputs.run == 'true'
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: The mutant pass
+        if: steps.scope.outputs.run == 'true'
+        run: node bench/mutate.mjs --jobs 4 --json mutants.json --md mutants.md
+      - name: The result in the job summary
+        if: always() && steps.scope.outputs.run == 'true'
+        run: test -f mutants.md && cat mutants.md >> "$GITHUB_STEP_SUMMARY" || true
+
   zero-config:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -114,7 +213,7 @@ jobs:
 
   # The required status check (branch protection names this job, not the others).
   ci-ok:
-    needs: [test, action, zero-config]
+    needs: [test, action, zero-config, bench, mutants]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -129,4 +228,4 @@ jobs:
             n=$((n + 1))
             [ "$r" = success ] || { echo "::error::a required job ended $r"; exit 1; }
           done
-          [ "$n" -eq 3 ] || { echo "::error::expected 3 job results, got $n"; exit 1; }
+          [ "$n" -eq 5 ] || { echo "::error::expected 5 job results, got $n"; exit 1; }

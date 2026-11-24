@@ -1,0 +1,39 @@
+{
+  "id": "rust/rust-mcp-sdk-struct",
+  "language": "rust",
+  "idioms": [
+    "macro"
+  ],
+  "about": "rust-mcp-sdk #[mcp_tool] structs in a module",
+  "outcome": "tools",
+  "tools": [
+    "list_directory",
+    "file_size"
+  ],
+  "details": {
+    "list_directory": {
+      "description": "Lists the entries of a directory inside the allowed root.",
+      "params": [
+        "path"
+      ],
+      "required": [
+        "path"
+      ],
+      "annotations": {
+        "readOnlyHint": true
+      }
+    },
+    "file_size": {
+      "description": "Returns the size of a file in bytes.",
+      "params": [
+        "path"
+      ],
+      "required": [
+        "path"
+      ],
+      "annotations": {
+        "readOnlyHint": true
+      }
+    }
+  }
+}

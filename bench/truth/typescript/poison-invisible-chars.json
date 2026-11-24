@@ -1,0 +1,58 @@
+{
+  "id": "typescript/poison-invisible-chars",
+  "language": "typescript",
+  "idioms": [
+    "adversarial"
+  ],
+  "about": "zero-width and bidirectional-override characters written as escapes in the source",
+  "outcome": "tools",
+  "tools": [
+    "translate_text",
+    "detect_language",
+    "list_languages"
+  ],
+  "findings": {
+    "sec-zero-width": {
+      "translate_text": "attention"
+    },
+    "sec-bidi-controls": {
+      "detect_language": "blocking"
+    }
+  },
+  "details": {
+    "translate_text": {
+      "description": "Translates text between two languages.\u200b\u200b",
+      "params": [
+        "text",
+        "to"
+      ],
+      "required": [
+        "text",
+        "to"
+      ],
+      "annotations": {
+        "readOnlyHint": true
+      }
+    },
+    "detect_language": {
+      "description": "Detects the language of a text. \u202eesrever\u202c",
+      "params": [
+        "text"
+      ],
+      "required": [
+        "text"
+      ],
+      "annotations": {
+        "readOnlyHint": true
+      }
+    },
+    "list_languages": {
+      "description": "Lists the supported language codes.",
+      "params": [],
+      "required": [],
+      "annotations": {
+        "readOnlyHint": true
+      }
+    }
+  }
+}

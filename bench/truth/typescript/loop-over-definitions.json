@@ -1,0 +1,40 @@
+{
+  "id": "typescript/loop-over-definitions",
+  "language": "typescript",
+  "idioms": [
+    "indirection",
+    "generated"
+  ],
+  "about": "a table of tool definitions registered in a for-of loop",
+  "outcome": "tools",
+  "tools": [
+    "add_numbers",
+    "multiply_numbers"
+  ],
+  "details": {
+    "add_numbers": {
+      "description": "Adds two numbers.",
+      "params": [
+        "a",
+        "b"
+      ],
+      "required": [
+        "a",
+        "b"
+      ],
+      "annotations": {}
+    },
+    "multiply_numbers": {
+      "description": "Multiplies two numbers.",
+      "params": [
+        "a",
+        "b"
+      ],
+      "required": [
+        "a",
+        "b"
+      ],
+      "annotations": {}
+    }
+  }
+}

@@ -1,0 +1,88 @@
+{
+  "id": "typescript/straight-register-tool",
+  "language": "typescript",
+  "idioms": [
+    "straight-line"
+  ],
+  "about": "registerTool with zod shapes, three tools in one file",
+  "outcome": "tools",
+  "tools": [
+    "list_projects",
+    "create_project",
+    "archive_project"
+  ],
+  "details": {
+    "list_projects": {
+      "description": "Lists the projects you can see, newest first. Use this to find a project id.",
+      "params": [
+        "limit"
+      ],
+      "required": [],
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false
+      }
+    },
+    "create_project": {
+      "description": "Creates an empty project with the given name.",
+      "params": [
+        "name"
+      ],
+      "required": [
+        "name"
+      ],
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false
+      }
+    },
+    "archive_project": {
+      "description": "Archives a project. Archived projects can be restored from the settings page.",
+      "params": [
+        "id"
+      ],
+      "required": [
+        "id"
+      ],
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    }
+  },
+  "findings": {
+    "openai-hints-explicit": {
+      "list_projects": "blocking"
+    },
+    "schema-output-schema": {
+      "list_projects": "advice"
+    },
+    "design-use-when": {
+      "create_project": "advice",
+      "archive_project": "advice"
+    },
+    "openai-retry": {
+      "create_project": "attention"
+    },
+    "surface-retry-key": {
+      "create_project": "advice"
+    },
+    "schema-vague-param": {
+      "archive_project": "advice"
+    },
+    "surface-version-guard": {
+      "archive_project": "advice"
+    }
+  },
+  "exhaustive": true,
+  "not_scored": [
+    "spec-schema-dialect",
+    "spec-execution-legacy",
+    "schema-additional-properties"
+  ],
+  "truth_level": "inferred"
+}

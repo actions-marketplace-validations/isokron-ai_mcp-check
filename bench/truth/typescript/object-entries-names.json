@@ -1,0 +1,41 @@
+{
+  "id": "typescript/object-entries-names",
+  "language": "typescript",
+  "idioms": [
+    "indirection",
+    "generated"
+  ],
+  "about": "tool names and configs taken from Object.entries of a literal object, registered in a for-of loop",
+  "outcome": "tools",
+  "tools": [
+    "get_forecast",
+    "get_alerts"
+  ],
+  "details": {
+    "get_forecast": {
+      "description": "Returns the forecast for a city for the next three days.",
+      "params": [
+        "city"
+      ],
+      "required": [
+        "city"
+      ],
+      "annotations": {
+        "readOnlyHint": true
+      }
+    },
+    "get_alerts": {
+      "description": "Lists the weather alerts in force for a region.",
+      "params": [
+        "region",
+        "severe_only"
+      ],
+      "required": [
+        "region"
+      ],
+      "annotations": {
+        "readOnlyHint": true
+      }
+    }
+  }
+}

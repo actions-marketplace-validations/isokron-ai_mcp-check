@@ -1,0 +1,1 @@
+{ "name": "bench-docs-monorepo", "private": true, "workspaces": ["packages/*"] }

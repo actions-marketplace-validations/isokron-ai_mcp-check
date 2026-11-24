@@ -1,0 +1,41 @@
+{
+  "id": "lists/mcpb-static-responses",
+  "language": "committed-list",
+  "idioms": [
+    "straight-line"
+  ],
+  "about": "an MCPB manifest carrying its exact tools/list answer",
+  "outcome": "tools",
+  "tools": [
+    "convert_case",
+    "count_words"
+  ],
+  "details": {
+    "convert_case": {
+      "description": "Converts text to upper, lower or title case.",
+      "params": [
+        "text",
+        "to"
+      ],
+      "required": [
+        "text",
+        "to"
+      ],
+      "annotations": {
+        "readOnlyHint": true
+      }
+    },
+    "count_words": {
+      "description": "Counts the words in a text.",
+      "params": [
+        "text"
+      ],
+      "required": [
+        "text"
+      ],
+      "annotations": {
+        "readOnlyHint": true
+      }
+    }
+  }
+}

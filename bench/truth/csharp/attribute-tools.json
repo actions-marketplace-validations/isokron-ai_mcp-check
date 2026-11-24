@@ -1,0 +1,13 @@
+{
+  "id": "csharp/attribute-tools",
+  "language": "csharp",
+  "idioms": [
+    "decorator"
+  ],
+  "about": "the official C# SDK: [McpServerTool] methods in a [McpServerToolType] class",
+  "outcome": "tools",
+  "tools": [
+    "echo_text",
+    "reverse_text"
+  ]
+}

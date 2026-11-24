@@ -188,7 +188,8 @@ export function serverChoices(r) {
 /** The folders to choose from, for the advice: package folders, or the folders of the committed lists. */
 export function serverFolders(r) {
   const h = r.hints || {};
-  if (h.servers) return h.servers.map((x) => x.path || '.');
+  // a module file of one Rust crate (R-RD-10) is a server, but no folder holds it alone: it is not offered as a folder
+  if (h.servers) return h.servers.filter((x) => !/\.rs$/.test(x.path || '')).map((x) => x.path || '.');
   return Array.from(new Set((h.lists || []).map((x) => (x.path.includes('/') ? x.path.slice(0, x.path.lastIndexOf('/')) : '.'))));
 }
 
@@ -236,8 +237,9 @@ function cliUsable(r, where, pick) {
   if (u.problem === 'none') throw new InputFailure(noToolsMessage(where, r) + whyNothing(r), 'unreachable');
   if (u.problem === 'names') throw new InputFailure('only tool names were found in ' + where + ' (' + namesOnlyText(u.candidate) + '), which cannot be graded. ' + LIVE_ADVICE, 'unreachable');
   if (u.problem === 'multiple') {
+    const folders = serverFolders(r); const live = LIVE_ADVICE.charAt(0).toLowerCase() + LIVE_ADVICE.slice(1);
     throw new InputFailure('found tool definitions of more than one server in ' + where + ': ' + serverChoices(r) + '. Nothing was merged or picked. '
-      + 'Check one server at a time (' + serverFolders(r).slice(0, 3).map((f) => pick(f)).join(', ') + '), or ' + LIVE_ADVICE.charAt(0).toLowerCase() + LIVE_ADVICE.slice(1), 'unreachable');
+      + (folders.length ? 'Check one server at a time (' + folders.slice(0, 3).map((f) => pick(f)).join(', ') + '), or ' + live : 'They are modules of one crate, so no folder holds one alone: ' + live), 'unreachable');
   }
   return u.candidate;
 }

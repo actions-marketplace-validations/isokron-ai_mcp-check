@@ -1,0 +1,42 @@
+{
+  "id": "typescript/duplicate-and-bad-names",
+  "language": "typescript",
+  "idioms": [
+    "low-level",
+    "partial-invalid"
+  ],
+  "about": "a name with a space and a bang, and the same name twice",
+  "outcome": "tools",
+  "tools": [
+    "get weather!",
+    "lookup_city",
+    "list_alerts"
+  ],
+  "findings": {
+    "spec-name-charset": {
+      "get weather!": "attention"
+    }
+  },
+  "details": {
+    "get weather!": {
+      "description": "Current weather for a city.",
+      "params": [
+        "city"
+      ],
+      "required": [],
+      "annotations": {}
+    },
+    "lookup_city": {
+      "description": "Finds a city by name.",
+      "params": [
+        "name"
+      ],
+      "required": [],
+      "annotations": {}
+    }
+  },
+  "server_findings": {
+    "spec-name-unique": "attention",
+    "openai-name-unique": "blocking"
+  }
+}

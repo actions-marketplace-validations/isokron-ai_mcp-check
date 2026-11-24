@@ -1,0 +1,38 @@
+{
+  "id": "typescript/enum-names",
+  "language": "typescript",
+  "idioms": [
+    "imported",
+    "indirection"
+  ],
+  "about": "tool names as enum members, registered in a helper called from index",
+  "outcome": "tools",
+  "tools": [
+    "list_users",
+    "get_user"
+  ],
+  "details": {
+    "list_users": {
+      "description": "Lists users of the workspace.",
+      "params": [
+        "cursor"
+      ],
+      "required": [],
+      "annotations": {
+        "readOnlyHint": true
+      }
+    },
+    "get_user": {
+      "description": "Returns one user by id.",
+      "params": [
+        "id"
+      ],
+      "required": [
+        "id"
+      ],
+      "annotations": {
+        "readOnlyHint": true
+      }
+    }
+  }
+}

@@ -1,0 +1,74 @@
+{
+  "id": "go/mcp-go-newtool",
+  "language": "go",
+  "idioms": [
+    "straight-line"
+  ],
+  "about": "mark3labs/mcp-go NewTool with options, then AddTool",
+  "outcome": "tools",
+  "tools": [
+    "get_time",
+    "convert_time"
+  ],
+  "details": {
+    "get_time": {
+      "description": "Returns the current time in a time zone.",
+      "params": [
+        "zone"
+      ],
+      "required": [
+        "zone"
+      ],
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": true
+      }
+    },
+    "convert_time": {
+      "description": "Converts a time from one time zone to another.",
+      "params": [
+        "from",
+        "time",
+        "to"
+      ],
+      "required": [
+        "from",
+        "time",
+        "to"
+      ],
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": true
+      }
+    }
+  },
+  "findings": {
+    "anthropic-title": {
+      "get_time": "blocking",
+      "convert_time": "blocking"
+    },
+    "design-use-when": {
+      "get_time": "advice",
+      "convert_time": "advice"
+    },
+    "openai-readonly-destructive": {
+      "get_time": "attention",
+      "convert_time": "attention"
+    },
+    "schema-output-schema": {
+      "get_time": "advice",
+      "convert_time": "advice"
+    }
+  },
+  "exhaustive": true,
+  "not_scored": [
+    "spec-schema-dialect",
+    "spec-execution-legacy",
+    "schema-additional-properties"
+  ],
+  "truth_level": "inferred"
+}

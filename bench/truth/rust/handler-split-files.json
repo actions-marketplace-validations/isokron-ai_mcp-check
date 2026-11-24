@@ -1,0 +1,32 @@
+{
+  "id": "rust/handler-split-files",
+  "language": "rust",
+  "idioms": [
+    "macro",
+    "split-modules"
+  ],
+  "about": "one rmcp server whose #[tool_router] impl and ServerHandler impl sit in two files: one server, not two",
+  "outcome": "tools",
+  "tools": [
+    "utc_now",
+    "unix_time"
+  ],
+  "details": {
+    "utc_now": {
+      "description": "Returns the current time in UTC.",
+      "params": [],
+      "required": [],
+      "annotations": {
+        "readOnlyHint": true
+      }
+    },
+    "unix_time": {
+      "description": "Returns the current Unix time in seconds.",
+      "params": [],
+      "required": [],
+      "annotations": {
+        "readOnlyHint": true
+      }
+    }
+  }
+}

@@ -36,7 +36,7 @@ concurrency:
 
 env:
   WORKER_KIT_REF: '2ffcea16117ec679398f83eefe8c6fa66d38bac6'
-  SURFACE_CORPUS_REF: '066c15dbac1e1ef59ea6ba1705b5be344a3dfdc5'
+  SURFACE_CORPUS_REF: '4c16b586e8e5886acb098285b6ec405fd4db4ac7'
   # The tool-qa commit whose ingest judges the bundles here: tool-qa's ingest with the field registry it pins
   # (mcp-results a6fa803 since tool-qa #32: the oracle stage's fields). The worker kit that builds them stays at
   # WORKER_KIT_REF.
@@ -48,7 +48,7 @@ jobs:
   sandbox:
     permissions:
       contents: read
-    uses: isokron-ai/mcp-surface-corpus/.github/workflows/sandbox-conformance.yml@066c15dbac1e1ef59ea6ba1705b5be344a3dfdc5 # SURFACE_CORPUS_REF
+    uses: isokron-ai/mcp-surface-corpus/.github/workflows/sandbox-conformance.yml@4c16b586e8e5886acb098285b6ec405fd4db4ac7 # SURFACE_CORPUS_REF
     with:
       mutations: false
       artifact-prefix: live-probe-sandbox
@@ -114,7 +114,7 @@ jobs:
       # telemetry check), from the commit SURFACE_CORPUS_REF pins. It fails the job unless the verdict is pass.
       - id: guard
         name: Sandbox guard on this runner (mcp-surface-corpus sandbox-guard)
-        uses: isokron-ai/mcp-surface-corpus/sandbox-guard@066c15dbac1e1ef59ea6ba1705b5be344a3dfdc5 # SURFACE_CORPUS_REF
+        uses: isokron-ai/mcp-surface-corpus/sandbox-guard@4c16b586e8e5886acb098285b6ec405fd4db4ac7 # SURFACE_CORPUS_REF
         with:
           out: ${{ runner.temp }}/live-probe/selftest
       # Registry and GitHub reads only (JSON, fixed hosts): nothing of a subject is fetched to run here.

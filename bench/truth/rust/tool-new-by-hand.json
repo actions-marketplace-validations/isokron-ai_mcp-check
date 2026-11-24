@@ -1,0 +1,35 @@
+{
+  "id": "rust/tool-new-by-hand",
+  "language": "rust",
+  "idioms": [
+    "straight-line"
+  ],
+  "about": "Tool::new built by hand in a list",
+  "outcome": "tools",
+  "tools": [
+    "echo",
+    "reverse_text"
+  ],
+  "details": {
+    "echo": {
+      "description": "Returns the text it is given.",
+      "params": [
+        "text"
+      ],
+      "required": [
+        "text"
+      ],
+      "annotations": {}
+    },
+    "reverse_text": {
+      "description": "Returns the text reversed.",
+      "params": [
+        "text"
+      ],
+      "required": [
+        "text"
+      ],
+      "annotations": {}
+    }
+  }
+}

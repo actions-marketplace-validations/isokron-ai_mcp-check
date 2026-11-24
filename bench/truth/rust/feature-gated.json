@@ -1,0 +1,23 @@
+{
+  "id": "rust/feature-gated",
+  "language": "rust",
+  "idioms": [
+    "conditional",
+    "macro"
+  ],
+  "about": "a #[tool] behind a Cargo feature that is not on by default",
+  "outcome": "tools",
+  "tools": [
+    "list_events"
+  ],
+  "details": {
+    "list_events": {
+      "description": "Lists recent audit events.",
+      "params": [],
+      "required": [],
+      "annotations": {
+        "readOnlyHint": true
+      }
+    }
+  }
+}

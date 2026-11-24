@@ -1,0 +1,25 @@
+{
+  "id": "python/sdk-import-parenthesized",
+  "language": "python",
+  "idioms": [
+    "decorator",
+    "adversarial"
+  ],
+  "about": "fastmcp's standalone @tool imported in a parenthesized multi-line import, beside a repository helper also named tool() that builds a table row",
+  "outcome": "tools",
+  "tools": [
+    "search_books"
+  ],
+  "details": {
+    "search_books": {
+      "description": "Searches the catalogue by title or author.",
+      "params": [
+        "query"
+      ],
+      "required": [
+        "query"
+      ],
+      "annotations": {}
+    }
+  }
+}

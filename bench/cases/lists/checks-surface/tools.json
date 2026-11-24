@@ -1,0 +1,40 @@
+{
+  "tools": [
+    {
+      "name": "create_page",
+      "title": "Create a page",
+      "description": "Creates a page in a space and returns its id and version number.",
+      "inputSchema": { "type": "object", "properties": { "space": { "type": "string", "description": "Space key" }, "title": { "type": "string", "description": "Page title" }, "body": { "type": "string", "description": "Page body in Markdown" } }, "required": ["space", "title", "body"], "additionalProperties": false },
+      "annotations": { "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": false }
+    },
+    {
+      "name": "update_page",
+      "title": "Update a page",
+      "description": "Replaces the body of a page. Safe to retry: sending the same body again changes nothing.",
+      "inputSchema": { "type": "object", "properties": { "page_id": { "type": "string", "description": "Page id" }, "body": { "type": "string", "description": "New page body in Markdown" } }, "required": ["page_id", "body"], "additionalProperties": false },
+      "annotations": { "readOnlyHint": false, "destructiveHint": true, "idempotentHint": true, "openWorldHint": false }
+    },
+    {
+      "name": "delete_page",
+      "title": "Delete a page",
+      "description": "Deletes a page and its history. It cannot be restored. Safe to retry: deleting a deleted page changes nothing.",
+      "inputSchema": { "type": "object", "properties": { "page_id": { "type": "string", "description": "Page id" } }, "required": ["page_id"], "additionalProperties": false },
+      "annotations": { "readOnlyHint": false, "destructiveHint": true, "idempotentHint": true, "openWorldHint": false }
+    },
+    {
+      "name": "delete_space",
+      "title": "Delete a space",
+      "description": "Deletes a space and every page in it, after checking the version and the confirmation. Safe to retry.",
+      "inputSchema": { "type": "object", "properties": { "space": { "type": "string", "description": "Space key" }, "expected_version": { "type": "integer", "description": "The space version you read; the delete fails if it changed" }, "confirm": { "type": "boolean", "description": "Must be true" } }, "required": ["space", "expected_version", "confirm"], "additionalProperties": false },
+      "annotations": { "readOnlyHint": false, "destructiveHint": true, "idempotentHint": true, "openWorldHint": false }
+    },
+    {
+      "name": "get_page",
+      "title": "Get a page",
+      "description": "Returns one page with its body, title and current version number.",
+      "inputSchema": { "type": "object", "properties": { "page_id": { "type": "string", "description": "Page id" } }, "required": ["page_id"], "additionalProperties": false },
+      "outputSchema": { "type": "object", "properties": { "body": { "type": "string" }, "version": { "type": "integer" } } },
+      "annotations": { "readOnlyHint": true, "destructiveHint": false, "openWorldHint": false }
+    }
+  ]
+}

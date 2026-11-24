@@ -1,0 +1,10 @@
+[package]
+name = "sums"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rmcp = { version = "0.9", features = ["server", "transport-io"] }
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+schemars = "1"
