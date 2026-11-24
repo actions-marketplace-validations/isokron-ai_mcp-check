@@ -1,0 +1,35 @@
+{
+  "id": "javascript/commonjs-require",
+  "language": "javascript",
+  "idioms": [
+    "straight-line"
+  ],
+  "about": "CommonJS require and server.tool",
+  "outcome": "tools",
+  "tools": [
+    "start_timer",
+    "stop_timer"
+  ],
+  "details": {
+    "start_timer": {
+      "description": "Starts a named timer.",
+      "params": [
+        "label"
+      ],
+      "required": [
+        "label"
+      ],
+      "annotations": {}
+    },
+    "stop_timer": {
+      "description": "Stops a named timer and returns the elapsed seconds.",
+      "params": [
+        "label"
+      ],
+      "required": [
+        "label"
+      ],
+      "annotations": {}
+    }
+  }
+}

@@ -1,0 +1,76 @@
+{
+  "id": "python/lowlevel-server",
+  "language": "python",
+  "idioms": [
+    "low-level",
+    "straight-line"
+  ],
+  "about": "the low-level Server with list_tools returning types.Tool literals",
+  "outcome": "tools",
+  "tools": [
+    "count_stock",
+    "reserve_stock"
+  ],
+  "details": {
+    "count_stock": {
+      "description": "Returns the stock count of a product.",
+      "params": [
+        "sku"
+      ],
+      "required": [
+        "sku"
+      ],
+      "annotations": {
+        "readOnlyHint": true
+      }
+    },
+    "reserve_stock": {
+      "description": "Reserves units of a product for an order.",
+      "params": [
+        "sku",
+        "units"
+      ],
+      "required": [
+        "sku",
+        "units"
+      ],
+      "annotations": {}
+    }
+  },
+  "findings": {
+    "anthropic-description": {
+      "count_stock": "attention"
+    },
+    "anthropic-title": {
+      "count_stock": "blocking",
+      "reserve_stock": "blocking"
+    },
+    "design-use-when": {
+      "count_stock": "advice",
+      "reserve_stock": "advice"
+    },
+    "openai-hints-explicit": {
+      "count_stock": "blocking",
+      "reserve_stock": "blocking"
+    },
+    "schema-output-schema": {
+      "count_stock": "advice"
+    },
+    "anthropic-hint": {
+      "reserve_stock": "blocking"
+    },
+    "openai-retry": {
+      "reserve_stock": "attention"
+    },
+    "schema-param-description": {
+      "reserve_stock": "advice"
+    }
+  },
+  "exhaustive": true,
+  "not_scored": [
+    "spec-schema-dialect",
+    "spec-execution-legacy",
+    "schema-additional-properties"
+  ],
+  "truth_level": "inferred"
+}

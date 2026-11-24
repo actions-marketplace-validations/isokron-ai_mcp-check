@@ -1,0 +1,45 @@
+{
+  "id": "typescript/conditional-env",
+  "language": "typescript",
+  "idioms": [
+    "conditional"
+  ],
+  "about": "a write tool registered only when an environment variable is set",
+  "outcome": "tools",
+  "tools": [
+    "read_record"
+  ],
+  "optional_tools": [
+    "update_record"
+  ],
+  "details": {
+    "read_record": {
+      "description": "Returns one record by id.",
+      "params": [
+        "id"
+      ],
+      "required": [
+        "id"
+      ],
+      "annotations": {
+        "readOnlyHint": true
+      }
+    },
+    "update_record": {
+      "description": "Replaces the fields of one record.",
+      "params": [
+        "fields",
+        "id"
+      ],
+      "required": [
+        "fields",
+        "id"
+      ],
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true
+      }
+    }
+  }
+}

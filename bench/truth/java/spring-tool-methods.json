@@ -1,0 +1,13 @@
+{
+  "id": "java/spring-tool-methods",
+  "language": "java",
+  "idioms": [
+    "decorator"
+  ],
+  "about": "Spring AI @Tool methods",
+  "outcome": "tools",
+  "tools": [
+    "city_temperature",
+    "city_humidity"
+  ]
+}

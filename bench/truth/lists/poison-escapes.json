@@ -1,0 +1,58 @@
+{
+  "id": "lists/poison-escapes",
+  "language": "committed-list",
+  "idioms": [
+    "adversarial"
+  ],
+  "about": "an exact list with one planted problem per tool (JSON escapes, surrogate pairs for tag characters), a look-alike letter in a name and a name over 128 characters",
+  "outcome": "tools",
+  "tools": [
+    "archive_note",
+    "word_count",
+    "reverse_words",
+    "title_case",
+    "color_text",
+    "spell_check",
+    "text_stats",
+    "style_guide",
+    "sync_notes",
+    "lookup_\u0430ccount",
+    "summarize_quarterlyand_quarterlyand_quarterlyand_quarterlyand_quarterlyand_quarterlyand_quarterlyand_quarterlyand_quarterlyand_quarterlyand_quarterlyand_quarterlyand_quarterly_report"
+  ],
+  "findings": {
+    "sec-html-comment": {
+      "archive_note": "blocking"
+    },
+    "sec-zero-width": {
+      "word_count": "attention"
+    },
+    "sec-bidi-controls": {
+      "reverse_words": "blocking"
+    },
+    "sec-invisible-encoding": {
+      "title_case": "blocking"
+    },
+    "sec-control-chars": {
+      "color_text": "attention"
+    },
+    "sec-homoglyph": {
+      "spell_check": "attention",
+      "lookup_\u0430ccount": "blocking"
+    },
+    "sec-encoded-blob": {
+      "text_stats": "blocking"
+    },
+    "sec-external-instructions": {
+      "style_guide": "blocking"
+    },
+    "sec-secret-seeking": {
+      "sync_notes": "blocking"
+    },
+    "spec-name-charset": {
+      "lookup_\u0430ccount": "attention"
+    },
+    "spec-name-length": {
+      "summarize_quarterlyand_quarterlyand_quarterlyand_quarterlyand_quarterlyand_quarterlyand_quarterlyand_quarterlyand_quarterlyand_quarterlyand_quarterlyand_quarterlyand_quarterly_report": "attention"
+    }
+  }
+}

@@ -1,0 +1,56 @@
+{
+  "tools": [
+    {
+      "name": "send_invoice",
+      "title": "Send an invoice",
+      "description": "Emails an invoice to the customer named on it. The invoice must be in the sent folder afterwards.",
+      "inputSchema": { "type": "object", "properties": { "invoice_id": { "type": "string", "description": "Invoice id" } }, "required": ["invoice_id"], "additionalProperties": false },
+      "annotations": { "readOnlyHint": false, "destructiveHint": false }
+    },
+    {
+      "name": "get_report",
+      "title": "Get a report",
+      "description": "Returns a saved report by its id, with its rows and the date it was built.",
+      "inputSchema": { "type": "object", "properties": { "report_id": { "type": "string", "description": "Report id" } }, "required": ["report_id"], "additionalProperties": false },
+      "outputSchema": { "type": "object", "properties": { "rows": { "type": "array" } } },
+      "annotations": { "readOnlyHint": true, "destructiveHint": true, "openWorldHint": false }
+    },
+    {
+      "name": "run_command",
+      "title": "Run a command",
+      "description": "Runs any shell command on the build machine and returns its output.",
+      "inputSchema": { "type": "object", "properties": { "command": { "type": "string", "description": "The command line" } }, "required": ["command"], "additionalProperties": false },
+      "annotations": { "readOnlyHint": false, "destructiveHint": true, "idempotentHint": false, "openWorldHint": true }
+    },
+    {
+      "name": "transfer_funds",
+      "title": "Transfer funds",
+      "description": "Transfers money from the user's account to another account. Safe to retry with the same transfer_key.",
+      "inputSchema": { "type": "object", "properties": { "to_account": { "type": "string", "description": "Account number to pay" }, "amount": { "type": "number", "description": "Amount in USD" }, "transfer_key": { "type": "string", "description": "Idempotency key" } }, "required": ["to_account", "amount", "transfer_key"], "additionalProperties": false },
+      "annotations": { "readOnlyHint": false, "destructiveHint": true, "idempotentHint": true, "openWorldHint": true }
+    },
+    {
+      "name": "summarize_thread",
+      "title": "Summarize a thread",
+      "description": "Summarizes the conversation so far into five bullet points for the shared notes page.",
+      "inputSchema": { "type": "object", "properties": { "conversation_history": { "type": "string", "description": "Every message of the chat so far" } }, "required": ["conversation_history"], "additionalProperties": false },
+      "outputSchema": { "type": "object", "properties": { "bullets": { "type": "array" } } },
+      "annotations": { "readOnlyHint": true, "destructiveHint": false, "openWorldHint": false }
+    },
+    {
+      "name": "login_account",
+      "title": "Log in",
+      "description": "Logs in to the billing portal with the user's own username and password, and keeps the session.",
+      "inputSchema": { "type": "object", "properties": { "username": { "type": "string", "description": "Portal user name" }, "password": { "type": "string", "description": "Portal password" } }, "required": ["username", "password"], "additionalProperties": false },
+      "annotations": { "readOnlyHint": false, "destructiveHint": false, "idempotentHint": true, "openWorldHint": true }
+    },
+    {
+      "name": "find_nearby_shops",
+      "title": "Find nearby shops",
+      "description": "Finds shops near the user's current location, using the user's own GPS coordinates.",
+      "inputSchema": { "type": "object", "properties": { "latitude": { "type": "number", "description": "The user's latitude" }, "longitude": { "type": "number", "description": "The user's longitude" }, "limit": { "type": "integer", "description": "Most shops to return" }, "response_format": { "type": "string", "enum": ["concise", "detailed"], "description": "How much detail to return" } }, "required": ["latitude", "longitude"], "additionalProperties": false },
+      "outputSchema": { "type": "object", "properties": { "shops": { "type": "array" } } },
+      "annotations": { "readOnlyHint": true, "destructiveHint": false, "openWorldHint": true }
+    }
+  ]
+}

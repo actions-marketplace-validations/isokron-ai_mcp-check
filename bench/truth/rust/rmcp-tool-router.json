@@ -1,0 +1,62 @@
+{
+  "id": "rust/rmcp-tool-router",
+  "language": "rust",
+  "idioms": [
+    "macro"
+  ],
+  "about": "rmcp #[tool] methods in a #[tool_router] impl",
+  "outcome": "tools",
+  "tools": [
+    "increment",
+    "get_value"
+  ],
+  "details": {
+    "increment": {
+      "description": "Adds one to the counter and returns the new value.",
+      "params": [],
+      "required": [],
+      "annotations": {}
+    },
+    "get_value": {
+      "description": "Returns the counter value.",
+      "params": [],
+      "required": [],
+      "annotations": {
+        "readOnlyHint": true
+      }
+    }
+  },
+  "findings": {
+    "anthropic-hint": {
+      "increment": "blocking"
+    },
+    "anthropic-title": {
+      "increment": "blocking",
+      "get_value": "blocking"
+    },
+    "design-use-when": {
+      "increment": "advice",
+      "get_value": "advice"
+    },
+    "openai-hints-explicit": {
+      "increment": "blocking",
+      "get_value": "blocking"
+    },
+    "openai-retry": {
+      "increment": "attention"
+    },
+    "anthropic-description": {
+      "get_value": "attention"
+    },
+    "schema-output-schema": {
+      "get_value": "advice"
+    }
+  },
+  "exhaustive": true,
+  "not_scored": [
+    "spec-schema-dialect",
+    "spec-execution-legacy",
+    "schema-additional-properties"
+  ],
+  "truth_level": "inferred"
+}

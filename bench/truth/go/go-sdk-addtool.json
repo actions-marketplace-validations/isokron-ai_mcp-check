@@ -1,0 +1,68 @@
+{
+  "id": "go/go-sdk-addtool",
+  "language": "go",
+  "idioms": [
+    "straight-line"
+  ],
+  "about": "the official go-sdk mcp.AddTool with typed input structs",
+  "outcome": "tools",
+  "tools": [
+    "greet",
+    "farewell"
+  ],
+  "details": {
+    "greet": {
+      "description": "Says hello to someone.",
+      "params": [
+        "name"
+      ],
+      "required": [
+        "name"
+      ],
+      "annotations": {}
+    },
+    "farewell": {
+      "description": "Says goodbye to someone.",
+      "params": [
+        "name"
+      ],
+      "required": [
+        "name"
+      ],
+      "annotations": {}
+    }
+  },
+  "findings": {
+    "anthropic-description": {
+      "greet": "attention",
+      "farewell": "attention"
+    },
+    "anthropic-hint": {
+      "greet": "blocking",
+      "farewell": "blocking"
+    },
+    "anthropic-title": {
+      "greet": "blocking",
+      "farewell": "blocking"
+    },
+    "design-use-when": {
+      "greet": "advice",
+      "farewell": "advice"
+    },
+    "openai-hints-explicit": {
+      "greet": "blocking",
+      "farewell": "blocking"
+    },
+    "openai-retry": {
+      "greet": "attention",
+      "farewell": "attention"
+    }
+  },
+  "exhaustive": true,
+  "not_scored": [
+    "spec-schema-dialect",
+    "spec-execution-legacy",
+    "schema-additional-properties"
+  ],
+  "truth_level": "inferred"
+}

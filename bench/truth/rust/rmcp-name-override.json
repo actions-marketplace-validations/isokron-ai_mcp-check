@@ -1,0 +1,36 @@
+{
+  "id": "rust/rmcp-name-override",
+  "language": "rust",
+  "idioms": [
+    "macro",
+    "misleading-names"
+  ],
+  "about": "rmcp #[tool(name = ...)] renames the method, with Parameters<T> schemas",
+  "outcome": "tools",
+  "tools": [
+    "sum_values",
+    "mean_value"
+  ],
+  "details": {
+    "sum_values": {
+      "description": "Adds a list of numbers.",
+      "params": [
+        "values"
+      ],
+      "required": [
+        "values"
+      ],
+      "annotations": {}
+    },
+    "mean_value": {
+      "description": "Returns the mean of a list of numbers.",
+      "params": [
+        "values"
+      ],
+      "required": [
+        "values"
+      ],
+      "annotations": {}
+    }
+  }
+}

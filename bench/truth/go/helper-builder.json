@@ -1,0 +1,46 @@
+{
+  "id": "go/helper-builder",
+  "language": "go",
+  "idioms": [
+    "wrapper",
+    "indirection"
+  ],
+  "about": "a helper in another file builds each tool from a name and description",
+  "outcome": "tools",
+  "tools": [
+    "list_objects",
+    "bucket_usage"
+  ],
+  "details": {
+    "list_objects": {
+      "description": "Lists the objects in a bucket.",
+      "params": [
+        "bucket"
+      ],
+      "required": [
+        "bucket"
+      ],
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": true
+      }
+    },
+    "bucket_usage": {
+      "description": "Returns the bytes stored in a bucket.",
+      "params": [
+        "bucket"
+      ],
+      "required": [
+        "bucket"
+      ],
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": true
+      }
+    }
+  }
+}

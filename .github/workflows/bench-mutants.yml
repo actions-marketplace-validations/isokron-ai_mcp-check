@@ -1,0 +1,40 @@
+# The mutant pass of the adversarial benchmark (bench/mutate.mjs, bench/README.md).
+#
+# Puts about 170 small bugs into a temp copy of mcp-check's reader and check code (flipped conditions, dropped
+# registration patterns, weakened regular expressions, off-by-one numbers, swapped severities) and about 40 small
+# edits into the cases, and checks that the release gate fails each one. Fails when a mutant on the kill list
+# (bench/mutants/expected.json) survives. On pull requests and pushes the same pass is the mutants job of ci.yml
+# (required by ci-ok); this workflow is the weekly run, and a manual one.
+# Nothing is run but mcp-check itself, on files in this repository. No secrets, read-only token.
+
+name: bench-mutants
+
+on:
+  schedule:
+    - cron: "23 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bench-mutants-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  mutants:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: The mutant pass
+        run: node bench/mutate.mjs --jobs 4 --json mutants.json --md mutants.md
+      - name: The result in the job summary
+        if: always()
+        run: test -f mutants.md && cat mutants.md >> "$GITHUB_STEP_SUMMARY" || true

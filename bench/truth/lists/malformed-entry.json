@@ -1,0 +1,18 @@
+{
+  "id": "lists/malformed-entry",
+  "language": "committed-list",
+  "idioms": [
+    "partial-invalid"
+  ],
+  "about": "a committed {tools: [...]} list where one entry has no inputSchema: the list should still be graded, with the entry flagged",
+  "outcome": "tools",
+  "tools": [
+    "ping_host",
+    "traceroute_host"
+  ],
+  "findings": {
+    "spec-input-schema-missing": {
+      "ping_host": "blocking"
+    }
+  }
+}

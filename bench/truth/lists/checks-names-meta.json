@@ -1,0 +1,36 @@
+{
+  "id": "lists/checks-names-meta",
+  "language": "committed-list",
+  "idioms": [
+    "partial-invalid"
+  ],
+  "about": "exact list; every check labelled by hand: a promotional name, _meta key grammar and reserved prefixes, an object argument with no fields, and the same name listed twice",
+  "outcome": "tools",
+  "exhaustive": true,
+  "truth_level": "inferred",
+  "tools": [
+    "best_flight_search",
+    "book_seat"
+  ],
+  "findings": {
+    "openai-name-promotional": {
+      "best_flight_search": "attention"
+    },
+    "spec-meta-key": {
+      "book_seat": "attention"
+    },
+    "spec-meta-reserved": {
+      "book_seat": "advice"
+    },
+    "anthropic-hint-platforms-differ": {
+      "book_seat": "attention"
+    },
+    "schema-open-object": {
+      "book_seat": "advice"
+    }
+  },
+  "server_findings": {
+    "spec-name-unique": "attention",
+    "openai-name-unique": "blocking"
+  }
+}

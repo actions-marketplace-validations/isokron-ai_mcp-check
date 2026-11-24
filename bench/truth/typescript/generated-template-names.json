@@ -1,0 +1,35 @@
+{
+  "id": "typescript/generated-template-names",
+  "language": "typescript",
+  "idioms": [
+    "generated"
+  ],
+  "about": "tool names built with a template literal inside a loop over a constant array",
+  "outcome": "tools",
+  "tools": [
+    "list_invoices",
+    "list_customers"
+  ],
+  "details": {
+    "list_invoices": {
+      "description": "Lists invoices, newest first.",
+      "params": [
+        "limit"
+      ],
+      "required": [],
+      "annotations": {
+        "readOnlyHint": true
+      }
+    },
+    "list_customers": {
+      "description": "Lists customers, newest first.",
+      "params": [
+        "limit"
+      ],
+      "required": [],
+      "annotations": {
+        "readOnlyHint": true
+      }
+    }
+  }
+}

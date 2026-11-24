@@ -1,0 +1,13 @@
+{
+  "id": "php/attribute-tools",
+  "language": "php",
+  "idioms": [
+    "decorator"
+  ],
+  "about": "#[McpTool] attributes on methods",
+  "outcome": "tools",
+  "tools": [
+    "add_integers",
+    "subtract_integers"
+  ]
+}
