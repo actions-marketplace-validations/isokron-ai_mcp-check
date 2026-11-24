@@ -425,11 +425,11 @@ test('R-LP-22: the self test judges the bundles with the ingest tool-qa runs, wh
   assert.ok(ref, 'INGEST_REF pinned to a full SHA');
   assert.match(y, new RegExp("repository: isokron-ai/tool-qa\\n          ref: \\$\\{\\{ env\\.INGEST_REF \\}\\}\\n          path: tool-qa-ingest\\n          sparse-checkout: \\|\\n            worker-kit/\\n            ingest/\\n            scripts/lib/yaml-lite\\.mjs\\n"));
   assert.match(y, /verify --ingest tool-qa-ingest tool-qa /);
-  // Every field the lane can write is declared, with its type, in the registry that ingest pins (mcp-results eb2972c,
+  // Every field the lane can write is declared, with its type, in the registry that ingest pins (mcp-results a6fa803,
   // tool-qa #32: the oracle stage's fields too).
   const reg = registryTypes();
   for (const [f, t] of Object.entries({ ...LP.FIELDS, ...LP.TOOL_LIST_FIELDS, ...LP.ORACLE_FIELDS })) assert.equal(reg.get(f) && reg.get(f).type, t, f);
-  assert.equal(createHash('sha256').update(readFileSync(join(FX, 'fields-registry.yaml'))).digest('hex'), '421fdec44853383939531e8c86cd4f1feadb47ddce72d7c36d252c4d0100e0e5', 'the test copy is mcp-results eb2972c, as tool-qa #32 pins it');
+  assert.equal(createHash('sha256').update(readFileSync(join(FX, 'fields-registry.yaml'))).digest('hex'), 'b8bbfea66c4b93a46c57d4fb4a145f696ce56d996d842faa3da33fe9e4abf27d', 'the test copy is mcp-results a6fa803, as tool-qa #32 pins it');
 });
 
 test('R-LP-23: the sandbox pin includes the install-network hostile cases and the proxy positive control (mcp-surface-corpus #9, #10)', () => {
