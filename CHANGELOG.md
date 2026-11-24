@@ -2,6 +2,10 @@
 
 All notable changes to `@isokron/mcp-check` and the `isokron-ai/mcp-check` Action. The package follows [semantic versioning](https://semver.org/); the grading rubric has its own version (`rubric_version`), noted with each release.
 
+## Unreleased
+
+- **Reader: Rust helpers that return a tool written as JSON (R-RD-03).** A hand-rolled Rust server whose tools come from a helper such as `fn tool(name: &str, description: &str, properties: Value, required: &[&str]) -> Value { json!({ "name": name, … }) }` is now read: each call of the helper with arguments the reader can work out is a tool, its schema filled from the arguments (local `let` bindings and constants included). Until now the helper's own `json!` counted as one unresolved tool and its calls were not followed, as they already were for helpers that build `Tool::new(…)`. A call whose name cannot be worked out is still counted as unresolved. Found on HyunSeob/iphone-cli, which the loop reported as having no tools.
+
 ## 1.3.1 (2026-11-22)
 
 Docs and metadata only; no change to the reader, the engine or the rubric (2.2.0).
