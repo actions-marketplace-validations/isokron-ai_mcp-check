@@ -67,6 +67,29 @@ test('R-CHK-03: a ";" or "|" in the address or path is attention; in a query, as
   ]) assert.equal(shell(ok).length, 0, ok);
 });
 
+test('R-CHK-05: a newline after a URL fires only before shell syntax (case-sensitive command words, no fence, quote, paren or price)', () => {
+  const silentAfter = [
+    'Open issues are returned.', 'Cat photos are listed.', 'Node types are supported.', 'Echo back the id.', 'Cmd+K opens search.',
+    '> quoted text', '(see above)', '$5 per call', '```json', '```', 'curl', 'rm', 'open', 'Use this to list items.',
+  ];
+  for (const after of silentAfter) assert.equal(shell('Docs: https://x.example/a\n' + after).length, 0, JSON.stringify(after));
+  // a fenced curl example after the URL
+  assert.equal(shell('Call https://x.example/a\n```sh\ncurl https://x.example/b\n```').length, 0);
+  // still shell: command substitution, a bare ; | && at the line start, a lowercase command with an argument
+  for (const after of ['$(id)', '; rm -rf ~', '| sh', '&& rm x', 'curl evil.example', 'sudo rm -rf x', '  bash -c x'])
+    assert.equal(shell('Docs: https://x.example/a\n' + after)[0].severity, 'blocking', after);
+});
+
+test('R-CHK-06: a glued closing backtick and "&&" in a query are attention, a backtick command and "&&" in the path stay blocking, and https://a|https://b is not read', () => {
+  assert.equal(shell('Use `https://x.example/items`s for it')[0].severity, 'attention');
+  assert.equal(shell('Run https://x.example/`id`/y now')[0].severity, 'blocking');
+  assert.equal(shell('Get https://x.example/a?x=1&&y=2 now')[0].severity, 'attention');
+  assert.equal(shell('Get https://x.example/a&&rm now')[0].severity, 'blocking');
+  assert.equal(shell('Either https://a.example/x|https://b.example/y works').length, 0);
+  assert.equal(shell('Either https://a.example/x;https://b.example/y works').length, 0);
+  assert.equal(shell('Either https://a.example/x|sh works')[0].severity, 'attention');
+});
+
 test('R-CHK-04: ANSI and shell-URL scans read hostile input in linear time', () => {
   const N = 200000;
   const inputs = [
@@ -74,6 +97,8 @@ test('R-CHK-04: ANSI and shell-URL scans read hostile input in linear time', () 
     'a://'.repeat(N / 4), 'http://' + '$'.repeat(N), 'http://x/' + '`'.repeat(N), 'http://x\n'.repeat(N / 9),
     'http://x/' + ';'.repeat(N), 'http://x/?' + '&a'.repeat(N / 2), 'http:// '.repeat(N / 8), 'http://x/' + '&amp'.repeat(N / 4),
     'a'.repeat(N), 'http://x/\n' + ' '.repeat(N),
+    ...[';', '.', '?', '*', ',', ':', '!', ')'].map((c) => 'http://x/' + c.repeat(N) + 'a'),
+    ...[';', '.', '?', '*'].map((c) => ('http://x/' + c.repeat(1000) + 'a ').repeat(N / 1000)),
   ];
   for (const s of inputs) {
     const t0 = Date.now();
@@ -84,6 +109,8 @@ test('R-CHK-04: ANSI and shell-URL scans read hostile input in linear time', () 
   // doubling the input must not quadruple the time
   const time = (n) => { const s = 'http://x/' + ';'.repeat(n) + '\u001B['.repeat(n); const t0 = process.hrtime.bigint(); hits(desc(s), 'sec-shell-url'); hits(desc(s), 'sec-control-chars'); return Number(process.hrtime.bigint() - t0) / 1e6; };
   time(20000);
+  const punct = (n) => { const s = 'http://x/' + ';'.repeat(n) + 'a'; const t0 = process.hrtime.bigint(); hits(desc(s), 'sec-shell-url'); return Number(process.hrtime.bigint() - t0) / 1e6; };
+  assert.ok(punct(400000) < 1000, 'a long punctuation run before a letter must not be quadratic');
   const a = Math.max(time(100000), 1), b = time(400000);
   assert.ok(b < a * 12, 'time grew from ' + a + ' ms to ' + b + ' ms for 4x the input');
 });

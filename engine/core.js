@@ -726,21 +726,35 @@
   }
   // URL-like strings with shell syntax (the shape of CVE-2025-6514). One pass over scheme:// tokens; a token ends at whitespace.
   const RE_URL_TOKEN = /\b[a-z][a-z0-9+.-]{1,15}:\/\/[^\s\u0000-\u001F\u007F-\u009F]*/gi;
-  const RE_AFTER_NEWLINE = /[ \t]*(?:[;|&$`<>(]|(?:sudo\s+)?(?:curl|wget|sh|bash|zsh|nc|ncat|rm|cat|python3?|node|perl|ruby|powershell|pwsh|cmd|touch|chmod|eval|echo|open|xdg-open)(?![\w-]))/iy;
+  // The line after a URL starts like shell: "$(", a bare ";", "|" or "&&", or a lowercase command word followed by an argument.
+  // Case-sensitive on purpose: "Open issues are returned." and "Cat photos" are prose. A fence, ">", "(" and "$5" are not shell here.
+  const RE_AFTER_NEWLINE = /[ \t]*(?:\$\(|;|\||&&|(?:sudo[ \t]+)?(?:curl|wget|sh|bash|zsh|nc|ncat|rm|cat|python3?|node|perl|ruby|powershell|pwsh|cmd|touch|chmod|eval|echo|open|xdg-open)[ \t]+[^\s])/y;
   function shellUrl(value) {
     if (value.length < 8 || value.indexOf('://') < 0) return null;
     RE_URL_TOKEN.lastIndex = 0;
     let m;
     while ((m = RE_URL_TOKEN.exec(value))) {
       // entities (&amp;) and trailing sentence punctuation are not part of the address
-      const tok = m[0].replace(/&(?:#\d{1,7}|#x[0-9a-f]{1,6}|[a-z][a-z0-9]{1,31});/gi, '_').replace(/[.,;:!?)\]}>'"*]+$/, '');
+      let tok = m[0].replace(/&(?:#\d{1,7}|#x[0-9a-f]{1,6}|[a-z][a-z0-9]{1,31});/gi, '_');
+      // trailing sentence punctuation: a backwards loop (a regex with + before $ is quadratic on a long run)
+      let e = tok.length;
+      while (e > 0 && '.,;:!?)]}>\'"*'.indexOf(tok[e - 1]) >= 0) e--;
+      tok = tok.slice(0, e);
       const q = tok.search(/[?#]/);
-      const head = (q < 0 ? tok : tok.slice(0, q)).replace(/^[a-z][a-z0-9+.-]*:\/\//i, '');
+      // a "|" or ";" that separates two URLs (https://a|https://b) is prose, not shell
+      const head = (q < 0 ? tok : tok.slice(0, q)).replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').replace(/[|;](?=[a-z][a-z0-9+.-]{1,15}:\/\/)/gi, '_');
       if (tok.indexOf('$(') >= 0) return { sev: 'blocking', what: 'command substitution $( )', tok: value.slice(m.index, m.index + 90) };
       const bt = tok.indexOf('`');
-      // a backtick that closes a code span after the address is not inside it; one followed by more address characters is
-      if (bt >= 0 && /^`[^\s.,;:!?)\]}>'"`*]/.test(tok.slice(bt))) return { sev: 'blocking', what: 'a backtick command', tok: value.slice(m.index, m.index + 90) };
-      if (tok.indexOf('&&') >= 0) return { sev: 'blocking', what: '"&&"', tok: value.slice(m.index, m.index + 90) };
+      // `cmd` inside the address (two backticks around text) is a command; a single backtick glued to following text
+      // (a code span closed right before a word) is only worth attention
+      if (bt >= 0) {
+        const bt2 = tok.indexOf('`', bt + 1);
+        if (bt2 > bt + 1) return { sev: 'blocking', what: 'a backtick command', tok: value.slice(m.index, m.index + 90) };
+        if (/^`[^\s.,;:!?)\]}>'"`*]/.test(tok.slice(bt))) return { sev: 'attention', what: 'a backtick in the address', tok: value.slice(m.index, m.index + 90) };
+      }
+      const aa = tok.indexOf('&&');
+      if (aa >= 0 && (q < 0 || aa < q)) return { sev: 'blocking', what: '"&&"', tok: value.slice(m.index, m.index + 90) };
+      if (aa >= 0) return { sev: 'attention', what: '"&&" in the query', tok: value.slice(m.index, m.index + 90) };
       const end = m.index + m[0].length;
       if (value[end] === '\n' || value[end] === '\r') {
         RE_AFTER_NEWLINE.lastIndex = value[end] === '\r' && value[end + 1] === '\n' ? end + 2 : end + 1;
