@@ -82,3 +82,21 @@ test('R-RD-05: an MCP module in the same file keeps its tools (the Vercel AI SDK
   assert.deepEqual(names(r), ['notes_search']);
   assert.deepEqual(r.hostPlugins.map((x) => x.module), ['ai']);
 });
+
+test('R-RD-05: an MCP tool that calls an LLM through a host library keeps its SDK-shaped registrations', () => {
+  const src = 'import { generateText } from "ai";\nimport { z } from "zod";\n'
+    + 'export function registerSummarize(server) {\n  server.registerTool("summarize", { description: "Summarizes a text.", inputSchema: { text: z.string() } }, async ({ text }) => ({ content: [{ type: "text", text: (await generateText({ prompt: text })).text }] }));\n}\n'
+    + 'export function registerTranslate(server) {\n  server.tool("translate", "Translates a text.", { text: z.string() }, async () => ({ content: [] }));\n}\n';
+  const lc = 'import { ChatOpenAI } from "@langchain/openai";\nexport const reg = (server) => server.registerTool("ask", { description: "Asks the model." }, async () => ({ content: [] }));\n';
+  const r = repo({ 'package.json': '{"name":"s","dependencies":{"@modelcontextprotocol/sdk":"1.32.2","ai":"5"}}', 'src/summarize.ts': src, 'src/ask.ts': lc, 'src/index.ts': MCP_SERVER });
+  assert.deepEqual(names(r), ['ask', 'notes_search', 'summarize', 'translate']);
+  assert.deepEqual(r.hostPlugins, []);
+});
+
+test('R-RD-05: in a file with both, only the host-shaped tool({…}) is dropped', () => {
+  const both = 'import { tool } from "ai";\nimport { z } from "zod";\nexport const agentTools = { lookup: tool({ description: "Agent lookup.", inputSchema: z.object({ q: z.string() }), execute: async () => "" }) };\n'
+    + 'export const reg = (server) => server.registerTool("search", { description: "Searches." }, async () => ({ content: [] }));\n';
+  const r = repo({ 'package.json': '{"name":"s"}', 'src/tools.ts': both, 'src/index.ts': MCP_SERVER });
+  assert.deepEqual(names(r), ['notes_search', 'search']);
+  assert.deepEqual(r.hostPlugins.map((x) => [x.path, x.tools]), [['src/tools.ts', 1]]);
+});

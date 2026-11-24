@@ -2119,13 +2119,16 @@
   // Everything the reader does with a repository's files: SDK and constants, extraction, marking, exclusion.
   // ---- tools of another agent host's plugin API, not of an MCP server
   // A JavaScript or TypeScript file that imports another agent host's tool API (an OpenCode or OpenClaw plugin, the
-  // Vercel AI SDK, OpenAI Agents, LangChain, Mastra, LlamaIndex) and no MCP module defines that host's tools:
-  // `tool({ … })` and `api.registerTool({ … })` there look like MCP registrations but are not. They are not listed and do
-  // not make a package a server's tool library; the scan names the files (hints.hostPlugins). Any module whose name
-  // mentions MCP (the SDK, FastMCP, mcp-handler, xmcp, …) or the Claude Agent SDK (its in-process MCP servers) keeps a
-  // file's tools.
+  // Vercel AI SDK, OpenAI Agents, LangChain, Mastra, LlamaIndex) and no MCP module may define that host's tools:
+  // `tool({ … })` and `api.registerTool({ … })`, a call whose first argument is the tool object, look like MCP
+  // registrations but are not. Only those host-shaped calls are dropped (and named in hints.hostPlugins); SDK-shaped
+  // ones, `x.registerTool('name', …)` and `x.tool('name', …)`, stay: an MCP tool that calls an LLM through such a
+  // library is common. Any module whose name mentions MCP (the SDK, FastMCP, mcp-handler, xmcp, …) or the Claude Agent
+  // SDK (its in-process MCP servers) keeps all of a file's tools.
   const HOST_PLUGIN_MODULE = /^(?:@opencode-ai\/plugin|openclaw|ai|@ai-sdk\/[^/]+|@openai\/agents(?:-[\w-]+)?|@langchain\/[^/]+|langchain|@mastra\/core|llamaindex|@llamaindex\/[^/]+)(?:\/.*)?$/;
   const MCP_MODULE = /mcp|modelcontextprotocol|claude-agent-sdk/i;
+  const HOST_SHAPED = /^\.?\s*(?:registerTool|tool)\s*\(\s*\{/;
+  const HOST_SHAPED_LINE = /(?:^|[^\w$])(?:registerTool|tool)\s*\(\s*\{/;
   function hostPluginModule(src) {
     if (typeof src !== 'string') return null;
     const re = /\bfrom\s*(['"])([^'"\n]{1,200})\1|\bimport\s*(['"])([^'"\n]{1,200})\3|\b(?:require|import)\s*\(\s*(['"])([^'"\n]{1,200})\5\s*\)/g;
@@ -2164,7 +2167,14 @@
       } catch (e) { ts = []; ts.unresolved = [{ line: null }]; } // a file the reader fails on counts as one unread registration
       // another agent host's plugin: named, never listed (R-RD-05)
       const host = js ? hostPluginModule(t) : null;
-      if (host) { const n = ts.length + (ts.unresolved || []).length; if (n) hostPlugins.push({ path: p, module: host, tools: n }); return; }
+      if (host) {
+        const lines = t.split('\n');
+        const kept = ts.filter((x) => typeof x.offset !== 'number' || !HOST_SHAPED.test(t.slice(x.offset, x.offset + 200)));
+        const unres = (ts.unresolved || []).filter((u) => !(u.line && HOST_SHAPED_LINE.test(lines[u.line - 1] || '')));
+        const n = ts.length - kept.length + (ts.unresolved || []).length - unres.length;
+        if (n) hostPlugins.push({ path: p, module: host, tools: n });
+        const keep = kept; keep.unresolved = unres; keep.overBudget = ts.overBudget; ts = keep;
+      }
       (ts.unresolved || []).forEach((u) => unresolved.push(Object.assign({ path: p }, u)));
       (ts.overBudget || []).forEach((u) => overBudget.push(Object.assign({ path: p }, u)));
       ts.forEach((x) => {
