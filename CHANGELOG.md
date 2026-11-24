@@ -2,6 +2,11 @@
 
 All notable changes to `@isokron/mcp-check` and the `isokron-ai/mcp-check` Action. The package follows [semantic versioning](https://semver.org/); the grading rubric has its own version (`rubric_version`), noted with each release.
 
+## Unreleased
+
+- **Reader: Python tools written out as dicts (R-RD-01).** A hand-rolled Python server (its own JSON-RPC loop, no SDK) that lists its tools as dicts, `{"name": …, "description": …, "inputSchema": {…}}` in a `TOOLS` list or a return value, is now read like the TypeScript literals: names, titles, descriptions, input and output schemas and annotations, from literals and module constants. A dict whose name is a parameter or an attribute is not a tool (a template filled elsewhere, or a client's copy of another server's tool). `input_schema`, which the Anthropic API's tool tables also use, counts only in a file that speaks MCP (imports `mcp` or `fastmcp`, or answers `"tools/list"`). A computed schema is marked not readable. Found on two repositories the loop reported as having no tools (ilyautov/humanizer-ru, aresyn/codex-control-plane-mcp).
+- **Reader: a Python list that unpacks another (`[*GENRES, None]`) is not read (R-RD-01).** It used to be read with the unpacked part left out, which turned an enum into a shorter one.
+
 ## 1.3.1 (2026-11-22)
 
 Docs and metadata only; no change to the reader, the engine or the rubric (2.2.0).
