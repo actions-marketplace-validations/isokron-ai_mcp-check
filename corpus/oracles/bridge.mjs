@@ -129,6 +129,10 @@ export function createBridge({ spawnSession, requestTimeoutMs = 15_000, startTim
     for (const s of [...sessions.values()]) await dispose(s);
   }
 
+  // Starting and ending sessions take turns: two initialize requests at once still leave one server process alive.
+  let turn = Promise.resolve();
+  const exclusive = (fn) => { const r = turn.then(fn, fn); turn = r.then(() => {}, () => {}); return r; };
+
   function send(res, status, body, headers = {}) {
     res.writeHead(status, { 'content-type': 'application/json', ...headers });
     res.end(body ?? '');
@@ -147,15 +151,19 @@ export function createBridge({ spawnSession, requestTimeoutMs = 15_000, startTim
       s = sessions.get(hdr);
       if (!s) { stats.refused++; return send(res, 404, rpcError(m.id, -32001, 'bridge: no such session')); }
     } else if (m.method === 'initialize') {
-      if (sessions.size) { stats.superseded += sessions.size; await closeAll(); }
       newSid = randomBytes(16).toString('hex');
-      try { s = await start(newSid); } catch (e) { return send(res, 502, rpcError(m.id, -32603, `bridge: ${String(e.message).slice(0, 200)}`)); }
+      try {
+        s = await exclusive(async () => { if (sessions.size) { stats.superseded += sessions.size; await closeAll(); } return start(newSid); });
+      } catch (e) { return send(res, 502, rpcError(m.id, -32603, `bridge: ${String(e.message).slice(0, 200)}`)); }
     } else {
-      s = sessions.get('');
-      if (!s) {
-        if (sessions.size) { stats.superseded += sessions.size; await closeAll(); }
-        try { s = await start(''); } catch (e) { return send(res, 502, rpcError(m.id, -32603, `bridge: ${String(e.message).slice(0, 200)}`)); }
-      }
+      try {
+        s = await exclusive(async () => {
+          const have = sessions.get('');
+          if (have) return have;
+          if (sessions.size) { stats.superseded += sessions.size; await closeAll(); }
+          return start('');
+        });
+      } catch (e) { return send(res, 502, rpcError(m.id, -32603, `bridge: ${String(e.message).slice(0, 200)}`)); }
     }
     const sidHeader = newSid ? { 'mcp-session-id': newSid } : {};
     const isRequest = typeof m.method === 'string' && m.id !== undefined && m.id !== null;
@@ -180,7 +188,7 @@ export function createBridge({ spawnSession, requestTimeoutMs = 15_000, startTim
     if (req.method === 'DELETE') {
       const s = sessions.get(String(req.headers['mcp-session-id'] || '\u0000'));
       if (!s) { res.writeHead(404); return res.end(); }
-      dispose(s).then(() => { res.writeHead(200); res.end(); }, () => { res.writeHead(200); res.end(); });
+      exclusive(() => dispose(s)).then(() => { res.writeHead(200); res.end(); }, () => { res.writeHead(200); res.end(); });
       return;
     }
     if (req.method !== 'POST') { res.writeHead(405, { allow: 'POST, DELETE' }); return res.end(); }
@@ -198,8 +206,8 @@ export function createBridge({ spawnSession, requestTimeoutMs = 15_000, startTim
       server.listen(0, '127.0.0.1', () => resolve(`http://127.0.0.1:${server.address().port}/mcp`));
     }),
     /** Ends every session (between scenarios), keeping the transcript and the counts. */
-    reset: closeAll,
-    close: async () => { await closeAll(); server.closeAllConnections?.(); await new Promise((r) => server.close(() => r())); },
+    reset: () => exclusive(closeAll),
+    close: async () => { await exclusive(closeAll); server.closeAllConnections?.(); await new Promise((r) => server.close(() => r())); },
     transcript,
     stats,
     info: { name: BRIDGE_NAME, version: BRIDGE_VERSION },

@@ -19,11 +19,15 @@ export const MAX_PAGES = 100;
 
 const CLIENT_INFO = { name: 'isokron-oracle', version: '1' };
 
-/** Wraps a transport so the messages the SDK receives can be seen (for the negotiated version), unchanged. */
+/**
+ * Wraps a transport so the answer to our initialize request can be seen (for the negotiated version), unchanged.
+ * Only the response to that request's own id counts: anything else a server sends is not read here.
+ */
 export function tap(inner, seen) {
+  const initIds = new Set();
   const t = {
     start: () => inner.start(),
-    send: (m, o) => inner.send(m, o),
+    send: (m, o) => { if (m && m.method === 'initialize' && (typeof m.id === 'number' || typeof m.id === 'string')) initIds.add(m.id); return inner.send(m, o); },
     close: () => inner.close(),
     get sessionId() { return inner.sessionId; },
     set onclose(f) { inner.onclose = f; },
@@ -32,7 +36,7 @@ export function tap(inner, seen) {
     get onerror() { return inner.onerror; },
     set onmessage(f) {
       inner.onmessage = (m, extra) => {
-        if (m && typeof m === 'object' && m.result && typeof m.result === 'object' && typeof m.result.protocolVersion === 'string' && seen.protocol === null) seen.protocol = m.result.protocolVersion.slice(0, 40);
+        if (m && typeof m === 'object' && !('method' in m) && initIds.has(m.id) && m.result && typeof m.result === 'object' && typeof m.result.protocolVersion === 'string' && seen.protocol === null) seen.protocol = m.result.protocolVersion.slice(0, 40);
         return f(m, extra);
       };
     },

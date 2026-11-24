@@ -851,7 +851,8 @@ export async function planShard({ inputs, seed = new Map(), fetch: fetchImpl = g
   }
   const runnable = items.filter((x) => x.target).length;
   const timeout = subjectTimeout(runnable);
-  for (const x of items) if (x.target) x.target.timeout_s = timeout + ORACLE_ALLOWANCE_S;
+  // The oracle stage runs only for stdio targets (corpus/live-probe-driver.mjs): only they get its allowance.
+  for (const x of items) if (x.target) x.target.timeout_s = timeout + ((x.target.launch.transport || 'stdio') === 'stdio' ? ORACLE_ALLOWANCE_S : 0);
   return { format: PLAN_FORMAT, shard_id: inputs.shardId, attempt_id: inputs.attemptId, marker, planned_at: now().toISOString(), subject_timeout_s: timeout, runnable, items };
 }
 
@@ -1067,13 +1068,14 @@ export function toolsOf(rawPages) {
   return (Array.isArray(rawPages) ? rawPages : []).flatMap((p) => (p && isObj(p.result) && Array.isArray(p.result.tools) ? p.result.tools : []));
 }
 
-/** The oracle record the driver wrote for a target (corpus/live-probe-driver.mjs), or null. */
+/**
+ * The oracle records the driver wrote for a target (corpus/live-probe-driver.mjs): the one judged (the full stage,
+ * else the clients-only one), every record kept for raw/, and their time together. null when there is none.
+ */
 export function oracleRecord(dir) {
-  for (const f of ['oracles.json', 'oracles-unlisted.json', 'oracles-error.json']) {
-    const r = readJson(join(dir, f));
-    if (r) return { rec: r, file: f };
-  }
-  return null;
+  const all = ['oracles.json', 'oracles-unlisted.json', 'oracles-error.json'].map((f) => ({ file: f, rec: readJson(join(dir, f)) })).filter((x) => x.rec);
+  if (!all.length) return null;
+  return { ...all[0], all, ms: all.reduce((a, x) => a + (int(x.rec.ms) || 0), 0) };
 }
 
 /**
@@ -1101,9 +1103,9 @@ export function oracleFor(dir, item, reader, ctx) {
     }
     lines.push(obs('oracle_disagreements', j.disagreements));
   }
-  if (found) raw.push(['raw/oracles.json', Buffer.from(json(found.rec))]);
+  if (found) for (const x of found.all) raw.push(['raw/' + x.file, Buffer.from(json(x.rec))]);
   const summary = {
-    status: j.status, mode: j.mode, why: j.why, ms: j.ms,
+    status: j.status, mode: j.mode, why: j.why, ms: found ? found.ms : j.ms,
     clients: j.clients.map((c) => ({ client: c.client, outcome: c.outcome, protocol: c.protocol_negotiated, tool_count: c.tool_count })),
     conformance: j.conformance ? Object.fromEntries(Object.entries(j.conformance.summary).map(([k, v]) => [k, { pass: v.pass, fail: v.fail, expected_fail: v.expected_fail, not_applicable: v.not_applicable, bridge_excluded: v.bridge_excluded, scenarios_run: v.scenarios_run }])) : null,
     disagreements: j.disagreements.map((d) => d.class + ' ' + d.kind + ' ' + d.oracle_a + ' ' + d.oracle_b),
@@ -1443,6 +1445,22 @@ export function bundleShard({ work, now = () => new Date(), log = () => {}, know
 /** The tool-qa files verify imports, with what they import; the workflows' sparse checkout of tool-qa must hold them. */
 export const TOOL_QA_FILES = Object.freeze(['worker-kit/contract.mjs', 'worker-kit/manifest.schema.json', 'worker-kit/tar.mjs', 'ingest/forgery.mjs', 'ingest/redact.mjs', 'ingest/registry.mjs', 'scripts/lib/yaml-lite.mjs', 'history/seed-v1.json']);
 
+/**
+ * The self test's oracle expectations for one baselined item: the stage ran, matches its baseline, every client
+ * installed and ran (the control tolerates an install outage; the self test does not), and the meta file names the
+ * oracles.
+ */
+export function oracleExpectProblems(res, manifest) {
+  const p = [];
+  const o = res.oracles;
+  if (!o || o.status !== 'ran') p.push({ reason: 'oracles_not_run', got: o ? o.status + (o.why ? ' (' + o.why + ')' : '') : null });
+  else if (!Array.isArray(o.baseline_problems) || o.baseline_problems.length) p.push({ reason: 'oracle_baseline', problems: o.baseline_problems });
+  const off = o && Array.isArray(o.clients) ? o.clients.filter((c) => c.outcome === 'unavailable' || c.outcome === 'skipped').map((c) => c.client) : [];
+  if (off.length) p.push({ reason: 'oracle_client_unavailable', clients: off });
+  if (!manifest || !Array.isArray(manifest.oracles) || !manifest.oracles.length) p.push({ reason: 'oracle_components_missing' });
+  return p;
+}
+
 /** What ingest would check a self test bundle's identity against: the worker kit records GITHUB_WORKFLOW_SHA. */
 export function expectedIdentity(manifest, item, expect, env) {
   return { attempt_id: env.ATTEMPT_ID || expect.attempt_id, fence: item.fence, run_key: item.run_key, repo: env.GITHUB_REPOSITORY, workflow_file: manifest.workflow && manifest.workflow.file, workflow_sha: env.GITHUB_WORKFLOW_SHA, run_id: Number(env.GITHUB_RUN_ID) };
@@ -1487,12 +1505,7 @@ export async function verifyBundles({ toolQa, ingest = toolQa, tars, expect, env
     const oracleRun = expect.items.some((x) => x.expect && x.expect.oracles);
     if (manifest.controls.length !== (oracleRun ? 4 : 3)) problems.push({ tar: t, reason: 'controls_missing', got: manifest.controls.length });
     if (oracleRun && !manifest.controls.some((c) => c.kind === 'known_good' && c.output === 'controls/oracle-known-answer.json' && c.observed === 'match')) problems.push({ tar: t, reason: 'oracle_control_missing' });
-    if (want.oracles) {
-      const o = res.oracles;
-      if (!o || o.status !== 'ran') problems.push({ tar: t, reason: 'oracles_not_run', got: o ? o.status + (o.why ? ' (' + o.why + ')' : '') : null });
-      else if (!Array.isArray(o.baseline_problems) || o.baseline_problems.length) problems.push({ tar: t, reason: 'oracle_baseline', problems: o.baseline_problems });
-      if (!manifest.oracles.length) problems.push({ tar: t, reason: 'oracle_components_missing' });
-    }
+    if (want.oracles) for (const p of oracleExpectProblems(res, manifest)) problems.push({ tar: t, ...p });
   }
   if (results.length !== expect.items.length) problems.push({ reason: 'bundle_count', want: expect.items.length, got: results.length });
   return { problems, results };

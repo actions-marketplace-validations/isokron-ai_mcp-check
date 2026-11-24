@@ -5,14 +5,16 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createBridge } from '../corpus/oracles/bridge.mjs';
-import { lastJsonLine, oracleEnv, runOracles, suiteProblem, variantCommand } from '../corpus/oracles/run.mjs';
+import { CLEANUP_SLACK_MS, lastJsonLine, oracleEnv, runOracles, runProgram, suiteProblem, variantCommand } from '../corpus/oracles/run.mjs';
+import { tap } from '../corpus/oracles/ts-client.mjs';
+import { relay } from '../corpus/oracles/relay.mjs';
 import { baselineProblems, clientCatalog, judgeOracles, namesSha } from '../corpus/oracles/judge.mjs';
-import { oracleProbe, targetOf } from '../corpus/live-probe-driver.mjs';
+import { limitsOf, oracleProbe, targetOf } from '../corpus/live-probe-driver.mjs';
 import * as LP from '../corpus/live-probe.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
@@ -245,7 +247,7 @@ test('runOracles: a client that hangs is stopped at its limit; no budget left me
   const { dir, pins } = fakeSuite();
   const work = mkdtempSync(join(tmpdir(), 'oracle-work-'));
   const p = { ...pins, client_timeout_ms: 1500 };
-  const rec = await runOracles({ command: ECHO, dockerEnv: {}, install: fakeInstall(dir, { timeoutClient: 'typescript-v1' }), pins: p, budgetMs: 25_000, mode: 'clients_only', work, variant: local, removeContainer: async () => {} });
+  const rec = await runOracles({ command: ECHO, dockerEnv: {}, install: fakeInstall(dir, { timeoutClient: 'typescript-v1' }), pins: p, budgetMs: 60_000, mode: 'clients_only', work, variant: local, removeContainer: async () => {} });
   assert.equal(rec.clients[0].timed_out, true);
   assert.equal(rec.clients[0].outcome, 'timeout');
   assert.equal(rec.conformance, null, 'clients only');
@@ -358,7 +360,7 @@ test('judge: nothing a server says reaches a field except through a strict patte
   rec.clients[1].result.sdk_version = 'run_key: x';
   rec.conformance.runs[0].checks.push({ id: 'Fence = 999', status: 'FAILURE' });
   const j = judgeOracles(rec, { reader: knownReader(), pins: PINS });
-  assert.equal(j.clients[0].protocol_negotiated, null);
+  assert.equal(j.clients[0].protocol_negotiated, 'other');
   assert.equal(j.clients[1].sdk_version, PINS.clients[1].version, 'a version that is not plain falls back to the pinned one');
   assert.ok(!/Fence|attempt_id|run_key/.test(JSON.stringify(j)));
   assert.equal(judgeOracles(null, { reader: knownReader(), pins: PINS }).status, 'absent');
@@ -485,4 +487,130 @@ test('R-ORC-02: the driver\'s probe time holds the oracle stage (it runs inside 
   assert.equal(r.timing.probe_ms, 12472 - 11296);
   const st = readFileSync(join(w, 'out', '0', 'bundle', 'observations', 'live.ndjson'), 'utf8').trim().split('\n').map((l) => JSON.parse(l)).find((x) => x.field === 'step_telemetry').value;
   assert.deepEqual([st.probe_ms, st.oracle_ms], [1176, 11296]);
+});
+
+test('R-ORC-03: a server cannot put a string of its choosing into protocol_negotiated', () => {
+  // Review: the TypeScript 1.x client took the first protocolVersion it saw, from any message, and the judge passed
+  // any 40 plain characters, so a stray response could carry a marker into the fields.
+  const seen = { protocol: null };
+  const sent = []; const inner = { start: async () => {}, send: async (m) => { sent.push(m); }, close: async () => {} };
+  const t = tap(inner, seen);
+  const got = [];
+  t.onmessage = (m) => got.push(m);
+  t.send({ jsonrpc: '2.0', id: 0, method: 'initialize', params: {} });
+  inner.onmessage({ jsonrpc: '2.0', id: 99, result: { protocolVersion: 'liveprobeAAAABBBBCCCCDDDD0000' } });
+  inner.onmessage({ jsonrpc: '2.0', id: 0, method: 'x', result: { protocolVersion: 'liveprobe1' } });
+  assert.equal(seen.protocol, null, 'only the answer to our own initialize request counts');
+  inner.onmessage({ jsonrpc: '2.0', id: 0, result: { protocolVersion: '2025-11-25' } });
+  assert.equal(seen.protocol, '2025-11-25');
+  assert.equal(got.length, 3, 'every message still reaches the SDK unchanged');
+  const rec = knownRec();
+  rec.clients[0].result.protocol = 'liveprobeAAAABBBBCCCCDDDD0000';
+  rec.clients[1].result.protocol = '2026-07-28';
+  const j = judgeOracles(rec, { reader: knownReader(), pins: PINS });
+  assert.deepEqual(j.clients.slice(0, 2).map((c) => c.protocol_negotiated), ['other', '2026-07-28']);
+  assert.ok(!JSON.stringify(j).includes('liveprobe'));
+});
+
+test('R-ORC-04: a client whose child keeps its pipes open is still stopped at its limit, its whole process group with it, and its container removed at once', async () => {
+  // Review: runProgram waited for 'close', which a stray child holding stdout delays forever; the session's
+  // container (on the fixed address) was removed only after that.
+  let removed = 0;
+  const t0 = Date.now();
+  const r = await runProgram(process.execPath, [join(FX, 'holder.mjs')], { env: process.env, timeoutMs: 800, onTimeout: async () => { removed++; } });
+  assert.ok(Date.now() - t0 < 8000, 'settled soon after the limit');
+  assert.equal(r.timed_out, true);
+  assert.equal(removed, 1);
+  const g = lastJsonLine(r.stdout).grandchild;
+  await new Promise((res) => setTimeout(res, 300));
+  assert.throws(() => process.kill(g, 0), 'the grandchild went with its group');
+  const ok = await runProgram(process.execPath, ['-e', 'console.log(JSON.stringify({a:1}))'], { env: process.env, timeoutMs: 5000 });
+  assert.deepEqual([ok.exit, ok.timed_out, lastJsonLine(ok.stdout)], [0, false, { a: 1 }]);
+});
+
+test('R-ORC-05: what a server can send an oracle client on the runner is capped (relay.mjs): a flood without line breaks is stopped', async () => {
+  // Review: the clients run on the runner, outside the container's memory limit; a server writing gigabytes with no
+  // line break grew their heaps. Every client's server command now goes through the relay.
+  const { PassThrough, Writable } = await import('node:stream');
+  let got = 0;
+  const code = await new Promise((res) => relay(1024 * 1024, 256 * 1024, [process.execPath, join(FX, 'flood.mjs')], { stdin: new PassThrough(), stdout: new Writable({ write(c, _e, cb) { got += c.length; cb(); } }), exit: res }));
+  assert.equal(code, 3);
+  assert.ok(got <= 256 * 1024, `the line cap held (${got} bytes passed)`);
+  const src = readFileSync(join(root, 'corpus', 'oracles', 'run.mjs'), 'utf8');
+  assert.match(src, /const server = \[process\.execPath, relay, String\(SERVER_BYTES_CAP\), String\(SERVER_LINE_CAP\), '--', \.\.\.v\.command\];/);
+});
+
+test('R-ORC-06: an error inside the conformance loop still closes the bridge, so no session container is left on the address', async () => {
+  // Review: no finally around the loop: a throw skipped bridge.close() and the live session kept the fixed address.
+  const { dir, pins } = fakeSuite();
+  const work = mkdtempSync(join(tmpdir(), 'oracle-work-'));
+  const s = localSession();
+  let n = 0;
+  const rec = await runOracles({
+    command: ECHO, dockerEnv: {}, install: fakeInstall(dir), pins, budgetMs: 120_000, work,
+    variant: (c, k) => ({ command: c, name: `l${k}`, cidfile: null }),
+    // After the third client's container is removed, the work folder turns read-only: the suite's first scenario
+    // folder cannot be made, and the loop throws.
+    removeContainer: async () => { if (++n === 3) chmodSync(work, 0o500); },
+  });
+  chmodSync(work, 0o700);
+  assert.ok(rec.errors.length >= 1, 'the error is recorded');
+  assert.ok(rec.bridge && rec.bridge.stats, 'the bridge was closed and its record kept');
+  assert.equal(s.live.size, 0);
+});
+
+test('R-ORC-07: the stage keeps cleanup time inside its budget; the driver reads a target without a limit as 600 s; HTTP targets get no oracle allowance', async () => {
+  // Review: a client could run to the budget less 5 s plus 13 s of kill and removal, eating the driver's reserve.
+  const { dir, pins } = fakeSuite();
+  const work = mkdtempSync(join(tmpdir(), 'oracle-work-'));
+  const rec = await runOracles({ command: ECHO, dockerEnv: {}, install: fakeInstall(dir), pins: { ...pins, revisions: {} }, budgetMs: 45_000, mode: 'clients_only', work, variant: local, removeContainer: async () => {} });
+  const lim = rec.clients.filter((c) => c.result).map((c) => c.result.limit_ms);
+  assert.ok(lim.length && lim.every((x) => x <= 45_000 - CLEANUP_SLACK_MS), lim.join(','));
+  assert.deepEqual([...limitsOf({ defaults: {}, targets: [{ id: 's001' }, { id: 's002', timeout_s: 90 }] })], [['s001', 600], ['s002', 90]]);
+  const http = { index: 0, subject: 'a/b', repo: 'a/b', run_key: 'a'.repeat(64), fence: 1 };
+  const fetchHttp = async (u) => ({ ok: true, status: 200, headers: { get: () => null }, json: async () => ({}), text: async () => '{}', body: null, url: u });
+  void fetchHttp; void http;
+  const src = readFileSync(join(root, 'corpus', 'live-probe.mjs'), 'utf8');
+  assert.match(src, /timeout \+ \(\(x\.target\.launch\.transport \|\| 'stdio'\) === 'stdio' \? ORACLE_ALLOWANCE_S : 0\)/);
+});
+
+test('R-ORC-08: two initialize requests at once still leave one server process', async () => {
+  // Review: a second initialize arriving while the first closed the open session could start a second process.
+  const s = localSession();
+  const b = createBridge({ spawnSession: s.spawnSession });
+  const url = await b.listen();
+  try {
+    const [x, y] = await Promise.all([post(url, init(1)), post(url, init(1))]);
+    // The second ends the first session (its answer may then be a 502); never two processes at once.
+    assert.ok([x.status, y.status].includes(200));
+    assert.ok([x.status, y.status].every((st) => st === 200 || st === 502));
+    assert.equal(s.live.size, 1);
+    assert.equal(b.stats.sessions, 2);
+  } finally { await b.close(); }
+});
+
+test('R-ORC-09: a check id repeated in a scenario takes its worst status; a client that crashed is D12', () => {
+  // Review: only the first occurrence was kept, so a later FAILURE was dropped; client_error was D6, not D12.
+  const rec = knownRec();
+  const tl = rec.conformance.runs.find((r) => r.revision === '2025-11-25' && r.scenario === 'tools-list');
+  tl.checks.push({ id: 'tools-list', status: 'FAILURE', errorMessage: 'x' });
+  rec.clients[3].result.outcome = 'client_error'; rec.clients[3].result.tools = null;
+  const j = judgeOracles(rec, { reader: knownReader(), pins: PINS });
+  assert.equal(j.conformance.checks.find((c) => c.spec_revision === '2025-11-25' && c.check === 'tools-list').status, 'fail');
+  assert.ok(j.disagreements.some((d) => d.class === 'D12' && d.oracle_b === 'client:go' && d.detail.b === 'client_error'));
+});
+
+test('R-ORC-10: the self test refuses a client that did not install; both oracle records of a target are kept and timed', () => {
+  // Review: a run where every client failed to install still passed the self test; when the clients-only and the
+  // full stage both ran, the first one's time stayed in probe_ms and its record was dropped.
+  const res = (clients) => ({ oracles: { status: 'ran', baseline_problems: [], clients } });
+  assert.deepEqual(LP.oracleExpectProblems(res([{ client: 'go', outcome: 'listed' }]), { oracles: [{ name: 'x', version: '1' }] }), []);
+  assert.deepEqual(LP.oracleExpectProblems(res([{ client: 'go', outcome: 'unavailable' }]), { oracles: [{ name: 'x', version: '1' }] }).map((p) => p.reason), ['oracle_client_unavailable']);
+  const dir = mkdtempSync(join(tmpdir(), 'orc-'));
+  writeFileSync(join(dir, 'oracles.json'), JSON.stringify({ format: 'isokron-live-probe-oracles/1', mode: 'full', ms: 1000 }));
+  writeFileSync(join(dir, 'oracles-unlisted.json'), JSON.stringify({ format: 'isokron-live-probe-oracles/1', mode: 'clients_only', ms: 250 }));
+  const r = LP.oracleRecord(dir);
+  assert.equal(r.file, 'oracles.json');
+  assert.equal(r.ms, 1250);
+  assert.deepEqual(r.all.map((x) => x.file), ['oracles.json', 'oracles-unlisted.json']);
 });

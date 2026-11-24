@@ -18,13 +18,21 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createBridge } from './bridge.mjs';
+
+const here = dirname(fileURLToPath(import.meta.url));
 
 export const FORMAT = 'isokron-live-probe-oracles/1';
 export const CLIENT_OUT_CAP = 24 * 1024 * 1024;
 export const CHECKS_CAP = 4 * 1024 * 1024;
 export const STDERR_TAIL = 16 * 1024;
+/** What a server may send one oracle client in all, and in one line (as our own probe reads at most). */
+export const SERVER_BYTES_CAP = 24 * 1024 * 1024;
+export const SERVER_LINE_CAP = 4 * 1024 * 1024;
+/** Time kept back from a client's or a scenario's limit for stopping it and removing its container. */
+export const CLEANUP_SLACK_MS = 30_000;
 const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,200}$/;
 const CID_RE = /^\/[A-Za-z0-9._/-]{1,300}$/;
 
@@ -58,18 +66,37 @@ export function oracleEnv(dockerEnv, home, hostEnv = process.env) {
   return env;
 }
 
-/** Runs one program to its end or its time limit: { exit, signal, timed_out, stdout (capped), stdout_bytes, stderr_tail, ms }. */
-export function runProgram(cmd, args, { env, timeoutMs, cwd, cap = CLIENT_OUT_CAP }) {
+/**
+ * Runs one program to its end or its time limit: { exit, signal, timed_out, stdout (capped), stdout_bytes, stderr_tail,
+ * ms }. It runs in a process group of its own, and the whole group is stopped at the limit (a client's server command
+ * cannot outlive it); onTimeout runs first (the session's container is removed at once). It settles on the
+ * program's exit, waiting at most a moment for its pipes, which a stray child could hold open.
+ */
+export function runProgram(cmd, args, { env, timeoutMs, cwd, cap = CLIENT_OUT_CAP, onTimeout = null }) {
   return new Promise((resolve) => {
     const t0 = Date.now();
     let child;
-    try { child = spawn(cmd, args, { env, cwd, stdio: ['ignore', 'pipe', 'pipe'] }); } catch (e) { resolve({ exit: 127, signal: null, timed_out: false, stdout: '', stdout_bytes: 0, stderr_tail: String(e.message).slice(0, 500), ms: 0 }); return; }
-    const chunks = []; let n = 0; let over = false; let err = Buffer.alloc(0); let timedOut = false;
+    try { child = spawn(cmd, args, { env, cwd, stdio: ['ignore', 'pipe', 'pipe'], detached: true }); } catch (e) { resolve({ exit: 127, signal: null, timed_out: false, stdout: '', stdout_bytes: 0, stderr_tail: String(e.message).slice(0, 500), ms: 0 }); return; }
+    const chunks = []; let n = 0; let over = false; let err = Buffer.alloc(0); let timedOut = false; let done = false;
+    const group = (sig) => { try { process.kill(-child.pid, sig); } catch { try { child.kill(sig); } catch { /* gone */ } } };
     child.stdout.on('data', (c) => { n += c.length; if (n <= cap) chunks.push(c); else over = true; });
     child.stderr.on('data', (c) => { err = Buffer.concat([err, c]); if (err.length > STDERR_TAIL) err = err.subarray(err.length - STDERR_TAIL); });
-    const timer = setTimeout(() => { timedOut = true; try { child.kill('SIGTERM'); } catch { /* gone */ } setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* gone */ } }, 3000).unref(); }, timeoutMs);
-    child.on('error', (e) => { err = Buffer.from(String(e.message)); });
-    child.on('close', (code, signal) => { clearTimeout(timer); resolve({ exit: code, signal, timed_out: timedOut, stdout: Buffer.concat(chunks).toString('utf8'), stdout_bytes: n, stdout_over_cap: over, stderr_tail: err.toString('utf8'), ms: Date.now() - t0 }); });
+    const finish = (code, signal) => {
+      if (done) return;
+      done = true; clearTimeout(timer);
+      group('SIGKILL');
+      resolve({ exit: code, signal, timed_out: timedOut, stdout: Buffer.concat(chunks).toString('utf8'), stdout_bytes: n, stdout_over_cap: over, stderr_tail: err.toString('utf8'), ms: Date.now() - t0 });
+    };
+    const timer = setTimeout(async () => {
+      timedOut = true;
+      try { if (onTimeout) await onTimeout(); } catch { /* the kill below still runs */ }
+      group('SIGTERM');
+      setTimeout(() => group('SIGKILL'), 2000).unref();
+      setTimeout(() => finish(null, 'SIGKILL'), 4000).unref();
+    }, timeoutMs);
+    child.on('error', (e) => { err = Buffer.from(String(e.message)); finish(127, null); });
+    child.on('exit', (code, signal) => { setTimeout(() => finish(code, signal), 1500).unref(); });
+    child.on('close', (code, signal) => finish(code, signal));
   });
 }
 
@@ -125,7 +152,8 @@ export async function runOracles({ command, dockerEnv, install, pins, budgetMs, 
   mkdirSync(work, { recursive: true });
   const home = mkdtempSync(join(work, 'home-'));
   const env = oracleEnv(dockerEnv, home);
-  const rm = removeContainer || (async (name) => { spawnSync('docker', ['rm', '-f', '-v', name], { env, stdio: 'ignore', timeout: 30_000 }); });
+  const rm = removeContainer || (async (name) => { spawnSync('docker', ['rm', '-f', '-v', name], { env, stdio: 'ignore', timeout: 15_000 }); });
+  const relay = join(here, 'relay.mjs');
   let k = 0;
   const containers = out.containers;
   const session = async (role) => {
@@ -147,10 +175,12 @@ export async function runOracles({ command, dockerEnv, install, pins, budgetMs, 
   for (const c of pins.clients) {
     const inst = (install && install.clients && install.clients[c.id]) || null;
     if (!inst || !inst.ok || !Array.isArray(inst.command)) { out.clients.push({ id: c.id, outcome: 'unavailable', why: inst ? String(inst.error || 'not installed').slice(0, 200) : 'not installed' }); continue; }
-    const ms = Math.min(pins.client_timeout_ms, left() - 5000);
+    const ms = Math.min(pins.client_timeout_ms, left() - CLEANUP_SLACK_MS);
     if (ms < Math.min(5000, pins.client_timeout_ms)) { out.clients.push({ id: c.id, outcome: 'skipped', why: 'time_budget' }); continue; }
     const v = await session(`client:${c.id}`);
-    const r = await runProgram(inst.command[0], [...inst.command.slice(1), String(ms), '--', ...v.command], { env, timeoutMs: ms + 10_000, cwd: home });
+    // The client's server is the session's docker run behind the byte cap (relay.mjs).
+    const server = [process.execPath, relay, String(SERVER_BYTES_CAP), String(SERVER_LINE_CAP), '--', ...v.command];
+    const r = await runProgram(inst.command[0], [...inst.command.slice(1), String(ms), '--', ...server], { env, timeoutMs: ms + 5000, cwd: home, onTimeout: () => rm(v.name) });
     await finishSession(v, { exit: r.exit, ms: r.ms });
     const o = lastJsonLine(r.stdout);
     out.clients.push({ id: c.id, exit: r.exit, signal: r.signal, timed_out: r.timed_out, ms: r.ms, stdout_over_cap: !!r.stdout_over_cap, stderr_tail: r.stderr_tail, result: o, ...(o ? {} : { outcome: r.timed_out ? 'timeout' : 'client_error', why: 'no result line' }) });
@@ -178,16 +208,16 @@ export async function runOracles({ command, dockerEnv, install, pins, budgetMs, 
       });
       let url = null;
       try { url = await bridge.listen(); } catch (e) { conf.problem = `the bridge did not start: ${String(e.message).slice(0, 200)}`; }
-      if (url) {
+      if (url) try {
         for (const [rev, R] of Object.entries(pins.revisions)) {
           for (const sc of R.scenarios) {
             if (!sc.run) continue;
             const run = { revision: rev, scenario: sc.scenario, exit: null, ms: null, timed_out: false, checks: null, why: null };
             conf.runs.push(run);
             const ms = pins.conformance.scenario_timeout_ms;
-            if (left() < ms + 15_000) { run.why = 'time_budget'; continue; }
+            if (left() < ms + 5000 + CLEANUP_SLACK_MS) { run.why = 'time_budget'; continue; }
             const dir = mkdtempSync(join(work, 'conf-'));
-            const r = await runProgram(process.execPath, [suite.bin, 'server', '--url', url, '--scenario', sc.scenario, '--spec-version', rev, '--timeout', String(ms), '-o', dir], { env, timeoutMs: ms + 15_000, cwd: home, cap: 1024 * 1024 });
+            const r = await runProgram(process.execPath, [suite.bin, 'server', '--url', url, '--scenario', sc.scenario, '--spec-version', rev, '--timeout', String(ms), '-o', dir], { env, timeoutMs: ms + 5000, cwd: home, cap: 1024 * 1024, onTimeout: () => bridge.reset() });
             await bridge.reset();
             Object.assign(run, { exit: r.exit, ms: r.ms, timed_out: r.timed_out });
             const sub = readdirSync(dir).filter((d) => existsSync(join(dir, d, 'checks.json')));
@@ -200,12 +230,15 @@ export async function runOracles({ command, dockerEnv, install, pins, budgetMs, 
             rmSync(dir, { recursive: true, force: true });
           }
         }
+      } catch (e) {
+        out.errors.push(String(e && e.message).slice(0, 300));
+      } finally {
         await bridge.close();
         out.bridge = { ...bridge.info, stats: bridge.stats, transcript: bridge.transcript };
       }
     }
   }
-  rmSync(home, { recursive: true, force: true });
+  try { rmSync(home, { recursive: true, force: true }); } catch (e) { out.errors.push(`cleanup: ${String(e && e.message).slice(0, 200)}`); }
   out.ms = now() - t0;
   return out;
 }

@@ -134,7 +134,11 @@ registry.npmjs.org, pypi.org, files.pythonhosted.org, proxy.golang.org, sum.gola
 Go module proxy redirects module zips there; go.sum decides what is accepted); `clients.json` records what installed
 and the proxy's requests. A client that does not install is `unavailable` (our fault, never the server's); with
 nothing installed the stage is off and each item says `not_installed`. The clients and the suite run with PATH, a
-home of their own and the Docker variables only: no token.
+home of their own and the Docker variables only: no token. Each client and each suite run is a process group of its own, stopped whole at its
+limit, and its session's container is removed at once. The clients run on the runner, outside the container's memory
+limit, so each one's server command goes through a byte cap (`corpus/oracles/relay.mjs`: 24 MiB in all, 4 MiB a
+line, as our own probe reads at most). A protocol version a client reports reaches the fields only when it is one of
+the specification's revisions; anything else is `other`.
 
 **Judging** (`corpus/oracles/judge.mjs`, in the bundle step): each client's tools are hashed with this repository's
 engine exactly as our reader's list is, and by tool names alone. Each conformance check is `pass`, `fail`, `warning`,

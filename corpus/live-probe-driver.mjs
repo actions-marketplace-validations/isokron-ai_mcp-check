@@ -97,6 +97,14 @@ export async function removeQuietly(command, opts) {
   spawnSync('docker', ['rm', '-f', '-v', command[i + 1]], { env: (opts && opts.env) || process.env, stdio: 'ignore', timeout: 30_000 });
 }
 
+/** Each target's time limit in seconds, as the sandbox driver reads its list (its own default is 600 s). */
+export function limitsOf(list) {
+  const limits = new Map();
+  const dflt = list && list.defaults && Number.isFinite(list.defaults.timeout_s) ? list.defaults.timeout_s : 600;
+  for (const t of (list && list.targets) || []) if (TARGET_RE.test(t.id)) limits.set(t.id, Number.isFinite(t.timeout_s) ? t.timeout_s : dflt);
+  return limits;
+}
+
 export async function main(argv = process.argv.slice(2)) {
   const o = parse(argv);
   const msc = resolve(o.msc);
@@ -106,12 +114,8 @@ export async function main(argv = process.argv.slice(2)) {
   ]);
   const out = resolve(optionOf(o.rest, '--out'));
   const targetsFile = optionOf(o.rest, '--targets');
-  const limits = new Map();
-  try {
-    const list = JSON.parse(readFileSync(targetsFile, 'utf8'));
-    const dflt = list.defaults && Number.isFinite(list.defaults.timeout_s) ? list.defaults.timeout_s : 300;
-    for (const t of list.targets || []) if (TARGET_RE.test(t.id)) limits.set(t.id, Number.isFinite(t.timeout_s) ? t.timeout_s : dflt);
-  } catch { /* the driver itself refuses a bad list */ }
+  let limits = new Map();
+  try { limits = limitsOf(JSON.parse(readFileSync(targetsFile, 'utf8'))); } catch { /* the driver itself refuses a bad list */ }
   let install = null;
   if (o.oracles !== 'none' && existsSync(o.oracles)) { try { install = JSON.parse(readFileSync(o.oracles, 'utf8')); } catch { install = null; } }
   const pins = JSON.parse(readFileSync(new URL('./oracles/pins.json', import.meta.url), 'utf8'));

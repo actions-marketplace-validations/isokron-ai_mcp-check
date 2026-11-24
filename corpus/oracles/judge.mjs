@@ -24,9 +24,15 @@ export const ORACLE_FORMAT = 'isokron-live-probe-oracles/1';
 const CHECK_ID_RE = /^[a-z0-9][a-z0-9:._-]{0,95}$/;
 const SCENARIO_RE = /^[a-z0-9][a-z0-9/._-]{0,95}$/;
 const VERSION_RE = /^[A-Za-z0-9][A-Za-z0-9.+_-]{0,63}$/;
-const PROTOCOL_RE = /^[0-9A-Za-z.-]{1,40}$/;
+/**
+ * The protocol versions a field may name: the specification's revisions. Anything else a server's answer makes a
+ * client report is `other` (the text stays in raw/): a server must not be able to put a string of its choosing here.
+ */
+export const PROTOCOL_VERSIONS = Object.freeze(['2024-11-05', '2025-03-26', '2025-06-18', '2025-11-25', '2026-07-28']);
+const protocolOf = (v) => (typeof v !== 'string' ? null : PROTOCOL_VERSIONS.includes(v) ? v : 'other');
 const OUTCOMES = ['listed', 'init_failed', 'list_failed', 'timeout', 'client_error', 'unavailable', 'skipped'];
 const STATUS = { SUCCESS: 'pass', FAILURE: 'fail', WARNING: 'warning', INFO: 'info', SKIPPED: 'skipped' };
+const SEVERITY = ['SKIPPED', 'INFO', 'SUCCESS', 'WARNING', 'FAILURE'];
 
 const sha256 = (s) => createHash('sha256').update(s).digest('hex');
 const isObj = (x) => !!x && typeof x === 'object' && !Array.isArray(x);
@@ -76,7 +82,7 @@ function clientEntry(c, pinsClient) {
   return {
     entry: {
       client: c.id, sdk: pinsClient ? pinsClient.sdk : null, sdk_version: pick(r && r.sdk_version, VERSION_RE) || (pinsClient ? pinsClient.version : null),
-      outcome, stage: pick(r && r.stage, /^[a-z]{1,12}$/), protocol_negotiated: pick(r && r.protocol, PROTOCOL_RE),
+      outcome, stage: pick(r && r.stage, /^[a-z]{1,12}$/), protocol_negotiated: protocolOf(r && r.protocol),
       tool_count: cat ? cat.tool_count : null, catalog_sha256: cat ? cat.catalog_sha256 : null, catalog_defaults_sha256: cat ? cat.catalog_defaults_sha256 : null, names_sha256: cat ? cat.names_sha256 : null,
       catalog_vs_reader: null,
       pages: int(r && r.pages), ms: int(c.ms),
@@ -124,11 +130,16 @@ export function judgeOracles(rec, { reader, pins, baseline = null }) {
         const run = (conf.runs || []).find((r) => r && r.revision === rev && r.scenario === sc.scenario);
         if (!run || !Array.isArray(run.checks)) { s.scenarios_not_run.push({ scenario: sc.scenario, scored: !!sc.scored, reason: run ? pick(run.why, /^[a-z_]{1,40}$/) || 'no_checks' : conf.problem ? 'suite_unavailable' : 'not_run' }); continue; }
         s.scenarios_run++;
-        const seen = new Set();
+        // A check id can repeat within a scenario (a loop, a retry): the occurrences collapse to the worst status, as
+        // the suite's own baseline does.
+        const worst = new Map();
         for (const c of run.checks) {
           const id = pick(c && c.id, CHECK_ID_RE);
-          if (!id || seen.has(id)) continue;
-          seen.add(id);
+          if (!id) continue;
+          const prev = worst.get(id);
+          if (!prev || SEVERITY.indexOf(c.status) > SEVERITY.indexOf(prev.status)) worst.set(id, c);
+        }
+        for (const [id, c] of worst) {
           let status = STATUS[c.status] || 'skipped';
           const key = `${rev}/${sc.scenario}/${id}`;
           if (excluded[id]) status = 'bridge_excluded';
@@ -155,6 +166,9 @@ export function judgeOracles(rec, { reader, pins, baseline = null }) {
   return out;
 }
 
+/** A client that timed out or crashed (D12); one that was refused at initialize or at the list (D6). */
+const crashClass = (outcome) => (outcome === 'timeout' || outcome === 'client_error' ? 'D12' : 'D6');
+
 /** The disagreements between our reader, the clients and the suite (DESIGN-v3 §7 classes). */
 export function disagreements(j, names, reader, readerCatalog = null) {
   const d = [];
@@ -166,7 +180,7 @@ export function disagreements(j, names, reader, readerCatalog = null) {
   for (const c of j.clients) {
     if (c.outcome === 'unavailable' || c.outcome === 'skipped') continue;
     const b = `client:${c.client}`;
-    if (readerListed && c.outcome !== 'listed') d.push({ class: c.outcome === 'timeout' ? 'D12' : 'D6', oracle_a: 'reader', oracle_b: b, kind: 'outcome', detail: { a: 'listed', b: c.outcome } });
+    if (readerListed && c.outcome !== 'listed') d.push({ class: crashClass(c.outcome), oracle_a: 'reader', oracle_b: b, kind: 'outcome', detail: { a: 'listed', b: c.outcome } });
     else if (!readerListed && c.outcome === 'listed') d.push({ class: 'D6', oracle_a: 'reader', oracle_b: b, kind: 'outcome', detail: { a: 'not_listed', b: 'listed' } });
     else if (readerListed && c.outcome === 'listed') {
       if (c.names_sha256 !== namesSha(reader.names)) d.push({ class: 'D6', oracle_a: 'reader', oracle_b: b, kind: 'tool_names', detail: { ...diffNames(reader.names, names.get(c.client)), count_a: int(reader.tool_count), count_b: c.tool_count } });
@@ -180,7 +194,7 @@ export function disagreements(j, names, reader, readerCatalog = null) {
       if (c.names_sha256 !== ref.names_sha256) d.push({ class: 'D6', oracle_a: `client:${ref.client}`, oracle_b: `client:${c.client}`, kind: 'tool_names', detail: { ...diffNames(names.get(ref.client), names.get(c.client)), count_a: ref.tool_count, count_b: c.tool_count } });
       else if (c.catalog_sha256 !== ref.catalog_sha256 && c.catalog_defaults_sha256 !== ref.catalog_defaults_sha256) d.push({ class: 'D4', oracle_a: `client:${ref.client}`, oracle_b: `client:${c.client}`, kind: 'catalog', detail: { count_a: ref.tool_count, count_b: c.tool_count } });
     }
-    for (const c of failedClients) d.push({ class: c.outcome === 'timeout' ? 'D12' : 'D6', oracle_a: `client:${ref.client}`, oracle_b: `client:${c.client}`, kind: 'outcome', detail: { a: 'listed', b: c.outcome } });
+    for (const c of failedClients) d.push({ class: crashClass(c.outcome), oracle_a: `client:${ref.client}`, oracle_b: `client:${c.client}`, kind: 'outcome', detail: { a: 'listed', b: c.outcome } });
   }
   // The suite's tool-name check against our engine's (spec Tool Names), when both saw the whole list on one page.
   const conf = j.conformance;

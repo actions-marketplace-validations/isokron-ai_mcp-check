@@ -7,7 +7,7 @@ if (sep !== '--') process.exit(2);
 if (process.env.FAKE_OUTCOME === 'timeout') setInterval(() => {}, 1000);
 else {
   const child = spawn(cmd[0], cmd.slice(1), { stdio: ['pipe', 'pipe', 'ignore'] });
-  const out = { format: 'isokron-oracle-client/1', client: id, sdk_version: '9.9.9', outcome: null, stage: 'connect', error: null, protocol: null, pages: 0, tools: null, ms: 1, env_keys: Object.keys(process.env).sort() };
+  const out = { format: 'isokron-oracle-client/1', client: id, sdk_version: '9.9.9', outcome: null, stage: 'connect', error: null, protocol: null, pages: 0, tools: null, ms: 1, limit_ms: Number(ms), env_keys: Object.keys(process.env).sort() };
   let buf = '';
   child.stdout.on('data', (c) => {
     buf += c;
