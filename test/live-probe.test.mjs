@@ -20,6 +20,8 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 const FX = join(root, 'test', 'fixtures', 'live-probe');
 const fx = (f) => readFileSync(join(FX, f), 'utf8');
 const MARKER = 'liveprobe-MARKERMARKERMARKER0000';
+/** The mcp-surface-corpus commit both workflows pin (SURFACE_CORPUS_REF, the conformance call and sandbox-guard). */
+const SANDBOX_PIN = '066c15dbac1e1ef59ea6ba1705b5be344a3dfdc5';
 const NODE24 = 'docker.io/library/node:24-bookworm-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23fceb061c54';
 const items = (n, f = (i) => 'owner' + i + '/repo' + i) => JSON.stringify(Array.from({ length: n }, (_, i) => ({ subject: f(i), run_key: String(i + 1).repeat(64).slice(0, 64).replace(/[^0-9a-f]/g, 'a'), fence: i + 1 })));
 
@@ -412,7 +414,7 @@ test('R-LP-20: tool_count and tool_list_sha256 are written as fields of their ow
 });
 
 test('R-LP-21: the sandbox at mcp-surface-corpus 73a2669 builds native modules, so kronicle-lite is expected to start in the self test', () => {
-  for (const f of ['live-probe.yml', 'live-probe-selftest.yml']) assert.equal((wf(f).match(/73a2669ca3d571bc50c5deab1cd171bc4a70ddda/g) || []).length, 3, f + ': the env pin, the conformance workflow and the guard');
+  for (const f of ['live-probe.yml', 'live-probe-selftest.yml']) assert.equal(wf(f).split(SANDBOX_PIN).length - 1, 3, f + ': the env pin, the conformance workflow and the guard');
   const shard = JSON.parse(readFileSync(join(root, 'corpus', 'fixtures', 'live-probe', 'selftest-shard.json'), 'utf8'));
   assert.deepEqual(shard.items.find((x) => x.subject === 'isokron-ai/kronicle-lite').expect, { status: 'graded', min_tools: 1 });
 });
@@ -427,6 +429,17 @@ test('R-LP-22: the self test judges the bundles with the ingest tool-qa runs, wh
   const reg = registryTypes();
   for (const [f, t] of Object.entries({ ...LP.FIELDS, ...LP.TOOL_LIST_FIELDS })) assert.equal(reg.get(f) && reg.get(f).type, t, f);
   assert.equal(createHash('sha256').update(readFileSync(join(FX, 'fields-registry.yaml'))).digest('hex'), 'c79f5124d90bf5a8d2cb6e2e2a351228ceddc827ed52339990e9550a6b07d31f', 'the test copy is mcp-results f2b16de, as tool-qa pins it');
+});
+
+test('R-LP-23: the sandbox pin includes the install-network hostile cases and the proxy positive control (mcp-surface-corpus #9, #10)', () => {
+  assert.equal(SANDBOX_PIN, '066c15dbac1e1ef59ea6ba1705b5be344a3dfdc5');
+  for (const f of ['live-probe.yml', 'live-probe-selftest.yml']) {
+    const y = wf(f);
+    assert.equal(/\n  SURFACE_CORPUS_REF: '([0-9a-f]{40})'\n/.exec(y)[1], SANDBOX_PIN, f);
+    assert.ok(y.includes('isokron-ai/mcp-surface-corpus/.github/workflows/sandbox-conformance.yml@' + SANDBOX_PIN + ' # SURFACE_CORPUS_REF'), f + ': the conformance call');
+    assert.ok(y.includes('isokron-ai/mcp-surface-corpus/sandbox-guard@' + SANDBOX_PIN + ' # SURFACE_CORPUS_REF'), f + ': sandbox-guard');
+    assert.equal((y.match(/mcp-surface-corpus[^\n]*@([0-9a-f]{40})/g) || []).filter((m) => !m.endsWith(SANDBOX_PIN)).length, 0, f + ': no other sandbox commit');
+  }
 });
 
 test('R-LP-12: npm installs run their install scripts, in the sandbox, so native modules can be built', async () => {
@@ -695,7 +708,7 @@ test('R-LP-14: one sandbox commit everywhere: the conformance workflow, the in-j
   for (const f of ['live-probe.yml', 'live-probe-selftest.yml']) {
     const y = wf(f);
     const ref = /\n  SURFACE_CORPUS_REF: '([0-9a-f]{40})'\n/.exec(y)[1];
-    assert.equal(ref, '73a2669ca3d571bc50c5deab1cd171bc4a70ddda', f + ': at or after mcp-surface-corpus #8');
+    assert.equal(ref, SANDBOX_PIN, f + ': at or after mcp-surface-corpus #8');
     const code = y.replace(/^\s*#.*$/gm, '');
     assert.match(code, new RegExp('\\n  sandbox:\\n(?:    .*\\n)*?    uses: isokron-ai/mcp-surface-corpus/\\.github/workflows/sandbox-conformance\\.yml@' + ref + ' # SURFACE_CORPUS_REF\\n    with:\\n      mutations: false\\n'), f);
     assert.match(code, new RegExp('uses: isokron-ai/mcp-surface-corpus/sandbox-guard@' + ref + ' # SURFACE_CORPUS_REF\\n'), f);
