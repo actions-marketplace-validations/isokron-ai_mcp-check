@@ -2093,15 +2093,20 @@
     for (let k = f.parent[i], n = 0; k >= 0 && n < 64; k = f.parent[k], n++) {
       if (!isP(t[k], '{')) continue;
       if (isId(t[k - 1], 'else')) { out.push({ kind: 'else', cond: 'else' }); continue; }
-      // the statement before the brace: walk back over brackets to its first token
-      let h = k - 1; let m = 0;
-      while (h > 0 && m++ < 400) {
-        const x = t[h];
-        if (x.y === 'p' && (x.v === ')' || x.v === ']')) { const o = f.parent[h]; if (o < 0 || o >= h) break; h = o - 1; continue; }
-        if (isP(x, ';') || isP(x, '{') || isP(x, '}') || (x.nl && endsLine(t[h - 1]))) break;
-        h--;
-      }
-      const hs = isP(t[h], ';') || isP(t[h], '{') || isP(t[h], '}') ? h + 1 : h;
+      // the statement before the brace: walk back over brackets to its first token; past one `;` when what is before it
+      // starts with `if` (if v := os.Getenv("X"); v == "1" {)
+      const back = (from) => {
+        let h = from; let m = 0;
+        while (h > 0 && m++ < 400) {
+          const x = t[h];
+          if (x.y === 'p' && (x.v === ')' || x.v === ']')) { const o = f.parent[h]; if (o < 0 || o >= h) break; h = o - 1; continue; }
+          if (isP(x, ';') || isP(x, '{') || isP(x, '}') || (x.nl && endsLine(t[h - 1]))) break;
+          h--;
+        }
+        return isP(t[h], ';') || isP(t[h], '{') || isP(t[h], '}') ? h + 1 : h;
+      };
+      let hs = back(k - 1);
+      if (!isId(t[hs], 'if') && !isId(t[hs], 'else') && isP(t[hs - 1], ';') && !t[hs].nl) { const h2 = back(hs - 2); if (isId(t[h2], 'if') || (isId(t[h2], 'else') && isId(t[h2 + 1], 'if'))) hs = h2; }
       if (isId(t[hs], 'if') || (isId(t[hs], 'else') && isId(t[hs + 1], 'if'))) {
         let a = isId(t[hs], 'else') ? hs + 2 : hs + 1; for (let q = a; q < k; q++) { if (isP(t[q], ';')) a = q + 1; else if (t[q].y === 'p' && (t[q].v === '(' || t[q].v === '[') && f.close[q] > q) q = f.close[q]; }
         out.push({ kind: 'if', cond: a < k ? f.text.slice(t[a].s, t[k - 1].e !== undefined ? t[k - 1].e : t[k].s).trim() : 'if' });

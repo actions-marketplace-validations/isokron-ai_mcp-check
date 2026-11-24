@@ -472,7 +472,7 @@
   const OPEN_READ = set('node nodes file files page pages url urls link links document documents doc docs tab tabs entity entities graph resource resources path paths directory folder');
   // "resolve" reads when its object is a name to look up (resolve_names, resolve_library_id, resolve_hostname);
   // resolve_issue, resolve_alert and resolve_thread close something and stay updates.
-  const RESOLVE_READ = set('name names id ids identifier identifiers ref refs reference references alias aliases host hosts hostname hostnames address addresses dns domain domains url urls uri uris path paths symbol symbols handle handles username usernames library libraries package packages module modules import imports dependency dependencies version versions type types variable variables location locations coordinates');
+  const RESOLVE_READ = set('name names id ids identifier identifiers ref refs reference references alias aliases host hosts hostname hostnames address addresses dns domain domains url urls uri uris path paths symbol symbols handle handles username usernames library libraries type types variable variables location locations coordinates');
   // Operations on two operands (source and target) or one state change: not a replacement of the whole object.
   const REWIRE_V = set('move rename assign unassign transition merge restore sync');
 

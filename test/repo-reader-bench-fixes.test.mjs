@@ -328,3 +328,82 @@ test('R-RD-24: a folder with "evals" as a word of its name (mcp-server-evals) is
   assert.equal(plan('packages/retrievals/index.ts'), true);
   assert.equal(plan('python-eval-mcp/server.py'), true);
 });
+
+// ---------------------------------------------------------------- review of the fixes (second reader)
+test('R-RD-15: a collection that is changed after its declaration (push, let reassigned, index assignment) is not unrolled; its registration stays unresolved', () => {
+  const reg = "server.registerTool(n, { description: 'D.' }, async () => ({ content: [] }));\n";
+  assert.deepEqual([names(ts("const T = ['a_one'];\nif (process.env.B) T.push('b_two');\nfor (const n of T) " + reg)), ts("const T = ['a_one'];\nif (process.env.B) T.push('b_two');\nfor (const n of T) " + reg).unresolved], [[], 1]);
+  assert.equal(ts("let T = ['a_one'];\nT = T.concat(more);\nfor (const n of T) " + reg).unresolved, 1);
+  assert.equal(ts("const T = { a_one: {} };\nT[dyn] = {};\nfor (const [n] of Object.entries(T)) " + reg).unresolved, 1);
+  assert.equal(ts("const T = ['a_one'];\naddMore(T);\nfor (const n of T) " + reg).unresolved, 1);
+});
+
+test('R-RD-15: a parameter or an outer loop variable that shadows a constant is not read as the constant', () => {
+  const a = ts("const list = ['a_one'];\nfunction reg(list) { for (const n of list) server.registerTool(n, { description: 'D.' }, async () => ({ content: [] })); }\n");
+  assert.deepEqual(names(a), []);
+  const b = ts("const p = 'zz';\nfor (const p of loadPrefixes()) { for (const n of ['a', 'b']) { server.registerTool(p + '_' + n, { description: 'D.' }, async () => ({ content: [] })); } }\n");
+  assert.deepEqual(names(b), []);
+  assert.equal(b.unresolved, 1);
+});
+
+test('R-RD-15: an index expression before .forEach is not an array literal, and a loop body that may skip the registration is not unrolled', () => {
+  const a = ts("const groups = load();\ngroups['a'].forEach((n) => server.registerTool(n, { description: 'D.' }, async () => ({ content: [] })));\n");
+  assert.deepEqual(names(a), []);
+  const b = ts("const T = ['a_one', 'b_two'];\nfor (const n of T) {\n  if (!enabled(n)) continue;\n  server.registerTool(n, { description: 'D.' }, async () => ({ content: [] }));\n}\n");
+  assert.deepEqual(names(b), []);
+  assert.equal(b.unresolved, 1);
+  const c = ts("const T = ['a_one', 'b_two'];\nT.forEach((n) => server.registerTool(n, { description: 'D.' }, async () => ({ content: [] })));\n");
+  assert.deepEqual(names(c), ['a_one', 'b_two']);
+});
+
+test('R-RD-15: many loops and factory calls next to many constants are read in linear time', () => {
+  const consts = Array.from({ length: 4000 }, (_, i) => 'const c' + i + ' = ' + i + ';').join('\n');
+  const loops = Array.from({ length: 3000 }, (_, i) => "for (const n of ['t" + i + "']) server.registerTool(n + 'x', { description: 'D.' }, async () => ({ content: [] }));").join('\n');
+  const calls = "function makeTool(name) { return { name, inputSchema: { type: 'object' } }; }\nexport const all = [" + Array.from({ length: 3000 }, (_, i) => "makeTool('m" + i + "')").join(', ') + '];\n';
+  const t0 = performance.now();
+  const an = ts(consts + '\n' + loops + '\n' + calls);
+  const ms = performance.now() - t0;
+  assert.equal(an.tools.length, 6000);
+  assert.ok(ms < 3000, 'took ' + Math.round(ms) + ' ms');
+});
+
+test('R-RD-12: a TOOLISH function whose object has no schema key is not a tool factory (no phantom tool)', () => {
+  const an = ts("function findTool(name) { return { name, found: false }; }\nasync function handler() { return findTool('missing_thing'); }\nserver.registerTool('real_tool', { description: 'R.' }, async () => ({ content: [] }));\n");
+  assert.deepEqual(names(an), ['real_tool']);
+});
+
+test('R-RD-08: duplicates in a literal array of another file than the name\'s first registration are not kept', () => {
+  const an = read({ 'package.json': PKG, 'src/a.ts': TS_HEAD + "server.registerTool('dup_tool', { description: 'A.' }, async () => ({ content: [] }));\n", 'src/b.ts': "export const TOOLS = [{ name: 'dup_tool', description: 'B.', inputSchema: { type: 'object' } }, { name: 'dup_tool', description: 'C.', inputSchema: { type: 'object' } }];\n" });
+  assert.equal(names(an).filter((n) => n === 'dup_tool').length, 1);
+});
+
+test('R-RD-20: a registrar also called outside a decorator keeps its registration unresolved; annotations set later in its body stay unknown', () => {
+  const files = (body, use) => ({ 'pyproject.toml': '[project]\nname = "x"\ndependencies = ["fastmcp>=3"]\n', 'app/server.py': 'from fastmcp import FastMCP\nmcp = FastMCP("x")\n\ndef create_tool(name, description):\n    def deco(fn):\n' + body + '        return fn\n    return deco\n\n@create_tool("find_notes", "Finds notes.")\ndef find_notes(query: str) -> str:\n    return query\n' + (use || '') });
+  const dyn = read(files('        mcp.tool(fn, name=name, description=description)\n', '\nfor n in load_names():\n    create_tool(n, "D.")(find_notes)\n'));
+  assert.equal(dyn.unresolved, 1);
+  const later = read(files('        mcp.tool(fn, name=name, description=description)\n        mcp._tool_manager.get_tool(name).annotations = ANN\n'));
+  assert.ok(tool(later, 'find_notes')._unreadable.includes('annotations'));
+});
+
+test('R-RD-11: a Go tool under if with an init statement (if v := os.Getenv("X"); v == "1") is conditional', () => {
+  const r = goRead('func main() {\n\ts := server.NewMCPServer("a", "1")\n\tx := 1; s.AddTool(mcp.NewTool("plain", mcp.WithDescription("P.")), handle)\n\tif v := os.Getenv("X"); v == "1" {\n\t\ts.AddTool(mcp.NewTool("gated", mcp.WithDescription("G.")), handle)\n\t}\n\t_ = x\n}\n');
+  assert.deepEqual(marksOf(r, 'plain'), []);
+  assert.deepEqual(marksOf(r, 'gated'), ['conditional-branch']);
+});
+
+test('R-RD-21: an import line with a long run of spaces is read in linear time (Python and TypeScript)', () => {
+  const t0 = performance.now();
+  read({ 'a.py': 'from mcp import a' + ' '.repeat(80000) + 'b(\nfrom x.y import z' + ' '.repeat(80000) + 'q(\n@mcp.tool()\ndef f():\n    pass\n', 'b.ts': 'import { a' + ' '.repeat(80000) + 'b } from "zod";\nserver.registerTool("x", { description: "d" }, h);\n' });
+  const ms = performance.now() - t0;
+  assert.ok(ms < 1500, 'took ' + Math.round(ms) + ' ms');
+});
+
+test('R-RD-07: in a raw f-string a backslash stays and does not hide a {expression}', () => {
+  const an = read({ 'pyproject.toml': PYPROJECT, 'srv.py': 'from mcp.server.fastmcp import FastMCP\nmcp = FastMCP("x")\nN = "k"\n@mcp.tool(description=rf"a \\{N} b \\" c")\ndef f() -> str:\n    return ""\n' });
+  assert.equal(tool(an, 'f').description, 'a \\k b \\" c');
+});
+
+test('R-RD-14: resolve_dependencies and resolve_imports stay writes', () => {
+  assert.equal(core.kindOf('resolve_dependencies'), 'update');
+  assert.equal(core.kindOf('resolve_imports'), 'update');
+});

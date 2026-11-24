@@ -685,7 +685,7 @@
     const names = new Set();
     const re = /import\s+(?:\{([^}]*)\}|\*\s+as\s+(\w+)|(\w+))\s+from\s+['"]zod(?:\/v[34])?['"]/g; let m;
     while ((m = re.exec(src))) {
-      if (m[1]) m[1].split(',').forEach((p) => { const q = p.trim().split(/\s+as\s+/); if (q[0] === 'z' || q[0] === 'zod') names.add((q[1] || q[0]).trim()); });
+      if (m[1]) m[1].split(',').forEach((p) => { const q = asParts(p); if (q[0] === 'z' || q[0] === 'zod') names.add((q[1] || q[0]).trim()); });
       if (m[2]) names.add(m[2]); if (m[3]) names.add(m[3]);
     }
     if (/require\(['"]zod['"]\)/.test(src) || /\bz\.object\s*\(/.test(src)) names.add('z');
@@ -693,7 +693,7 @@
     // z or zod that is used as zod.
     const re2 = /import\s+(?:\{([^}]*)\}|\*\s+as\s+(\w+)|(\w+))\s+from\s+['"][^'"]+['"]/g;
     while ((m = re2.exec(src))) {
-      const bind = []; if (m[1]) m[1].split(',').forEach((p) => { const q = p.trim().replace(/^type\s+/, '').split(/\s+as\s+/); if (q[0]) bind.push([q[0].trim(), (q[1] || q[0]).trim()]); });
+      const bind = []; if (m[1]) m[1].split(',').forEach((p) => { const q = asParts(p.trim().replace(/^type\s+/, '')); if (q[0]) bind.push([q[0].trim(), (q[1] || q[0]).trim()]); });
       if (m[2]) bind.push([m[2], m[2]]); if (m[3]) bind.push([m[3], m[3]]);
       bind.forEach(([orig, local]) => { if (/^(z|zod)$/i.test(orig) && /^[\w$]+$/.test(local) && new RegExp('\\b' + local.replace(/\$/g, '\\$') + '\\.(object|string|number|boolean|enum|array|union|literal)\\s*\\(').test(src)) names.add(local); });
     }
@@ -893,12 +893,58 @@
       if (!parents) { parents = new Int32Array(t.length).fill(-1); const st = []; for (let k = 0; k < t.length; k++) { parents[k] = st.length ? st[st.length - 1] : -1; const x = t[k]; if (x.type !== 'p') continue; if (CLOSERS[x.value]) st.push(k); else if (x.value === ')' || x.value === ']' || x.value === '}') st.pop(); } }
       return parents[i];
     };
+    // Constants seen through an overlay (R-RD-15, R-RD-12): some names bound to other values (a loop's variables, a
+    // factory's parameters), some hidden (parameters and loop variables that shadow a constant), without copying the
+    // file's constants for each element or call.
+    const overlay = (set, hide) => {
+      const base = ctx.consts || {};
+      const own = (k) => hasOwn(set, k);
+      const hidden = (k) => !!hide && hide.has(k) && !own(k);
+      return new Proxy(base, {
+        get: (b0, k) => (k === OVERLAY_BASE ? b0 : own(k) ? set[k] : hidden(k) ? undefined : b0[k]),
+        has: (b0, k) => own(k) || (!hidden(k) && k in b0),
+        getOwnPropertyDescriptor: (b0, k) => (own(k) ? { value: set[k], writable: true, enumerable: true, configurable: true } : hidden(k) ? undefined : Reflect.getOwnPropertyDescriptor(b0, k)),
+        ownKeys: (b0) => Array.from(new Set(Reflect.ownKeys(b0).filter((k) => !hidden(k)).concat(Object.keys(set)))),
+      });
+    };
+    // A constant of this file that nothing changes: declared once, with const, and every other use a read (not
+    // assigned, not given to a call that could change it, no push/splice/… on it or a member). Only those are unrolled.
+    let idUses = null; const frozenMemo = new Map();
+    const MUTATORS = /^(push|pop|shift|unshift|splice|sort|reverse|fill|copyWithin|set|delete|clear|add)$/;
+    const READ_CALLS = /^(entries|keys|values|freeze)$/;
+    const frozenConst = (name) => {
+      if (frozenMemo.has(name)) return frozenMemo.get(name);
+      if (!idUses) { idUses = new Map(); for (let k = 0; k < t.length; k++) { const x = t[k]; if (x.type !== 'id' || isP(t[k - 1], '.') || isP(t[k - 1], '?.')) continue; if (!idUses.has(x.value)) idUses.set(x.value, []); idUses.get(x.value).push(k); } }
+      const uses = idUses.get(name) || []; let decls = 0; let ok = true;
+      for (const k of uses) {
+        const pv = t[k - 1];
+        if (pv && pv.type === 'id' && /^(const|let|var)$/.test(pv.value)) { decls++; if (pv.value !== 'const') ok = false; continue; }
+        if (pv && ((pv.type === 'id' && pv.value === 'delete') || isP(pv, '++') || isP(pv, '--'))) { ok = false; break; }
+        if (isP(t[k + 1], ':') && (isP(pv, '{') || isP(pv, ','))) continue; // a key of an object literal
+        let m = k + 1;
+        for (let n = 0; n < 64; n++) {
+          if ((isP(t[m], '.') || isP(t[m], '?.')) && t[m + 1] && t[m + 1].type === 'id') { if (MUTATORS.test(t[m + 1].value) && isP(t[m + 2], '(')) { ok = false; break; } m += 2; }
+          else if (isP(t[m], '[')) m = matchClose(t, m) + 1;
+          else break;
+        }
+        if (!ok) break;
+        if (isP(t[m], '=') || isP(t[m], '++') || isP(t[m], '--') || (t[m] && t[m].type === 'p' && /^([-+*/%|&^]|\?\?|\|\||&&|\*\*|<<|>>)$/.test(t[m].value) && isP(t[m + 1], '='))) { ok = false; break; }
+        // given to a call: only Object.entries / keys / values / freeze read it
+        if (m === k + 1 && (isP(pv, '(') || isP(pv, ',') || isP(pv, '...'))) {
+          const o = parentOf(k);
+          if (o >= 0 && isP(t[o], '(') && !(t[o - 1] && t[o - 1].type === 'id' && READ_CALLS.test(t[o - 1].value) && isP(t[o - 2], '.') && t[o - 3] && t[o - 3].value === 'Object')) {
+            if (!(isP(t[o], '(') && (isP(t[o - 1], '=>') || (t[o - 1] && t[o - 1].type === 'id' && /^(if|while|switch|return)$/.test(t[o - 1].value))))) { ok = false; break; }
+          }
+        }
+      }
+      const r = ok && decls === 1; frozenMemo.set(name, r); return r;
+    };
     // Registrations inside a loop over a collection the reader knows (R-RD-15, R-RD-16):
     //   for (const x of LIST) / for (const [name, def] of Object.entries(TABLE)) / LIST.forEach((x) => …)
     // are read once per element, with the loop's variables bound to that element. LIST and TABLE are a literal or a
-    // constant read in full (no element or key left out); anything else stays an unresolved registration.
+    // constant of this file that nothing changes, read in full; anything else stays an unresolved registration.
     const MAX_UNROLL = 256;
-    const collectionAt = (a, b) => { // the collection written at tokens [a, b): an array of elements, or null
+    const collectionAt = (a, b, shadowed) => { // the collection written at tokens [a, b): an array of elements, or null
       let kind = 'array'; let k = a; let e = b;
       if (t[k] && t[k].type === 'id' && t[k].value === 'Object' && isP(t[k + 1], '.') && t[k + 2] && /^(entries|keys|values)$/.test(t[k + 2].value) && isP(t[k + 3], '(') && matchClose(t, k + 3) === e - 1) { kind = t[k + 2].value; k += 4; e -= 1; }
       let v; let holes = 0;
@@ -906,9 +952,10 @@
         if (matchClose(t, k) !== e - 1) return null;
         const r = isP(t[k], '[') ? parseArray(t, k, ctx) : parseObject(t, k, ctx); if (r.value === SKIP) return null;
         v = r.value; holes = (r.holes || 0) + (r.unknownKeys ? r.unknownKeys.size : 0) + (r.spreadUnknown ? 1 : 0);
-      } else if (t[k] && t[k].type === 'id' && !isP(t[k + 1], '.') && k + 1 === e) {
-        if (!ctx.consts || !hasOwn(ctx.consts, t[k].value)) return null;
-        const c = ctx.consts[t[k].value]; v = c.value; holes = c.holes === undefined ? 1 : c.holes;
+      } else if (t[k] && t[k].type === 'id' && k + 1 === e) {
+        const n = t[k].value;
+        if (shadowed.has(n) || !ctx.consts || !hasOwn(ctx.consts, n) || !frozenConst(n)) return null;
+        const c = ctx.consts[n]; v = c.value; holes = c.holes === undefined ? 1 : c.holes;
       } else return null;
       if (holes || !v || typeof v !== 'object') return null;
       if (kind === 'array') return Array.isArray(v) ? v : null;
@@ -929,55 +976,75 @@
       }
       return null;
     };
-    // The loop around token i: { vars: Set, envs: [{ var: value }] }; null when there is none or its collection is not
-    // known in full. The walk goes up the brackets around i (at most 64 levels).
-    const loopAt = (open) => { // undefined: the bracket at `open` does not start a loop
+    const bindVars = (a, b) => { const out = []; for (let m = a; m < b; m++) if (t[m].type === 'id' && !isP(t[m + 1], ':')) out.push(t[m].value); return out; };
+    // The loop a bracket starts: { vars, envs (null when its collection is not known in full), body: [open, close] | null };
+    // undefined when the bracket at `open` does not start a loop. Memoized per bracket.
+    const loopMemo = new Map();
+    const loopAt = (open) => {
+      if (loopMemo.has(open)) return loopMemo.get(open);
+      const r = loopAtOnce(open); loopMemo.set(open, r); return r;
+    };
+    const loopAtOnce = (open) => {
       if (open < 1 || !isP(t[open], '(') || !t[open - 1] || t[open - 1].type !== 'id') return undefined;
+      const shadowed = paramsAround(t, blocks, open);
       if (t[open - 1].value === 'for') {
         const close = matchClose(t, open); let q = open + 1; if (t[q] && /^(const|let|var)$/.test(t[q].value)) q++;
         let of = -1; for (let m = q; m < close; m++) { if (CLOSERS[t[m].type === 'p' && t[m].value]) { m = matchClose(t, m); continue; } if (t[m].type === 'id' && t[m].value === 'of') { of = m; break; } }
         if (of < 0) return undefined; // for (;;) or for … in: not read
-        const bind = bindingAt(q, of); const items = bind && collectionAt(of + 1, close);
-        return items && items.length <= MAX_UNROLL ? { vars: new Set(bindVars(q, of)), envs: items.map(bind) } : null;
+        const bind = bindingAt(q, of); const items = bind && collectionAt(of + 1, close, shadowed);
+        const body = isP(t[close + 1], '{') ? [close + 1, matchClose(t, close + 1)] : null;
+        return { vars: new Set(bindVars(q, of)), envs: items && items.length <= MAX_UNROLL ? items.map(bind) : null, body };
       }
       if (/^(forEach|map|flatMap)$/.test(t[open - 1].value) && isP(t[open - 2], '.')) {
         // LIST.forEach((x) => …), LIST.forEach(async x => …): the callback is the call's first argument
         let ps = open + 1; if (t[ps] && t[ps].type === 'id' && t[ps].value === 'async') ps++;
-        let pe;
-        if (isP(t[ps], '(')) { pe = matchClose(t, ps); if (!isP(t[pe + 1], '=>')) return undefined; ps++; } else if (t[ps] && t[ps].type === 'id' && isP(t[ps + 1], '=>')) pe = ps + 1; else return undefined;
+        let pe; let arrowAt;
+        if (isP(t[ps], '(')) { pe = matchClose(t, ps); if (!isP(t[pe + 1], '=>')) return undefined; arrowAt = pe + 1; ps++; } else if (t[ps] && t[ps].type === 'id' && isP(t[ps + 1], '=>')) { pe = ps + 1; arrowAt = ps + 1; } else return undefined;
         let firstEnd = ps; for (; firstEnd < pe; firstEnd++) { if (CLOSERS[t[firstEnd].type === 'p' && t[firstEnd].value]) { firstEnd = matchClose(t, firstEnd); continue; } if (isP(t[firstEnd], ',')) break; }
         firstEnd = Math.min(firstEnd, pe);
         const cend = open - 2; let cstart = cend - 1;
         if (isP(t[cend - 1], ')')) { const o = parentOf(cend - 1); cstart = o >= 3 && t[o - 1].type === 'id' && /^(entries|keys|values)$/.test(t[o - 1].value) && isP(t[o - 2], '.') ? o - 3 : -1; }
-        else if (isP(t[cend - 1], ']')) cstart = parentOf(cend - 1);
-        else if (!(t[cstart] && t[cstart].type === 'id')) cstart = -1;
-        const bind = bindingAt(ps, firstEnd); const items = bind && cstart >= 0 && collectionAt(cstart, cend);
-        return items && items.length <= MAX_UNROLL ? { vars: new Set(bindVars(ps, firstEnd)), envs: items.map(bind) } : null;
+        else if (isP(t[cend - 1], ']')) { cstart = parentOf(cend - 1); const pv = t[cstart - 1]; if (pv && (isP(pv, ')') || isP(pv, ']') || (pv.type === 'id' && !/^(return|of|in|case|typeof|void|await|yield)$/.test(pv.value)))) cstart = -1; } // groups['a'].forEach: an index, not a literal
+        else if (!(t[cstart] && t[cstart].type === 'id') || isP(t[cstart - 1], '.') || isP(t[cstart - 1], '?.')) cstart = -1;
+        const bind = bindingAt(ps, firstEnd); const items = bind && cstart >= 0 && collectionAt(cstart, cend, shadowed);
+        const body = isP(t[arrowAt + 1], '{') ? [arrowAt + 1, matchClose(t, arrowAt + 1)] : null;
+        return { vars: new Set(bindVars(ps, firstEnd)), envs: items && items.length <= MAX_UNROLL ? items.map(bind) : null, body };
       }
       return undefined;
     };
-    const loopAround = (i) => {
+    // The loops around token i, innermost first (the walk goes up the brackets around i, at most 64 levels).
+    const loopsAround = (i) => {
+      const out = [];
       // a brace-less body: for (const x of LIST) server.registerTool(…)
       let k = i; while (k > 0 && (t[k - 1].type === 'id' || isP(t[k - 1], '.') || isP(t[k - 1], '?.')) && !/^(return|await|void|yield)$/.test(t[k - 1].value)) k--;
       if (t[k - 1] && /^(await|void)$/.test(t[k - 1].value)) k--;
-      if (isP(t[k - 1], ')')) { const r = loopAt(parentOf(k - 1)); if (r !== undefined) return r; }
+      if (isP(t[k - 1], ')')) { const r = loopAt(parentOf(k - 1)); if (r !== undefined) out.push(r); }
       let p = parentOf(i); let n = 0;
       while (p >= 0 && n++ < 64) {
-        let r = loopAt(p); if (r !== undefined) return r;
-        if (isP(t[p], '{') && isP(t[p - 1], ')')) { r = loopAt(parentOf(p - 1)); if (r !== undefined) return r; } // for (…) { … }
+        let r = loopAt(p); if (r !== undefined) out.push(r);
+        if (isP(t[p], '{') && isP(t[p - 1], ')')) { r = loopAt(parentOf(p - 1)); if (r !== undefined) out.push(r); } // for (…) { … }
         p = parentOf(p);
       }
-      return null;
+      return out;
     };
-    const bindVars = (a, b) => { const out = []; for (let m = a; m < b; m++) if (t[m].type === 'id' && !isP(t[m + 1], ':')) out.push(t[m].value); return out; };
-    // A registration in a loop, read once per element: true when every element gave a named tool.
+    const EXITS = /^(continue|break|return|throw)$/;
+    // A registration in a loop, read once per element: true when it was read (or the work limit ran out and the list
+    // is refused). Not read, so counted as unresolved by the caller: an unknown collection, a name or config that does
+    // not resolve for some element, a loop body that may skip the registration (continue, break, return, throw
+    // before it), or a name that depends on an outer loop's variable or a parameter.
     const unrollAt = (i, at, fn, args, params) => {
-      const loop = loopAround(i); if (!loop) return false;
-      const ps = new Set(Array.from(params).filter((x) => !loop.vars.has(x)));
+      const loops = loopsAround(i); if (!loops.length || !loops[0].envs) return false;
+      const loop = loops[0];
+      if (loop.body) for (let m = loop.body[0] + 1; m < i; m++) if (t[m].type === 'id' && EXITS.test(t[m].value)) return false;
+      const hide = new Set(params); loops.slice(1).forEach((l) => l.vars.forEach((x) => hide.add(x)));
+      loop.vars.forEach((x) => hide.delete(x));
+      const ps = new Set(Array.from(hide));
+      const span = args[1] !== undefined ? Math.max(1, skipExpr(t, args[1]) - args[1]) : 1;
       const made = [];
       for (const env of loop.envs) {
-        const consts = Object.assign({}, ctx.consts); Object.keys(env).forEach((k) => { consts[k] = { value: env[k], exact: true, holes: 0 }; });
-        const lctx = Object.assign({}, ctx, { consts });
+        budget -= span; if (budget < 0) { overBudget.push({ line: lineOf(at) }); return true; }
+        const set = {}; Object.keys(env).forEach((k) => { set[k] = { value: env[k], exact: true, holes: 0 }; });
+        const lctx = Object.assign({}, ctx, { consts: overlay(set, hide) });
         const nm = resolveName(t, args[0], lctx, ps); if (!nm || !nm.name) return false;
         const a1 = args[1]; let tool;
         if (a1 === undefined) tool = { name: nm.name, inputSchema: { type: 'object', properties: {} } };
@@ -1109,6 +1176,7 @@
     //   const keyTool = (name: string, description: string) => ({ name, description, inputSchema: {…} });
     const factories = new Map(); // name -> { params: [[start, end)], obj: the returned "{" }
     {
+      const keyAtTopAny = (open) => { const c = matchClose(t, open); for (let m = open + 1; m < c; m++) { if (t[m].type === 'p' && CLOSERS[t[m].value]) { m = matchClose(t, m); continue; } if ((t[m].type === 'id' || t[m].type === 'str') && SCHEMA_KEYS.includes(String(t[m].value)) && (isP(t[m + 1], ':') || isP(t[m + 1], ',') || isP(t[m + 1], '}')) && (isP(t[m - 1], '{') || isP(t[m - 1], ','))) return m; } return -1; };
       const returned = (open) => { const close = matchClose(t, open); for (let m = open + 1; m < close; m++) { if (t[m].type === 'id' && t[m].value === 'return') { let q = m + 1; while (isP(t[q], '(')) q++; return isP(t[q], '{') ? q : -1; } if (t[m].type === 'p' && CLOSERS[t[m].value]) m = matchClose(t, m); } return -1; };
       for (let k = 0; k + 3 < t.length; k++) {
         if (t[k].type !== 'id') continue;
@@ -1121,34 +1189,35 @@
         let obj = -1;
         if (arrow) { if (!isP(t[b], '=>')) continue; b++; let q = b; while (isP(t[q], '(')) q++; obj = isP(t[q], '{') && q > b ? q : isP(t[b], '{') ? returned(b) : -1; }
         else if (isP(t[b], '{')) obj = returned(b);
-        if (obj < 0) continue;
+        if (obj < 0 || keyAtTopAny(obj) < 0) continue; // a tool object has a schema key of its own (not { name, found })
         const params = []; let a = po + 1;
         while (a < pc) { let e = a; for (; e < pc; e++) { if (t[e].type === 'p' && CLOSERS[t[e].value]) { e = matchClose(t, e); continue; } if (isP(t[e], ',')) break; } params.push([a, Math.min(e, pc)]); a = e + 1; }
         if (!factories.has(name)) factories.set(name, { params, obj });
       }
     }
     // A call of one of those functions: the tool it returns, read with its parameters bound, or null.
+    const OVER = { over: true };
     const fromFactory = (f, args, at) => {
-      const consts = Object.assign({}, ctx.consts);
+      const set = {}; const hide = new Set(); // the parameters: bound to the arguments, or hidden (unknown)
       f.params.forEach(([a, b], idx) => {
         const arg = args[idx];
-        if (isP(t[a], '...')) { bindVars(a + 1, b).forEach((x) => { delete consts[x]; }); return; }
+        if (isP(t[a], '...')) { bindVars(a + 1, b).forEach((x) => { hide.add(x); }); return; }
         if (t[a].type === 'id') {
           const n = t[a].value; let v = null;
           if (arg !== undefined) v = parseValue(t, arg, ctx);
           else { let eq = a + 1; while (eq < b && !isP(t[eq], '=')) eq++; if (eq < b) v = parseValue(t, eq + 1, ctx); }
-          if (v && v.value !== SKIP) consts[n] = { value: v.value, exact: v.exact !== false, partial: !!v.partial, holes: 0 }; else delete consts[n];
+          if (v && v.value !== SKIP) set[n] = { value: v.value, exact: v.exact !== false, partial: !!v.partial, holes: 0 }; else hide.add(n);
           return;
         }
         if (isP(t[a], '{') || isP(t[a], '[')) {
           const end = matchClose(t, a) + 1; const bind = bindingAt(a, end); const vars = bindVars(a + 1, end - 1);
           const v = arg !== undefined ? parseValue(t, arg, ctx) : null;
           const env = bind && v && v.value !== SKIP ? bind(v.value) : {};
-          vars.forEach((x) => { if (hasOwn(env, x)) consts[x] = { value: env[x], exact: true, holes: 0 }; else delete consts[x]; });
+          vars.forEach((x) => { if (hasOwn(env, x)) set[x] = { value: env[x], exact: true, holes: 0 }; else hide.add(x); });
         }
       });
-      budget -= Math.max(1, matchClose(t, f.obj) - f.obj); if (budget < 0) { overBudget.push({ line: lineOf(at) }); return null; }
-      const lctx = Object.assign({}, ctx, { consts });
+      budget -= Math.max(1, matchClose(t, f.obj) - f.obj); if (budget < 0) { overBudget.push({ line: lineOf(at) }); return OVER; }
+      const lctx = Object.assign({}, ctx, { consts: overlay(set, hide) });
       const o = parseObjectWithZod(t, f.obj, lctx); o.start = f.obj;
       return toolFromObject(o, null, at);
     };
@@ -1184,7 +1253,7 @@
         if (a0 === undefined) continue;
         // FastMCP (TypeScript, punkpeye) addTool({ name, description, parameters: z.object(...), annotations, execute }) and
         // factories that take or return a tool object: defineTool({ name, … }), defineTool((args) => ({ name, … })).
-        if (!sdk && bare && factories.has(fn)) { const tool = fromFactory(factories.get(fn), args, at); if (tool) { add(tool, 'derived', at); continue; } }
+        if (!sdk && bare && factories.has(fn)) { const tool = fromFactory(factories.get(fn), args, at); if (tool === OVER) continue; if (tool) { add(tool, 'derived', at); continue; } }
         const objAt = isP(t[a0], '{') ? a0 : args.length === 1 ? factoryObject(a0) : -1;
         if (objAt >= 0) {
           const fast = fn === 'addTool';
@@ -1404,9 +1473,10 @@
   // Where zod is used in a file (a zod binding followed by ".", or .shape of a zod constant), as running counts, so
   // "is there zod between a and b" is answered without rescanning (cached per token array and constant table).
   const ZOD_PREFIX = new WeakMap();
+  const OVERLAY_BASE = Symbol('overlay base'); // an overlay of constants shares the zod index of the constants under it
   function zodBetween(t, ctx, a, b) {
     let byConsts = ZOD_PREFIX.get(t); if (!byConsts) { byConsts = new WeakMap(); ZOD_PREFIX.set(t, byConsts); }
-    const key = ctx.consts || ZOD_PREFIX; let pre = byConsts.get(key);
+    const key = (ctx.consts && ctx.consts[OVERLAY_BASE]) || ctx.consts || ZOD_PREFIX; let pre = byConsts.get(key);
     if (!pre) {
       pre = new Int32Array(t.length + 1);
       for (let k = 0; k < t.length; k++) {
@@ -1526,7 +1596,8 @@
         const parts = ['']; const exprs = [];
         while (j < n) {
           if (s[j] === '\\' && !raw) { const u = pyEscape(s, j, bytes); parts[parts.length - 1] += u[0]; j += u[1]; continue; }
-          if (s[j] === '\\' && raw) { parts[parts.length - 1] += s.substr(j, 2); j += 2; continue; }
+          // raw: the backslash is kept, and only shields a quote or another backslash (in rf"…", "\{" still opens an expression)
+          if (s[j] === '\\' && raw) { const two = s[j + 1] === q0 || s[j + 1] === '\\'; parts[parts.length - 1] += s.substr(j, two ? 2 : 1); j += two ? 2 : 1; continue; }
           if (s.substr(j, q.length) === q) { j += q.length; break; }
           if (!triple && s[j] === '\n') break;
           if (f && s[j] === '{') { if (s[j + 1] === '{') { parts[parts.length - 1] += '{'; j += 2; continue; } let d = 1; const es = j + 1; j++; while (j < n && d) { if (s[j] === '{') d++; else if (s[j] === '}') d--; j++; } exprs.push(s.slice(es, j - 1).replace(/[!:][^}]*$/, '').trim()); parts.push(''); continue; }
@@ -1640,7 +1711,7 @@
   function pyFileConsts(lines, globals) {
     const consts = {}; const partialNames = new Set(); const imported = new Set(); const lostOf = {};
     const ctx = { consts, partialNames, lostOf };
-    lines.forEach((l) => { if (l.indent !== 0) return; const m = /^from\s+[\w.]+\s+import\s+\(?([\s\S]+?)\)?\s*$/.exec(l.text); if (m) m[1].split(',').forEach((x) => { const q = x.trim().split(/\s+as\s+/); if (q[0]) imported.add((q[1] || q[0]).trim()); }); });
+    lines.forEach((l) => { if (l.indent !== 0) return; const m = /^from\s+[\w.]+\s+import\b([\s\S]*)$/.exec(l.text); if (m) importNames(m[1]).split(',').forEach((x) => { const q = asParts(x); if (q[0]) imported.add((q[1] || q[0]).trim()); }); });
     if (globals) imported.forEach((n) => { if (hasOwn(globals, n)) consts[n] = globals[n]; });
     let cls = null;
     lines.forEach((l) => {
@@ -1780,7 +1851,7 @@
     let templates = opts.pyTemplates || new Map();
     // a name this file imports from mcp or fastmcp (from fastmcp.tools import tool) is the SDK's, not a factory of the repository
     // read from logical lines, so a parenthesized import over several lines counts too (R-RD-21)
-    const sdkNames = new Set(); L.forEach((l) => { if (l.indent !== 0) return; const im = /^from\s+(?:mcp|fastmcp)(?:\.[\w.]+)?\s+import\s+\(?([^()]+?)\)?\s*$/.exec(l.text); if (im) im[1].split(',').forEach((x) => { const q = x.trim().split(/\s+as\s+/); if (q[0] && /^\w+$/.test(q[0])) sdkNames.add((q[1] || q[0]).trim()); }); });
+    const sdkNames = new Set(); L.forEach((l) => { if (l.indent !== 0) return; const im = /^from\s+(?:mcp|fastmcp)(?:\.[\w.]+)?\s+import\b([\s\S]*)$/.exec(l.text); if (im) importNames(im[1]).split(',').forEach((x) => { const q = asParts(x); if (q[0] && /^\w+$/.test(q[0])) sdkNames.add((q[1] || q[0]).trim()); }); });
     sdkNames.forEach((n) => { if (templates.has(n)) { templates = new Map(templates); templates.delete(n); } });
     const tplCall = templates.size ? new RegExp('(?:^|[^\\w.])(?:' + Array.from(templates.keys()).join('|') + ')\\s*\\(') : null;
     const tools = []; const seen = new Set(); const unresolved = []; const overBudget = [];
@@ -2122,7 +2193,7 @@
           if (!topDef) { topDef = new Int32Array(L.length).fill(-1); let cur = -1; L.forEach((x, q) => { if (x.indent === 0) cur = /^(?:async\s+)?def\s+\w+/.test(x.text) ? q : -1; topDef[q] = cur; }); }
           const dq = topDef[k]; const dn = dq >= 0 ? /^(?:async\s+)?def\s+(\w+)/.exec(L[dq].text)[1] : null; const br = dn ? registrars.bare.get(dn) : null;
           const nameKw = a.kw.name !== undefined && t[a.kw.name] && t[a.kw.name].type === 'id' && (isP(t[a.kw.name + 1], ',') || isP(t[a.kw.name + 1], ')')) ? t[a.kw.name].value : null;
-          if (br && nameKw && br.nameParam === nameKw) continue;
+          if (br && br.decoratorOnly && nameKw && br.nameParam === nameKw) continue;
         }
         if (given.nameUnknown) { unresolved.push(unresolvedText(l.line, given)); continue; }
         const dk = defs.get(fnRef);
@@ -2159,6 +2230,11 @@
   function tokText(text, t, a, b) { return a < b && t[a] && t[b - 1] ? text.slice(t[a].s, t[b - 1].e) : ''; }
   // Methods and functions of the repository that register a tool (their body calls .tool(, add_tool(, Tool.from_function(
   // or another of them): used as decorators, @registry.reader("…") makes the function under it a tool.
+  // The names part of `from X import …` (one logical line): brackets and spaces stripped in code, not by a regex that
+  // backtracks over a long run of spaces (R-RD-21).
+  // `a as b` -> ['a', 'b'], `a` -> ['a']: split on whitespace in code (a regex /\s+as\s+/ is quadratic on long space runs)
+  function asParts(x) { const w = String(x).trim().split(/\s+/); return w[1] === 'as' && w.length >= 3 ? [w[0], w[2]] : [w[0]]; }
+  function importNames(rest) { let r = rest.trim(); if (r[0] === '(') { r = r.slice(1); const c = r.lastIndexOf(')'); if (c >= 0) r = r.slice(0, c); } return r; }
   function pyRegistrars(files) {
     const bodies = new Map(); const top = new Map(); const dupTop = new Set();
     const serversOf = new Map(); const importsOf = []; // path -> its server objects; [path, servers, [{ mod, names }]]
@@ -2171,7 +2247,7 @@
       while ((sm = sre.exec(clean))) if (sm[2] !== 'Server' || sdkFile) servers.add(sm[1]);
       serversOf.set(p, new Set(servers));
       // from app.server import mcp / from .server import mcp as srv: an MCP server object of another module (R-RD-20)
-      const imps = []; L.forEach((l) => { if (l.indent !== 0) return; const im = /^from\s+(\.*[\w.]*)\s+import\s+\(?([^()]+?)\)?\s*$/.exec(l.text); if (im && !/^(?:mcp|fastmcp)(?:\.|$)/.test(im[1])) imps.push({ mod: im[1], names: im[2].split(',').map((x) => x.trim().split(/\s+as\s+/)).filter((q) => /^\w+$/.test(q[0])).map((q) => [q[0], (q[1] || q[0]).trim()]) }); });
+      const imps = []; L.forEach((l) => { if (l.indent !== 0) return; const im = /^from\s+(\.*[\w.]*)\s+import\b([\s\S]*)$/.exec(l.text); if (im && !/^(?:mcp|fastmcp)(?:\.|$)/.test(im[1])) imps.push({ mod: im[1], names: importNames(im[2]).split(',').map((x) => asParts(x)).filter((q) => /^\w+$/.test(q[0])).map((q) => [q[0], (q[1] || q[0]).trim()]) }); });
       if (imps.length) importsOf.push([p, servers, imps]);
       L.forEach((l, k) => {
         const m = /^(?:async\s+)?def\s+(\w+)\s*\(/.exec(l.text); if (!m || /^(__\w+__|main|run|register|setup|create_app|create_server|serve)$/.test(m[1])) return;
@@ -2216,9 +2292,19 @@
       // annotations are known to be none only when the registration is a statement of its own (its tool object is not
       // kept, so nothing can set them later) and passes neither annotations nor **kwargs (R-RD-20)
       const stmt = !!call && /(?:^|\n)[ \t]*[A-Za-z_][\w.]*\.(?:tool|add_tool)[ \t]*\(/.test(info.body);
-      const noAnnotations = !!stmt && !/\bannotations\s*=|\*\*|_hint\s*=/.test(call[1]) && !/=[ \t]*[A-Za-z_][\w.]*\.(?:tool|add_tool)\s*\(|return[ \t]+[A-Za-z_][\w.]*\.(?:tool|add_tool)\s*\(/.test(info.body);
-      bare.set(n, { params: info.params, nameParam: kwOf('name'), descriptionParam: kwOf('description'), noAnnotations });
+      const noAnnotations = !!stmt && !/\*\*|_hint\s*=/.test(call[1]) && !/\bannotations\b/.test(info.body) && !/=[ \t]*[A-Za-z_][\w.]*\.(?:tool|add_tool)\s*\(|return[ \t]+[A-Za-z_][\w.]*\.(?:tool|add_tool)\s*\(/.test(info.body);
+      bare.set(n, { params: info.params, nameParam: kwOf('name'), descriptionParam: kwOf('description'), noAnnotations, decoratorOnly: true });
     });
+    // a registrar used anywhere other than as a decorator (create_tool(n, "D.")(f) in a loop) is not read there: its own
+    // registration then still counts as unresolved (R-RD-20). One pass over each file for all registrar names.
+    if (bare.size) {
+      const re = /(@?)\b([A-Za-z_]\w*)[ \t]*\(/g;
+      files.forEach(([p, text]) => {
+        if (!/\.py$/.test(p) || typeof text !== 'string') return;
+        re.lastIndex = 0; let m;
+        while ((m = re.exec(text))) { const b0 = bare.get(m[2]); if (!b0 || m[1]) continue; const before = text.slice(Math.max(0, m.index - 8), m.index); if (/def[ \t]+$/.test(before) || /\.$/.test(before)) continue; b0.decoratorOnly = false; }
+      });
+    }
     Object.defineProperty(out, 'bare', { value: bare, enumerable: false });
     return out;
   }
@@ -2712,7 +2798,7 @@
     const mods = moduleConsts(readable, consts, sdkFor);
     const pyConsts = pyGlobalConsts(readable); const pyRegs = pyRegistrars(readable); const mounts = pyMounts(readable); const pyTpl = pyToolTemplates(readable);
     const bases = toolBases(readable);
-    const found = []; const byName = new Set();
+    const found = []; const byName = new Set(); const firstPath = new Map();
     const dupes = []; const unresolved = []; const overBudget = [];
     const hostPlugins = [];
     srcList.forEach(([p, t]) => {
@@ -2738,7 +2824,8 @@
         if (x.server && mounts.has(x.server)) { x.tool = Object.assign({}, x.tool, { name: mounts.get(x.server) + '_' + x.tool.name }); x.prefix = mounts.get(x.server); }
         // a class tool belongs with the code that registers it, unless it sits in test, mock or example code
         if (x.groupPath && notServerFolder(p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : '', true)) delete x.groupPath;
-        if (!byName.has(x.tool.name) || x.listDup) { byName.add(x.tool.name); found.push(Object.assign({ path: p }, x)); } else dupes.push({ path: p, name: x.tool.name });
+        // a duplicate of one literal list is kept only when the name's first tool came from that same file's list (R-RD-08)
+        if (!byName.has(x.tool.name) || (x.listDup && firstPath.get(x.tool.name) === p)) { if (!byName.has(x.tool.name)) firstPath.set(x.tool.name, p); byName.add(x.tool.name); found.push(Object.assign({ path: p }, x)); } else dupes.push({ path: p, name: x.tool.name });
       });
     });
     const marks = markConditionals(found, srcList, dupes, readable);
@@ -3044,7 +3131,7 @@
       candidates.push({ kind: 'source', fidelity: allLiteral && !Object.keys(out.unreadable).length && !language ? 'literal' : 'derived', language, path: null, built, files: Array.from(new Set(found.map((x) => x.path))), tools: out.tools, unreadable: out.unreadable, unresolved: unres, unresolvedNames: unres.length, where: found.map((x) => ({ name: x.tool.name, path: x.path, line: x.line, fidelity: x.fidelity })), excluded: an.excluded.filter((x) => found.some((f) => servers.rootOf(f.groupPath || f.path) === servers.rootOf(x.groupPath || x.path))).map((x) => ({ name: x.tool.name, path: x.path, line: x.line, reasons: x.marks.filter((m) => m.exclude).map((m) => m.reason + (m.detail ? ' (' + m.detail + ')' : '')) })).concat(setAside), marked, sdk: an.sdk });
       // several Go main packages (or Rust modules) construct a server and none of them holds tools: they share the
       // tools read, and each may register only part of them; the list is their union, and the report says so
-      const ctorOnly = Array.from(serverDirs).filter((d) => d && !found.some((x) => x.path.startsWith(d + '/')));
+      const ctorOnly = Array.from(serverDirs).filter((d) => d && !found.some((x) => x.path === d || x.path.startsWith(d + '/')));
       if (language && ctorOnly.length >= 2) candidates[candidates.length - 1].notes = [ctorOnly.length + ' ' + language + ' servers are started from ' + ctorOnly.slice(0, 4).map((d) => d || '.').join(', ') + (ctorOnly.length > 4 ? ' and more' : '') + ' and share these tools; each may register only part of them (this list is their union)'];
     }
     // A snapshot counts as this repository's exact list only when it names this repository's server. A snapshot of
