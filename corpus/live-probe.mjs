@@ -68,6 +68,8 @@ export const ORACLE_BASELINE_FILE = join(FIXTURES, 'oracle-baseline.json');
 export const ORACLE_ALLOWANCE_S = 150;
 /** The fuzz stage's allowance per stdio target, only while the stage is on (corpus/FUZZ.md). */
 export const FUZZ_ALLOWANCE_S = 60;
+/** The self test's ceiling for one target's fuzz stage: the stage's own budget (corpus/fuzz/run.mjs FUZZ_BUDGET_MS). */
+export const FUZZ_STAGE_MAX_MS = 60_000;
 
 /**
  * The known-answer control: our own published server, @isokron/mcp-check 1.3.1, installed from npm and started in the
@@ -1323,8 +1325,11 @@ export function safeEvidence(ev) {
 
 /** One result as it goes into results/ and the fields. */
 export function fuzzRow(r) {
-  return { id: safeText(r.id, /^(FZ-[A-Z]+-[0-9]|\*)$/), primitive: safeText(r.primitive, /^(tools|prompts|resources|templates|\*)$/), verdict: safeText(r.verdict, /^(pass|fail|warn|na|inconclusive)$/), kind: safeText(r.kind, FUZZ_WORD), fault: r.fault === 'subject' || r.fault === 'tool' ? r.fault : null, reproduced: r.reproduced === true ? true : r.reproduced === false ? false : null, evidence: safeEvidence(r.evidence) };
+  return { id: safeText(r.id, /^(FZ-[A-Z]+-[0-9]|\*)$/), primitive: safeText(r.primitive, /^(tools|prompts|resources|templates|\*)$/), verdict: safeText(r.verdict, /^(pass|fail|warn|observation|na|inconclusive)$/), kind: safeText(r.kind, FUZZ_WORD), fault: r.fault === 'subject' || r.fault === 'tool' ? r.fault : null, reproduced: r.reproduced === true ? true : r.reproduced === false ? false : null, evidence: safeEvidence(r.evidence) };
 }
+
+/** probe_ms without the stages that run inside the driver's probe call (the oracle stage, R-ORC-02, and the fuzz stage). */
+export const withoutStages = (probeMs, ...stageMs) => (probeMs === null || probeMs === undefined ? null : Math.max(0, probeMs - stageMs.reduce((a, x) => a + (Number.isSafeInteger(x) ? x : 0), 0)));
 
 export function fuzzRecord(dir) {
   const rec = dir ? readJson(join(dir, 'fuzz.json')) : null;
@@ -1460,10 +1465,11 @@ export function buildItem(item, ctx) {
     // The driver times its probe around the probe option, so its probe_ms holds the oracle stage too (R-ORC-02):
     // step_telemetry keeps the two apart.
     const oms = oracle.summary ? int(oracle.summary.ms) : null;
-    if (oms !== null) {
-      result.timing.oracle_ms = oms;
-      if (result.timing.probe_ms !== null) result.timing.probe_ms = Math.max(0, result.timing.probe_ms - oms);
-    }
+    // The fuzz stage runs inside the same probe call: its time comes out of probe_ms too.
+    const fms = fuzz && fuzz.summary ? int(fuzz.summary.ms) : null;
+    if (oms !== null) result.timing.oracle_ms = oms;
+    if (fms !== null) result.timing.fuzz_ms = fms;
+    if ('probe_ms' in result.timing) result.timing.probe_ms = withoutStages(result.timing.probe_ms, oms, fms);
     // The captured bytes: the tools/list answers, each probe whole, the static read, the registry entry, the logs.
     const raw = [];
     if (primary) raw.push(['raw/tools-list.json', Buffer.from(json(primary.lists['tools/list'].raw_pages))]);
@@ -1713,7 +1719,10 @@ export function fuzzExpectProblems(res) {
   const f = res.fuzz;
   if (!f || f.status !== 'ran') return [{ reason: 'fuzz_not_run', got: f ? f.status + (f.why ? ' (' + f.why + ')' : '') : null }];
   const bad = f.results.filter((r) => r.verdict === 'fail' || r.verdict === 'warn' || r.fault === 'subject').map((r) => r.id + ' ' + r.primitive + ' ' + r.verdict + ' ' + r.kind);
-  return bad.length ? [{ reason: 'fuzz_finding_on_our_own_server', results: bad }] : [];
+  const p = bad.length ? [{ reason: 'fuzz_finding_on_our_own_server', results: bad }] : [];
+  // The time guard: the stage must stay inside its own budget, or the lease and the shard time are wrong (corpus/FUZZ.md, "Time").
+  if (!Number.isSafeInteger(f.ms) || f.ms > FUZZ_STAGE_MAX_MS) p.push({ reason: 'fuzz_over_budget', ms: f.ms, max: FUZZ_STAGE_MAX_MS });
+  return p;
 }
 
 /** What ingest would check a self test bundle's identity against: the worker kit records GITHUB_WORKFLOW_SHA. */

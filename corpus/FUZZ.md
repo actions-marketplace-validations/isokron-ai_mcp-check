@@ -44,59 +44,91 @@ limits; one alive at a time, removed after use, trace summarised):
   non-BMP character).
 - **B**: initialize; every list once; then A's first cursor (issued in another session).
 
-A fail or warn from FZ-CAT-* and FZ-PAG-* is repeated by round 2 (a fresh A and B) before the server is blamed.
+Round 2 runs only when round 1 has a finding that could be the server's fault (FZ-CAT-1 `content_unstable`, FZ-PAG-1
+`duplicate_item`); observations need no second round.
 
 ## Invariants
 
-Per list ("primitive"): `tools`, `prompts`, `resources`, `templates`. Verdicts: `pass`, `fail`, `warn`, `na`,
-`inconclusive`. Item identity: `name` (resources: `uri` when there is no name). Item equality: SHA-256 of the item's
-canonical JSON (sorted keys), so key order never counts.
+Per list ("primitive"): `tools`, `prompts`, `resources`, `templates`. Verdicts: `pass`, `fail`, `warn`, `observation`,
+`na`, `inconclusive`. Item identity: tools and prompts by `name`; resources and templates by `uri` (a resource's `name`
+is display text and repeats). Item equality: SHA-256 of the item's canonical JSON (sorted keys). "Attribution" is the
+most a finding can be: **subject** (the server is blamed), **observation** (recorded, never blamed), **tool** (our
+side or unconfirmed).
 
-| ID | Rule | Pass | Warn | Fail | Not applicable / inconclusive |
-|---|---|---|---|---|---|
-| FZ-CAT-1 | Listing twice in one session gives the same catalog | ordered item hashes equal | same items, other order (`order_unstable`) | other items or definitions (`content_unstable`; counts of added, removed, changed) | `na`: method not found; the server sent `notifications/<x>/list_changed` during either listing (`list_changed_announced`). `inconclusive`: a listing did not reach its end (`incomplete_traversal`) |
-| FZ-CAT-2 | Listing in two sessions gives the same catalog | as CAT-1, A's first listing against B's | `session_order_unstable` | `session_content_unstable` | as CAT-1 |
-| FZ-PAG-1 | Following `nextCursor` to the end yields each item once | every `name` once over all pages | | a name on two pages or twice (`duplicate_item`) | `na`: one page only. `inconclusive`: no end reached (page cap 50, item cap 5000, repeated cursor, timeout, error) |
-| FZ-PAG-2 | A cursor used a second time: error, or the page it first gave | JSON-RPC error (`rejected`), or equal item hashes (`same_page`) | | a different page (`spent_cursor_other_page`) | `na`: no cursor issued |
-| FZ-PAG-3 | A cursor the server never issued: JSON-RPC error | error (`rejected`) for both invented cursors | answered with the first page again (`cursor_ignored`; the spec asks for -32602) | answered with anything else (`invented_cursor_accepted`) | `na`: not paginated |
-| FZ-PAG-4 | A cursor issued in session A, used in B: error, or the page A got | as PAG-2 (a stateless offset cursor is allowed to work) | | a different page, for example the list restarted (`foreign_cursor_other_page`) | `na`: no cursor issued |
-| FZ-UNI-1 | No invisible, control, format, private-use, unassigned or ill-formed code point in an identifier (tools, prompts, resources, templates: `name`; resources: `uri`) | none | U+FFFD only | `invisible_or_control` (Cc, Cf, Cs, Co, Cn, Zl, Zp, Zs other than U+0020, default-ignorable, variation selectors, tag characters); `ill_formed` (a lone surrogate); `invalid_utf8` (a line of the server's output that is not UTF-8) | `na`: nothing listed |
-| FZ-UNI-2 | No two identifiers of one list are equal after removing ignorable characters, NFKC and folding Cyrillic and Greek look-alikes to Latin | all distinct | equal only after case folding (`collision_case`) | `collision` | |
-| FZ-UNI-3 | Identifiers are in NFC | all NFC | `not_nfc` | | |
-| FZ-UNI-4 | No Latin word mixes in Cyrillic, Greek, Armenian, Cherokee or Coptic letters | none | `mixed_script` | | |
+| ID | Rule | Finding | Attribution and why |
+|---|---|---|---|
+| FZ-CAT-1 | Listing twice in one session gives the same catalog | `content_unstable` (other items or definitions); `order_unstable` (same items, other order) | `content_unstable`: **subject**, only if the server declared no `listChanged` for that list, announced no change, and the second round on fresh containers shows it again; otherwise **tool** (`unconfirmed_content_unstable`). `order_unstable`: **observation** (the specification does not order a list). Declared `listChanged` or an announcement: `na` |
+| FZ-CAT-2 | Listing in two sessions gives the same catalog | `session_content_unstable`, `session_order_unstable` | **observation** always: a catalog may depend on time, configuration or state, and the specification does not require two sessions to agree. `na` when `listChanged` is declared |
+| FZ-PAG-1 | Following `nextCursor` to the end yields each item once | `duplicate_item` | **subject** when it repeats in round 2 (a client following the cursors gets one item twice; the item's identity is the tool or prompt name, the resource uri); else **tool**. `na` for one page; `inconclusive` (**tool**) with no end (page cap 50, item cap 5000, repeated cursor, timeout, error) |
+| FZ-PAG-2 | A cursor used a second time: an error, or the page it first gave | `spent_cursor_other_page` | **observation**. Reuse is not specified; "stable cursors" is a SHOULD (below) |
+| FZ-PAG-3 | A cursor the server never issued gets an error | `cursor_ignored` (the first page again), `invented_cursor_accepted` (another page) | **observation**. Invalid cursors SHOULD get -32602 and be handled gracefully (below); returning the first page is a graceful handling the text allows |
+| FZ-PAG-4 | A cursor issued in session A, used in B: an error, or the page A got | `foreign_cursor_other_page` | **observation**. The specification forbids the client to do this ("Don't persist cursors across sessions"); it says nothing of the server's answer, so a server that restarts the list is conformant. The probe is ours |
+| FZ-UNI-1 | No invisible or control code point, lone surrogate or invalid UTF-8 in an identifier | `invisible_or_control`, `ill_formed`, `invalid_utf8` (clear cases); `unusual_code_point` | **subject** only for a clear case in a **tool name** (control characters, bidi controls, zero-width U+200B and U+2060..2064, U+FEFF, U+180E, tag characters, a lone surrogate, a stdout line that is not UTF-8) and ZWJ or VS15/VS16 that is not part of an emoji sequence. Everything else, including Co (icon fonts), Cn, other format characters, soft hyphen and anything in a prompt, resource or uri: **observation** |
+| FZ-UNI-2 | No two identifiers of one list are equal after removing ignorable characters, NFKC and folding Cyrillic and Greek look-alikes | `collision`, `collision_case` | **observation**. Names (tools, prompts) and uris (resources, templates); display names are not compared |
+| FZ-UNI-3 | Tool and prompt names are in NFC | `not_nfc` | **observation** |
+| FZ-UNI-4 | No word of a tool or prompt name mixes Latin with Cyrillic, Greek, Armenian, Cherokee or Coptic letters | `mixed_script` (per word: "Report Отчёт" is two words, each in one script) | **observation** |
 
-The static engine already grades one tool list's invisible characters and look-alikes (`sec-zero-width`,
-`sec-homoglyph`, `spec-name-charset`). FZ-UNI adds what a single-list grade cannot: prompts, resources and templates,
-collisions between two identifiers (the shadowing case), NFC, lone surrogates and invalid UTF-8 read with a strict
-decoder, and the same finding recorded with the invariants.
+Emoji names are ordinary: a ZWJ between pictographs and VS16 after a pictograph or a keycap base pass. The static
+engine already grades one tool list's invisible characters and look-alikes (`sec-zero-width`, `sec-homoglyph`,
+`spec-name-charset`); FZ-UNI adds prompts, resources and templates, collisions between two identifiers, NFC, lone
+surrogates and invalid UTF-8 read with a strict decoder.
 
 ## Who is at fault
 
 Same rule as the skips (`LIVE-PROBE.md`): a server is recorded as at fault (`subject`) only with evidence our own
-environment cannot explain. `corpus/fuzz/judge.mjs` `attribute`:
+environment cannot explain **and** a specification text or a clear defect in its bytes behind it. Only FZ-CAT-1
+`content_unstable`, FZ-PAG-1 `duplicate_item` and the clear cases of FZ-UNI-1 can be `subject`
+(`SUBJECT_CAPABLE` in `corpus/fuzz/judge.mjs`); every other finding is an observation, in the record and the results,
+with `fault: null`. The first two need the second round (`attribute`):
 
-- **`subject`** for a `fail` or `warn` that (a) was computed from complete listings (no page cap, timeout, closed
-  pipe, byte or line cap of ours, no error in the middle) and (b) for CAT-* and PAG-*, **showed again in round 2** with
-  the same invariant and kind, on fresh containers. Unicode findings are deterministic bytes the server sent, read with
-  a strict decoder through no relay: one sighting is enough.
-- **`tool`** (verdict `inconclusive`, kind `unconfirmed_<kind>`, `first_seen` kept) for a failure that did not repeat
-  (a flaky server and our environment look the same), or that had no time for a second round (`confirmation:
-  not_run`).
-- **`tool`** (verdict `inconclusive`) for every limit or session problem of ours: `initialize_failed`,
-  `incomplete_traversal`, `session_limited`, `malformed_answer`.
-- A server that announces a change (`list_changed`) is `na` for the catalog invariants, never a failure.
-- Phase 2 adds a control gate: the known-answer control (s901, our own server) runs the same stage; if it does not pass
-  every invariant, the shard's fuzz results are all `tool`.
+- not reproduced in round 2, or no time for one: verdict `inconclusive`, kind `unconfirmed_<kind>`, fault `tool`;
+- every limit or session problem of ours (`initialize_failed`, `incomplete_traversal`, `session_limited`,
+  `malformed_answer`): `inconclusive`, fault `tool`;
+- a server that declared `listChanged` for the list, or announced a change, is `na` for the catalog invariants.
+
+What the 2025-11-25 specification says (pagination page, "Implementation Guidelines" and "Error Handling"), verbatim:
+
+> Servers SHOULD: Provide stable cursors; Handle invalid cursors gracefully
+>
+> Clients MUST treat cursors as opaque tokens: ... Don't persist cursors across sessions
+>
+> Invalid cursors SHOULD result in an error with code -32602 (Invalid params).
+
+and, on the page size, "clients MUST NOT assume a fixed page size". Nothing says what a server does with a cursor used
+twice, and the "MUST" about sessions binds the client, which is why FZ-PAG-4 is an observation. Whether a server
+answers an invented cursor with an error or with its first page is a choice between two SHOULDs; we record it.
+
+Phase 2 adds a control gate: the known-answer control (s901, our own server) runs the same stage; if it does not pass
+every invariant, the shard's fuzz results are all `tool`.
 
 Fuzz results never turn a graded item into a skip and never change its grade: they are findings next to it.
+
+## Time
+
+The stage's own budget is 60 s (`FUZZ_BUDGET_MS`); a typical run is 2 sessions of 100 to 500 ms of protocol time plus
+two container starts (a few seconds), and a failing run adds two sessions. `probe_ms` in the timing record no longer
+includes it (`fuzz_ms` is its own key). The self test measures it: a stage over `FUZZ_STAGE_MAX_MS` (60 s) fails the
+self test (`fuzz_over_budget`).
+
+What this does to the lane's arithmetic, none of which this change alters: `SUBJECT_BUDGET_S` (26 min for subjects) and
+the 34-minute job stop stay; each target's limit grows by 60 s only while the stage is on, so the job stop is what
+bounds a shard (items left report a retryable `shard_deadline`). The worst case is 60 s for each of 10 subjects, 10
+minutes a shard; the typical case is well under one. tool-qa's lease is `1.5 x (setup_minutes + shard_size x
+minutes_per_subject) + 10`: with `setup_minutes` 8, `minutes_per_subject` 2 and shard 10 that is 52 minutes. At
+switch-on tool-qa should set `minutes_per_subject` to 3 (the worst case, lease 67 minutes) and leave `setup_minutes`;
+this change does not touch tool-qa. The job stop at minute 34 holds either way, so a longer lease only waits for a run
+that has already ended.
 
 ## Output
 
 `<out>/<target>/fuzz.json` (format `isokron-live-probe-fuzz/1`): the rounds with each session's record (health, lists,
-probes; server names appear here), the attributed results, the reproducers. The bundle step copies it to
+probes; server names appear here), the attributed results, the reproducers. Server cursors are hashes (`cur-<16 hex>`);
+the initialize answer is a hash plus `declares`, `list_changed` and the protocol version, never its instructions or server
+info. The record is capped at 3 MiB (`capRecord`: reproducers first, then item lists), well under the bundle's 6 MiB
+cut. The bundle step copies it to
 `raw/fuzz.json` (subject text allowed there) and writes `results/live-probe.json` `fuzz`: stage status, counts, and
 each result as `{ id, primitive, verdict, kind, fault, reproduced, evidence }` where evidence is counts, hashes and
-code points only (`safeEvidence`). A shard where the plan did not switch the stage on has no `fuzz` key and no change in
+code points only (`safeEvidence`); `observation` is a verdict of its own. A shard where the plan did not switch the stage on has no `fuzz` key and no change in
 its bundles.
 
 Observation fields (mcp-results `fields/registry.yaml`): existing, `list_determinism` (boolean, planned): true when
@@ -106,7 +138,7 @@ registry change merged and tool-qa's ingest pinned to it. Until then everything 
 
 ## Reproducers, and how one becomes a regression test
 
-Every `subject` result carries a reproducer in `fuzz.json` (`reproducers[]`, format `isokron-fuzz-reproducer/1`): only
+Every `subject` or observation result carries a reproducer in `fuzz.json` (`reproducers[]`, format `isokron-fuzz-reproducer/1`): only
 the requests and answers that show it (initialize, the traversal or probe involved, in the order asked), the expected
 verdict and kind, and `order`, which session of the spec each server start plays. It is narrowed by construction (one
 invariant, one list, the sessions involved); shrinking items inside a list is phase 2.
@@ -133,5 +165,5 @@ invariant, one list, the sessions involved); shrinking items inside a list is ph
 1. Merge this change and the mcp-results registry entries (optional: results are in `results/` and `raw/` without them).
 2. Repository variable `LANE_LIVE_PROBE_FUZZ=on` in isokron-ai/mcp-check. Off by unsetting it.
 3. In tool-qa `pump/workflows.json`, `live-probe.versions.probe`: add `"fuzz": "<mcp-check commit>"`, bump
-   `versions.tool.mcp-check`.
+   `versions.tool.mcp-check`; set `minutes_per_subject` to 3 (see "Time").
 4. When the registry has the fields and ingest is pinned to it: set `EMIT_FUZZ_FIELDS = true`.
