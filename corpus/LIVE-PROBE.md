@@ -186,25 +186,43 @@ lists the suite and each SDK client that ran, with its version.
 
 A subject that cannot be installed, started or listed is a skip, never a failed job:
 
-Every skip names its fault side (tool-qa's `SKIP_FAULTS`; R-LP-24..27). Our own limits and errors have reasons of
+Every skip names its fault side (tool-qa's `SKIP_FAULTS`; R-LP-24..38). Our own limits and errors have reasons of
 their own and fault `tool`: they count as unassessed on our side, never as an exclusion and never as the server's or
-an upstream's failure. `oci_host_not_allowed` is a deliberate safety choice (the sandbox's egress is deny by default,
-so only six OCI hosts are reachable), but it says nothing about the server, so it is recorded as our gap rather than
-as `policy_excluded`, which would take the subject out of the coverage denominator and hide the gap.
+an upstream's failure. The rule: a server is recorded as at fault (`subject`) only with evidence our own environment
+cannot explain. Anything our environment could have caused is `tool`, and `infra` is only for a passing outside
+condition (a rate limit, an outage).
+
+`oci_host_not_allowed` is a deliberate safety choice, but it says nothing about the server, so it is recorded as our
+gap rather than as `policy_excluded`, which would take the subject out of the coverage denominator and hide the gap.
+The allowlist (six OCI hosts) does not stand between the sandbox and the network: the image is pulled by the runner's
+Docker daemon, outside the sandbox. It guards the planner's own manifest and token fetches (no SSRF, no IP literal, no
+token realm of the registry's choosing), limits what the host daemon is asked to pull, and enforces the 2 GiB size cap
+and the 4x free-disk rule. An image on another host is unassessed until the list grows.
 
 | Detail | Skip reason | Fault | Retryable |
 |---|---|---|---|
 | `bad_subject` (not a GitHub owner/name), `unsupported_package` (cargo, NuGet, MCPB only), `unverified_registry_entry`, `launch_invalid` | `no_runnable_artifact` | tool | no |
 | `oci_host_not_allowed` (the image is not on one of our six registries) | `no_runnable_artifact` | tool | no |
-| `no_package` | `no_runnable_artifact` | subject | no |
+| `no_package` (no registry search page came back full) | `no_runnable_artifact` | subject | no |
+| `registry_lookup_truncated` (a registry search page came back full, 100 results with no paging: the entry may not have been fetched) | `no_runnable_artifact` | tool | no |
 | `private_registry` | `no_runnable_artifact` | tool (we reach only the default registries, as with `unsupported_package`) | no |
 | `image_too_large` (over our 2 GB cap) | `too_large` | tool | no |
 | `remote_only` | `remote_only` | subject | no |
 | `unsupported_transport` (SSE, or HTTP with no fixed local port) | `unsupported_transport` | tool | no |
-| `image_unavailable`, `install_failed` | `install_failed_registry` | subject | no |
+| `image_unavailable` (the registry's own 404, or 401 or 403 after a good token exchange, or a digest mismatch) | `install_failed_registry` | subject | no |
+| `image_registry_unreadable` (no Bearer challenge, a bad realm, no token, bad JSON, no linux/amd64 entry, no layers, bad sizes, or a 401 or 403 with no token exchanged) | `install_failed_registry` | tool | no |
+| `image_pull_failed` (the run-stage pull failed on a digest the planner already read; the pull records no stderr, so a rate limit, a timeout and the runner's disk look alike) | `install_failed_registry` | tool | no |
+| `install_failed` (non-zero exit, no proxy refusal, not 137 or 124, and the log shows a package error: npm E404 or ETARGET, pip "No matching distribution", "declares no bin") | `install_failed_registry` | subject | no |
+| `install_blocked` (our egress proxy refused something the install asked for) | `install_failed_registry` | tool | no |
+| `install_resource_limit` (exit 137 or 124, or out of memory) | `install_failed_registry` | tool | no |
+| `install_build_failed` (a native build, a missing compiler or library, an engine mismatch, or any other install failure with no package error) | `install_failed_registry` | tool | no |
 | `install_timeout` (our install time limit) | `install_failed_registry` | tool | no |
-| `needs_credentials` (the registry entry declares a required env var, and no list with dummy values) | `start_requires_credentials` | subject | no |
-| `start_failed`, `list_failed` | `timeout_start` | subject | no |
+| `needs_credentials` (the registry entry declares a required env var, the server exited non-zero by itself with no signal or time limit, and it made no network attempt) | `start_requires_credentials` | subject | no |
+| `start_needs_network` (the server tried the network, which the run does not have: a lookup or connection in its role, or a failed network call in its trace) | `timeout_start` | tool (the contract allows only subject for `start_requires_credentials`) | no |
+| `start_failed` (install ok, every argument filled, the server's own non-zero exit, not 137, inside half the probe window, no network attempt, and no unresolved PyPI console-script guess) | `timeout_start` | subject | no |
+| `start_env_limited` (any other start failure: a signal, 137, exit 0, a late exit, an unfilled argument, a network attempt, a guessed PyPI entry) | `timeout_start` | tool | no |
+| `list_failed` (a JSON-RPC error the server sent, or a malformed result) | `timeout_start` | subject | no |
+| `list_probe_limited` (our time limit, the page cap, the read cap, or an HTTP transport failure while listing) | `timeout_start` | tool | no |
 | `start_timeout` | `timeout_start` | tool (the subject's time budget also pays for the install, so a slow runner or sandbox start can run it out; it is no evidence the server hung) | no |
 | `list_rejected` (the engine refused the list) | `tool_error` | tool | no |
 | `harness_error` (our driver or bundle step failed) | `tool_error` | tool | yes |
