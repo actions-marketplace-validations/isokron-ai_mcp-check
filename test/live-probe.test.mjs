@@ -11,7 +11,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as LP from '../corpus/live-probe.mjs';
 import { evaluateGuard } from '../corpus/loop-guard.mjs';
-import { buildManifest, collectFiles, validateManifest, SKIP_REASONS } from './tool-qa/worker-kit/contract.mjs';
+import { buildManifest, collectFiles, validateManifest, resultFault, SKIP_REASONS, SKIP_FAULTS } from './tool-qa/worker-kit/contract.mjs';
 import { readTar, writeTar } from './tool-qa/worker-kit/tar.mjs';
 import { checkBundle } from './tool-qa/ingest/forgery.mjs';
 import { scanFiles } from './tool-qa/ingest/redact.mjs';
@@ -190,7 +190,7 @@ test('R-LP-09: an OCI image only from the allowed registries, token services inc
   const g = fakeFetch([server('io.github.acme/box', 'acme/box', [{ registryType: 'oci', identifier: 'ghcr.io/acme/box:1.4', transport: { type: 'stdio' } }])], { oci: { 'ghcr.io': ok.handler }, realm: 'https://169.254.169.254/token' });
   assert.equal((await LP.resolveSubject({ subject: 'acme/box', repo: 'acme/box' }, { fetch: g })).detail, 'oci_host_not_allowed');
   assert.ok(!g.calls.some((c) => c.url.includes('169.254')));
-  assert.deepEqual(LP.DETAILS.oci_host_not_allowed.slice(0, 2), ['policy_excluded', false]);
+  assert.deepEqual(LP.DETAILS.oci_host_not_allowed, ['no_runnable_artifact', false, 'resolve', 'tool'], 'R-LP-25');
   assert.deepEqual(LP.OCI_HOSTS, ['docker.io', 'ghcr.io', 'quay.io', 'public.ecr.aws', 'mcr.microsoft.com', 'registry.gitlab.com']);
 });
 
@@ -200,8 +200,8 @@ test('R-LP-10: an image over 2 GB, or with no linux/amd64 image, is not pulled',
   const f = (h) => fakeFetch([server('io.github.acme/box', 'acme/box', [{ registryType: 'oci', identifier: 'quay.io/acme/box:2', transport: { type: 'stdio' } }])], { oci: { 'quay.io': h }, realm: 'https://quay.io/token' });
   const a = await LP.resolveSubject({ subject: 'acme/box', repo: 'acme/box' }, { fetch: f(big.handler) });
   assert.equal(a.detail, 'image_too_large');
-  assert.deepEqual(LP.DETAILS.image_too_large.slice(0, 2), ['policy_excluded', false]);
-  assert.equal((await LP.resolveSubject({ subject: 'acme/box', repo: 'acme/box' }, { fetch: f(arm.handler) })).detail, 'image_unavailable');
+  assert.deepEqual(LP.DETAILS.image_too_large, ['too_large', false, 'resolve', 'tool'], 'R-LP-24');
+  assert.equal((await LP.resolveSubject({ subject: 'acme/box', repo: 'acme/box' }, { fetch: f(arm.handler) })).detail, 'image_registry_unreadable', 'R-LP-36: our read of the index, not the image\'s absence');
 });
 
 test('R-LP-08: a registry entry that names the repository but not from its owner is not the subject\'s, unless its package points back', async () => {
@@ -322,7 +322,7 @@ test('R-LP-16: OCI subjects run one at a time, each only with about 4x its image
   assert.deepEqual(summary.map((x) => [x.status, x.detail]), [['graded', null], ['skipped', 'disk_low'], ['skipped', 'disk_low']]);
   assert.deepEqual(LP.DETAILS.disk_low.slice(0, 2), ['upstream_unavailable', true]);
   const meta = JSON.parse(readFileSync(join(w, 'out', '1', 'meta.json'), 'utf8'));
-  assert.deepEqual(meta.skips, [{ stage: 'install', reason: 'upstream_unavailable', evidence: LP.RESULT_PATH, retryable: true }]);
+  assert.deepEqual(meta.skips, [{ stage: 'install', reason: 'upstream_unavailable', fault: 'infra', evidence: LP.RESULT_PATH, retryable: true }]);
   assert.match(readFileSync(join(w, 'out', '0', 'bundle', 'raw', 'telemetry.jsonl'), 'utf8'), /registry\.npmjs\.org/, 'its own run\'s telemetry');
   // The script: free space against four times the declared size, before each image, and the image removed after.
   const sh = readFileSync(join(root, 'corpus', 'live-probe-sandbox.sh'), 'utf8');
@@ -512,7 +512,7 @@ function workFolder({ marker = MARKER, selftestRc = 0, items: its = null, swept 
   // kronicle-lite: installed, then exited before answering (a native module was not built).
   const rec2 = JSON.parse(fx('record-ok.json')); rec2.layers.live = false;
   put('driver-subjects/s002/record.json', rec2);
-  put('driver-subjects/s002/probe-bare.json', { format: 'isokron-surface-probe/1', era: null, initialize: null, error: 'the server exited before answering', lists: {}, transport: { exit: 1 } });
+  put('driver-subjects/s002/probe-bare.json', { format: 'isokron-surface-probe/1', era: null, initialize: null, error: 'the server exited before answering', lists: {}, transport: { exit: 1 }, timing: { total_ms: 2000 } });
   for (const p of drop) { try { writeFileSync(join(w, p), ''); } catch { /* */ } }
   return w;
 }
@@ -558,12 +558,12 @@ test('live-probe bundle: every item gets a bundle that tool-qa\'s contract and f
   // The skips: codes from tool-qa's list, retryable only for a passing cause.
   const meta = (i) => JSON.parse(readFileSync(join(w, 'out', String(i), 'meta.json'), 'utf8'));
   assert.deepEqual(meta(0).skips, []);
-  assert.deepEqual(meta(1).skips, [{ stage: 'start', reason: 'timeout_start', evidence: LP.RESULT_PATH }]);
-  assert.deepEqual(meta(2).skips, [{ stage: 'resolve', reason: 'no_runnable_artifact', evidence: LP.RESULT_PATH }]);
-  assert.deepEqual(meta(3).skips, [{ stage: 'start', reason: 'upstream_unavailable', evidence: LP.RESULT_PATH, retryable: true }]);
+  assert.deepEqual(meta(1).skips, [{ stage: 'start', reason: 'timeout_start', fault: 'subject', evidence: LP.RESULT_PATH }]);
+  assert.deepEqual(meta(2).skips, [{ stage: 'resolve', reason: 'no_runnable_artifact', fault: 'subject', evidence: LP.RESULT_PATH }]);
+  assert.deepEqual(meta(3).skips, [{ stage: 'start', reason: 'upstream_unavailable', fault: 'infra', evidence: LP.RESULT_PATH, retryable: true }]);
   assert.equal(meta(0).subject.sha, '5e2668aed07efeb61beb2f3761bc3348af2075c3');
   assert.equal(meta(0).tools[1].name, 'isokron-ai/mcp-surface-corpus');
-  assert.match(lines.join('\n'), /item 3: skipped \(shard_deadline, upstream_unavailable, retryable\)/);
+  assert.match(lines.join('\n'), /item 3: skipped \(shard_deadline, upstream_unavailable, infra, retryable\)/);
 });
 
 test('live-probe bundle: the live grade, the static comparison and the field records', () => {
@@ -652,20 +652,293 @@ test('live-probe forgery control: the forged texts stay in raw/; leaks() catches
 });
 
 test('live-probe failure details: install, start, credentials, list, evidence and deadline', () => {
-  const rec = (o) => ({ install: { kind: 'npm', ok: true, steps: [] }, env: { names: { registry: [] }, secret_named: [] }, ...o });
+  const rec = (o) => ({ install: { kind: 'npm', ok: true, steps: [] }, env: { names: { registry: [] }, secret_named: [] }, timing: { total_ms: 60000 }, ...o });
+  const ctx = { launch: { kind: 'npm' }, argsUnfilled: 0 };
+  const exited = (exit) => ({ error: 'exited', transport: { exit, signal: null }, timing: { total_ms: 2000 } });
   assert.equal(LP.failureDetail(null, null, null, { deadlineHit: true }), 'shard_deadline');
   assert.equal(LP.failureDetail(null, null, null), 'harness_error');
   assert.equal(LP.failureDetail(rec({ excluded: 'sandbox evidence missing' })), 'sandbox_evidence_missing');
-  assert.equal(LP.failureDetail(rec({ install: { kind: 'docker', ok: false, steps: [] } })), 'image_unavailable');
-  assert.equal(LP.failureDetail(rec({ install: { kind: 'npm', ok: false, steps: [{ name: 'install', exit: 1 }] } })), 'install_failed');
+  assert.equal(LP.failureDetail(rec({ install: { kind: 'docker', ok: false, steps: [] } })), 'image_pull_failed');
+  assert.equal(LP.failureDetail(rec({ install: { kind: 'npm', ok: false, steps: [{ name: 'install', exit: 1 }] }, }), null, null, { stepsLog: 'npm error code E404' }), 'install_failed');
   assert.equal(LP.failureDetail(rec({ install: { kind: 'npm', ok: false, steps: [{ name: 'install', exit: null, timed_out: true }] } })), 'install_timeout');
-  assert.equal(LP.failureDetail(rec({}), { error: 'exited' }, null), 'start_failed');
-  assert.equal(LP.failureDetail(rec({}), { error: 'time limit (45000 ms)' }, null), 'start_timeout');
-  assert.equal(LP.failureDetail(rec({}), { initialize: {}, error: null }, null), 'list_failed');
-  assert.equal(LP.failureDetail(rec({ env: { names: { registry: ['API_KEY'] }, secret_named: ['API_KEY'] } }), { error: 'exited' }, { error: 'exited' }), 'needs_credentials');
+  assert.equal(LP.failureDetail(rec({}), exited(1), null, ctx), 'start_failed');
+  assert.equal(LP.failureDetail(rec({}), { error: 'time limit (45000 ms)' }, null, ctx), 'start_timeout');
+  assert.equal(LP.failureDetail(rec({}), { initialize: {}, error: null, lists: { 'tools/list': { ok: false, error: 'Method not found', error_code: -32601 } } }, null), 'list_failed');
+  assert.equal(LP.failureDetail(rec({ env: { names: { registry: ['API_KEY'] }, secret_named: ['API_KEY'] } }), exited(1), exited(1), ctx), 'needs_credentials');
   // R-LP-07: an optional key named in the README is not a declared credential.
-  assert.equal(LP.failureDetail(rec({ env: { names: { registry: [], readme: ['ANCHOR_KEY'], used: ['ANCHOR_KEY'] }, secret_named: ['ANCHOR_KEY'] } }), { error: null, initialize_error: 'the server exited (exit 1, signal null)' }, { error: null }), 'start_failed');
+  assert.equal(LP.failureDetail(rec({ env: { names: { registry: [], readme: ['ANCHOR_KEY'], used: ['ANCHOR_KEY'] }, secret_named: ['ANCHOR_KEY'] } }), { error: null, initialize_error: 'the server exited (exit 1, signal null)', timing: { total_ms: 2000 } }, { error: null, initialize_error: 'the server exited (exit 1, signal null)', timing: { total_ms: 2000 } }, ctx), 'start_failed');
   for (const [d, [reason]] of Object.entries(LP.DETAILS)) assert.ok(SKIP_REASONS.includes(reason), d + ' -> ' + reason);
+});
+
+// ------------------------------------------------------------------ evidence rules for the skip faults (R-LP-29..38)
+// A server is recorded as at fault (subject) only with evidence our own environment cannot explain; the records below
+// are in the shapes the lane writes (the driver's record.json and probe, and the sandbox's telemetry.jsonl).
+
+const lpRec = (o = {}) => ({ install: { kind: 'npm', ok: true, steps: [{ name: 'install', exit: 0 }] }, env: { names: { registry: [] }, secret_named: [] }, timing: { total_ms: 60000 }, timed_out: false, ...o });
+const badInstall = (o = {}, step = {}) => lpRec({ install: { kind: 'npm', ok: false, steps: [{ name: 'install', exit: 1, timed_out: false, ...step }], egress_refused: 0, ...o } });
+const probeExit = (exit, signal = null, ms = 3000) => ({ initialize: null, era: null, error: null, initialize_error: 'the server exited (exit ' + exit + ', signal ' + signal + ')', lists: {}, transport: { exit, signal }, ...(ms === null ? {} : { timing: { first_byte_ms: null, total_ms: ms } }) });
+const trec = (type, o = {}) => ({ v: 1, type, run: 'abc', seq: 9, t: '2026-11-23T10:00:09.000Z', subject: 's001', ...o });
+const serverDns = trec('dns_query', { source: 'netlog', role: 'server', qname: 'api.example.com', qtype: 'A', answer: 'sinkhole' });
+const serverConn = trec('connection', { source: 'netlog', role: 'server', proto: 'tcp', port: 443, bytes: 0, sni: 'api.example.com' });
+const traceNet = (n, role = 'server') => trec('trace_summary', { source: 'runsc', role, summary: { format: 'isokron-trace-summary/1', failed: { file: 0, process: 0, network: n, privileged: 0, other: 0 } } });
+const OK = { launch: { kind: 'npm' }, argsUnfilled: 0 };
+const needEnv = { names: { registry: ['API_KEY'] }, secret_named: ['API_KEY'] };
+
+test('R-LP-29: an install our proxy refused something for is install_blocked (tool), never the server\'s install_failed', () => {
+  // kronicle-lite's case: the install asked for a prebuilt binary the proxy refused; the 404 text is no excuse.
+  const refused = badInstall({ egress_refused: 2, egress: [{ host: 'github.com', allowed: false }] });
+  assert.equal(LP.failureDetail(refused, null, null, { stepsLog: 'npm error code E404' }), 'install_blocked');
+  assert.deepEqual(LP.DETAILS.install_blocked, ['install_failed_registry', false, 'install', 'tool']);
+  // Counted from the egress list when the count is not there.
+  const listed = badInstall({ egress_refused: undefined, egress: [{ host: 'x.example', allowed: false }] });
+  assert.equal(LP.failureDetail(listed), 'install_blocked');
+});
+
+test('R-LP-30: an install killed by a limit (137, 124, out of memory) is install_resource_limit (tool)', () => {
+  for (const step of [{ exit: 137 }, { exit: 124 }]) assert.equal(LP.failureDetail(badInstall({}, step), null, null, { stepsLog: 'npm error code E404' }), 'install_resource_limit', JSON.stringify(step));
+  assert.equal(LP.failureDetail(badInstall(), null, null, { stepsLog: 'FATAL ERROR: JavaScript heap out of memory' }), 'install_resource_limit');
+  assert.deepEqual(LP.DETAILS.install_resource_limit, ['install_failed_registry', false, 'install', 'tool']);
+});
+
+test('R-LP-31: an install that failed with no package-level cause is install_build_failed (tool); only a package error stays the server\'s', () => {
+  const log = (t) => LP.failureDetail(badInstall(), null, null, { stepsLog: t });
+  for (const t of ['npm error code E404\nnpm error 404 Not Found', 'npm error code ETARGET\nnpm error notarget No matching version', 'ERROR: No matching distribution found for acme-mcp', 'npm error acme-mcp declares no bin']) assert.equal(log(t), 'install_failed', t);
+  for (const t of ['gyp ERR! find Python', 'error: command \'gcc\' failed: No such file or directory', 'npm error code EBADENGINE\nnpm error engine Unsupported engine', 'Failed building wheel for pydantic-core', '']) assert.equal(log(t), 'install_build_failed', t);
+  // The text may be in the step itself, as the lane writes it.
+  assert.equal(LP.failureDetail(badInstall({}, { stderr: 'npm error code E404' })), 'install_failed');
+  assert.deepEqual(LP.DETAILS.install_build_failed, ['install_failed_registry', false, 'install', 'tool']);
+});
+
+test('R-LP-32: a server that ran out of the time limit is start_timeout (tool) even with a required env var declared, never needs_credentials', () => {
+  const r = lpRec({ env: needEnv });
+  assert.equal(LP.failureDetail(r, { error: 'time limit (45000 ms)' }, { error: 'time limit (45000 ms)' }, OK), 'start_timeout');
+  assert.equal(LP.failureDetail({ ...r, timed_out: true }, probeExit(1), probeExit(1), OK), 'start_timeout');
+  // Killed (a signal, 137) is no exit of its own either.
+  assert.equal(LP.failureDetail(r, probeExit(null, 'SIGKILL'), null, OK), 'start_env_limited');
+  assert.equal(LP.failureDetail(r, probeExit(137), null, OK), 'start_env_limited');
+  // The server's own non-zero exit with a declared env var is the one credentials case.
+  assert.equal(LP.failureDetail(r, probeExit(1), null, OK), 'needs_credentials');
+  assert.equal(LP.failureDetail(lpRec(), { error: 'time limit (45000 ms)' }, null, OK), 'start_timeout');
+});
+
+test('R-LP-33: a server that went to the network (which the run does not have) is start_needs_network, not needs_credentials or start_failed', () => {
+  assert.deepEqual(LP.DETAILS.start_needs_network, ['timeout_start', false, 'start', 'tool']);
+  for (const records of [[serverDns], [serverConn], [traceNet(3)]]) {
+    assert.equal(LP.failureDetail(lpRec({ env: needEnv }), probeExit(1), null, { ...OK, records }), 'start_needs_network');
+    assert.equal(LP.failureDetail(lpRec(), probeExit(1), null, { ...OK, records }), 'start_env_limited');
+  }
+  // The install's lookups, a quiet trace and another target's records are no attempt of the server.
+  const quiet = [trec('dns_query', { source: 'netlog', role: 'install', qname: 'registry.npmjs.org' }), trec('connection', { source: 'netlog', role: 'install' }), traceNet(0), traceNet(5, 'install')];
+  assert.equal(LP.failureDetail(lpRec({ env: needEnv }), probeExit(1), null, { ...OK, records: quiet }), 'needs_credentials');
+  assert.equal(LP.failureDetail(lpRec(), probeExit(1), null, { ...OK, records: quiet }), 'start_failed');
+  assert.equal(LP.serverNetworkAttempt(LP.telemetryFor(join(FX, 'telemetry.jsonl'), 's001').records), false, 'the saved telemetry has no server-role lookup');
+});
+
+test('R-LP-34: start_failed is the server\'s only with its own early non-zero exit, every argument filled and a resolved launch; else start_env_limited (tool)', () => {
+  assert.equal(typeof LP.START_QUICK_MS, 'number');
+  assert.equal(LP.START_QUICK_MS, LP.PROBE_MS / 2);
+  assert.deepEqual(LP.DETAILS.start_env_limited, ['timeout_start', false, 'start', 'tool']);
+  assert.equal(LP.failureDetail(lpRec(), probeExit(1), null, OK), 'start_failed');
+  const limited = (what, r, p, c) => assert.equal(LP.failureDetail(r, p, null, c), 'start_env_limited', what);
+  limited('placeholder arguments left unfilled', lpRec(), probeExit(1), { ...OK, argsUnfilled: 2 });
+  limited('arguments not known', lpRec(), probeExit(1), { launch: OK.launch });
+  limited('killed by a signal', lpRec(), probeExit(null, 'SIGSEGV'), OK);
+  limited('exit 137', lpRec(), probeExit(137), OK);
+  limited('exit 0', lpRec(), probeExit(0), OK);
+  limited('late (the probe ran to half its window)', lpRec(), probeExit(1, null, LP.START_QUICK_MS), OK);
+  limited('no probe timing at all', lpRec(), probeExit(1, null, null), OK);
+  limited('PyPI console script guessed from the package name', lpRec(), probeExit(1), { ...OK, launch: { kind: 'pypi', package: 'acme-mcp', version: 'latest' } });
+  limited('no launch known', lpRec(), probeExit(1), { argsUnfilled: 0 });
+  // A PyPI launch with a resolved entry is evidence again.
+  assert.equal(LP.failureDetail(lpRec(), probeExit(1), null, { ...OK, launch: { kind: 'pypi', package: 'acme-mcp', entry: 'acme-server' } }), 'start_failed');
+});
+
+test('R-LP-35: list_failed is the server\'s only for a JSON-RPC error it sent or a malformed result; our limits are list_probe_limited (tool)', () => {
+  assert.deepEqual(LP.DETAILS.list_probe_limited, ['timeout_start', false, 'list', 'tool']);
+  const listed = (error, error_code = null) => ({ initialize: {}, era: 'legacy', error: null, lists: { 'tools/list': { ok: false, error, error_code, pages: 0 } }, transport: { exit: null, signal: null } });
+  const r = lpRec({ env: needEnv });
+  for (const [e, c] of [['Method not found', -32601], ['Internal error', -32603], ['the tools/list result has no tools array', null], ['nextCursor is not a string', null], ['the server repeated the same cursor', null], ['the answer has no result object', null]]) assert.equal(LP.failureDetail(r, listed(e, c), null), 'list_failed', e);
+  for (const [e, c] of [['time limit', null], ['time limit (45000 ms)', null], ['paging stopped after 100 pages', null], ['the server wrote more than 25165824 bytes', null], ['HTTP request failed: ECONNRESET: x', null], ['HTTP 502: Bad Gateway', 502], ['the server exited (exit 1, signal null)', null]]) assert.equal(LP.failureDetail(r, listed(e, c), null), 'list_probe_limited', e);
+  assert.equal(LP.failureDetail(r, { initialize: {}, error: null }, null), 'list_probe_limited', 'no list answer at all');
+  // A declared env var does not turn a list failure into needs_credentials.
+  assert.notEqual(LP.failureDetail(r, listed('Method not found', -32601), null), 'needs_credentials');
+});
+
+test('R-LP-40: the quick window is the failing probe\'s own time, not the record\'s total, which holds the install and the analysis', () => {
+  // Real selftest records show 24.7 to 72.7 s of total_ms for a server that failed in about a second.
+  for (const total of [24_700, 72_700, 300_000]) assert.equal(LP.failureDetail(lpRec({ timing: { total_ms: total } }), probeExit(1, null, 900), null, OK), 'start_failed', 'total ' + total);
+  // A probe that ran to half its window is no early exit, whatever the total.
+  assert.equal(LP.failureDetail(lpRec({ timing: { total_ms: 1000 } }), probeExit(1, null, 30_000), null, OK), 'start_env_limited');
+  // The record's own probes entry, then captured_at - started_at, when the probe carries no timing.
+  const bare = probeExit(1, null, null);
+  assert.equal(LP.failureDetail(lpRec({ probes: { bare: { timing: { total_ms: 800 } } } }), bare, null, OK), 'start_failed');
+  assert.equal(LP.failureDetail(lpRec({ probes: { bare: { timing: { total_ms: 40_000 } } } }), bare, null, OK), 'start_env_limited');
+  assert.equal(LP.failureDetail(lpRec(), { ...bare, started_at: '2026-11-23T10:00:00.000Z', captured_at: '2026-11-23T10:00:01.500Z' }, null, OK), 'start_failed');
+  assert.equal(LP.failureDetail(lpRec(), { ...bare, started_at: '2026-11-23T10:00:00.000Z', captured_at: '2026-11-23T10:00:40.000Z' }, null, OK), 'start_env_limited');
+});
+
+test('R-LP-39: exits 125, 126 and 127 (docker run, not executable, command not found) are not the server\'s own; needs_credentials needs the same guards as start_failed', () => {
+  const r = lpRec({ env: needEnv });
+  const pypiGuess = { launch: { kind: 'pypi', package: 'acme-mcp', version: 'latest' }, argsUnfilled: 0 };
+  // The case: a declared env var, a guessed PyPI launch and exit 127 (command not found).
+  assert.equal(LP.failureDetail(r, probeExit(127), null, pypiGuess), 'start_env_limited');
+  assert.notEqual(LP.failureDetail(r, probeExit(127), null, pypiGuess), 'needs_credentials');
+  for (const exit of [125, 126, 127, 137]) {
+    assert.equal(LP.failureDetail(r, probeExit(exit), null, OK), 'start_env_limited', 'needs_credentials, exit ' + exit);
+    assert.equal(LP.failureDetail(lpRec(), probeExit(exit), null, OK), 'start_env_limited', 'start_failed, exit ' + exit);
+  }
+  // Each guard of start_failed holds for needs_credentials too.
+  assert.equal(LP.failureDetail(r, probeExit(1), null, pypiGuess), 'start_env_limited', 'a guessed launch');
+  assert.equal(LP.failureDetail(r, probeExit(1), null, { ...OK, argsUnfilled: 1 }), 'start_env_limited', 'an unfilled argument');
+  assert.equal(LP.failureDetail(r, probeExit(1), null, { launch: OK.launch }), 'start_env_limited', 'arguments not known');
+  assert.equal(LP.failureDetail(r, probeExit(null, 'SIGTERM'), null, OK), 'start_env_limited', 'a signal');
+  // With a network attempt it is the network code, guards or not.
+  assert.equal(LP.failureDetail(r, probeExit(127), null, { ...pypiGuess, records: [serverDns] }), 'start_needs_network');
+  // All guards met: the one credentials case.
+  assert.equal(LP.failureDetail(r, probeExit(1), null, OK), 'needs_credentials');
+  assert.equal(LP.failureDetail(r, probeExit(2), null, { launch: { kind: 'pypi', package: 'a', entry: 'a-server' }, argsUnfilled: 0 }), 'needs_credentials');
+});
+
+test('R-LP-41: a server\'s network attempt shows in its trace summary when the netlog records are lost', () => {
+  const trace = (summary, role = 'server') => trec('trace_summary', { source: 'runsc', role, summary: { format: 'isokron-trace-summary/1', counts: { file: 40, process: 3, network: 0, privileged: 0, other: 0 }, failed: { file: 0, process: 0, network: 0, privileged: 0, other: 0 }, network: { sockets: [], raw_sockets: 0, connects: [], sends: [], binds: [], dns_names: [] }, ...summary } });
+  const seen = (rec) => LP.failureDetail(lpRec({ env: needEnv }), probeExit(1), null, { ...OK, records: [rec] });
+  // No dns_query or connection record anywhere: the trace alone.
+  assert.equal(seen(trace({ network: { sockets: [], connects: [{ addr: '93.184.216.34', port: 443, n: 1, failed: 1, errno: 'ENETUNREACH' }], dns_names: [] } })), 'start_needs_network', 'a connect');
+  assert.equal(seen(trace({ network: { sockets: [], connects: [], dns_names: [{ name: 'api.example.com', n: 1 }] } })), 'start_needs_network', 'a looked-up name');
+  assert.equal(seen(trace({ network: { sockets: [], connects: [], sends: [{ addr: '10.0.0.9', port: 53, n: 1 }], dns_names: [] } })), 'start_needs_network', 'a send');
+  assert.equal(seen(trace({ failed: { file: 0, process: 0, network: 2, privileged: 0, other: 0 } })), 'start_needs_network', 'failed network calls');
+  // A quiet trace, or another role's, is no attempt.
+  assert.equal(seen(trace({})), 'needs_credentials');
+  assert.equal(seen(trace({ counts: { network: 9 } }, 'install')), 'needs_credentials');
+  assert.equal(LP.serverNetworkAttempt([trace({ network: { connects: 3 } })]), true, 'a count works as well as a list');
+});
+
+test('R-LP-42: network syscalls alone (counts.network) are not a network attempt: the real healthy shape stays the server\'s own', () => {
+  // From live-probe-selftest run 45522659823: a healthy server whose list came back, with counts.network 4 and no
+  // connects, sends, names or failed network calls (local sockets inside the runtime).
+  const healthy = trec('trace_summary', { source: 'runsc', role: 'server', summary: { format: 'isokron-trace-summary/1', counts: { file: 40, process: 3, network: 4, privileged: 0, other: 0 }, failed: { file: 0, process: 0, network: 0, privileged: 0, other: 0 }, network: { sockets: [], raw_sockets: 0, connects: [], sends: [], binds: [], dns_names: [] } } });
+  assert.equal(LP.serverNetworkAttempt([healthy]), false);
+  assert.equal(LP.failureDetail(lpRec({ env: needEnv }), probeExit(1), null, { ...OK, records: [healthy] }), 'needs_credentials');
+});
+
+test('a manifest 404 is the registry\'s answer for the name we built: library/ and odd tags are normalised before the request', async () => {
+  const asked = [];
+  const f = async (url, init = {}) => {
+    const u = new URL(url); asked.push(u.href);
+    if (u.pathname === '/token') return res(200, { token: 't' });
+    if (!init.headers.authorization) return res(401, '', { 'www-authenticate': 'Bearer realm="https://auth.docker.io/token",service="registry.docker.io"' });
+    return res(404, '');
+  };
+  const cases = [
+    ['node:24', 'https://registry-1.docker.io/v2/library/node/manifests/24'],
+    ['docker.io/node', 'https://registry-1.docker.io/v2/library/node/manifests/latest'],
+    ['index.docker.io/acme/box:1.0-rc.1_x', 'https://registry-1.docker.io/v2/acme/box/manifests/1.0-rc.1_x'],
+    ['docker.io/library/node:24-bookworm-slim', 'https://registry-1.docker.io/v2/library/node/manifests/24-bookworm-slim'],
+  ];
+  for (const [id, url] of cases) {
+    asked.length = 0;
+    const ref = LP.parseOciRef(id);
+    assert.ok(ref, id);
+    assert.equal(await ociCode(f, ref), 'image_unavailable', id);
+    assert.equal(asked.filter((u) => u.includes('/manifests/'))[0], url, id);
+  }
+  assert.equal(LP.parseOciRef('ghcr.io/acme/box:bad tag'), null);
+});
+
+/** An OCI registry fetch stub for resolveOciImage: `reply(url, init)` gives the manifest answers; the token service gives a token. */
+function ociFetch(reply, { challenge = 'Bearer realm="https://ghcr.io/token",service="ghcr.io"', token = { token: 'anon' } } = {}) {
+  return async (url, init = {}) => {
+    const u = new URL(url);
+    if (u.pathname === '/token') return res(token === null ? 404 : 200, token === null ? '' : token);
+    if (!init.headers.authorization && challenge !== false) return challenge === null ? res(401, '') : res(401, '', { 'www-authenticate': challenge });
+    return reply(u, init);
+  };
+}
+const goodImage = JSON.stringify({ schemaVersion: 2, mediaType: 'application/vnd.oci.image.manifest.v1+json', config: { size: 1000, digest: 'sha256:' + 'c'.repeat(64) }, layers: [{ size: 5000, digest: 'sha256:' + 'd'.repeat(64) }] });
+const imageRef = (o = {}) => ({ ...LP.parseOciRef('ghcr.io/acme/box:1'), ...o });
+const ociCode = async (fetch, ref = imageRef()) => { try { await LP.resolveOciImage(ref, { fetch }); return 'ok'; } catch (e) { return e.detail; } };
+
+test('R-LP-36: an image is image_unavailable (subject) only for the registry\'s own 404, 401 or 403 after a token exchange, or a digest mismatch; what we could not read is image_registry_unreadable (tool)', async () => {
+  assert.deepEqual(LP.DETAILS.image_unavailable, ['install_failed_registry', false, 'resolve', 'subject']);
+  assert.deepEqual(LP.DETAILS.image_registry_unreadable, ['install_failed_registry', false, 'resolve', 'tool']);
+  // The registry's own answer: kept as the image's.
+  for (const status of [404, 401, 403]) assert.equal(await ociCode(ociFetch(() => res(status, ''))), 'image_unavailable', 'after a good token exchange: ' + status);
+  assert.equal(await ociCode(ociFetch(() => res(404, ''), { challenge: false })), 'image_unavailable', 'a 404 with no challenge is still the registry\'s answer');
+  assert.equal(await ociCode(ociFetch(() => res(200, goodImage)), imageRef({ digest: 'sha256:' + '9'.repeat(64) })), 'image_unavailable', 'digest mismatch');
+  // Ours: a 401 or 403 with no token ever exchanged, and everything the registry sent that we could not read.
+  for (const status of [401, 403]) assert.equal(await ociCode(ociFetch(() => res(status, ''), { challenge: false })), 'image_registry_unreadable', 'no token exchanged: ' + status);
+  const tool = {
+    'no Bearer challenge': ociFetch(() => res(200, goodImage), { challenge: 'Basic realm="x"' }),
+    'no challenge header': ociFetch(() => res(200, goodImage), { challenge: null }),
+    'a bad realm': ociFetch(() => res(200, goodImage), { challenge: 'Bearer realm="not a url",service="ghcr.io"' }),
+    'no token': ociFetch(() => res(200, goodImage), { token: {} }),
+    'no token answer': ociFetch(() => res(200, goodImage), { token: null }),
+    'bad JSON': ociFetch(() => res(200, '<html>not json')),
+    'no linux/amd64 entry': ociFetch(() => res(200, { schemaVersion: 2, manifests: [{ digest: 'sha256:' + 'a'.repeat(64), platform: { os: 'linux', architecture: 'arm64' } }] })),
+    'no layers': ociFetch(() => res(200, { schemaVersion: 2, config: { size: 1 }, layers: [] })),
+    'bad sizes': ociFetch(() => res(200, { schemaVersion: 2, config: { size: 1 }, layers: [{ size: -5 }] })),
+  };
+  for (const [what, f] of Object.entries(tool)) assert.equal(await ociCode(f), 'image_registry_unreadable', what);
+  assert.equal(await ociCode(ociFetch(() => res(200, goodImage))), 'ok');
+});
+
+test('R-LP-37: a run-stage image pull that failed is image_pull_failed (tool), not the image\'s absence', () => {
+  // The planner already read this digest, so the image is there; the pull step records no stderr, and a rate limit on a
+  // shared runner address, a timeout and the runner's disk look alike. None is evidence about the server. Tool rather
+  // than infra: infra says a passing outside condition, which the record cannot show.
+  assert.deepEqual(LP.DETAILS.image_pull_failed, ['install_failed_registry', false, 'install', 'tool']);
+  for (const step of [{ name: 'pull', exit: 1 }, { name: 'pull', exit: null, timed_out: true }, { name: 'pull', exit: 137 }]) {
+    assert.equal(LP.failureDetail(lpRec({ install: { kind: 'docker', ok: false, steps: [step] } })), 'image_pull_failed', JSON.stringify(step));
+  }
+  assert.equal(LP.failureDetail(lpRec({ install: { kind: 'docker', ok: false, steps: [] } })), 'image_pull_failed');
+});
+
+test('R-LP-38: no_package is the subject\'s only when no registry search page came back full; a full page (100, no paging) is registry_lookup_truncated (tool)', async () => {
+  assert.deepEqual(LP.DETAILS.registry_lookup_truncated, ['no_runnable_artifact', false, 'resolve', 'tool']);
+  assert.equal(LP.REGISTRY_PAGE, 100);
+  const others = (n) => Array.from({ length: n }, (_, i) => server('io.github.zed/box-' + i, 'zed/box-' + i, [npmPkg('box-' + i)]));
+  const resolve = (n) => LP.resolveSubject({ subject: 'acme/box', repo: 'acme/box' }, { fetch: fakeFetch(others(n)) });
+  assert.equal((await resolve(99)).detail, 'no_package');
+  assert.equal((await resolve(0)).detail, 'no_package');
+  assert.equal((await resolve(100)).detail, 'registry_lookup_truncated');
+  assert.equal((await resolve(120)).detail, 'registry_lookup_truncated');
+});
+
+test('live-probe fault evidence (telemetry, steps log, plan) reaches failureDetail through the bundle step (R-LP-29..38)', () => {
+  const run = (setup) => {
+    const w = workFolder();
+    setup(w);
+    const out = LP.bundleShard({ work: w });
+    return out.map((s) => s.detail);
+  };
+  const addTelemetry = (w, ...recs) => writeFileSync(join(w, 'driver-subjects', '_shard', 'telemetry.jsonl'), readFileSync(join(w, 'driver-subjects', '_shard', 'telemetry.jsonl'), 'utf8') + recs.map((r) => JSON.stringify({ ...r, subject: 's002' })).join('\n') + '\n');
+  assert.equal(run(() => {})[1], 'start_failed', 'the saved kronicle-lite capture: an early exit 1, nothing else');
+  assert.equal(run((w) => addTelemetry(w, serverDns))[1], 'start_env_limited', 'its telemetry shows a server-role lookup');
+  const plan = (w, f) => { const p = JSON.parse(readFileSync(join(w, 'plan.json'), 'utf8')); f(p.items[1]); writeFileSync(join(w, 'plan.json'), JSON.stringify(p)); };
+  assert.equal(run((w) => plan(w, (it) => { it.resolution.choice.args_unfilled = 1; }))[1], 'start_env_limited', 'the plan says an argument was left unfilled');
+  assert.equal(run((w) => plan(w, (it) => { it.resolution.launch = { kind: 'pypi', package: 'x' }; }))[1], 'start_env_limited', 'the plan says the PyPI entry is a guess');
+  const failedInstall = (log) => (w) => {
+    const rec = JSON.parse(readFileSync(join(w, 'driver-subjects', 's002', 'record.json'), 'utf8'));
+    rec.install = { kind: 'npm', ok: false, steps: [{ name: 'install', exit: 1, timed_out: false, ms: 5 }], egress: [] };
+    writeFileSync(join(w, 'driver-subjects', 's002', 'record.json'), JSON.stringify(rec));
+    writeFileSync(join(w, 'driver-subjects', 's002', 'probe-bare.json'), '');
+    writeFileSync(join(w, 'driver-subjects', 's002', 'steps.log'), log);
+  };
+  assert.equal(run(failedInstall('npm error code E404'))[1], 'install_failed', 'steps.log names a package error');
+  assert.equal(run(failedInstall('gyp ERR! stack Error: not found: make'))[1], 'install_build_failed', 'steps.log names a build error');
+});
+
+test('live-probe docs: every detail code is in the skip table with its reason and fault, and the OCI allowlist reason is the true one', () => {
+  const doc = readFileSync(join(root, 'corpus', 'LIVE-PROBE.md'), 'utf8');
+  for (const [d, [reason, , , fault]] of Object.entries(LP.DETAILS)) {
+    const row = doc.split('\n').find((l) => l.startsWith('|') && l.includes('`' + d + '`'));
+    assert.ok(row, d + ' is in the docs table');
+    const cells = row.split('|').map((c) => c.trim());
+    assert.equal(cells[2], '`' + reason + '`', d + ' reason');
+    assert.ok(cells[3].startsWith(fault), d + ' fault ' + fault + ' in "' + cells[3] + '"');
+  }
+  assert.doesNotMatch(doc, /sandbox'?s? egress is deny by default, so only six OCI hosts/);
+  assert.match(doc, /Docker daemon[^.]*outside the sandbox/);
 });
 
 test('live-probe raw files are capped and the cut is recorded', () => {
@@ -831,8 +1104,79 @@ test('the vendored tool-qa contract is unedited and at the commit WORKER_KIT_REF
   for (const r of new Set(Object.values(LP.DETAILS).map((d) => d[0]))) assert.ok(SKIP_REASONS.includes(r), r);
 });
 
+// ------------------------------------------------------------------ explicit skip reasons and faults (gate E)
+
+/** One bundle per detail code, each built from a skipped resolution and judged by tool-qa's contract. */
+function bundleEveryDetail() {
+  const rk = (n) => n.toString(16).padStart(64, '0');
+  const names = Object.keys(LP.DETAILS);
+  const its = names.map((d, i) => ({ index: i, subject: 'acme/s' + i, repo: 'acme/s' + i, run_key: rk(i + 1), fence: i + 1, target_id: null, resolve_ms: 1,
+    resolution: { status: 'skipped', detail: d, registry: null, choice: null, candidates: [], launch: null, subdir: null, seed_packages: 0 } }));
+  const w = workFolder({ items: its });
+  LP.bundleShard({ work: w });
+  const out = {};
+  names.forEach((d, i) => {
+    const dir = join(w, 'out', String(i));
+    const j = judge(dir, its[i]);
+    out[d] = { meta: JSON.parse(readFileSync(join(dir, 'meta.json'), 'utf8')), j, result: JSON.parse(j.files.get(LP.RESULT_PATH).toString('utf8')) };
+  });
+  return out;
+}
+
+test('R-LP-24: an image over our size cap is too_large with fault tool, never policy_excluded', () => {
+  const b = bundleEveryDetail().image_too_large;
+  assert.deepEqual(b.meta.skips, [{ stage: 'resolve', reason: 'too_large', fault: 'tool', evidence: LP.RESULT_PATH }]);
+  assert.ok(b.j.v.ok, JSON.stringify(b.j.v.errors));
+  assert.deepEqual(resultFault(b.j.manifest.skips), { fault: 'tool', coverage: 'unassessed_tool', faults: { tool: 1 } });
+  assert.equal(b.result.skip_reason, 'too_large');
+  assert.equal(b.result.fault, 'tool');
+});
+
+test('R-LP-25: an OCI host off our allowlist is our gap (no_runnable_artifact, fault tool), not an exclusion', () => {
+  const b = bundleEveryDetail().oci_host_not_allowed;
+  assert.deepEqual(b.meta.skips, [{ stage: 'resolve', reason: 'no_runnable_artifact', fault: 'tool', evidence: LP.RESULT_PATH }]);
+  assert.ok(b.j.v.ok, JSON.stringify(b.j.v.errors));
+  assert.equal(resultFault(b.j.manifest.skips).coverage, 'unassessed_tool', 'counted as unassessed on our side, not excluded');
+  assert.equal(b.result.fault, 'tool');
+});
+
+test('R-LP-26: a harness failure is tool_error with fault tool (retryable), not upstream_unavailable', () => {
+  const all = bundleEveryDetail();
+  const b = all.harness_error;
+  assert.deepEqual(b.meta.skips, [{ stage: 'start', reason: 'tool_error', fault: 'tool', evidence: LP.RESULT_PATH, retryable: true }]);
+  assert.ok(b.j.v.ok, JSON.stringify(b.j.v.errors));
+  assert.equal(resultFault(b.j.manifest.skips).fault, 'tool');
+  // An unknown detail falls back to the same record.
+  assert.deepEqual(LP.DETAILS.harness_error.slice(0, 2), ['tool_error', true]);
+  // The engine refusing a list is our error too.
+  assert.deepEqual(all.list_rejected.meta.skips, [{ stage: 'grade', reason: 'tool_error', fault: 'tool', evidence: LP.RESULT_PATH }]);
+});
+
+test('R-LP-27: every skip names its fault explicitly, tool-qa allows that fault for its reason, and no limit of ours is policy or infra', () => {
+  const all = bundleEveryDetail();
+  for (const [d, [reason, , , fault]] of Object.entries(LP.DETAILS)) {
+    const { meta, j, result } = all[d];
+    assert.equal(meta.skips.length, 1, d);
+    assert.equal(meta.skips[0].reason, reason, d);
+    assert.equal(meta.skips[0].fault, fault, d + ': fault is set on the skip');
+    assert.ok(SKIP_FAULTS[reason].allowed.includes(fault), d + ': ' + fault + ' is allowed for ' + reason);
+    assert.ok(j.v.ok, d + ' ' + JSON.stringify(j.v.errors));
+    assert.equal(result.fault, fault, d);
+  }
+  // Our own limits and errors: tool, and none under policy_excluded.
+  for (const d of ['bad_subject', 'unsupported_package', 'unverified_registry_entry', 'oci_host_not_allowed', 'image_too_large', 'launch_invalid', 'unsupported_transport', 'install_timeout', 'list_rejected', 'harness_error', 'sandbox_evidence_missing', 'start_timeout', 'private_registry']) assert.equal(LP.DETAILS[d][3], 'tool', d);
+  assert.ok(!Object.values(LP.DETAILS).some((x) => x[0] === 'policy_excluded'), 'this lane never excludes by policy');
+});
+
 test('live-probe docs exist and name the fixtures', () => {
   const doc = readFileSync(join(root, 'corpus', 'LIVE-PROBE.md'), 'utf8');
   assert.match(doc, /live-probe/);
   assert.ok(readdirSync(join(root, 'corpus', 'fixtures', 'live-probe')).includes('forgery-server.js'));
+});
+
+test('R-LP-28: a start that ran out of time and a private registry are our limits, not the server\'s (fault tool)', () => {
+  // The subject's time budget also pays for the install, so a slow runner or a slow sandbox start can run it out:
+  // that is no evidence the server hung. A private registry is unreachable because we reach only the default registries.
+  assert.equal(LP.DETAILS.start_timeout[3], 'tool');
+  assert.equal(LP.DETAILS.private_registry[3], 'tool');
 });

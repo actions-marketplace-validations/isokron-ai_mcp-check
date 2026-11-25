@@ -85,6 +85,8 @@ export const SUBJECT_BUDGET_S = 26 * 60;
 export const SUBJECT_TIMEOUT_MIN_S = 90;
 export const SUBJECT_TIMEOUT_MAX_S = 300;
 export const PROBE_MS = 45_000;
+/** A start that failed on its own account fails well inside the probe window; a later exit may be our limits (R-LP-34, R-LP-40). */
+export const START_QUICK_MS = PROBE_MS / 2;
 /** One raw file at most (tool-qa's limit is 8 MiB a file, 64 MiB a bundle). */
 export const RAW_FILE_CAP = 6 * 1024 * 1024;
 export const RAW_TOTAL_CAP = 40 * 1024 * 1024;
@@ -92,33 +94,51 @@ const REGISTRY_CAP = 4 * 1024 * 1024;
 
 /**
  * Why an item has no live grade: our detail code, the tool-qa skip reason (worker-kit/contract.mjs SKIP_REASONS) it is
- * recorded with, whether it is retryable, and the stage. results/ keeps the detail.
+ * recorded with, whether it is retryable, the stage, and the fault side (SKIP_FAULTS: tool, subject, infra or policy).
+ * results/ keeps the detail. R-LP-24..27: our own limits and errors have reasons of their own and fault "tool", never
+ * policy_excluded (which reads as a deliberate exclusion, not a coverage gap) and never upstream_unavailable (which
+ * reads as somebody else's outage). Only what the subject itself did (no package, a failing install, a server that
+ * will not start, one that needs credentials) is the subject's, and only a rate limit or an outage is infra.
  */
 export const DETAILS = Object.freeze({
-  bad_subject: ['no_runnable_artifact', false, 'resolve'],
-  no_package: ['no_runnable_artifact', false, 'resolve'],
-  unsupported_package: ['no_runnable_artifact', false, 'resolve'],
-  private_registry: ['no_runnable_artifact', false, 'resolve'],
-  unverified_registry_entry: ['no_runnable_artifact', false, 'resolve'],
-  oci_host_not_allowed: ['policy_excluded', false, 'resolve'],
-  image_too_large: ['policy_excluded', false, 'resolve'],
-  launch_invalid: ['no_runnable_artifact', false, 'resolve'],
-  remote_only: ['remote_only', false, 'resolve'],
-  unsupported_transport: ['unsupported_transport', false, 'resolve'],
-  image_unavailable: ['install_failed_registry', false, 'install'],
-  install_failed: ['install_failed_registry', false, 'install'],
-  install_timeout: ['install_failed_registry', false, 'install'],
-  needs_credentials: ['start_requires_credentials', false, 'start'],
-  start_failed: ['timeout_start', false, 'start'],
-  start_timeout: ['timeout_start', false, 'start'],
-  list_failed: ['timeout_start', false, 'list'],
-  list_rejected: ['no_runnable_artifact', false, 'grade'],
-  rate_limited: ['rate_limited', true, 'resolve'],
-  upstream_error: ['upstream_unavailable', true, 'resolve'],
-  harness_error: ['upstream_unavailable', true, 'start'],
-  shard_deadline: ['upstream_unavailable', true, 'start'],
-  sandbox_evidence_missing: ['trace_unavailable', true, 'start'],
-  disk_low: ['upstream_unavailable', true, 'install'],
+  bad_subject: ['no_runnable_artifact', false, 'resolve', 'tool'], // not a GitHub owner/name: this lane reads GitHub only
+  no_package: ['no_runnable_artifact', false, 'resolve', 'subject'],
+  unsupported_package: ['no_runnable_artifact', false, 'resolve', 'tool'], // cargo, NuGet, MCPB: we cannot run them yet
+  private_registry: ['no_runnable_artifact', false, 'resolve', 'tool'],
+  unverified_registry_entry: ['no_runnable_artifact', false, 'resolve', 'tool'], // our provenance checks stop short of it
+  // Our allowlist of OCI hosts (it guards the planner's own fetches and what the runner's Docker daemon pulls, outside the
+  // sandbox; it is not the sandbox's egress rule). A deliberate safety choice, but it is a limit of
+  // ours, not a statement about the server: recorded as a gap of ours (tool), so it counts as unassessed and is not
+  // hidden as an exclusion. no_runnable_artifact is the one reason that fits: there is no artifact we can run.
+  oci_host_not_allowed: ['no_runnable_artifact', false, 'resolve', 'tool'],
+  image_too_large: ['too_large', false, 'resolve', 'tool'], // over our 2 GB image cap
+  launch_invalid: ['no_runnable_artifact', false, 'resolve', 'tool'], // the entry's package id failed our own name check
+  remote_only: ['remote_only', false, 'resolve', 'subject'],
+  unsupported_transport: ['unsupported_transport', false, 'resolve', 'tool'],
+  // R-LP-29..38: a server is recorded as at fault (subject) only with evidence our own environment cannot explain.
+  registry_lookup_truncated: ['no_runnable_artifact', false, 'resolve', 'tool'], // a registry search page came back full: the entry may not have been fetched
+  image_unavailable: ['install_failed_registry', false, 'resolve', 'subject'], // the registry's own 404, 401 or 403 after a good token exchange, or a digest mismatch
+  image_registry_unreadable: ['install_failed_registry', false, 'resolve', 'tool'], // we could not read the registry's answer (no challenge, bad realm, no token, bad JSON, no linux/amd64, no layers, bad sizes)
+  image_pull_failed: ['install_failed_registry', false, 'install', 'tool'], // the run-stage pull failed on a digest the planner already read
+  install_failed: ['install_failed_registry', false, 'install', 'subject'], // a package-level error (E404, ETARGET, no matching distribution, no bin), no proxy denial
+  install_blocked: ['install_failed_registry', false, 'install', 'tool'], // our egress proxy refused something the install asked for
+  install_resource_limit: ['install_failed_registry', false, 'install', 'tool'], // killed (137, 124, out of memory) inside our limits
+  install_build_failed: ['install_failed_registry', false, 'install', 'tool'], // a native build, a missing compiler or library, an engine mismatch, or an install failure with no package-level cause
+  install_timeout: ['install_failed_registry', false, 'install', 'tool'], // our install time limit
+  needs_credentials: ['start_requires_credentials', false, 'start', 'subject'], // a declared required env var, and the server exited non-zero by itself with no network attempt
+  start_needs_network: ['timeout_start', false, 'start', 'tool'], // the server tried the network, which the run does not have
+  start_failed: ['timeout_start', false, 'start', 'subject'], // exited with its own non-zero code, early, with every argument filled
+  start_env_limited: ['timeout_start', false, 'start', 'tool'], // a start failure our environment could have caused
+  start_timeout: ['timeout_start', false, 'start', 'tool'],
+  list_failed: ['timeout_start', false, 'list', 'subject'], // a JSON-RPC error the server sent, or a malformed result
+  list_probe_limited: ['timeout_start', false, 'list', 'tool'], // our time limit, page cap or read cap, or an HTTP transport failure
+  list_rejected: ['tool_error', false, 'grade', 'tool'], // our engine refused the list it was given
+  rate_limited: ['rate_limited', true, 'resolve', 'infra'],
+  upstream_error: ['upstream_unavailable', true, 'resolve', 'infra'],
+  harness_error: ['tool_error', true, 'start', 'tool'], // our driver or bundle step failed; tried again, then accepted as a gap
+  shard_deadline: ['upstream_unavailable', true, 'start', 'infra'],
+  sandbox_evidence_missing: ['trace_unavailable', true, 'start', 'tool'],
+  disk_low: ['upstream_unavailable', true, 'install', 'infra'], // the runner's disk
 });
 
 /** The fields this lane writes, with their types in mcp-results fields/registry.yaml (at tool-qa's pinned commit). */
@@ -344,7 +364,9 @@ const MANIFEST_CAP = 4 * 1024 * 1024;
 /**
  * The digest an OCI reference points to and the size of its linux/amd64 image, from the registry's v2 API (anonymous:
  * the registry's own token service when it asks for one). Data only: no layer is fetched here. Only OCI_HOSTS, and token
- * services on OCI_TOKEN_HOSTS. Throws a detail code: oci_host_not_allowed, image_unavailable, image_too_large,
+ * services on OCI_TOKEN_HOSTS. Throws a detail code: oci_host_not_allowed, image_unavailable (the registry's own 404, a 401 or
+ * 403 after a good token exchange, or a digest mismatch: the image's), image_registry_unreadable (anything else we could
+ * not read: no Bearer challenge, a bad realm, no token, bad JSON, no linux/amd64 entry, no layers, bad sizes: ours), image_too_large,
  * rate_limited or upstream_error.
  */
 export async function resolveOciImage(ref, { fetch: fetchImpl = globalThis.fetch, timeoutMs = 20_000, maxBytes = OCI_MAX_BYTES } = {}) {
@@ -362,28 +384,30 @@ export async function resolveOciImage(ref, { fetch: fetchImpl = globalThis.fetch
     let res = await ask(urlFor(reference));
     if (res.status === 401 && !auth) {
       const m = /^Bearer\s+(.*)$/i.exec(String(header(res, 'www-authenticate') || ''));
-      if (!m) throw fail('image_unavailable');
+      if (!m) throw fail('image_registry_unreadable');
       const params = {};
       for (const p of m[1].matchAll(/([a-z]+)="([^"]{0,500})"/gi)) params[p[1].toLowerCase()] = p[2];
       let realm;
-      try { realm = new URL(params.realm); } catch { throw fail('image_unavailable'); }
+      try { realm = new URL(params.realm); } catch { throw fail('image_registry_unreadable'); }
       if (realm.protocol !== 'https:' || realm.port !== '' || !OCI_TOKEN_HOSTS.includes(realm.hostname)) throw fail('oci_host_not_allowed');
       if (params.service) realm.searchParams.set('service', params.service);
       realm.searchParams.set('scope', 'repository:' + ref.path + ':pull');
       const tok = await getJson(fetchImpl, realm.href, { timeoutMs, cap: 64 * 1024 });
       const token = tok && (typeof tok.token === 'string' ? tok.token : typeof tok.access_token === 'string' ? tok.access_token : null);
-      if (!token || token.length > 16384) throw fail('image_unavailable');
+      if (!token || token.length > 16384) throw fail('image_registry_unreadable');
       auth = 'Bearer ' + token;
       res = await ask(urlFor(reference));
     }
     if (res.status === 401 || res.status === 403 || res.status === 404) {
       if (res.status === 403 && httpDetail(403, (k) => header(res, k)) === 'rate_limited') throw fail('rate_limited');
-      throw fail('image_unavailable', { status: res.status });
+      // The registry's own refusal is the image's only when nothing of ours can explain it: a 404 is its answer for the
+      // name, and a 401 or 403 counts only after a good token exchange (R-LP-36). Without one, it may be our request.
+      throw fail(res.status === 404 || auth ? 'image_unavailable' : 'image_registry_unreadable', { status: res.status });
     }
     if (!res.ok) throw fail(httpDetail(res.status, (k) => header(res, k)), { status: res.status });
     const buf = await readCapped(res, MANIFEST_CAP);
     let doc;
-    try { doc = JSON.parse(buf.toString('utf8')); } catch { throw fail('image_unavailable'); }
+    try { doc = JSON.parse(buf.toString('utf8')); } catch { throw fail('image_registry_unreadable'); }
     const digest = 'sha256:' + sha256(buf);
     return { doc, digest };
   };
@@ -392,14 +416,14 @@ export async function resolveOciImage(ref, { fetch: fetchImpl = globalThis.fetch
   let image = top.doc;
   if (isObj(image) && Array.isArray(image.manifests)) {
     const pick = image.manifests.find((e) => isObj(e) && isObj(e.platform) && e.platform.os === 'linux' && e.platform.architecture === 'amd64' && typeof e.digest === 'string' && /^sha256:[0-9a-f]{64}$/.test(e.digest));
-    if (!pick) throw fail('image_unavailable');
+    if (!pick) throw fail('image_registry_unreadable');
     const sub = await manifest(pick.digest);
     if (sub.digest !== pick.digest) throw fail('image_unavailable');
     image = sub.doc;
   }
-  if (!isObj(image) || !Array.isArray(image.layers) || !image.layers.length) throw fail('image_unavailable');
+  if (!isObj(image) || !Array.isArray(image.layers) || !image.layers.length) throw fail('image_registry_unreadable');
   const sizes = [image.config && image.config.size, ...image.layers.map((l) => l && l.size)];
-  if (!sizes.every((n) => Number.isSafeInteger(n) && n >= 0)) throw fail('image_unavailable');
+  if (!sizes.every((n) => Number.isSafeInteger(n) && n >= 0)) throw fail('image_registry_unreadable');
   const bytes = sizes.reduce((a, b) => a + b, 0);
   if (bytes > maxBytes) throw fail('image_too_large', { bytes });
   return { digest: top.digest, bytes };
@@ -718,13 +742,16 @@ export async function launchFor(pkg, { fetch: fetchImpl = globalThis.fetch } = {
  * how it matched: seed (it carries a package of the seed list), namespace (its name is io.github.<subject owner>/...,
  * which the registry verifies), repository (only its repository URL, free text anyone can publish).
  */
-export async function registryEntries(subject, seedPkgs, { fetch: fetchImpl = globalThis.fetch, base = REGISTRY_BASE } = {}) {
+export const REGISTRY_PAGE = 100;
+export async function registryEntries(subject, seedPkgs, { fetch: fetchImpl = globalThis.fetch, base = REGISTRY_BASE, stats = null } = {}) {
   const [owner, name] = subject.split('/');
   const seedIds = new Set(seedPkgs.map((p) => String(p.registry).toLowerCase() + ':' + String(p.identifier).toLowerCase()));
   const queries = [...new Set([name, owner + '/' + name, ...seedPkgs.filter((p) => ['npm', 'pypi'].includes(p.registry)).map((p) => p.identifier.split('/').pop())])].filter((q) => q && q.length <= 200).slice(0, 5);
   const found = new Map();
   for (const q of queries) {
     const d = await getJson(fetchImpl, base + '/v0.1/servers?search=' + encodeURIComponent(q) + '&version=latest&limit=100');
+    // A search page of 100 is full, and we do not page: the entry we want may be on a page we never fetched (R-LP-38).
+    if (stats && Array.isArray(d && d.servers) && d.servers.length >= REGISTRY_PAGE) stats.full = true;
     for (const x of Array.isArray(d && d.servers) ? d.servers : []) {
       const s = x && isObj(x.server) ? x.server : x;
       if (!isObj(s) || typeof s.name !== 'string' || found.has(s.name)) continue;
@@ -738,7 +765,7 @@ export async function registryEntries(subject, seedPkgs, { fetch: fetchImpl = gl
   return [...found.values()].sort((a, b) => (b.seed - a.seed) || (b.namespace - a.namespace) || (a.server.name < b.server.name ? -1 : 1));
 }
 
-const DETAIL_ORDER = ['unverified_registry_entry', 'image_too_large', 'oci_host_not_allowed', 'unsupported_transport', 'image_unavailable', 'launch_invalid', 'private_registry', 'unsupported_package'];
+const DETAIL_ORDER = ['unverified_registry_entry', 'image_too_large', 'oci_host_not_allowed', 'unsupported_transport', 'image_registry_unreadable', 'image_unavailable', 'launch_invalid', 'private_registry', 'unsupported_package'];
 
 /**
  * How to run one subject: { status: 'runnable', launch, choice, registry, subdir } or { status: 'skipped', detail }.
@@ -750,7 +777,8 @@ export async function resolveSubject(item, { seed = new Map(), fetch: fetchImpl 
   const seedPkgs = seed.get(item.repo.toLowerCase()) || [];
   out.seed_packages = seedPkgs.length;
   try {
-    const entries = await registryEntries(item.repo, seedPkgs, { fetch: fetchImpl, base });
+    const lookup = { full: false };
+    const entries = await registryEntries(item.repo, seedPkgs, { fetch: fetchImpl, base, stats: lookup });
     const cands = [];
     for (const e of entries) for (const p of Array.isArray(e.server.packages) ? e.server.packages.slice(0, 20) : []) if (isObj(p)) cands.push({ server: e.server, entry: e, by: e.by, pkg: p });
     if (!entries.length) for (const p of seedPkgs) cands.push({ server: null, entry: null, by: 'seed-only', pkg: { registryType: p.registry, identifier: p.identifier } });
@@ -790,7 +818,7 @@ export async function resolveSubject(item, { seed = new Map(), fetch: fetchImpl 
     }
     // A remote-only entry counts only when it is the subject's own (seed or namespace); otherwise it is someone's claim.
     const own = entries.filter((e) => e.seed || e.namespace);
-    if (!cands.length) out.detail = own.some(({ server }) => Array.isArray(server.remotes) && server.remotes.length) ? 'remote_only' : entries.length > own.length ? 'unverified_registry_entry' : 'no_package';
+    if (!cands.length) out.detail = own.some(({ server }) => Array.isArray(server.remotes) && server.remotes.length) ? 'remote_only' : entries.length > own.length ? 'unverified_registry_entry' : lookup.full ? 'registry_lookup_truncated' : 'no_package';
     else out.detail = DETAIL_ORDER.find((d) => details.includes(d)) || 'unsupported_package';
     if (own.length) out.registry = { name: own[0].server.name, version: typeof own[0].server.version === 'string' ? own[0].server.version.slice(0, 64) : null, entries: own.length, transports: [], remotes: Array.isArray(own[0].server.remotes) ? own[0].server.remotes.length : 0 };
   } catch (e) {
@@ -971,26 +999,117 @@ export function networkEvents(records, cap = 200) {
   return out;
 }
 
-/** Why an item that had a target got no live list: a detail code (DETAILS). */
-export function failureDetail(rec, bare, envp, { deadlineHit = false } = {}) {
+/** Package-level install errors: the package, its version or its launcher is not there (the server's own publishing). */
+const PACKAGE_ERROR = /\bE404\b|\bETARGET\b|No matching distribution|declares no bin/;
+const OOM_TEXT = /\bENOMEM\b|out of memory|\bOOM\b/i;
+/** A list error that is the server's own: a malformed result. (A JSON-RPC error is told by its numeric code.) */
+const MALFORMED_LIST = /^the .* result has no .* array$|^nextCursor is not a string$|^the server repeated the same cursor$|^the answer has no result object$/;
+
+/** Everything the install steps and the steps log say, as one text (step fields are only strings the driver wrote). */
+function installText(inst, stepsLog) {
+  const parts = [];
+  for (const st of Array.isArray(inst.steps) ? inst.steps : []) if (st) for (const k of ['stderr', 'stdout', 'error', 'message', 'tail']) if (typeof st[k] === 'string') parts.push(st[k]);
+  if (typeof stepsLog === 'string') parts.push(stepsLog);
+  else if (Buffer.isBuffer(stepsLog)) parts.push(stepsLog.toString('utf8'));
+  return parts.join('\n');
+}
+
+/** How many installs the proxy refused: the count the lane records, or the refused entries of the egress list. */
+function refusedCount(inst) {
+  if (Number.isInteger(inst.egress_refused)) return inst.egress_refused;
+  return (Array.isArray(inst.egress) ? inst.egress : []).filter((e) => e && e.allowed === false).length;
+}
+
+/**
+ * Network evidence in a runsc trace summary (mcp-surface-corpus trace-summary.mjs): a failed network call, a connect,
+ * a send or a looked-up name. The trace is kept when the netlog files are lost (R-LP-41). Not counts.network: a healthy
+ * server that touched no network showed counts.network 4 (local sockets inside the runtime), so it would mark every
+ * server as needing the network and nothing could be the server's own failure (R-LP-42).
+ */
+function traceNetwork(sum) {
+  if (!isObj(sum)) return false;
+  const n = isObj(sum.network) ? sum.network : {};
+  const len = (v) => (Array.isArray(v) ? v.length : Number(v) || 0);
+  return (isObj(sum.failed) && Number(sum.failed.network) > 0) || len(n.connects) > 0 || len(n.sends) > 0 || len(n.dns_names) > 0;
+}
+
+/** Whether the server itself tried the network (the run has none): a lookup or connection in its role, or a failed network call in its trace. */
+export function serverNetworkAttempt(records) {
+  return (Array.isArray(records) ? records : []).some((r) => isObj(r) && r.role === 'server' && (r.type === 'dns_query' || r.type === 'connection'
+    || (r.type === 'trace_summary' && traceNetwork(r.summary))));
+}
+
+/** How the server's process ended, from the probe: { exit, signal }, read from the transport, else from the error text. */
+function exitOf(p) {
+  const t = isObj(p.transport) ? p.transport : {};
+  if (Number.isInteger(t.exit) || (typeof t.signal === 'string' && t.signal)) return { exit: Number.isInteger(t.exit) ? t.exit : null, signal: t.signal || null };
+  const m = /\(exit (-?\d+|null), signal ([A-Za-z0-9]+|null)\)/.exec(String(p.initialize_error || p.error || ''));
+  return m ? { exit: m[1] === 'null' ? null : Number(m[1]), signal: m[2] === 'null' ? null : m[2] } : { exit: null, signal: null };
+}
+
+/** How long the probe whose exit we read ran: its own total_ms (in the record's probe entry or the probe), else captured_at - started_at. */
+function probeMs(rec, p, tag) {
+  const t = [isObj(p.timing) ? p.timing.total_ms : null, isObj(rec.probes) && isObj(rec.probes[tag]) && isObj(rec.probes[tag].timing) ? rec.probes[tag].timing.total_ms : null];
+  for (const v of t) if (Number.isFinite(v) && v >= 0) return v;
+  const d = Date.parse(p.captured_at) - Date.parse(p.started_at);
+  return Number.isFinite(d) && d >= 0 ? d : null;
+}
+
+/** A list that did not come: the server's own fault only when it sent a JSON-RPC error or a malformed result. */
+function listDetail(p) {
+  const L = isObj(p.lists) ? p.lists['tools/list'] : null;
+  const err = isObj(L) && typeof L.error === 'string' ? L.error : null;
+  if (err) {
+    if (Number.isInteger(L.error_code) && !/^HTTP \d{3}/.test(err)) return 'list_failed';
+    if (MALFORMED_LIST.test(err)) return 'list_failed';
+  }
+  return 'list_probe_limited';
+}
+
+/**
+ * Why an item that had a target got no live list: a detail code (DETAILS). The server is the one at fault (subject) only
+ * with evidence our own environment cannot explain (R-LP-29..38); anything else is ours (tool). `ctx` carries what the lane
+ * records beside the driver's record: records (this target's telemetry), stepsLog (the install's log text), launch and
+ * argsUnfilled (the plan's resolution of it).
+ */
+export function failureDetail(rec, bare, envp, { deadlineHit = false, records = [], stepsLog = null, launch = null, argsUnfilled = null } = {}) {
   if (!rec) return deadlineHit ? 'shard_deadline' : 'harness_error';
   if (rec.excluded) return 'sandbox_evidence_missing';
   const inst = rec.install;
   if (!inst) return rec.timed_out ? 'shard_deadline' : 'harness_error';
   if (!inst.ok) {
-    if (inst.kind === 'docker') return 'image_unavailable';
-    if (rec.timed_out || (Array.isArray(inst.steps) && inst.steps.some((s) => s && s.timed_out))) return 'install_timeout';
-    if (Array.isArray(inst.steps) && inst.steps.some((s) => s && Number.isInteger(s.exit) && s.exit !== 0)) return 'install_failed';
-    return 'harness_error';
+    // The planner already read this image's digest, so a failed pull is not the image's absence (R-LP-37).
+    if (inst.kind === 'docker') return 'image_pull_failed';
+    const steps = Array.isArray(inst.steps) ? inst.steps : [];
+    if (rec.timed_out || steps.some((s) => s && s.timed_out)) return 'install_timeout';
+    const failed = steps.filter((s) => s && Number.isInteger(s.exit) && s.exit !== 0);
+    if (!failed.length) return 'harness_error';
+    const text = installText(inst, stepsLog);
+    if (failed.some((s) => s.exit === 137 || s.exit === 124) || OOM_TEXT.test(text)) return 'install_resource_limit';
+    if (refusedCount(inst) > 0) return 'install_blocked';
+    if (PACKAGE_ERROR.test(text)) return 'install_failed';
+    return 'install_build_failed';
   }
   const p = envp || bare;
   if (!p) return rec.timed_out ? 'start_timeout' : 'harness_error';
+  if (p.initialize || p.era === 'modern') return listDetail(p);
+  if (rec.timed_out || /^time limit/.test(String(p.error || ''))) return 'start_timeout';
   // Credentials only when the publisher declares a required env var (the registry entry). A secret-looking name in the
   // README or the source is no such evidence: optional keys are common, and the server failed with dummies too.
   const needsEnv = !!(rec.env && rec.env.names && Array.isArray(rec.env.names.registry) && rec.env.names.registry.length);
-  if (p.initialize || p.era === 'modern') return needsEnv ? 'needs_credentials' : 'list_failed';
-  if (rec.timed_out || /^time limit/.test(String(p.error || ''))) return needsEnv ? 'needs_credentials' : 'start_timeout';
-  return needsEnv ? 'needs_credentials' : 'start_failed';
+  const net = serverNetworkAttempt(records);
+  const { exit, signal } = exitOf(p);
+  // 125 is docker run's own failure, 126 and 127 are not-executable and command-not-found (what an unresolved PyPI
+  // venv/bin/<package> guess gives), 137 a kill: none is the server's own exit (R-LP-39).
+  const own = Number.isInteger(exit) && exit !== 0 && ![125, 126, 127, 137].includes(exit) && !signal;
+  // A PyPI launch with no entry runs venv/bin/<package name>, a guess: the console script often has another name.
+  const guess = !isObj(launch) || !launch.kind || (launch.kind === 'pypi' && !launch.entry);
+  const sound = own && argsUnfilled === 0 && !guess;
+  if (needsEnv) return net ? 'start_needs_network' : sound ? 'needs_credentials' : 'start_env_limited';
+  if (net) return 'start_env_limited';
+  // The probe's own duration, not the record's total (which holds the install and the analysis too, R-LP-40).
+  const ms = probeMs(rec, p, p === envp ? 'env' : 'bare');
+  return sound && ms !== null && ms < START_QUICK_MS ? 'start_failed' : 'start_env_limited';
 }
 
 // ------------------------------------------------------------------ observations
@@ -1122,7 +1241,7 @@ export function buildItem(item, ctx) {
   const r = item.resolution;
   const lines = [obs('subject_id', item.subject)];
   const result = {
-    format: FORMAT, lane: LANE, subject: item.subject, status: null, detail: null, skip_reason: null, retryable: false,
+    format: FORMAT, lane: LANE, subject: item.subject, status: null, detail: null, skip_reason: null, fault: null, retryable: false,
     engine_version: VERSION, rubric_version: M.RUBRIC_VERSION, spec_version: M.SPEC_VERSION,
     install: null, unverified: null, live: null, static_vs_live: null, timing: { resolve_ms: int(item.resolve_ms) }, sandbox: ctx.sandboxSummary,
     driver: null, oracles: null, raw_truncated: [],
@@ -1164,8 +1283,9 @@ export function buildItem(item, ctx) {
     }
     const primary = listed(envp) ? envp : listed(bare) ? bare : null;
     let reader = { listed: false };
+    const tel = telemetryFor(telemetryFile, item.target_id);
     if (!primary) {
-      detail = ociRun && ociRun.outcome === 'disk_low' ? 'disk_low' : failureDetail(rec, bare, envp, { deadlineHit });
+      detail = ociRun && ociRun.outcome === 'disk_low' ? 'disk_low' : failureDetail(rec, bare, envp, { deadlineHit, records: tel.records, stepsLog: readText(join(dir, 'steps.log')), launch: r.launch, argsUnfilled: r.choice ? r.choice.args_unfilled : null });
     } else {
       const text = listText(primary.lists['tools/list'].raw_pages);
       let g = null;
@@ -1224,7 +1344,7 @@ export function buildItem(item, ctx) {
     for (const [k, p] of [['bare', bare], ['env', envp]]) if (p) raw.push(['raw/probe-' + k + '.json', Buffer.from(json(p))]);
     if (rec) raw.push(['raw/record.json', Buffer.from(json(rec))]);
     for (const f of ['registry.json', 'static.json', 'analysis.json', 'steps.log']) { const b = readText(join(dir, f)); if (b) raw.push(['raw/' + f.replace(/\.log$/, '.txt'), b]); }
-    const tel = telemetryFor(telemetryFile, item.target_id);
+
     if (tel.lines.length) raw.push(['raw/telemetry.jsonl', Buffer.from(tel.lines.join('\n') + '\n')]);
     lines.push(...networkEvents(tel.records).map((e) => obs('network_event', e)));
     raw.push(...oracle.raw);
@@ -1235,12 +1355,12 @@ export function buildItem(item, ctx) {
   lines.push(obs('runner_env', ctx.runnerEnv, 'the sandbox wrote no shard record'));
   lines.push(obs('our_tool_versions', ctx.toolVersions));
   if (detail) {
-    const [reason, retryable, stage] = DETAILS[detail] || DETAILS.harness_error;
-    result.status = 'skipped'; result.detail = detail; result.skip_reason = reason; result.retryable = retryable;
+    const [reason, retryable, stage, fault] = DETAILS[detail] || DETAILS.harness_error;
+    result.status = 'skipped'; result.detail = detail; result.skip_reason = reason; result.fault = fault; result.retryable = retryable;
     lines.push(obs('error_taxonomy_code', detail));
     files[RESULT_PATH] = json(result);
     files['observations/live.ndjson'] = lines.join('\n') + '\n';
-    return { status: 'skipped', detail, files, skips: [{ stage, reason, evidence: RESULT_PATH, ...(retryable ? { retryable: true } : {}) }], subjectSha, components: oracle.components };
+    return { status: 'skipped', detail, files, skips: [{ stage, reason, fault, evidence: RESULT_PATH, ...(retryable ? { retryable: true } : {}) }], subjectSha, components: oracle.components };
   }
   result.status = 'graded';
   files[RESULT_PATH] = json(result);
@@ -1430,7 +1550,7 @@ export function bundleShard({ work, now = () => new Date(), log = () => {}, know
     };
     writeFileSync(join(dir, 'meta.json'), json(meta));
     summary.push({ index: item.index, status: b.status, detail: b.detail });
-    log('item ' + item.index + ': ' + b.status + (b.detail ? ' (' + b.detail + ', ' + DETAILS[b.detail][0] + (DETAILS[b.detail][1] ? ', retryable' : '') + ')' : ''));
+    log('item ' + item.index + ': ' + b.status + (b.detail ? ' (' + b.detail + ', ' + DETAILS[b.detail][0] + ', ' + DETAILS[b.detail][3] + (DETAILS[b.detail][1] ? ', retryable' : '') + ')' : ''));
   }
   return summary;
 }
