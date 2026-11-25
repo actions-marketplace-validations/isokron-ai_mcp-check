@@ -378,7 +378,7 @@ test('R-AE-26: off by default everywhere but the CLI flag: the Action, the MCP s
   assert.match(src('src/inputs/repo-source.cjs'), /if \(o\.effects && RepoEffects\)/, 'effects are asked for only when the module is there');
 });
 
-test('AE-27: an fs or HTTP sink is definite only when its target comes from the tool\'s arguments; a constant or server-internal target is "may"', async () => {
+test('R-AE-27: an fs or HTTP sink is definite only when its target comes from the tool\'s arguments; a constant or server-internal target is "may"', async () => {
   const t = (await read('fp2-ts')).fx.tools;
   for (const n of ['upd_check', 'sync_status', 'evict', 'rmtemp', 'datacache', 'rmcache', 'gqlmut']) {
     const all = ['write', 'delete', 'unsafe_http', 'exec'].flatMap((k) => t[n].effects[k]);
@@ -392,7 +392,7 @@ test('AE-27: an fs or HTTP sink is definite only when its target comes from the 
   assert.deepEqual(report.findings.filter((f) => f.severity === 'attention').map((f) => f.tool).sort(), ['delete_file', 'delete_in_dir', 'evict_user']);
 });
 
-test('AE-28: the flow from an argument is followed through local variables, destructuring, loops and the parameters of callees', () => {
+test('R-AE-28: the flow from an argument is followed through local variables, destructuring, loops and the parameters of callees', () => {
   const via = (body, extra = '') => snippet(TS(body, extra), 't').effects.delete[0].confidence;
   assert.equal(via("const target = a.dir + '/x'; fs.rmSync(target);"), 'definite', 'a local variable');
   assert.equal(via("const { dir: d } = a; const full = d + '/x'; fs.rmSync(full);"), 'definite', 'destructuring, then a second variable');
@@ -411,7 +411,7 @@ test('AE-28: the flow from an argument is followed through local variables, dest
   assert.equal(snippet(TS("await fetch('https://x/s/' + a.id, { method: 'DELETE' });"), 't').effects.delete[0].confidence, 'definite');
 });
 
-test('AE-29: a SQL or ORM write is definite only when an argument reaches the statement', () => {
+test('R-AE-29: a SQL or ORM write is definite only when an argument reaches the statement', () => {
   const w = (body, head = '') => snippet(TS(body, head), 't').effects.write[0].confidence;
   assert.equal(w("await db.run('UPDATE counters SET hits = hits + 1');"), 'may', 'a statement on a fixed table with no argument');
   assert.equal(w("await db.run('UPDATE counters SET hits = ? WHERE id = ?', [1, a.id]);"), 'definite');
