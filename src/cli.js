@@ -9,6 +9,7 @@ import { ALL_SECTIONS, DEFAULT_SECTIONS, GRADED_SECTIONS, GRADES, belowMinGrade,
 import { approximateLine, collect, InputFailure, line, sourceLine, savedList } from './inputs/collect.js';
 import { tagged } from './links.js';
 import { analyseList, skippedLine } from './unreadable.js';
+import { codeEffectsReport, codeEffectsText, codeEffectsMarkdown } from './code-effects.js';
 
 const USAGE = `mcp-check ${VERSION}: grade an MCP server's tools/list (rubric ${M.RUBRIC_VERSION})
 
@@ -40,6 +41,10 @@ Options:
                                 never gated: selecting it adds its guard-coverage line
   --fix <out.json>              write the list with safe fixes applied
   --compare <old.json>          diff against an earlier list; exit 1 on a high-risk annotation change
+  --code-effects                experimental, with --repo or --repo-dir: follow each tool's handler through the source and
+                                compare what it writes, deletes or sends with the declared hints (own block of the report,
+                                never graded, never changes the exit code)
+  --code-effects-depth <0-6>    how many levels of calls --code-effects follows inside the repository (default 3)
   --save <file>                 write the tool list that was fetched (for --compare or the web checker)
   --timeout <seconds>           one overall limit for reaching a server and listing its tools (default 60)
   --sarif-uri <path>            with --format sarif: the repository path of the list, for file locations
@@ -60,7 +65,7 @@ class UsageError extends Error {}
 export function parseArgs(argv) {
   const opt = {
     cmd: 'check', format: 'text', minGrade: null, sections: DEFAULT_SECTIONS.slice(), fix: null, compare: null, file: null, sarifUri: null, output: null, timeout: 60, server: null,
-    url: null, headers: {}, protocol: 'auto', command: null, argv: null, env: {}, config: null, repo: null, repoDir: null, registry: null, save: null, githubTokenEnv: null,
+    url: null, headers: {}, protocol: 'auto', command: null, argv: null, env: {}, config: null, repo: null, repoDir: null, registry: null, save: null, githubTokenEnv: null, codeEffects: false, codeEffectsDepth: undefined,
   };
   const timeout = (v) => { const n = Number(v); if (!(n > 0 && n <= 600)) throw new UsageError('--timeout must be 1 to 600 seconds'); return n; };
   if (argv[0] === 'serve') { opt.cmd = 'serve'; if (argv.length > 1) throw new UsageError('serve takes no arguments'); return opt; }
@@ -105,6 +110,8 @@ export function parseArgs(argv) {
     else if (a === '--server') opt.server = next();
     else if (a === '--repo') opt.repo = next();
     else if (a === '--repo-dir') opt.repoDir = next();
+    else if (a === '--code-effects') opt.codeEffects = true;
+    else if (a === '--code-effects-depth') { const n = Number(next()); if (!Number.isInteger(n) || n < 0 || n > 6) throw new UsageError('--code-effects-depth must be a whole number from 0 to 6'); opt.codeEffectsDepth = n; opt.codeEffects = true; }
     else if (a === '--registry') opt.registry = next();
     else if (a === '--github-token-env') opt.githubTokenEnv = next();
     else if (a === '--save') opt.save = next();
@@ -122,6 +129,7 @@ export function parseArgs(argv) {
   if (Object.keys(opt.env).length && !(opt.command || opt.argv)) throw new UsageError('--env goes with --command or -- only');
   if (opt.server && !opt.config) throw new UsageError('--server goes with --config');
   if (opt.githubTokenEnv && !(opt.repo || opt.registry)) throw new UsageError('--github-token-env goes with --repo or --registry');
+  if (opt.codeEffects && !(opt.repo || opt.repoDir)) throw new UsageError('--code-effects goes with --repo or --repo-dir (it reads handlers from source)');
   if (opt.save && opt.file) throw new UsageError('--save is for fetched lists; the input is already a file');
   if (!['text', 'md', 'json', 'sarif'].includes(opt.format)) throw new UsageError('unknown format ' + opt.format + ' (use text, md, json or sarif)');
   if (!['auto', 'modern', 'legacy'].includes(opt.protocol)) throw new UsageError('--protocol must be auto, modern or legacy');
@@ -149,6 +157,7 @@ function textReport(r, opt, below, diff, source) {
   const fs = M.allFindings(r).filter((f) => f.severity !== 'advice' && f.section !== 'surface');
   if (fs.length) out.push('', 'Blocking and attention items:');
   fs.forEach((f) => out.push('  [' + f.severity + '] ' + (f.tool ? line(f.tool, 200) : '(list)') + ': ' + f.id + ': ' + line(f.message, 2000)));
+  if (r.code_effects) out.push(...codeEffectsText(r.code_effects, line));
   if (diff) out.push('', 'Compared with ' + opt.compare + ': ' + diff.added.length + ' added, ' + diff.removed.length + ' removed, ' + diff.changed.length + ' changed' + (diff.highRisk.length ? '; HIGH RISK: ' + diff.highRisk.map((t) => line(t, 200)).join(', ') : ''));
   if (below.length) out.push('', 'Below --min-grade ' + opt.minGrade + ': ' + below.join(', '));
   out.push('', 'Docs for each check: ' + tagged(M.DOCS_BASE + '<id>', 'cli'));
@@ -163,6 +172,7 @@ function grade(item, opt, prevTools) {
     throw e;
   }
   const r = analyseList(parsed, item.reader || null); // a source read: checks of parts the reader could not read are skipped
+  if (opt.codeEffects && item.effects !== undefined) r.code_effects = codeEffectsReport(parsed.tools, item.effects); // its own block: never in the grades
   const below = belowMinGrade(r, opt.sections, opt.minGrade);
   const diff = prevTools ? M.diffCatalogs(prevTools, parsed.tools) : null;
   return { r, below, diff, parsed, failed: below.length > 0 || !!(diff && diff.highRisk.length) };
@@ -184,7 +194,7 @@ function render(item, x, opt, multi) {
     return s;
   }
   if (opt.format === 'md') {
-    const md = M.toMarkdown(x.r);
+    const md = M.toMarkdown(x.r) + (x.r.code_effects ? '\n' + codeEffectsMarkdown(x.r.code_effects, mdEscape) : '');
     const sl = [sourceLine(src), approximateLine(src), skippedLine(x.r)].filter(Boolean).map(mdEscape).join('\n\n');
     return (multi ? '<!-- ' + line(item.label).replace(/--/g, '- -') + ' -->\n' : '') + (sl ? md.replace(/^(# [^\n]*\n)/, (m) => m + '\n' + sl + '\n') : md);
   }

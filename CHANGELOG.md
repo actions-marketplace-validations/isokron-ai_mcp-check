@@ -4,6 +4,13 @@ All notable changes to `@isokron/mcp-check` and the `isokron-ai/mcp-check` Actio
 
 ## Unreleased
 
+### Code-derived tool annotations (phase 1, experimental, off by default)
+
+- **`--code-effects`** (with `--repo` or `--repo-dir`): reads each tool's handler from TypeScript, JavaScript and Python source, follows calls inside the repository to a set depth (`--code-effects-depth`, default 3), and records what it touches: file writes and deletes, SQL and ORM writes, HTTP with its method, process execution, client calls whose effect is not visible. Each effect has file and line and a tier, `definite` or `may`. Static only: nothing is run.
+- **New checks, in their own `code_effects` block of the report, never in the grades:** `annot-code-writes-marked-readonly`, `annot-code-deletes-marked-safe`, `annot-code-unmarked-write`. A definite sink is attention at most; a `may` is advice. The name-based checks are unchanged.
+- **Loop:** `corpus/scan-static.mjs` writes `raw/subject/code-effects.json` only when `SCAN_STATIC_CODE_EFFECTS=1`; results/ and the workflow are unchanged.
+- **Docs and score:** [docs/code-effects.md](docs/code-effects.md); `node bench/effects.mjs` scores the checks on labelled servers in `bench/effects/`. Tests: `test/code-effects.test.mjs`.
+
 ### Terminal escape sequences and shell syntax in URLs (loop upgrade 19)
 
 - **`sec-control-chars`** now names ANSI terminal escape sequences when it finds them (CSI, OSC including OSC 8 hyperlinks, and the single-byte C1 forms) and shows them, instead of the bare "Control characters." The check already flagged ESC; no new check ID, so existing cases keep their reading. Severity is unchanged (attention).

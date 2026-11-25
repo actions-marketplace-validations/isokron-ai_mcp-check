@@ -14,7 +14,7 @@ import {
   FORMAT, KNOWN_ANSWER_FILE, MARKER_RE, MAX_ITEMS, MAX_ITEMS_CHARS, PERMANENT, RESULT_PATH, SKIP_REASON, SKIPS, TRANSIENT, skipFaultFor, skipReasonFor,
   InputProblem, buildBundle, gradeError, forgeryControl, isDateTime, knownAnswerControl, knownAnswerFile, main, observationsOf,
   parseInputs, runShard, scanSubject, settingsDigest,
-  RAW_FILE_CAP, READ_LANGUAGES, SERVERS_SHARE, serverBreakdown, serverSkip, CALLS_PER_SUBJECT, RATE_RESERVE, SUBJECT_HEAP_MB, fixtureFetch, httpDetail, jsonUpTo, knownAnswer, notRead, rawText, readDetail, reportItem, scanInWorker, writeItem,
+  RAW_FILE_CAP, READ_LANGUAGES, SERVERS_SHARE, rawFiles, resultOf, serverBreakdown, serverSkip, CALLS_PER_SUBJECT, RATE_RESERVE, SUBJECT_HEAP_MB, fixtureFetch, httpDetail, jsonUpTo, knownAnswer, notRead, rawText, readDetail, reportItem, scanInWorker, writeItem,
 } from '../corpus/scan-static.mjs';
 import * as guard from '../corpus/loop-guard.mjs';
 // tool-qa's own result contract and ingest checks, at the commit WORKER_KIT_REF pins (test/tool-qa/README.md).
@@ -1017,4 +1017,24 @@ test('R-SS-14: a list too large to hold (list_rejected / too_large) is recorded 
   const e = gradeError(new RangeError('Invalid string length'));
   assert.equal(e.detail, 'list_rejected');
   assert.equal(skipReasonFor(e.detail, e.listError), 'too_large');
+});
+
+// ---- code-derived annotations in the lane (opt-in, raw/ only)
+const fxFiles = {
+  'package.json': readFileSync(join(root, 'bench', 'effects', 'cases', 'ts-lowlevel', 'package.json'), 'utf8'),
+  'src/tools.ts': readFileSync(join(root, 'bench', 'effects', 'cases', 'ts-lowlevel', 'src', 'tools.ts'), 'utf8'),
+  'src/index.ts': readFileSync(join(root, 'bench', 'effects', 'cases', 'ts-lowlevel', 'src', 'index.ts'), 'utf8'),
+};
+test('AE-17: scan-static writes raw/subject/code-effects.json only when asked for; results and grades are the same either way', async () => {
+  const off = await scanSubject('o/r', { fetch: fakeGithub({ 'o/r': { files: fxFiles } }), token: TOKEN });
+  const on = await scanSubject('o/r', { fetch: fakeGithub({ 'o/r': { files: fxFiles } }), token: TOKEN, codeEffects: true });
+  assert.equal(off.status, 'graded'); assert.equal(on.status, 'graded');
+  assert.equal('code_effects' in off.raw, false);
+  assert.equal(on.raw.code_effects.experimental, true);
+  assert.deepEqual(on.raw.code_effects.findings.map((f) => f.id).sort(), ['annot-code-deletes-marked-safe', 'annot-code-writes-marked-readonly']);
+  assert.deepEqual(on.grade, off.grade, 'the grades and the summary do not change');
+  const item = { index: 0, subject: 'o/r', repo: 'o/r', run_key: key(0), fence: 1 };
+  assert.deepEqual(resultOf(item, on, DATE), resultOf(item, off, DATE), 'results/ is the same');
+  assert.equal(Object.keys(rawFiles(off.raw)['files']).some((p) => /code-effects/.test(p)), false);
+  assert.ok(Object.keys(rawFiles(on.raw)['files']).includes('raw/subject/code-effects.json'));
 });
