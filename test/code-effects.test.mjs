@@ -274,7 +274,7 @@ test('R-AE-16: the first score on the labelled servers: nothing the check calls 
   assert.deepEqual(res.summary.not_analysed, []);
 });
 
-test('AE-20: a POST, PUT or PATCH is "may" on its own: GraphQL, JSON-RPC, search and login calls are POSTs that read', async () => {
+test('R-AE-20: a POST, PUT or PATCH is "may" on its own: GraphQL, JSON-RPC, search and login calls are POSTs that read', async () => {
   const ts = (await read('fp-ts')).fx.tools; const py = (await read('fp-py')).fx.tools;
   for (const t of [ts.gql_query, ts.es, ts.rpc, py.post_search, py.sess]) {
     assert.equal(t.effects.unsafe_http.length, 1);
@@ -285,7 +285,7 @@ test('AE-20: a POST, PUT or PATCH is "may" on its own: GraphQL, JSON-RPC, search
   assert.equal(del.effects.delete[0].confidence, 'definite', 'DELETE stays certain');
 });
 
-test('AE-21: housekeeping writes are "may": directories, logs, audit trails, metrics, state, caches, locks, temporary files, and appends to files the arguments do not name', async () => {
+test('R-AE-21: housekeeping writes are "may": directories, logs, audit trails, metrics, state, caches, locks, temporary files, and appends to files the arguments do not name', async () => {
   const ts = (await read('fp-ts')).fx.tools; const py = (await read('fp-py')).fx.tools;
   assert.equal(ts.with_log.effects.write[0].confidence, 'may'); assert.match(ts.with_log.effects.write[0].note, /log/);
   assert.equal(ts.ensure.effects.write[0].confidence, 'may'); assert.match(ts.ensure.effects.write[0].note, /directory/);
@@ -304,7 +304,7 @@ test('AE-21: housekeeping writes are "may": directories, logs, audit trails, met
   assert.equal(own.effects.write[0].confidence, 'may', 'an append to a fixed file');
 });
 
-test('AE-22: only the straight-line path is definite: a branch, a loop, a catch, a callback, a ternary or an argument-dependent helper is "may"', async () => {
+test('R-AE-22: only the straight-line path is definite: a branch, a loop, a catch, a callback, a ternary or an argument-dependent helper is "may"', async () => {
   const ts = (await read('fp-ts')).fx.tools; const py = (await read('fp-py')).fx.tools;
   assert.equal(ts.deadbranch.effects.delete[0].confidence, 'may');
   assert.equal(ts.shared_read.effects.write[0].confidence, 'may', 'a helper branch that depends on an argument');
@@ -322,7 +322,7 @@ test('AE-22: only the straight-line path is definite: a branch, a loop, a catch,
   assert.equal(viaHelper.effects.delete[0].confidence, 'may', 'a callee reached from a branch is not certain either');
 });
 
-test('AE-23: the reviewer\'s repros give no attention, and every finding is worded as what it is', async () => {
+test('R-AE-23: the reviewer\'s repros give no attention, and every finding is worded as what it is', async () => {
   for (const name of ['fp-ts', 'fp-py']) {
     const { report } = await read(name);
     assert.deepEqual(report.findings.filter((f) => f.severity === 'attention').map((f) => f.tool), name === 'fp-ts' ? ['dl'] : [], name + ': only dl, a real write to /var/data');
@@ -333,7 +333,7 @@ test('AE-23: the reviewer\'s repros give no attention, and every finding is word
   assert.deepEqual(['collide', 'sel_update', 'helpish', 'mapdel'].flatMap((n) => ['write', 'delete', 'unsafe_http', 'exec'].flatMap((k) => fx.tools[n].effects[k])), []);
 });
 
-test('AE-24: annotations the reader could not read are unknown, never "not declared"; a constant holding them is read', async () => {
+test('R-AE-24: annotations the reader could not read are unknown, never "not declared"; a constant holding them is read', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'fx-ann-'));
   try {
     const mk = (ann, use) => ({ 'package.json': '{"name":"x","dependencies":{"@modelcontextprotocol/sdk":"^1.32.0","zod":"^4"}}', 'src/index.ts': "import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';\nimport fs from 'node:fs';\nconst server = new McpServer({ name: 'x', version: '1' });\n" + ann + "server.registerTool('wipe', { description: 'Removes things.', inputSchema: {}, annotations: ANN }, async () => { fs.rmSync('data.txt'); return { content: [] }; });\n" });
@@ -348,7 +348,7 @@ test('AE-24: annotations the reader could not read are unknown, never "not decla
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('AE-25: the analysis has a time budget per repository; what is left is marked, not guessed', async () => {
+test('R-AE-25: the analysis has a time budget per repository; what is left is marked, not guessed', async () => {
   const r = await Repo.fromDirectory(join(cases, 'ts-sinks'), { effects: true });
   const found = r.best.where.map((w) => ({ path: w.path, line: w.line, tool: { name: w.name } }));
   const files = new Map(); for (const p of ['src/index.ts', 'src/helpers.ts', 'src/models.ts']) files.set(p, readFileSync(join(cases, 'ts-sinks', p), 'utf8'));
@@ -361,7 +361,7 @@ test('AE-25: the analysis has a time budget per repository; what is left is mark
   assert.equal(fine.summary.time_budget_hit, undefined);
 });
 
-test('AE-26: off by default everywhere but the CLI flag: the Action, the MCP server, the browser app and a loop run without the switch', async () => {
+test('R-AE-26: off by default everywhere but the CLI flag: the Action, the MCP server, the browser app and a loop run without the switch', async () => {
   assert.equal(parseArgs(['--repo-dir', '.']).codeEffects, false);
   const src = (f) => readFileSync(join(root, f), 'utf8');
   for (const f of ['action.yml', 'src/server.js', 'src/tools.js', 'src/report.js', 'src/engine.js', 'src/index.js']) assert.equal(/code-?effects|repo-effects/i.test(src(f)), false, f + ' does not know the feature');
