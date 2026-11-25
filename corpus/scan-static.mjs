@@ -34,6 +34,7 @@ import M from '../src/engine.js';
 import { InputError } from '../src/limits.js';
 import { parseList } from '../src/tools.js';
 import { analyseList } from '../src/unreadable.js';
+import { codeEffectsReport } from '../src/code-effects.js';
 import { isApproximate, readerNotes, registrationNotSeen, repoProvenance, usableList } from '../src/inputs/collect.js';
 import { VERSION } from '../src/version.js';
 
@@ -374,7 +375,7 @@ export const notRead = (detail) => ({
  * (TRANSIENT) and the skip_reason it is recorded with. Everything outside `raw` is ours; `raw` holds what the
  * subject wrote, for raw/ only.
  */
-export async function scanSubject(subject, { fetch: fetchImpl = globalThis.fetch, token = null, timeoutMs = SUBJECT_TIMEOUT_MS } = {}) {
+export async function scanSubject(subject, { fetch: fetchImpl = globalThis.fetch, token = null, timeoutMs = SUBJECT_TIMEOUT_MS, codeEffects = false } = {}) {
   const out = {
     status: null, detail: null, retryable: false, skip_reason: null, http_status: null, list_error: null, error_name: null, language_hint: null,
     repository: null, commit: null, listing: null, list: null, grade: null, servers: null, raw: {},
@@ -421,7 +422,7 @@ export async function scanSubject(subject, { fetch: fetchImpl = globalThis.fetch
     phase = 'read';
     let r;
     // servers: a repository of several servers is also read server by server, from the same listing (R-SS-13)
-    const ropts = { fetch: f, githubToken: token || undefined, noFallback: true, servers: true, serversDeadline: started + Math.floor(timeoutMs * SERVERS_SHARE) };
+    const ropts = { fetch: f, githubToken: token || undefined, noFallback: true, servers: true, serversDeadline: started + Math.floor(timeoutMs * SERVERS_SHARE), ...(codeEffects ? { effects: true } : {}) };
     try { r = await Repo.fromGitHub('github.com/' + full + '/tree/' + sha, ropts); } catch (e) {
       throw fail(readDetail(e, ctl.signal.aborted, refused), { status: Number.isInteger(e && e.status) ? e.status : undefined, errorName: e && e.name });
     }
@@ -457,6 +458,9 @@ export async function scanSubject(subject, { fetch: fetchImpl = globalThis.fetch
     out.grade = g.summary;
     out.list = provenanceOf(c, r, g.summary.tool_count);
     out.raw.report = { provenance: repoProvenance(c).provenance, files: c.files || [c.path], findings: g.report.findings };
+    // opt-in (codeEffects): what the handlers touch, in raw/ only; results/ and the grades are the same with it on or off
+    // never attention in loop output until real-repo QA: maxSeverity advice
+    if (codeEffects) { try { out.raw.code_effects = codeEffectsReport(g.parsed.tools, c.effects || null, { unreadable: c.unreadable, maxSeverity: 'advice' }); } catch { out.raw.code_effects = { version: 0, error: 'code_effects_failed' }; } }
   })();
   work.catch(() => {}); // a subject that timed out may still fail later; that is not unhandled
   let timer;
@@ -813,6 +817,7 @@ export function rawFiles(raw, cap = RAW_FILE_CAP) {
   if (raw.scan) add('raw/subject/scan.json', raw.scan);
   if (raw.report) add('raw/subject/report.json', raw.report);
   if (raw.servers) add('raw/subject/servers.json', raw.servers);
+  if (raw.code_effects) add('raw/subject/code-effects.json', raw.code_effects);
   return { files, truncated };
 }
 
@@ -932,7 +937,7 @@ async function readCappedBody(res, cap) {
  * The thread has no environment and no network of its own: its requests go through `fetch` here (so the caller
  * sees every answer, onResponse(url, status, header)). Never throws.
  */
-export function scanInWorker(subject, { fetch: fetchImpl = globalThis.fetch, token = null, timeoutMs = SUBJECT_TIMEOUT_MS, graceMs = SUBJECT_GRACE_MS, onResponse = () => {}, workerUrl = WORKER_URL } = {}) {
+export function scanInWorker(subject, { fetch: fetchImpl = globalThis.fetch, token = null, timeoutMs = SUBJECT_TIMEOUT_MS, graceMs = SUBJECT_GRACE_MS, onResponse = () => {}, workerUrl = WORKER_URL, codeEffects = false } = {}) {
   return new Promise((resolve) => {
     const inflight = new Map();
     let settled = false;
@@ -949,7 +954,7 @@ export function scanInWorker(subject, { fetch: fetchImpl = globalThis.fetch, tok
     const failed = (detail, name) => ({ ...notRead(detail), error_name: safeName(name) });
     try {
       // The thread gets no token (the requests it asks for get it here) and a heap limit (R-SS-08, R-SS-10).
-      worker = new Worker(workerUrl, { workerData: { subject, timeoutMs }, env: {}, resourceLimits: { maxOldGenerationSizeMb: SUBJECT_HEAP_MB } });
+      worker = new Worker(workerUrl, { workerData: { subject, timeoutMs, ...(codeEffects ? { codeEffects: true } : {}) }, env: {}, resourceLimits: { maxOldGenerationSizeMb: SUBJECT_HEAP_MB } });
     } catch (e) {
       finish(failed('reader_error', e && e.name));
       return;
@@ -997,7 +1002,7 @@ export function scanInWorker(subject, { fetch: fetchImpl = globalThis.fetch, tok
  * controls_failed=true before throwing. Throws InputProblem on malformed inputs (before anything is read or
  * written) and Error on a harness problem.
  */
-export async function runShard({ shardId, attemptId, items, out, fetch: fetchImpl = globalThis.fetch, token = null, now = () => new Date(), marker = newMarker, tmp = tmpdir(), log = () => {}, budgetMs = SHARD_BUDGET_MS, timeoutMs = SUBJECT_TIMEOUT_MS, clock = () => performance.now(), knownAnswerExpected = KNOWN_ANSWER_FILE, onOutputs = () => {}, isolate = true, workerUrl, graceMs = SUBJECT_GRACE_MS, caps = {}, write }) {
+export async function runShard({ shardId, attemptId, items, out, codeEffects = false, fetch: fetchImpl = globalThis.fetch, token = null, now = () => new Date(), marker = newMarker, tmp = tmpdir(), log = () => {}, budgetMs = SHARD_BUDGET_MS, timeoutMs = SUBJECT_TIMEOUT_MS, clock = () => performance.now(), knownAnswerExpected = KNOWN_ANSWER_FILE, onOutputs = () => {}, isolate = true, workerUrl, graceMs = SUBJECT_GRACE_MS, caps = {}, write }) {
   const input = parseInputs({ shardId, attemptId, items });
   if (existsSync(out) && readdirSync(out).length) throw new Error('the output folder is not empty');
   const t0 = clock();
@@ -1040,8 +1045,8 @@ export async function runShard({ shardId, attemptId, items, out, fetch: fetchImp
     else if (!item.repo) scan = notRead('bad_subject');
     else {
       scan = isolate
-        ? await scanInWorker(item.repo, { fetch: fetchImpl, token, timeoutMs, graceMs, onResponse, workerUrl })
-        : await scanSubject(item.repo, { fetch: tracked, token, timeoutMs });
+        ? await scanInWorker(item.repo, { fetch: fetchImpl, token, timeoutMs, graceMs, onResponse, workerUrl, codeEffects })
+        : await scanSubject(item.repo, { fetch: tracked, token, timeoutMs, codeEffects });
       if (scan.detail === 'rate_limited') stop = 'rate_limited'; // the next subjects would hit it too: they are not read
     }
     const finishedAt = now().toISOString();
@@ -1070,7 +1075,7 @@ export async function main(argv, env, { fetch: fetchImpl = globalThis.fetch, std
     };
     const res = await runShard({
       shardId: env.SHARD_ID, attemptId: env.ATTEMPT_ID, items: env.ITEMS, out: argv[1],
-      fetch: fetchImpl, token: env.GITHUB_TOKEN || null, log: (s) => stdout.write(s + '\n'), onOutputs: put,
+      fetch: fetchImpl, token: env.GITHUB_TOKEN || null, log: (s) => stdout.write(s + '\n'), onOutputs: put, codeEffects: env.SCAN_STATIC_CODE_EFFECTS === '1',
     });
     stdout.write(res.items.filter((x) => x.status === 'graded').length + ' of ' + res.items.length + ' items graded; every item has a bundle\n');
     return 0;

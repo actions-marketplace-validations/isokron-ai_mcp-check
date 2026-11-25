@@ -2,6 +2,8 @@
 // In Node it requires repo-go.cjs, repo-rust.cjs and repo-csharp.cjs; in a browser, load those three scripts first (they
 // define RepoGo, RepoRust and RepoCSharp), or Go, Rust and C# are not read.
 // Every download is size-capped (MAX_FILE per file, MAX_JSON per API answer); nothing fetched is executed.
+// With { effects: true } (opt-in, --code-effects) the candidate also carries `effects`: what each tool's handler touches,
+// read from the same files by repo-effects.cjs (TypeScript, JavaScript, Python). It never changes the list.
 //
 //   await RepoSource.fromGitHub('github.com/owner/repo', { fetch })   -> { candidates, best, hints }
 //   await RepoSource.fromDirectory('/path/to/checkout')               -> the same, from a local folder (Node only, no network)
@@ -24,9 +26,9 @@
 // raw.githubusercontent.com for files; data.jsdelivr.com / cdn.jsdelivr.net as the fallback. The registry API at
 // registry.modelcontextprotocol.io sends Access-Control-Allow-Origin: *. Nothing goes to IsoKron.
 (function (root, factory) {
-  if (typeof module === 'object' && module.exports) module.exports = factory(require('./repo-go.cjs'), require('./repo-rust.cjs'), require('./repo-csharp.cjs'));
-  else root.RepoSource = factory(root.RepoGo, root.RepoRust, root.RepoCSharp); // in a browser, load repo-go.cjs, repo-rust.cjs and repo-csharp.cjs first
-})(typeof self !== 'undefined' ? self : this, function (RepoGo, RepoRust, RepoCSharp) {
+  if (typeof module === 'object' && module.exports) module.exports = factory(require('./repo-go.cjs'), require('./repo-rust.cjs'), require('./repo-csharp.cjs'), require('./repo-effects.cjs'));
+  else root.RepoSource = factory(root.RepoGo, root.RepoRust, root.RepoCSharp, root.RepoEffects); // in a browser, load repo-go.cjs, repo-rust.cjs and repo-csharp.cjs first (repo-effects.cjs too, for the opt-in code effects)
+})(typeof self !== 'undefined' ? self : this, function (RepoGo, RepoRust, RepoCSharp, RepoEffects) {
   'use strict';
 
   // ------------------------------------------------------------ tokenizer (JS/TS)
@@ -2933,7 +2935,7 @@
       await Promise.all(Array.from({ length: Math.min(n, ps.length) }, worker));
       return out;
     };
-    const scan = await scanFiles({ all: listing.paths, subdir: ref.subdir, readMany: fetchMany, maxSourceFiles: opts.maxSourceFiles, state, servers: !!opts.servers, serversDeadline: opts.serversDeadline });
+    const scan = await scanFiles({ all: listing.paths, subdir: ref.subdir, readMany: fetchMany, maxSourceFiles: opts.maxSourceFiles, state, servers: !!opts.servers, serversDeadline: opts.serversDeadline, effects: !!opts.effects, effectsDepth: opts.effectsDepth });
     if (state.failed.length) {
       const st = state.failed.map((x) => x.status).filter(Boolean);
       const limited = st.some((x) => x === 403 || x === 429);
@@ -3129,6 +3131,8 @@
       const langs2 = Array.from(new Set(found.map((x) => x.language || null)));
       const language = langs2.length === 1 && langs2[0] ? langs2[0] : null;
       candidates.push({ kind: 'source', fidelity: allLiteral && !Object.keys(out.unreadable).length && !language ? 'literal' : 'derived', language, path: null, built, files: Array.from(new Set(found.map((x) => x.path))), tools: out.tools, unreadable: out.unreadable, unresolved: unres, unresolvedNames: unres.length, where: found.map((x) => ({ name: x.tool.name, path: x.path, line: x.line, fidelity: x.fidelity })), excluded: an.excluded.filter((x) => found.some((f) => servers.rootOf(f.groupPath || f.path) === servers.rootOf(x.groupPath || x.path))).map((x) => ({ name: x.tool.name, path: x.path, line: x.line, reasons: x.marks.filter((m) => m.exclude).map((m) => m.reason + (m.detail ? ' (' + m.detail + ')' : '')) })).concat(setAside), marked, sdk: an.sdk });
+      // opt-in (o.effects): what each tool's handler touches, read from the same files (repo-effects.cjs); never changes the list or its grades
+      if (o.effects && RepoEffects) { try { candidates[candidates.length - 1].effects = RepoEffects.analyse(readFiles, found, { depth: o.effectsDepth }); } catch (e) { candidates[candidates.length - 1].effects = { version: 0, tools: {}, summary: { error: 'reader_error' } }; } }
       // several Go main packages (or Rust modules) construct a server and none of them holds tools: they share the
       // tools read, and each may register only part of them; the list is their union, and the report says so
       const ctorOnly = Array.from(serverDirs).filter((d) => d && !found.some((x) => x.path === d || x.path.startsWith(d + '/')));
@@ -3429,7 +3433,7 @@
     };
     const readMany = async (ps) => ps.map((p) => [p, readOne(p)]);
     all.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)); // the walk order only decides what a truncated listing keeps
-    const scan = await scanFiles({ all: all.concat(Array.from(extra.keys())), subdir: null, readMany, maxSourceFiles: opts.maxSourceFiles, builtFallback: true, state, servers: !!opts.servers, serversDeadline: opts.serversDeadline });
+    const scan = await scanFiles({ all: all.concat(Array.from(extra.keys())), subdir: null, readMany, maxSourceFiles: opts.maxSourceFiles, builtFallback: true, state, servers: !!opts.servers, serversDeadline: opts.serversDeadline, effects: !!opts.effects, effectsDepth: opts.effectsDepth });
     return Object.assign({ repo: String(dir), ref: null, sha: null, via: 'directory', truncated }, scan);
   }
 
