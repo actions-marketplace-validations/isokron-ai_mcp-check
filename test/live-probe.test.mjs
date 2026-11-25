@@ -891,7 +891,7 @@ test('R-LP-27: every skip names its fault explicitly, tool-qa allows that fault 
     assert.equal(result.fault, fault, d);
   }
   // Our own limits and errors: tool, and none under policy_excluded.
-  for (const d of ['bad_subject', 'unsupported_package', 'unverified_registry_entry', 'oci_host_not_allowed', 'image_too_large', 'launch_invalid', 'unsupported_transport', 'install_timeout', 'list_rejected', 'harness_error', 'sandbox_evidence_missing']) assert.equal(LP.DETAILS[d][3], 'tool', d);
+  for (const d of ['bad_subject', 'unsupported_package', 'unverified_registry_entry', 'oci_host_not_allowed', 'image_too_large', 'launch_invalid', 'unsupported_transport', 'install_timeout', 'list_rejected', 'harness_error', 'sandbox_evidence_missing', 'start_timeout', 'private_registry']) assert.equal(LP.DETAILS[d][3], 'tool', d);
   assert.ok(!Object.values(LP.DETAILS).some((x) => x[0] === 'policy_excluded'), 'this lane never excludes by policy');
 });
 
@@ -899,4 +899,11 @@ test('live-probe docs exist and name the fixtures', () => {
   const doc = readFileSync(join(root, 'corpus', 'LIVE-PROBE.md'), 'utf8');
   assert.match(doc, /live-probe/);
   assert.ok(readdirSync(join(root, 'corpus', 'fixtures', 'live-probe')).includes('forgery-server.js'));
+});
+
+test('R-LP-28: a start that ran out of time and a private registry are our limits, not the server\'s (fault tool)', () => {
+  // The subject's time budget also pays for the install, so a slow runner or a slow sandbox start can run it out:
+  // that is no evidence the server hung. A private registry is unreachable because we reach only the default registries.
+  assert.equal(LP.DETAILS.start_timeout[3], 'tool');
+  assert.equal(LP.DETAILS.private_registry[3], 'tool');
 });

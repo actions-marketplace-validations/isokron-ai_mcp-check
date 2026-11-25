@@ -196,14 +196,16 @@ as `policy_excluded`, which would take the subject out of the coverage denominat
 |---|---|---|---|
 | `bad_subject` (not a GitHub owner/name), `unsupported_package` (cargo, NuGet, MCPB only), `unverified_registry_entry`, `launch_invalid` | `no_runnable_artifact` | tool | no |
 | `oci_host_not_allowed` (the image is not on one of our six registries) | `no_runnable_artifact` | tool | no |
-| `no_package`, `private_registry` | `no_runnable_artifact` | subject | no |
+| `no_package` | `no_runnable_artifact` | subject | no |
+| `private_registry` | `no_runnable_artifact` | tool (we reach only the default registries, as with `unsupported_package`) | no |
 | `image_too_large` (over our 2 GB cap) | `too_large` | tool | no |
 | `remote_only` | `remote_only` | subject | no |
 | `unsupported_transport` (SSE, or HTTP with no fixed local port) | `unsupported_transport` | tool | no |
 | `image_unavailable`, `install_failed` | `install_failed_registry` | subject | no |
 | `install_timeout` (our install time limit) | `install_failed_registry` | tool | no |
 | `needs_credentials` (the registry entry declares a required env var, and no list with dummy values) | `start_requires_credentials` | subject | no |
-| `start_failed`, `start_timeout`, `list_failed` | `timeout_start` | subject | no |
+| `start_failed`, `list_failed` | `timeout_start` | subject | no |
+| `start_timeout` | `timeout_start` | tool (the subject's time budget also pays for the install, so a slow runner or sandbox start can run it out; it is no evidence the server hung) | no |
 | `list_rejected` (the engine refused the list) | `tool_error` | tool | no |
 | `harness_error` (our driver or bundle step failed) | `tool_error` | tool | yes |
 | `rate_limited` | `rate_limited` | infra | yes |

@@ -102,7 +102,7 @@ export const DETAILS = Object.freeze({
   bad_subject: ['no_runnable_artifact', false, 'resolve', 'tool'], // not a GitHub owner/name: this lane reads GitHub only
   no_package: ['no_runnable_artifact', false, 'resolve', 'subject'],
   unsupported_package: ['no_runnable_artifact', false, 'resolve', 'tool'], // cargo, NuGet, MCPB: we cannot run them yet
-  private_registry: ['no_runnable_artifact', false, 'resolve', 'subject'],
+  private_registry: ['no_runnable_artifact', false, 'resolve', 'tool'],
   unverified_registry_entry: ['no_runnable_artifact', false, 'resolve', 'tool'], // our provenance checks stop short of it
   // Our allowlist of OCI hosts (sandbox egress is deny by default). A deliberate safety choice, but it is a limit of
   // ours, not a statement about the server: recorded as a gap of ours (tool), so it counts as unassessed and is not
@@ -117,7 +117,7 @@ export const DETAILS = Object.freeze({
   install_timeout: ['install_failed_registry', false, 'install', 'tool'], // our install time limit
   needs_credentials: ['start_requires_credentials', false, 'start', 'subject'],
   start_failed: ['timeout_start', false, 'start', 'subject'],
-  start_timeout: ['timeout_start', false, 'start', 'subject'],
+  start_timeout: ['timeout_start', false, 'start', 'tool'],
   list_failed: ['timeout_start', false, 'list', 'subject'],
   list_rejected: ['tool_error', false, 'grade', 'tool'], // our engine refused the list it was given
   rate_limited: ['rate_limited', true, 'resolve', 'infra'],
