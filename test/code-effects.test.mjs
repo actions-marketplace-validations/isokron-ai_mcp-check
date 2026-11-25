@@ -36,7 +36,7 @@ function snippet(files, tool, opts) {
 const TS = (body, extra = '') => ({ 'index.ts': "import fs from 'node:fs';\nimport { execSync } from 'node:child_process';\n" + extra + "\nserver.registerTool('t', { description: 'd', inputSchema: {}, annotations: { readOnlyHint: true } }, async () => {\n" + body + "\n});\n" });
 const PY = (body, head = '') => ({ 'server.py': 'import os\nimport shutil\nimport subprocess\nimport requests\n' + head + '\n@mcp.tool()\ndef t():\n' + body.split('\n').map((l) => '    ' + l).join('\n') + '\n' });
 
-test('AE-01: handlers are found for inline functions, referenced functions, class methods, decorators and name switches', async () => {
+test('R-AE-01: handlers are found for inline functions, referenced functions, class methods, decorators and name switches', async () => {
   const ts = (await read('ts-mixed')).fx.tools;
   assert.equal(ts.read_note.handler.how, 'inline');
   assert.equal(ts.preview_note.handler.how, 'inline');
@@ -56,7 +56,7 @@ test('AE-01: handlers are found for inline functions, referenced functions, clas
   assert.equal(en.handler.how, 'case'); assert.deepEqual(kinds(en, 'delete'), ['fs.os.remove']);
 });
 
-test('AE-01b: a handler found only by its function name is never definite', () => {
+test('R-AE-18: a handler found only by its function name is never definite', () => {
   const t = snippet({ 'index.ts': "import fs from 'node:fs';\nexport function purge_all() { fs.rmSync('x'); }\n" }, 'purge_all');
   assert.equal(t.handler.how, 'by-name');
   assert.deepEqual(t.effects.delete.map((e) => e.confidence), ['may']);
@@ -64,7 +64,7 @@ test('AE-01b: a handler found only by its function name is never definite', () =
   assert.deepEqual(r.findings.map((f) => f.severity), ['advice']);
 });
 
-test('AE-02: calls are followed through the repository, with evidence at file and line', async () => {
+test('R-AE-02: calls are followed through the repository, with evidence at file and line', async () => {
   const t = (await read('ts-mixed')).fx.tools.preview_note;
   assert.deepEqual(kinds(t, 'write'), ['fs.writeFile']);
   const ev = t.effects.write[0];
@@ -74,7 +74,7 @@ test('AE-02: calls are followed through the repository, with evidence at file an
   assert.deepEqual(kinds(py, 'delete'), ['sql.delete']); assert.equal(py.effects.delete[0].file, 'store.py');
 });
 
-test('AE-03: a read-only claim over a write is attention; honest read-only tools raise nothing', async () => {
+test('R-AE-03: a read-only claim over a write is attention; honest read-only tools raise nothing', async () => {
   const { report } = await read('ts-mixed');
   const f = (n) => report.findings.filter((x) => x.tool === n);
   assert.deepEqual(f('preview_note').map((x) => [x.id, x.severity, x.confidence]), [['annot-code-writes-marked-readonly', 'attention', 'definite']]);
@@ -83,7 +83,7 @@ test('AE-03: a read-only claim over a write is attention; honest read-only tools
   assert.match(f('preview_note')[0].message, /src\/store\.ts:16/);
 });
 
-test('AE-04: SQL writes are found in strings handed to a call; selects are reads; strings given to a logger are not queries', async () => {
+test('R-AE-04: SQL writes are found in strings handed to a call; selects are reads; strings given to a logger are not queries', async () => {
   const t = (await read('ts-mixed')).fx.tools.top_notes;
   assert.deepEqual(kinds(t, 'write'), ['sql.update']); assert.deepEqual(kinds(t, 'read'), ['sql.select']);
   const log = snippet(TS("console.log('DELETE FROM users');\nthrow new Error('INSERT INTO x VALUES (1)');\nreturn 1;"), 't');
@@ -94,7 +94,7 @@ test('AE-04: SQL writes are found in strings handed to a call; selects are reads
   assert.deepEqual(kinds(local, 'delete'), ['sql.delete']);
 });
 
-test('AE-05: HTTP is judged by its method; DELETE is also a delete; a POST to a query URL is only a may', async () => {
+test('R-AE-05: HTTP is judged by its method; DELETE is also a delete; a POST to a query URL is only a may', async () => {
   const ts = (await read('ts-sinks')).fx.tools;
   assert.deepEqual(kinds(ts.fetch_put, 'unsafe_http'), ['http.PUT']);
   assert.deepEqual(kinds(ts.got_delete, 'delete'), ['http.DELETE']);
@@ -108,7 +108,7 @@ test('AE-05: HTTP is judged by its method; DELETE is also a delete; a POST to a 
   assert.equal(dyn.effects.unsafe_http[0].confidence, 'may', 'a method that is not a literal');
 });
 
-test('AE-06: an opaque client call is a may, worded "may write", and never attention', async () => {
+test('R-AE-06: an opaque client call is a may, worded "may write", and never attention', async () => {
   for (const name of ['ts-mixed', 'py-fastmcp']) {
     const { report } = await read(name);
     const f = report.findings.filter((x) => x.confidence === 'may');
@@ -119,7 +119,7 @@ test('AE-06: an opaque client call is a may, worded "may write", and never atten
   assert.equal(tool.effects.write[0].confidence, 'may'); assert.equal(tool.derived.readOnlyHint.value, null);
 });
 
-test('AE-07: FastMCP decorators and low-level call_tool branches resolve, with the name from the decorator or a constant', async () => {
+test('R-AE-07: FastMCP decorators and low-level call_tool branches resolve, with the name from the decorator or a constant', async () => {
   const py = await read('py-fastmcp');
   assert.deepEqual(py.report.findings.filter((x) => x.severity === 'attention').map((x) => x.tool).sort(), ['disk_usage', 'export_user', 'remove_user', 'sync_user']);
   const low = await read('py-lowlevel');
@@ -130,7 +130,7 @@ test('AE-07: FastMCP decorators and low-level call_tool branches resolve, with t
   assert.deepEqual(multi.effects.delete, [], 'a multi-line decorator belongs to its own function only');
 });
 
-test('AE-08: a switch on the tool name is resolved when the list and the dispatch are in different files', async () => {
+test('R-AE-08: a switch on the tool name is resolved when the list and the dispatch are in different files', async () => {
   const low = (await read('ts-lowlevel')).fx.tools;
   assert.deepEqual(kinds(low.touch_item, 'write'), ['fs.writeFileSync']);
   assert.deepEqual(kinds(low.delete_item, 'delete'), ['fs.rmSync']);
@@ -140,7 +140,7 @@ test('AE-08: a switch on the tool name is resolved when the list and the dispatc
   assert.deepEqual(kinds(fall, 'delete'), ['fs.rmSync']); assert.deepEqual(kinds(fall, 'write'), [], 'a fall-through group, up to the next case');
 });
 
-test('AE-09: comments and the text of strings are not code', () => {
+test('R-AE-09: comments and the text of strings are not code', () => {
   const t = snippet(TS("// fs.unlinkSync('x');\n/* execSync('rm -rf /') */\nconst s = \"fs.rmSync('y')\";\nreturn s + `fs.writeFileSync('z', '')`;"), 't');
   ['write', 'delete', 'exec'].forEach((k) => assert.deepEqual(t.effects[k], [], k));
   const p = snippet(PY('# os.remove("x")\ns = "shutil.rmtree(y)"\nreturn s'), 't');
@@ -149,7 +149,7 @@ test('AE-09: comments and the text of strings are not code', () => {
   assert.deepEqual(d.effects.delete, []);
 });
 
-test('AE-10: a temporary path is a may; a read-only command is a read; any other process is an exec', async () => {
+test('R-AE-10: a temporary path is a may; a read-only command is a read; any other process is an exec', async () => {
   const tmp = (await read('ts-mixed')).fx.tools.render_preview;
   assert.equal(tmp.effects.write[0].confidence, 'may'); assert.match(tmp.effects.write[0].note, /temporary/);
   const ls = (await read('ts-sinks')).fx.tools;
@@ -163,7 +163,7 @@ test('AE-10: a temporary path is a may; a read-only command is a read; any other
   assert.equal(dangerous.effects.exec.length, 1, 'a command line with && is not a read-only command');
 });
 
-test('AE-11: calls are followed to a set depth, and recursion ends', async () => {
+test('R-AE-11: calls are followed to a set depth, and recursion ends', async () => {
   const shallow = (await read('ts-sinks')).fx.tools.deep_write;
   assert.deepEqual(shallow.effects.write, [], 'the write is four calls down: not seen at depth 3');
   const deep = (await read('ts-sinks', { effectsDepth: 5 })).fx.tools.deep_write;
@@ -175,7 +175,7 @@ test('AE-11: calls are followed to a set depth, and recursion ends', async () =>
   assert.deepEqual(none.effects.delete, [], 'depth 0 reads the handler only');
 });
 
-test('AE-11b: a call the repository resolves is followed, not guessed from its name, and a function runs once', () => {
+test('R-AE-19: a call the repository resolves is followed, not guessed from its name, and a function runs once', () => {
   const files = { 'service.ts': "export function create() { return 1; }\n", 'index.ts': "import * as service from './service.js';\nserver.registerTool('t', {}, async () => { service.create(); service.create(); service.create(); });\n" };
   const t = snippet(files, 't');
   assert.deepEqual(t.effects.write.concat(t.effects.delete, t.effects.unknown_call), [], 'service.create() is the repository\'s own function, which writes nothing');
@@ -185,7 +185,7 @@ test('AE-11b: a call the repository resolves is followed, not guessed from its n
   assert.equal(opaque.effects.write[0].confidence, 'may', 'the same call on a package is opaque');
 });
 
-test('AE-12: the feature is off unless asked for, and then sits in its own block that never changes a grade or the exit code', () => {
+test('R-AE-12: the feature is off unless asked for, and then sits in its own block that never changes a grade or the exit code', () => {
   const dir = join(cases, 'ts-mixed');
   const off = JSON.parse(cli(['--repo-dir', dir, '--format', 'json']).stdout);
   assert.equal('code_effects' in off, false);
@@ -202,7 +202,7 @@ test('AE-12: the feature is off unless asked for, and then sits in its own block
   assert.equal(/Code-derived/.test(cli(['--repo-dir', dir]).stdout), false);
 });
 
-test('AE-13: severity is capped: nothing blocks, and only a definite sink is attention', async () => {
+test('R-AE-13: severity is capped: nothing blocks, and only a definite sink is attention', async () => {
   assert.equal(SEVERITY_CAP, 'attention');
   CODE_CHECKS.forEach((c) => assert.notEqual(c.severity, 'blocking', c.id));
   for (const name of ['ts-mixed', 'ts-lowlevel', 'ts-sinks', 'py-fastmcp', 'py-lowlevel', 'py-sinks']) {
@@ -218,7 +218,7 @@ test('AE-13: severity is capped: nothing blocks, and only a definite sink is att
   assert.equal(noFx.summary.available, false);
 });
 
-test('AE-14: nothing is run and nothing outside the files given is read', () => {
+test('R-AE-14: nothing is run and nothing outside the files given is read', () => {
   const dir = mkdtempSync(join(tmpdir(), 'fx-pwn-'));
   const mark = join(dir, 'ran');
   try {
@@ -234,7 +234,7 @@ test('AE-14: nothing is run and nothing outside the files given is read', () => 
   assert.equal(/\b(eval|new Function|require\(|import\()/.test(readFileSync(join(root, 'src', 'inputs', 'repo-effects.cjs'), 'utf8').replace(/\/\/.*$/gm, '').replace(/'[^'\n]*'|"[^"\n]*"|\/(?:[^/\n\\]|\\.)+\/[gimsuy]*/g, '')), false, 'the analyser has no eval or dynamic loading');
 });
 
-test('AE-15: every sink family has a mutation check: switching the family off removes the effect', () => {
+test('R-AE-15: every sink family has a mutation check: switching the family off removes the effect', () => {
   const FAMILIES = [
     ['fs', TS("fs.writeFileSync('x', 'y');"), 'write'],
     ['fs', PY('os.remove("x")'), 'delete'],
@@ -255,7 +255,7 @@ test('AE-15: every sink family has a mutation check: switching the family off re
   }
 });
 
-test('AE-16: the first score on the labelled servers: nothing the check calls attention is wrong, and the misses are the known limits', async () => {
+test('R-AE-16: the first score on the labelled servers: nothing the check calls attention is wrong, and the misses are the known limits', async () => {
   const res = await score();
   const w = res.summary['annot-code-writes-marked-readonly'];
   assert.equal(w.code_lenient.fp, 0, 'no false attention on the labelled tools');

@@ -1025,7 +1025,7 @@ const fxFiles = {
   'src/tools.ts': readFileSync(join(root, 'bench', 'effects', 'cases', 'ts-lowlevel', 'src', 'tools.ts'), 'utf8'),
   'src/index.ts': readFileSync(join(root, 'bench', 'effects', 'cases', 'ts-lowlevel', 'src', 'index.ts'), 'utf8'),
 };
-test('AE-17: scan-static writes raw/subject/code-effects.json only when asked for; results and grades are the same either way', async () => {
+test('R-AE-17: scan-static writes raw/subject/code-effects.json only when asked for; results and grades are the same either way', async () => {
   const off = await scanSubject('o/r', { fetch: fakeGithub({ 'o/r': { files: fxFiles } }), token: TOKEN });
   const on = await scanSubject('o/r', { fetch: fakeGithub({ 'o/r': { files: fxFiles } }), token: TOKEN, codeEffects: true });
   assert.equal(off.status, 'graded'); assert.equal(on.status, 'graded');
