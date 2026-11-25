@@ -172,7 +172,7 @@ function grade(item, opt, prevTools) {
     throw e;
   }
   const r = analyseList(parsed, item.reader || null); // a source read: checks of parts the reader could not read are skipped
-  if (opt.codeEffects && item.effects !== undefined) r.code_effects = codeEffectsReport(parsed.tools, item.effects); // its own block: never in the grades
+  if (opt.codeEffects && item.effects !== undefined) r.code_effects = codeEffectsReport(parsed.tools, item.effects, { unreadable: item.reader && item.reader.unreadable }); // its own block: never in the grades
   const below = belowMinGrade(r, opt.sections, opt.minGrade);
   const diff = prevTools ? M.diffCatalogs(prevTools, parsed.tools) : null;
   return { r, below, diff, parsed, failed: below.length > 0 || !!(diff && diff.highRisk.length) };

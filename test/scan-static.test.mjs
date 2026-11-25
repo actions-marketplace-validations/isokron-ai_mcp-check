@@ -1032,6 +1032,8 @@ test('R-AE-17: scan-static writes raw/subject/code-effects.json only when asked 
   assert.equal('code_effects' in off.raw, false);
   assert.equal(on.raw.code_effects.experimental, true);
   assert.deepEqual(on.raw.code_effects.findings.map((f) => f.id).sort(), ['annot-code-deletes-marked-safe', 'annot-code-writes-marked-readonly']);
+  assert.ok(on.raw.code_effects.findings.length >= 2 && on.raw.code_effects.findings.every((f) => f.severity === 'advice'), 'no attention leaves the loop path until real-repo QA');
+  assert.equal(on.raw.code_effects.max_severity, 'advice');
   assert.deepEqual(on.grade, off.grade, 'the grades and the summary do not change');
   const item = { index: 0, subject: 'o/r', repo: 'o/r', run_key: key(0), fence: 1 };
   assert.deepEqual(resultOf(item, on, DATE), resultOf(item, off, DATE), 'results/ is the same');

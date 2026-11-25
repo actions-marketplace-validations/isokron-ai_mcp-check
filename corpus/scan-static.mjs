@@ -459,7 +459,8 @@ export async function scanSubject(subject, { fetch: fetchImpl = globalThis.fetch
     out.list = provenanceOf(c, r, g.summary.tool_count);
     out.raw.report = { provenance: repoProvenance(c).provenance, files: c.files || [c.path], findings: g.report.findings };
     // opt-in (codeEffects): what the handlers touch, in raw/ only; results/ and the grades are the same with it on or off
-    if (codeEffects) { try { out.raw.code_effects = codeEffectsReport(g.parsed.tools, c.effects || null); } catch { out.raw.code_effects = { version: 0, error: 'code_effects_failed' }; } }
+    // never attention in loop output until real-repo QA: maxSeverity advice
+    if (codeEffects) { try { out.raw.code_effects = codeEffectsReport(g.parsed.tools, c.effects || null, { unreadable: c.unreadable, maxSeverity: 'advice' }); } catch { out.raw.code_effects = { version: 0, error: 'code_effects_failed' }; } }
   })();
   work.catch(() => {}); // a subject that timed out may still fail later; that is not unhandled
   let timer;

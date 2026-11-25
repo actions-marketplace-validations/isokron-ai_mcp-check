@@ -691,13 +691,21 @@
   const FS_OVERWRITE = new Set(['writeFile', 'writeFileSync', 'copyFile', 'copyFileSync', 'cp', 'cpSync', 'rename', 'renameSync', 'createWriteStream', 'outputFile', 'outputJson', 'writeJson', 'writeJSON', 'copy', 'move', 'truncate', 'truncateSync']);
   const FS_DELETE = new Set(['unlink', 'unlinkSync', 'rm', 'rmSync', 'rmdir', 'rmdirSync', 'remove', 'removeSync', 'emptyDir', 'emptyDirSync']);
   const FS_READ = new Set(['readFile', 'readFileSync', 'readdir', 'readdirSync', 'stat', 'statSync', 'lstat', 'lstatSync', 'access', 'accessSync', 'readlink', 'createReadStream', 'exists', 'existsSync', 'opendir', 'realpath', 'readJson', 'readJSON', 'pathExists']);
-  const TEMPISH = /tmp|temp|cache|scratch|mkdtemp|\.cache|os\.tmpdir|lock|\.pid\b|pidfile/i; // temporary files, caches, lock and pid files: bookkeeping, not the tool's data
+  // Bookkeeping files: logs, audit trails, metrics, state, caches, locks, pid files, temporary files. A write to one of
+// these is "may": it is the server's own housekeeping, not the data the tool is about. Words in snake_case, dotted and
+// camelCase names.
+const BOOK_WORD = /(?:^|[^A-Za-z])(?:log|logs|logging|audit|metric|metrics|state|cache|caches|lock|locks|pid|tmp|temp|scratch|history|journal|telemetry|trace|traces)(?:[^a-z]|$)/;
+const BOOK_CAMEL = /[a-z0-9](?:Log|Audit|Metric|State|Cache|Lock|Pid|Tmp|Temp|Scratch|History|Journal|Telemetry|Trace)(?:[^a-z]|$)/;
+const BOOK_OTHER = /\.log\b|tmpdir|mkdtemp|pidfile|lockfile|\.cache\b/i;
+const bookkeeping = (t) => BOOK_WORD.test(t) || BOOK_CAMEL.test(t) || BOOK_OTHER.test(t);
+const APPEND_ONLY = new Set(['appendFile', 'appendFileSync']);
+// the identifiers a path expression is built from, not counting members (os.path) or strings
+const idsOf = (code) => new Set((code.match(/(?<![.\w$])[A-Za-z_$][\w$]*/g) || []));
   const CP_MODS = /^(node:)?child_process$|^(execa|shelljs|cross-spawn|node-pty)$/;
   const CP_FNS = new Set(['exec', 'execSync', 'execFile', 'execFileSync', 'spawn', 'spawnSync', 'fork', 'execa', 'execaSync', 'execaCommand', 'execaCommandSync']);
   const HTTP_JS_MODS = /^(axios|got|ky|superagent|needle|undici|node-fetch|cross-fetch|ofetch|request|request-promise|phin|wretch)$/;
   const HTTP_VERBS_W = new Set(['post', 'put', 'patch', 'delete', 'del']);
-  const READISH_URL = /search|query|graphql|lookup|find|list|fetch|read|get|embed|complet|token|oauth|auth|count|check|validate|verify|preview|dry|calculate|estimate|translate|classif|analy[sz]e|infer|rank|retriev|batchGet/i;
-  // read-only commands: the program (and sub-command) of a literal command line
+    // read-only commands: the program (and sub-command) of a literal command line
   const RO_CMDS = new Set(['ls', 'cat', 'head', 'tail', 'wc', 'grep', 'rg', 'ag', 'echo', 'pwd', 'which', 'whoami', 'date', 'uname', 'df', 'du', 'ps', 'stat', 'file', 'tree', 'env', 'printenv', 'hostname', 'uptime', 'id', 'sort', 'uniq', 'diff', 'cmp', 'nproc', 'free', 'lsof', 'netstat', 'ping', 'dig', 'nslookup', 'host', 'curl_head', 'jq', 'basename', 'dirname', 'realpath', 'readlink', 'type', 'command', 'tput', 'sw_vers', 'lscpu', 'top', 'vmstat', 'find']);
   const RO_SUB = { git: new Set(['status', 'log', 'diff', 'show', 'rev-parse', 'branch', 'ls-files', 'ls-tree', 'blame', 'describe', 'remote', 'config', 'shortlog', 'rev-list', 'cat-file', 'grep', 'tag', 'version', 'ls-remote', 'stash_list']), docker: new Set(['ps', 'images', 'inspect', 'logs', 'version', 'info', 'stats', 'top', 'port', 'diff', 'history', 'ls']), kubectl: new Set(['get', 'describe', 'logs', 'version', 'top', 'explain', 'api-resources', 'cluster-info', 'config']), npm: new Set(['ls', 'list', 'view', 'outdated', 'audit', 'search', 'config', 'root', 'prefix', 'whoami']), pip: new Set(['list', 'show', 'freeze', 'check', 'search']), node: new Set(['--version', '-v']), python: new Set(['--version', '-V']), python3: new Set(['--version', '-V']), brew: new Set(['list', 'info', 'search', 'outdated']), gh: new Set(['view', 'list', 'status', 'search', 'api']), terraform: new Set(['plan', 'show', 'validate', 'version', 'output', 'fmt']) };
   const SQL_RE = /^\s*(?:\/\*[\s\S]*?\*\/\s*|--[^\n]*\n\s*)*(?:(insert\s+(?:or\s+\w+\s+)?into|replace\s+into|upsert\s+into|merge\s+into)\b|(update\s+[\w."`\[\]$:{}?]+\s+set)\b|(delete\s+from\s+[\w."`\[\]$:{}?]+)|(drop\s+(?:table|database|schema|index|view|column|trigger)|truncate(?:\s+table)?\s+[\w."`\[\]$:{}?]+)|(alter\s+table\s+[\w."`\[\]$:{}?]+|create\s+(?:or\s+replace\s+)?(?:table|index|database|view|trigger)\b)|(select\b[\s\S]*\bfrom\b|select\s+[\w*]+\s*$|pragma\s+table_info|show\s+\w+|explain\b))/i;
@@ -722,6 +730,43 @@
   const SDK_DELETE_VERBS = new Set(['delete', 'remove', 'destroy', 'drop', 'truncate', 'terminate', 'kill', 'revoke', 'cancel', 'archive', 'purge', 'unsubscribe', 'deregister', 'unregister', 'uninstall', 'detach']);
   const CLIENTISH = /client|api|sdk|octokit|stripe|github|gitlab|\bgh\b|service|svc|\bdb\b|database|slack|notion|jira|linear|aws|s3|gcs|bucket|sns|sqs|dynamo|redis|mailer|mail|smtp|twilio|supabase|firebase|k8s|kube|docker|openai|anthropic|resend|sendgrid|shopify|hubspot|salesforce|airtable|trello|asana|discord|telegram|stripe|paypal|plaid|cloudflare|vercel|netlify|heroku|azure|gcp|google|drive|gmail|calendar|sheets|contentful|sanity|strapi|wordpress|posthog|grafana|prometheus|datadog|sentry|pagerduty|okta|auth0|clerk|neon|planetscale|turso|mongo|collection|kv|gateway/i;
   const NEVER_SDK = /^(server|mcpServer|mcp|app|router|Object|Array|Math|JSON|console|Promise|path|Set|Map|WeakMap|WeakSet|String|Number|Date|Buffer|URL|URLSearchParams|process|util|Intl|crypto|os|Symbol|Reflect|Proxy|Error|RegExp|results?|arr|list|items?|params|searchParams|headers|args|opts|options|data|body|text|res|result|response|req|request|output|lines|parts|keys|values|out|acc|map|set|cache|memo|seen|visited|queue|stack|logger|log|self|cls|time|datetime|re|json|logging|random|itertools|functools|collections|typing|asyncio|textwrap|string|base64|hashlib|uuid|copy|math|operator|inspect|traceback|warnings|contextlib|dataclasses|enum|abc)$/;
+
+  // ------------------------------------------------------------ reachability
+  // Reachability is not modelled, so a sink is "definite" only on the straight-line path of a function: not inside an
+  // if/else/loop/switch/catch/finally body, a callback, a ternary or the right side of && || ??. Everything else is "may".
+  function condRangesJs(P) {
+    if (P._cond) return P._cond;
+    const code = P.code; const out = []; let m;
+    const body = (from) => { const b0 = nextSig(code, from); if (code[b0] === '{') { const e = matchClose(code, b0); if (e > b0) out.push([b0, e]); } else { const e = exprEnd(code, b0); out.push([b0, e]); } };
+    const reCtl = /\b(if|while|for)\s*(?:await\s*)?\(/g;
+    while ((m = reCtl.exec(code))) { const open = m.index + m[0].length - 1; const close = matchClose(code, open); if (close > open) body(close + 1); }
+    const reElse = /\belse\b(?!\s*if\b)/g;
+    while ((m = reElse.exec(code))) body(m.index + 4);
+    const reTry = /\b(?:catch\s*(?:\([^)]*\))?|finally)\s*\{/g;
+    while ((m = reTry.exec(code))) { const open = m.index + m[0].length - 1; const e = matchClose(code, open); if (e > open) out.push([open, e]); }
+    const reSw = /\bswitch\s*\(/g;
+    while ((m = reSw.exec(code))) { const open = m.index + m[0].length - 1; const close = matchClose(code, open); if (close > open) body(close + 1); }
+    // a callback may never run; the executor of new Promise(...) runs at once
+    P.funcs.filter((f) => f.anon && !/\bnew\s+Promise\s*\(\s*(?:async\s*)?$/.test(code.slice(Math.max(0, f.start - 40), f.start))).forEach((f) => out.push([f.body[0], f.body[1]]));
+    P._cond = out; return out;
+  }
+  function isCond(P, pos, a, b) {
+    if (P.lang === 'js') {
+      if (condRangesJs(P).some((r) => r[0] >= a && r[0] <= pos && pos < r[1] && !(r[0] === a && r[1] === b))) return true;
+      let k = pos - 1; const lim = Math.max(a, pos - 300);
+      while (k > lim && !';{}'.includes(P.code[k])) k--;
+      return /&&|\|\||\?\?|\?(?![.:])/.test(P.code.slice(k + 1, pos));
+    }
+    const li = P.line(pos) - 1; const li0 = Math.max(0, P.line(a) - 1);
+    let cur = P.indentOf(P.lines[li]);
+    for (let k = li - 1; k >= li0; k--) {
+      const l = P.lines[k]; if (!l.trim()) continue;
+      const ind = P.indentOf(l);
+      if (ind < cur) { if (/^\s*(if|elif|else|for|while|except|finally|case|match|async\s+for)\b/.test(l)) return true; cur = ind; }
+    }
+    const lineStart = P.lineStart[li]; const pre = P.code.slice(lineStart, pos);
+    return /\b(if|and|or|for|lambda)\b/.test(pre);
+  }
 
   // ------------------------------------------------------------ scanning a region
   function callsIn(P, a, b) {
@@ -766,7 +811,7 @@
     return { method: def, dynamic: false };
   }
 
-  function evOf(P, at, sink, conf, via, note) { return { file: P.path, line: P.line(at), sink, confidence: conf, via: via.slice(), ...(note ? { note } : {}) }; }
+  function evOf(P, at, sink, conf, via, note, kind) { return { file: P.path, line: P.line(at), sink, kind, confidence: conf, via: via.slice(), ...(note ? { note } : {}) }; }
 
   function classify(R, P, call, region, state) {
     const out = []; const chain = call.chain; const last = chain[chain.length - 1]; const head = chain[0];
@@ -784,9 +829,9 @@
       if (fsName) {
         fam('fs');
         const pathArg = argTexts(P, call)[0]; const pathText = pathText0(P, region, pathArg);
-        const temp = TEMPISH.test(pathText);
-        if (FS_DELETE.has(fsName)) emit('delete', temp ? 'may' : 'definite', 'fs.' + fsName, temp ? 'path looks temporary or a lock file' : '');
-        else if (FS_WRITE.has(fsName)) emit('write', temp ? 'may' : 'definite', 'fs.' + fsName, temp ? 'path looks temporary or a lock file' : (FS_OVERWRITE.has(fsName) ? 'overwrite' : ''));
+        const why = softFs(P, region, fsName, pathArg, pathText, APPEND_ONLY.has(fsName));
+        if (FS_DELETE.has(fsName)) emit('delete', why ? 'may' : 'definite', 'fs.' + fsName, why || '');
+        else if (FS_WRITE.has(fsName)) emit('write', why ? 'may' : 'definite', 'fs.' + fsName, why || (FS_OVERWRITE.has(fsName) ? 'overwrite' : ''));
         else if (FS_READ.has(fsName)) emit('read', 'definite', 'fs.' + fsName, '');
         if (FS_DELETE.has(fsName) || FS_WRITE.has(fsName) || FS_READ.has(fsName)) return out;
       }
@@ -823,12 +868,12 @@
         const pathText = pathText0(P, region, args[0]);
         const lit = /^\s*[rbu]*(['"])([^'"]*)\1\s*$/.exec(modeArg);
         if (!modeArg) { emit('read', 'definite', 'fs.open'); return out; }
-        if (lit) { if (/[wax+]/.test(lit[2])) emit('write', TEMPISH.test(pathText) ? 'may' : 'definite', 'fs.open', TEMPISH.test(pathText) ? 'path looks temporary or a lock file' : 'mode ' + lit[2]); else emit('read', 'definite', 'fs.open'); return out; }
+        if (lit) { if (/[wax+]/.test(lit[2])) { const why = softFs(P, region, 'open', args[0], pathText, /^[rb]*a[b]*$/.test(lit[2])); emit('write', why ? 'may' : 'definite', 'fs.open', why || 'mode ' + lit[2]); } else emit('read', 'definite', 'fs.open'); return out; }
         emit('write', 'may', 'fs.open', 'mode is not a literal'); return out;
       }
       if ((head === 'os' || (imp && /^os$/.test(impHead))) && chain.length === 2) {
         fam('fs'); if (/^(remove|unlink|rmdir|removedirs)$/.test(last)) { emit('delete', 'definite', 'fs.os.' + last); return out; }
-        if (/^(rename|replace|mkdir|makedirs|truncate|symlink|link|chmod|chown|utime|renames)$/.test(last)) { emit('write', 'definite', 'fs.os.' + last); return out; }
+        if (/^(rename|replace|mkdir|makedirs|truncate|symlink|link|chmod|chown|utime|renames)$/.test(last)) { const why = softFs(P, region, last, argTexts(P, call)[0], pathText0(P, region, argTexts(P, call)[0]), false); emit('write', why ? 'may' : 'definite', 'fs.os.' + last, why || ''); return out; }
         if (/^(system|popen|execv|execve|execvp|execl|execlp|spawnl|spawnv|spawnlp|spawnvp|startfile)$/.test(last)) { fam('exec'); const w = cmdWords(P, call); if (w.words && roCommand(w.words)) emit('read', 'definite', 'exec.readonly', w.words.slice(0, 3).join(' ')); else emit('exec', 'definite', 'exec.os.' + last, w.words ? w.words.slice(0, 3).join(' ') : 'command is not a literal'); return out; }
         if (/^(listdir|scandir|stat|walk|getcwd|getenv|readlink|access)$/.test(last)) { emit('read', 'definite', 'fs.os.' + last); return out; }
       }
@@ -841,8 +886,8 @@
         if (/^(rename|replace|mkdir|makedirs|move|copy|copy2|copyfile|copytree)$/.test(imp.name)) { emit('write', 'definite', 'fs.' + impHead + '.' + imp.name); return out; }
       }
       if (chain.length >= 2) {
-        if (/^(write_text|write_bytes|touch|symlink_to|hardlink_to)$/.test(last)) { fam('fs'); emit('write', 'definite', 'fs.pathlib.' + last); return out; }
-        if (/^(mkdir)$/.test(last) && chain.length >= 2 && state.pathlibish(P, chain)) { fam('fs'); emit('write', 'definite', 'fs.pathlib.mkdir'); return out; }
+        if (/^(write_text|write_bytes|touch|symlink_to|hardlink_to)$/.test(last)) { fam('fs'); const why = bookkeeping(P.text.slice(Math.max(0, call.at - 160), call.open)) ? 'path looks like a log, state, cache, lock or temporary file' : null; emit('write', why ? 'may' : 'definite', 'fs.pathlib.' + last, why || ''); return out; }
+        if (/^(mkdir)$/.test(last) && chain.length >= 2 && state.pathlibish(P, chain)) { fam('fs'); emit('write', 'may', 'fs.pathlib.mkdir', 'creates a directory'); return out; }
         if (/^(unlink|rmdir)$/.test(last) && state.pathlibish(P, chain)) { fam('fs'); emit('delete', 'definite', 'fs.pathlib.' + last); return out; }
         if (/^(read_text|read_bytes|iterdir|glob|rglob|exists|is_file|is_dir|stat)$/.test(last) && state.pathlibish(P, chain)) { fam('fs'); emit('read', 'definite', 'fs.pathlib.' + last); return out; }
       }
@@ -921,6 +966,19 @@
     return out;
   }
 
+  // Why a file write or delete is only a "may": a bookkeeping file, a directory made on the way, an append to a file the
+  // tool's arguments do not name. null when none applies.
+  function softFs(P, region, fsName, pathArg, pathText, appendOnly) {
+    if (bookkeeping(pathText)) return 'path looks like a log, state, cache, lock or temporary file';
+    if (/^(mkdir|mkdirSync|makedirs|ensureDir|ensureDirSync|ensureFile|ensureFileSync)$/.test(fsName) || fsName === 'mkdir') return 'creates a directory';
+    if (appendOnly) {
+      const ids = pathArg ? idsOf(P.code.slice(pathArg[0], pathArg[1])) : new Set();
+      const fromArgs = Array.from(ids).some((x) => region.params && region.params.has(x));
+      if (!fromArgs) return 'appends to a file the tool\'s arguments do not name';
+    }
+    return null;
+  }
+
   // the text of a path argument, plus the right-hand side of its variable's assignment in the same function
   function pathText0(P, region, arg) {
     if (!arg) return '';
@@ -937,10 +995,14 @@
     if (m.dynamic || m.method === null) { mk('unsafe_http', 'may', 'http.' + sink, 'method is not a literal'); return out; }
     const meth = m.method;
     if (meth === 'GET' || meth === 'HEAD' || meth === 'OPTIONS') { mk('read', 'definite', 'http.' + meth, sink); return out; }
-    const readish = meth === 'POST' && READISH_URL.test(urlText);
-    const conf = meth === 'POST' && readish ? 'may' : 'definite';
-    const note = readish ? 'POST to a URL that looks like a query' : '';
-    mk('unsafe_http', conf, 'http.' + meth, note);
+    // Only DELETE, a GraphQL mutation written in the call, or a URL that names a write is certain. POST, PUT and PATCH are
+    // also how GraphQL, JSON-RPC, search and login calls are sent, so on their own they are "may".
+    const callText = P.text.slice(call.open, call.close);
+    const mutation = /\bmutation\b\s*[\w({]/.test(callText);
+    const writeUrl = /\/(create|delete|remove|destroy|send|publish|upload|refund|cancel|revoke|purge)(\/|\?|["'`]|$)/i.test(urlText.replace(/\$\{[^}]*\}/g, ''));
+    const certain = meth === 'DELETE' || mutation || writeUrl;
+    const note = certain ? (mutation ? 'a GraphQL mutation' : writeUrl ? 'a URL that names a write' : '') : meth + ' may be a read (GraphQL, RPC, search)';
+    mk('unsafe_http', certain ? 'definite' : 'may', 'http.' + meth, note);
     if (meth === 'DELETE') mk('delete', 'definite', 'http.DELETE', sink);
     return out;
   }
@@ -975,20 +1037,24 @@
 
   // ------------------------------------------------------------ one tool
   function scanTool(R, regions, how, state) {
+    const idsOfParams = (Q, f) => (f && f.params && Q.code[f.params[0]] ? idsOf(Q.code.slice(f.params[0] + 1, f.params[1])) : new Set());
     const fx = { read: [], write: [], delete: [], unsafe_http: [], exec: [], unknown_call: [] };
     const seenEv = new Set(); const visited = new Set(); const unresolved = [];
-    const add = (e, via, capMay) => {
-      const conf = capMay && e.conf === 'definite' ? 'may' : e.conf;
+    const add = (e, via, capMay, cond) => {
+      let conf = capMay && e.conf === 'definite' ? 'may' : e.conf;
+      if (cond && conf === 'definite') { conf = 'may'; e = Object.assign({}, e, { note: (e.note ? e.note + '; ' : '') + 'on a conditional path' }); }
       const key = e.P.path + ':' + e.P.line(e.at) + ':' + e.sink + ':' + e.kind;
       if (seenEv.has(key)) return; seenEv.add(key);
       if (fx[e.kind].length >= MAX_EVIDENCE) return;
-      fx[e.kind].push(evOf(e.P, e.at, e.sink, conf, via, e.note));
+      fx[e.kind].push(evOf(e.P, e.at, e.sink, conf, via, e.note, e.kind));
     };
     const capMay = how === 'by-name';
     let calls = 0;
-    const walk = (P, a, b, depth, via, f) => {
+    const walk = (P, a, b, depth, via, f, cond, params) => {
       const key = P.path + ':' + a + ':' + b; if (visited.has(key)) return; visited.add(key);
-      const region = { P, a, b, via, f };
+      if (state.deadline && Date.now() > state.deadline) { state.timedOut = true; return; }
+      params = new Set([...(params || []), ...idsOfParams(P, f)]);
+      const region = { P, a, b, via, f, params };
       const cs = callsIn(P, a, b);
       const strs = strsIn(P, a, b);
       // SQL: strings that are arguments of a call (definite when it is not a log or error), others "may"
@@ -1016,14 +1082,15 @@
             argTexts(P, call).map(([x, y]) => { const t = P.code.slice(x, y).trim(); return /^[A-Za-z_$][\w$]*$/.test(t) && DB_EXEC.has(lastSeg) ? localStr(t) : null; }).filter(Boolean));
           for (const s of cand) {
             if (sqlSeen.has(s.s)) continue; const k = sqlKind(s.v); if (!k) continue; sqlSeen.add(s.s); claimed.add(s.s); sqlHere = true;
-            add({ kind: k.kind, conf: 'definite', sink: 'sql.' + k.verb, note: s.v.replace(/\s+/g, ' ').slice(0, 60), at: s.s, P }, via, capMay);
+            add({ kind: k.kind, conf: 'definite', sink: 'sql.' + k.verb, note: s.v.replace(/\s+/g, ' ').slice(0, 60), at: s.s, P }, via, capMay, cond || isCond(P, s.s, a, b));
           }
         }
         if (sqlHere) effs = effs.filter((e) => e.kind !== 'unknown_call');
-        effs.forEach((e) => add(e, via, capMay));
+        const condCall = cond || isCond(P, call.at, a, b);
+        effs.forEach((e) => add(e, via, capMay, condCall));
         // follow into the repository
         if (depth < state.depth && !call.chained) {
-          for (const t of targets.slice(0, 3)) { const nm = t.f.name; walk(t.P, t.f.body[0], t.f.body[1], depth + 1, via.concat(nm + '@' + t.P.path + ':' + t.P.line(t.f.start)), t.f); }
+          for (const t of targets.slice(0, 3)) { const nm = t.f.name; walk(t.P, t.f.body[0], t.f.body[1], depth + 1, via.concat(nm + '@' + t.P.path + ':' + t.P.line(t.f.start)), t.f, condCall, params); }
           if (!targets.length && call.chain.length >= 1 && P.imports.get(call.chain[0])) {
             const imp = P.imports.get(call.chain[0]);
             if (imp.spec.startsWith('.') || (P.lang === 'py' && imp.spec.startsWith('.'))) {
@@ -1037,13 +1104,13 @@
       if (!state.disable.has('sql')) for (const s of strs) {
         if (claimed.has(s.s) || sqlSeen.has(s.s) || s.doc) continue;
         const k = sqlKind(s.v); if (!k || k.kind === 'read') continue;
-        if (s.tpl && /sql|execute|query/i.test(s.tag || '')) { sqlSeen.add(s.s); add({ kind: k.kind, conf: 'definite', sink: 'sql.' + k.verb, note: s.v.replace(/\s+/g, ' ').slice(0, 60), at: s.s, P }, via, capMay); continue; }
-        sqlSeen.add(s.s); add({ kind: k.kind, conf: 'may', sink: 'sql.' + k.verb, note: 'a SQL string that no call in this function receives', at: s.s, P }, via, capMay);
+        if (s.tpl && /sql|execute|query/i.test(s.tag || '')) { sqlSeen.add(s.s); add({ kind: k.kind, conf: 'definite', sink: 'sql.' + k.verb, note: s.v.replace(/\s+/g, ' ').slice(0, 60), at: s.s, P }, via, capMay, cond || isCond(P, s.s, a, b)); continue; }
+        sqlSeen.add(s.s); add({ kind: k.kind, conf: 'may', sink: 'sql.' + k.verb, note: 'a SQL string that no call in this function receives', at: s.s, P }, via, capMay, cond || isCond(P, s.s, a, b));
       }
     };
     for (const r of regions) {
       const via0 = [(r.f ? r.f.name : 'handler') + '@' + r.P.path + ':' + r.P.line(r.a)];
-      walk(r.P, r.a, r.b, 0, via0, r.f);
+      walk(r.P, r.a, r.b, 0, via0, r.f, false, new Set());
     }
     return { fx, unresolved, calls };
   }
@@ -1057,6 +1124,7 @@
     const state = {
       depth: Number.isInteger(opts.depth) ? Math.max(0, Math.min(6, opts.depth)) : 3,
       maxCalls: opts.maxCalls || 3000, disable: new Set(opts.disable || []), family: '', truncated: false,
+      deadline: Date.now() + (Number.isFinite(opts.timeBudgetMs) ? opts.timeBudgetMs : 20000), timedOut: false,
       stdlib: stdlibJs,
       fileHandles: (P) => { if (P._fh) return P._fh; const s = new Set(); const re = /\b(?:const|let|var|using)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:await\s+)?(?:[\w$.]+\.)?open(?:Sync)?\s*\(/g; let m; while ((m = re.exec(P.code))) s.add(m[1]); P._fh = s; return s; },
       localDef: (P, n) => P.funcs.some((f) => f.name === n),
@@ -1075,6 +1143,7 @@
     for (const f of found || []) {
       const name = f && f.tool && f.tool.name; if (typeof name !== 'string' || has(tools, name)) continue;
       n++;
+      if (Date.now() > state.deadline) { tools[name] = { status: 'time_budget' }; state.timedOut = true; continue; }
       const lang = langOf(f.path || '');
       if (!lang || (f.language && f.language !== 'TypeScript' && f.language !== 'JavaScript' && f.language !== 'Python' && !/^(typescript|javascript|python)$/i.test(f.language))) { tools[name] = { status: 'unsupported_language', language: f.language || null }; continue; }
       const P = R.get(f.path);
@@ -1103,13 +1172,14 @@
       let res;
       try { res = scanTool(R, regions, regions.every((r) => r.how === 'by-name') ? 'by-name' : how, state); } catch (e) { tools[name] = { status: 'reader_error' }; continue; }
       withHandler++; totalCalls += res.calls;
+      const cut = state.timedOut;
       const fx = res.fx;
       const def = (k) => fx[k].filter((e) => e.confidence === 'definite');
       const may = (k) => fx[k].filter((e) => e.confidence !== 'definite');
       const definiteWrite = def('write').length + def('delete').length + def('unsafe_http').length + def('exec').length > 0;
       const mayWrite = may('write').length + may('delete').length + may('unsafe_http').length + may('exec').length > 0;
       const overwrite = def('write').some((e) => /overwrite/.test(e.note || ''));
-      const noSink = !definiteWrite && !mayWrite && !fx.unknown_call.length && !res.unresolved.length;
+      const noSink = !cut && !definiteWrite && !mayWrite && !fx.unknown_call.length && !res.unresolved.length;
       tools[name] = {
         status: 'analysed',
         handler: { file: regions[0].P.path, line: regions[0].P.line(regions[0].a), how: regions[0].how, regions: regions.length },
@@ -1119,9 +1189,10 @@
           destructiveHint: def('delete').length ? { value: true, confidence: 'definite' } : may('delete').length ? { value: null, confidence: 'may', why: 'may delete' } : overwrite ? { value: true, confidence: 'may', why: 'overwrites' } : { value: null, confidence: 'none' },
         },
         unresolved: res.unresolved.slice(0, 10),
+        ...(cut ? { truncated: true } : {}),
       };
     }
-    return { version: VERSION, tools, summary: { tools: n, handlers_found: withHandler, calls_scanned: totalCalls, depth: state.depth, truncated: state.truncated }, limits: LIMITS };
+    return { version: VERSION, tools, summary: { tools: n, handlers_found: withHandler, calls_scanned: totalCalls, depth: state.depth, truncated: state.truncated || state.timedOut, ...(state.timedOut ? { time_budget_hit: true } : {}) }, limits: LIMITS };
   }
   const camel = (s, up) => { const c = s.replace(/[_-]+([a-z0-9])/g, (_, x) => x.toUpperCase()); return up ? c[0].toUpperCase() + c.slice(1) : c; };
   function packageDir(R, p) {

@@ -30,20 +30,25 @@ has no further effect. Phase 1 covers the first two.
 
 | Family | Sinks |
 |---|---|
-| `fs` | `fs`/`fs/promises`/`fs-extra` write, append, mkdir, copy, rename, truncate, chmod; unlink, rm, rmdir, remove; file handles opened here; `promisify(fs.x)` and `const { x } = fs` aliases; Deno and Bun. Python `open(path, mode)` with a write mode, `os.remove/rename/mkdir/...`, `shutil.rmtree/move/copy...`, `pathlib` write and unlink. A path that looks temporary (`tmp`, `temp`, `cache`, `os.tmpdir`) is `may`. |
+| `fs` | `fs`/`fs/promises`/`fs-extra` write, append, mkdir, copy, rename, truncate, chmod; unlink, rm, rmdir, remove; file handles opened here; `promisify(fs.x)` and `const { x } = fs` aliases; Deno and Bun. Python `open(path, mode)` with a write mode, `os.remove/rename/mkdir/...`, `shutil.rmtree/move/copy...`, `pathlib` write and unlink. Housekeeping is `may`: any directory creation; a path with a log, audit, metrics, state, cache, lock, pid, history, journal, telemetry, trace, tmp or temp word in it (snake_case, dotted or camelCase; "status" is not "state"); an append to a file the tool's arguments do not name. |
 | `sql` | A string handed to a call (not a logger, `print` or an error) that starts with INSERT, UPDATE ... SET, DELETE FROM, DROP, TRUNCATE, ALTER, CREATE, MERGE or REPLACE INTO; a tagged template; a variable assigned such a string in the handler or at module level. SELECT is a read. A write-shaped string that no call receives is `may`. |
 | `orm` | prisma create/update/delete/upsert; Mongo `insertOne`, `updateOne`, `deleteMany` and the like; Sequelize `destroy`, `save`; Drizzle and Knex when the file uses them; SQLAlchemy `session.add/delete/merge`, `commit` (`may` alone); Django `objects.create/update/delete`; `.delete()` and `.save()` in a file that uses a known ORM; Redis writes and deletes. |
-| `http` | `fetch`, `axios`, `got`, `ky`, `requests`, `httpx`, `aiohttp`, clients made by `axios.create`, `httpx.Client`, `requests.Session`, `aiohttp.ClientSession`, with their method. PUT, PATCH and DELETE are `definite` (DELETE also fills `delete`); GET is a read; a method that is not a literal is `may`; POST is `definite` unless the URL looks like a query (`search`, `query`, `graphql`, `lookup`, ...), then `may`. |
+| `http` | `fetch`, `axios`, `got`, `ky`, `requests`, `httpx`, `aiohttp`, clients made by `axios.create`, `httpx.Client`, `requests.Session`, `aiohttp.ClientSession`, with their method. GET is a read. DELETE is `definite` (and fills `delete`). POST, PUT and PATCH are `may` on their own, because GraphQL, JSON-RPC, search, login and many vendor APIs send reads that way; they are `definite` only when the call itself shows a write: a GraphQL `mutation` written in it, or a URL ending in `/create`, `/delete`, `/remove`, `/destroy`, `/send`, `/publish`, `/upload`, `/refund`, `/cancel`, `/revoke` or `/purge`. A method that is not a literal is `may`. |
 | `exec` | `child_process` exec/spawn/execFile/fork, `execa`; Python `subprocess`, `os.system`, `os.popen`, asyncio subprocesses. A literal command that is known to be read-only (`ls`, `cat`, `git status`, `git log`, `kubectl get`, ...) is a read; anything else, a command built from arguments included, is `exec`. Python `exec` and `eval` are `may`. |
 | `sdk` | A method on a client-like object named like a write: `client.issues.create`, `stripe.charges.refund`, `bucket.delete`. Always `may`, because what the remote service does is not visible. Calls to such objects with other names are `unknown_call`. |
 
 ## Confidence tiers
 
-- **definite**: a sink call in the handler's own resolved call chain, with the sink's kind visible in the code (a
-  method, a path, a SQL string).
-- **may**: an opaque client call, a method that is not a literal, a path that looks temporary, a POST to a URL that
-  looks like a query, a SQL string that no call receives, a handler found only by its function name, an import that
-  could not be resolved.
+- **definite**: the write is certain on the handler's unconditional path: a sink call on the straight-line path of the
+  handler or of a resolved callee that is itself called on that path, with the kind visible in the code (a method, a
+  path, a SQL string). Reachability is not modelled, so a sink inside an `if`/`else`, a loop, a `switch`, a `catch` or
+  `finally` (Python: `if`/`elif`/`else`/`for`/`while`/`except`/`finally`/`match`), a callback, a ternary or the right
+  side of `&&`/`||`/`??`/`and`/`or` is `may`, and so is everything below a call made there. A plain `try` body, a
+  `with` block and the executor of `new Promise(...)` are on the path.
+- **may**: an opaque client call, a method that is not a literal, a POST, PUT or PATCH without a visible write, a
+  housekeeping file or directory, a sink on a conditional path, a SQL string that no call receives, a handler found only
+  by its function name, an import that could not be resolved. Messages for a `may` say "reaches a possible write (HTTP
+  POST at file:line)"; the definite wording ("reaches ...") is used for `definite` only.
 
 ## Checks
 
@@ -62,6 +67,17 @@ never change the exit code. Only `definite` evidence gives `attention`; `may` gi
 evidence exists, and `true` with confidence `no_sink_found` otherwise. The last one is the absence of a sink within the
 depth and the files read: it is not proof, and no check uses it. `idempotentHint` is not derived in phase 1.
 
+## Annotations the reader could not read
+
+A tool whose annotations the reader could not read (a call that builds them, a spread of something unknown) is marked
+`annotations: unreadable` in the block and gets no finding: unknown is not "not declared". A constant in the same file
+that holds the annotations is read.
+
+## Time budget
+
+The analysis stops after 20 seconds per repository (`timeBudgetMs`); tools not reached have `status: time_budget`, the
+one in progress is marked `truncated` and gets no "no sink found", and the summary says `time_budget_hit`.
+
 ## Limits
 
 - Static reading only. A call through a variable, a plugin, a generated client, reflection or a table of functions
@@ -73,7 +89,7 @@ depth and the files read: it is not proof, and no check uses it. `idempotentHint
 - Handlers the reader found but this one could not place (`handler_not_found`) get no effects and no finding.
 - The call budget per tool is 3000; a tool that hits it is cut and the report says `truncated`.
 - Precision matters more than recall: a wrong "this server lies" costs more than a miss, so a definite needs a direct
-  sink, and the guesses (temporary paths, query-like POSTs, by-name handlers, client verbs) are `may`.
+  sink on the unconditional path, and the guesses (housekeeping files, POST/PUT/PATCH, conditional paths, by-name handlers, client verbs) are `may`.
 
 ## Scores
 
@@ -87,5 +103,6 @@ that the analyser stays quiet there, not that it finds anything.
 ## In the loop
 
 `corpus/scan-static.mjs` writes `raw/subject/code-effects.json` (the same block) only when the environment variable
-`SCAN_STATIC_CODE_EFFECTS=1` is set for the run. It is not set by any workflow. `results/` and the grades are the same
+`SCAN_STATIC_CODE_EFFECTS=1` is set for the run. It is not set by any workflow. Until real-repository QA is done, every
+finding in that file is capped at `advice` (`max_severity: advice`): attention exists only on the CLI flag path. `results/` and the grades are the same
 with it on or off.

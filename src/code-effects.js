@@ -40,6 +40,9 @@ const definite = (list) => (list || []).filter((e) => e.confidence === 'definite
 const mayOnly = (list) => (list || []).filter((e) => e.confidence !== 'definite');
 const where = (e) => e.file + ':' + e.line;
 const uniq = (list) => { const seen = new Set(); return list.filter((e) => { const k = e.file + ':' + e.line + ':' + e.sink; if (seen.has(k)) return false; seen.add(k); return true; }); };
+const sinkLabel = (e) => (/^http\.[A-Z]+$/.test(e.sink) ? 'HTTP ' + e.sink.slice(5) : e.sink) + ' at ' + where(e);
+/** "a possible write (HTTP POST at src/a.ts:3)": the wording of a may. */
+const possibleText = (all) => { const list = uniq(all); const word = list.every((e) => e.kind === 'delete') ? 'delete' : 'write'; return 'a possible ' + word + ' (' + list.slice(0, 3).map(sinkLabel).join('; ') + (list.length > 3 ? '; and ' + (list.length - 3) + ' more' : '') + ')'; };
 const sinkText = (all) => { const list = uniq(all); return list.slice(0, 3).map((e) => e.sink + ' at ' + where(e) + (e.via && e.via.length > 1 ? ' (through ' + e.via.slice(1).map((v) => v.split('@')[0]).join(' > ') + ')' : '')).join('; ') + (list.length > 3 ? '; and ' + (list.length - 3) + ' more' : ''); };
 const trimEv = (e) => ({ file: e.file, line: e.line, sink: e.sink, confidence: e.confidence, via: e.via, ...(e.note ? { note: e.note } : {}) });
 
@@ -48,14 +51,16 @@ const trimEv = (e) => ({ file: e.file, line: e.line, sink: e.sink, confidence: e
  * @param {object[]} tools    the graded tools (name, annotations)
  * @param {object} effects    RepoEffects.analyse(...) result carried by the candidate
  */
-export function codeEffectsReport(tools, effects) {
-  const out = { version: CODE_EFFECTS_VERSION, experimental: true, severity_cap: SEVERITY_CAP, summary: null, findings: [], tools: [], limits: (effects && effects.limits) || [] };
+export function codeEffectsReport(tools, effects, opts = {}) {
+  const unreadable = new Set((opts.unreadable && Array.isArray(opts.unreadable.annotations) ? opts.unreadable.annotations : []).map(String));
+  const out = { version: CODE_EFFECTS_VERSION, experimental: true, severity_cap: SEVERITY_CAP, summary: null, findings: [], tools: [], limits: (effects && effects.limits) || [], ...(opts.maxSeverity ? { max_severity: opts.maxSeverity } : {}) };
   if (!effects || !effects.tools) { out.summary = { tools: (tools || []).length, analysed: 0, available: false }; return out; }
   const counts = { analysed: 0, handler_not_found: 0, unsupported_language: 0, other: 0 };
   for (const t of tools || []) {
     if (!t || typeof t.name !== 'string') continue;
     const e = effects.tools[t.name];
     const a = t.annotations && typeof t.annotations === 'object' ? t.annotations : {};
+    const annUnreadable = unreadable.has(t.name);
     const declared = { readOnlyHint: typeof a.readOnlyHint === 'boolean' ? a.readOnlyHint : null, destructiveHint: typeof a.destructiveHint === 'boolean' ? a.destructiveHint : null, idempotentHint: typeof a.idempotentHint === 'boolean' ? a.idempotentHint : null };
     if (!e || e.status !== 'analysed') {
       const st = e ? e.status : 'not_analysed';
@@ -68,23 +73,26 @@ export function codeEffectsReport(tools, effects) {
     const defW = WRITEISH.flatMap((k) => definite(fx[k])); const mayW = WRITEISH.flatMap((k) => mayOnly(fx[k]));
     const defDel = definite(fx.delete); const mayDel = mayOnly(fx.delete);
     const row = {
-      name: t.name, status: 'analysed', handler: e.handler, declared,
+      name: t.name, status: 'analysed', handler: e.handler, declared, ...(annUnreadable ? { annotations: 'unreadable' } : {}), ...(e.truncated ? { truncated: true } : {}),
       effects: Object.fromEntries(Object.keys(fx).map((k) => [k, { definite: definite(fx[k]).length, may: mayOnly(fx[k]).length, evidence: fx[k].slice(0, 6).map(trimEv) }])),
       derived: e.derived,
     };
     out.tools.push(row);
     const push = (id, severity, confidence, message, path, ev) => out.findings.push({ id, section: 'annotations', severity, confidence, tool: t.name, message, path, evidence: ev.slice(0, 6).map(trimEv), experimental: true });
+    if (annUnreadable) { /* the reader could not read this tool's annotations: unknown, never "not declared" */ }
+    else {
     if (declared.readOnlyHint === true) {
       if (defW.length) push('annot-code-writes-marked-readonly', 'attention', 'definite', 'readOnlyHint is true but the handler reaches ' + sinkText(defW) + '.', 'annotations.readOnlyHint', defW);
-      else if (mayW.length) push('annot-code-writes-marked-readonly', 'advice', 'may', 'readOnlyHint is true and the handler may write: ' + sinkText(mayW) + '.', 'annotations.readOnlyHint', mayW);
+      else if (mayW.length) push('annot-code-writes-marked-readonly', 'advice', 'may', 'readOnlyHint is true and the handler reaches ' + possibleText(mayW) + '.', 'annotations.readOnlyHint', mayW);
     }
     if (declared.destructiveHint === false && declared.readOnlyHint !== true) {
       if (defDel.length) push('annot-code-deletes-marked-safe', 'attention', 'definite', 'destructiveHint is false but the handler reaches ' + sinkText(defDel) + '.', 'annotations.destructiveHint', defDel);
-      else if (mayDel.length) push('annot-code-deletes-marked-safe', 'advice', 'may', 'destructiveHint is false and the handler may delete: ' + sinkText(mayDel) + '.', 'annotations.destructiveHint', mayDel);
+      else if (mayDel.length) push('annot-code-deletes-marked-safe', 'advice', 'may', 'destructiveHint is false and the handler reaches ' + possibleText(mayDel) + '.', 'annotations.destructiveHint', mayDel);
     }
     if (declared.readOnlyHint === null && defW.length) push('annot-code-unmarked-write', 'advice', 'definite', 'readOnlyHint is not set, and the handler reaches ' + sinkText(defW) + '.', 'annotations.readOnlyHint', defW);
+    }
   }
-  out.findings.forEach((f) => { if (f.severity === 'blocking') f.severity = SEVERITY_CAP; if (f.confidence !== 'definite' && f.severity !== 'advice') f.severity = 'advice'; });
+  out.findings.forEach((f) => { if (f.severity === 'blocking') f.severity = SEVERITY_CAP; if (opts.maxSeverity === 'advice') f.severity = 'advice'; if (f.confidence !== 'definite' && f.severity !== 'advice') f.severity = 'advice'; });
   out.summary = { tools: (tools || []).length, ...counts, findings: out.findings.length, attention: out.findings.filter((f) => f.severity === 'attention').length, advice: out.findings.filter((f) => f.severity === 'advice').length, depth: effects.summary ? effects.summary.depth : null, truncated: effects.summary ? !!effects.summary.truncated : false };
   return out;
 }

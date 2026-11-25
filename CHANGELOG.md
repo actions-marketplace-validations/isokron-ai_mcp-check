@@ -8,7 +8,8 @@ All notable changes to `@isokron/mcp-check` and the `isokron-ai/mcp-check` Actio
 
 - **`--code-effects`** (with `--repo` or `--repo-dir`): reads each tool's handler from TypeScript, JavaScript and Python source, follows calls inside the repository to a set depth (`--code-effects-depth`, default 3), and records what it touches: file writes and deletes, SQL and ORM writes, HTTP with its method, process execution, client calls whose effect is not visible. Each effect has file and line and a tier, `definite` or `may`. Static only: nothing is run.
 - **New checks, in their own `code_effects` block of the report, never in the grades:** `annot-code-writes-marked-readonly`, `annot-code-deletes-marked-safe`, `annot-code-unmarked-write`. A definite sink is attention at most; a `may` is advice. The name-based checks are unchanged.
-- **Loop:** `corpus/scan-static.mjs` writes `raw/subject/code-effects.json` only when `SCAN_STATIC_CODE_EFFECTS=1`; results/ and the workflow are unchanged.
+- **Definite means certain.** A sink is `definite` only on the straight-line path of the handler and its callees; branches, loops, `catch`, callbacks and ternaries make it `may`. POST, PUT and PATCH are `may` unless the call shows a write (DELETE, a GraphQL `mutation`, a write URL); directory creation, log, audit, metrics, state, cache, lock and temporary files, and appends to files the arguments do not name are `may`. Annotations the reader could not read are unknown, and the analysis has a 20 s budget per repository.
+- **Loop:** `corpus/scan-static.mjs` writes `raw/subject/code-effects.json` only when `SCAN_STATIC_CODE_EFFECTS=1`, with every finding capped at advice; results/ and the workflow are unchanged.
 - **Docs and score:** [docs/code-effects.md](docs/code-effects.md); `node bench/effects.mjs` scores the checks on labelled servers in `bench/effects/`. Tests: `test/code-effects.test.mjs`.
 
 ### Terminal escape sequences and shell syntax in URLs (loop upgrade 19)

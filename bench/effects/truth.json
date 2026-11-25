@@ -363,6 +363,92 @@
    "state_change": true,
    "deletes": true,
    "why": "runs a function from a table by name (wipe removes a file)"
+  },
+  "fp-ts/gql_query": {
+   "state_change": false,
+   "deletes": false,
+   "why": "GraphQL query sent by POST"
+  },
+  "fp-ts/es": {
+   "state_change": false,
+   "deletes": false,
+   "why": "Elasticsearch count sent by POST"
+  },
+  "fp-ts/with_log": {
+   "state_change": false,
+   "deletes": false,
+   "why": "appends a line to an audit log: bookkeeping"
+  },
+  "fp-ts/ensure": {
+   "state_change": false,
+   "deletes": false,
+   "why": "makes an output directory: bookkeeping"
+  },
+  "fp-ts/deadbranch": {
+   "state_change": false,
+   "deletes": false,
+   "why": "the delete is in a branch that never runs"
+  },
+  "fp-ts/shared_read": {
+   "state_change": false,
+   "deletes": false,
+   "why": "a shared helper whose write mode is not used"
+  },
+  "fp-ts/collide": {
+   "state_change": false,
+   "deletes": false,
+   "why": "returns its argument"
+  },
+  "fp-ts/sel_update": {
+   "state_change": false,
+   "deletes": false,
+   "why": "SELECT ... FOR UPDATE and comments naming DELETE"
+  },
+  "fp-ts/helpish": {
+   "state_change": false,
+   "deletes": false,
+   "why": "returns a help string that names DELETE FROM"
+  },
+  "fp-ts/rpc": {
+   "state_change": false,
+   "deletes": false,
+   "why": "JSON-RPC read (eth_blockNumber) sent by POST"
+  },
+  "fp-ts/mapdel": {
+   "state_change": false,
+   "deletes": false,
+   "why": "deletes from local Map, Set and URLSearchParams objects"
+  },
+  "fp-ts/dl": {
+   "state_change": true,
+   "deletes": false,
+   "why": "writes a thumbnail under /var/data (a real file write by a tool declared read-only; kept out of the scores as it is a judgement)",
+   "ambiguous": true
+  },
+  "fp-py/rd": {
+   "state_change": false,
+   "deletes": false,
+   "why": "reads a file"
+  },
+  "fp-py/post_search": {
+   "state_change": false,
+   "deletes": false,
+   "why": "POST to an items endpoint with a query body"
+  },
+  "fp-py/metrics": {
+   "state_change": false,
+   "deletes": false,
+   "why": "writes a metrics file: bookkeeping"
+  },
+  "fp-py/err_path": {
+   "state_change": false,
+   "deletes": false,
+   "why": "the delete is in an error path"
+  },
+  "fp-py/sess": {
+   "state_change": false,
+   "deletes": false,
+   "why": "POST to a login endpoint: no data change"
   }
  }
 }

@@ -4,7 +4,8 @@
 // bench/effects/truth.json.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import vm from 'node:vm';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -13,6 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { CODE_CHECKS, SEVERITY_CAP, codeEffectsReport, codeEffectsText } from '../src/code-effects.js';
 import { parseList } from '../src/tools.js';
 import { score } from '../bench/effects.mjs';
+import { parseArgs } from '../src/cli.js';
 
 const require = createRequire(import.meta.url);
 const Repo = require('../src/inputs/repo-source.cjs');
@@ -104,6 +106,12 @@ test('R-AE-05: HTTP is judged by its method; DELETE is also a delete; a POST to 
   assert.deepEqual(kinds(py.httpx_client_delete, 'delete'), ['http.DELETE'], 'a client made by httpx.AsyncClient()');
   assert.deepEqual(kinds(py.aiohttp_patch, 'unsafe_http'), ['http.PATCH']);
   assert.equal(py.requests_post_search.effects.unsafe_http[0].confidence, 'may');
+  assert.equal(ts.fetch_put.effects.unsafe_http[0].confidence, 'may', 'PUT may be a read too: only DELETE, a mutation or a write URL is certain');
+  assert.equal(ts.got_delete.effects.delete[0].confidence, 'definite');
+  const gql = snippet(TS("await fetch(API, { method: 'POST', body: JSON.stringify({ query: 'mutation { drop(id: 1) { ok } }' }) });"), 't');
+  assert.equal(gql.effects.unsafe_http[0].confidence, 'definite', 'a GraphQL mutation written in the call');
+  const url = snippet(TS("await fetch('https://x/api/messages/send', { method: 'POST', body: b });"), 't');
+  assert.equal(url.effects.unsafe_http[0].confidence, 'definite', 'a URL that names a write');
   const dyn = snippet(TS("await fetch('https://x', { method: m });"), 't');
   assert.equal(dyn.effects.unsafe_http[0].confidence, 'may', 'a method that is not a literal');
 });
@@ -113,7 +121,7 @@ test('R-AE-06: an opaque client call is a may, worded "may write", and never att
     const { report } = await read(name);
     const f = report.findings.filter((x) => x.confidence === 'may');
     assert.ok(f.length >= 1, name);
-    f.forEach((x) => { assert.equal(x.severity, 'advice'); assert.match(x.message, /may write/); });
+    f.forEach((x) => { assert.equal(x.severity, 'advice'); assert.match(x.message, /reaches a possible (write|delete)/); assert.doesNotMatch(x.message, /^readOnlyHint is true but/); });
   }
   const tool = (await read('ts-mixed')).fx.tools.export_report;
   assert.equal(tool.effects.write[0].confidence, 'may'); assert.equal(tool.derived.readOnlyHint.value, null);
@@ -259,10 +267,113 @@ test('R-AE-16: the first score on the labelled servers: nothing the check calls 
   const res = await score();
   const w = res.summary['annot-code-writes-marked-readonly'];
   assert.equal(w.code_lenient.fp, 0, 'no false attention on the labelled tools');
-  assert.ok(w.code_lenient.tp >= 25 && w.code_lenient.recall.p >= 0.75, 'recall ' + JSON.stringify(w.code_lenient.recall));
-  assert.ok(w.name_based.tp < w.code_lenient.tp, 'the code check sees more than the name-based one on these tools');
+  assert.ok(w.code_lenient.tp >= 19 && w.code_lenient.recall.p >= 0.5, 'recall ' + JSON.stringify(w.code_lenient.recall));
   assert.equal(res.summary['annot-code-deletes-marked-safe'].code_lenient.fp, 0);
-  const missed = res.rows.filter((r) => r.checks['annot-code-writes-marked-readonly'].positive && !r.checks['annot-code-writes-marked-readonly'].attention).map((r) => r.key).sort();
-  assert.deepEqual(missed, ['py-fastmcp/bill_user', 'py-sinks/deep_write', 'py-sinks/sdk_may', 'py-sinks/table_dispatch', 'ts-mixed/export_report', 'ts-sinks/deep_write', 'ts-sinks/table_dispatch'], 'opaque clients (advice only), depth, and a table of functions');
+  const missed = res.rows.filter((r) => r.checks['annot-code-writes-marked-readonly'].positive && !r.checks['annot-code-writes-marked-readonly'].attention && !r.label.ambiguous).map((r) => r.key).sort();
+  assert.deepEqual(missed, ['py-fastmcp/bill_user', 'py-sinks/aiohttp_patch', 'py-sinks/deep_write', 'py-sinks/httpx_put', 'py-sinks/open_append', 'py-sinks/requests_post', 'py-sinks/sdk_may', 'py-sinks/table_dispatch', 'ts-mixed/export_report', 'ts-sinks/axios_post', 'ts-sinks/callback_write', 'ts-sinks/deep_write', 'ts-sinks/fetch_put', 'ts-sinks/fs_append', 'ts-sinks/fs_mkdir', 'ts-sinks/table_dispatch'], 'POST/PUT/PATCH and housekeeping-shaped writes and opaque clients (advice only), callbacks, depth, and a table of functions');
   assert.deepEqual(res.summary.not_analysed, []);
+});
+
+test('AE-20: a POST, PUT or PATCH is "may" on its own: GraphQL, JSON-RPC, search and login calls are POSTs that read', async () => {
+  const ts = (await read('fp-ts')).fx.tools; const py = (await read('fp-py')).fx.tools;
+  for (const t of [ts.gql_query, ts.es, ts.rpc, py.post_search, py.sess]) {
+    assert.equal(t.effects.unsafe_http.length, 1);
+    assert.equal(t.effects.unsafe_http[0].confidence, 'may');
+    assert.match(t.effects.unsafe_http[0].note, /may be a read/);
+  }
+  const del = snippet(PY('requests.delete("https://x/y/1")'), 't');
+  assert.equal(del.effects.delete[0].confidence, 'definite', 'DELETE stays certain');
+});
+
+test('AE-21: housekeeping writes are "may": directories, logs, audit trails, metrics, state, caches, locks, temporary files, and appends to files the arguments do not name', async () => {
+  const ts = (await read('fp-ts')).fx.tools; const py = (await read('fp-py')).fx.tools;
+  assert.equal(ts.with_log.effects.write[0].confidence, 'may'); assert.match(ts.with_log.effects.write[0].note, /log/);
+  assert.equal(ts.ensure.effects.write[0].confidence, 'may'); assert.match(ts.ensure.effects.write[0].note, /directory/);
+  assert.equal(py.metrics.effects.write[0].confidence, 'may');
+  for (const path of ['audit.log', 'metrics.json', 'app-state.json', 'cache/x', 'job.lock', 'x.pid', 'run/tmp.dat', 'historyFile', 'telemetry.ndjson']) {
+    const t = snippet(TS("fs.writeFileSync('" + path + "', 'x');"), 't');
+    assert.equal(t.effects.write[0].confidence, 'may', path);
+  }
+  const plain = snippet(TS("fs.writeFileSync('notes.md', 'x');"), 't');
+  assert.equal(plain.effects.write[0].confidence, 'definite', 'an ordinary data file stays certain');
+  const stat = snippet(TS("fs.writeFileSync('status-report.md', 'x');"), 't');
+  assert.equal(stat.effects.write[0].confidence, 'definite', '"state" inside another word is not a state file');
+  const named = snippet({ 'index.ts': "import fs from 'node:fs';\nserver.registerTool('t', { description: 'd', inputSchema: {} }, async ({ file }) => { fs.appendFileSync(file, 'x'); });\n" }, 't');
+  assert.equal(named.effects.write[0].confidence, 'definite', 'an append to the file the caller names is a write');
+  const own = snippet(TS("fs.appendFileSync('visits.csv', 'x');"), 't');
+  assert.equal(own.effects.write[0].confidence, 'may', 'an append to a fixed file');
+});
+
+test('AE-22: only the straight-line path is definite: a branch, a loop, a catch, a callback, a ternary or an argument-dependent helper is "may"', async () => {
+  const ts = (await read('fp-ts')).fx.tools; const py = (await read('fp-py')).fx.tools;
+  assert.equal(ts.deadbranch.effects.delete[0].confidence, 'may');
+  assert.equal(ts.shared_read.effects.write[0].confidence, 'may', 'a helper branch that depends on an argument');
+  assert.equal(py.err_path.effects.delete[0].confidence, 'may', 'an except block');
+  const cases = {
+    'if (a) { fs.rmSync("x"); }': 'may', 'for (const x of y) { fs.rmSync(x); }': 'may', 'try { fs.rmSync("x"); } catch (e) {}': 'definite',
+    'try { f(); } catch (e) { fs.rmSync("x"); }': 'may', 'try { f(); } finally { fs.rmSync("x"); }': 'may', 'x && fs.rmSync("x");': 'may', 'const r = a ? fs.rmSync("x") : 1;': 'may',
+    'p.then(() => fs.rmSync("x"));': 'may', 'switch (a) { case 1: fs.rmSync("x"); }': 'may', 'fs.rmSync("x");': 'definite', 'await new Promise((ok) => { fs.rmSync("x"); ok(1); });': 'definite',
+    'if (a) { x(); } else { fs.rmSync("x"); }': 'may',
+  };
+  for (const [body, want] of Object.entries(cases)) assert.equal(snippet(TS(body), 't').effects.delete[0].confidence, want, body);
+  const pyCases = { 'if a:\n    os.remove("x")': 'may', 'for i in y:\n    os.remove(i)': 'may', 'try:\n    os.remove("x")\nexcept Exception:\n    pass': 'definite', 'try:\n    f()\nexcept Exception:\n    os.remove("x")': 'may', 'with open("a") as f:\n    os.remove("x")': 'definite', 'x and os.remove("x")': 'may', 'os.remove("x")': 'definite' };
+  for (const [body, want] of Object.entries(pyCases)) assert.equal(snippet(PY(body), 't').effects.delete[0].confidence, want, body);
+  const viaHelper = snippet({ 'index.ts': "import fs from 'node:fs';\nfunction purge() { fs.rmSync('x'); }\nserver.registerTool('t', {}, async (a) => { if (a.force) { purge(); } });\n" }, 't');
+  assert.equal(viaHelper.effects.delete[0].confidence, 'may', 'a callee reached from a branch is not certain either');
+});
+
+test('AE-23: the reviewer\'s repros give no attention, and every finding is worded as what it is', async () => {
+  for (const name of ['fp-ts', 'fp-py']) {
+    const { report } = await read(name);
+    assert.deepEqual(report.findings.filter((f) => f.severity === 'attention').map((f) => f.tool), name === 'fp-ts' ? ['dl'] : [], name + ': only dl, a real write to /var/data');
+    for (const f of report.findings.filter((x) => x.confidence === 'may')) assert.match(f.message, /reaches a possible (write|delete) \(.* at .*:\d+\)/, f.message);
+    for (const f of report.findings.filter((x) => x.confidence === 'definite')) assert.doesNotMatch(f.message, /possible/);
+  }
+  const { fx } = await read('fp-ts');
+  assert.deepEqual(['collide', 'sel_update', 'helpish', 'mapdel'].flatMap((n) => ['write', 'delete', 'unsafe_http', 'exec'].flatMap((k) => fx.tools[n].effects[k])), []);
+});
+
+test('AE-24: annotations the reader could not read are unknown, never "not declared"; a constant holding them is read', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'fx-ann-'));
+  try {
+    const mk = (ann, use) => ({ 'package.json': '{"name":"x","dependencies":{"@modelcontextprotocol/sdk":"^1.32.0","zod":"^4"}}', 'src/index.ts': "import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';\nimport fs from 'node:fs';\nconst server = new McpServer({ name: 'x', version: '1' });\n" + ann + "server.registerTool('wipe', { description: 'Removes things.', inputSchema: {}, annotations: ANN }, async () => { fs.rmSync('data.txt'); return { content: [] }; });\n" });
+    const run = async (files) => { for (const [p, t] of Object.entries(files)) { mkdirSync(join(dir, p, '..'), { recursive: true }); writeFileSync(join(dir, p), t); } const r = await Repo.fromDirectory(dir, { effects: true }); return codeEffectsReport(parseList(r.best.tools, 'x').tools, r.best.effects, { unreadable: r.best.unreadable }); };
+    const known = await run(mk("const ANN = { readOnlyHint: true };\n"));
+    assert.deepEqual(known.findings.map((f) => f.id), ['annot-code-writes-marked-readonly'], 'a constant in the same file');
+    const unknown = await run(mk("const ANN = buildAnnotations();\n"));
+    assert.deepEqual(unknown.findings, [], 'unreadable annotations: no finding, not even "not declared"');
+    assert.equal(unknown.tools[0].annotations, 'unreadable');
+    const none = codeEffectsReport(parseList([{ name: 'wipe', inputSchema: { type: 'object' } }], 'x').tools, { tools: { wipe: { status: 'analysed', effects: { read: [], write: [], delete: [{ file: 'a', line: 1, sink: 'fs.rmSync', kind: 'delete', confidence: 'definite', via: [] }], unsafe_http: [], exec: [], unknown_call: [] }, derived: {} } }, limits: [] });
+    assert.deepEqual(none.findings.map((f) => f.id), ['annot-code-unmarked-write'], 'a tool with no annotations is "not declared"');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('AE-25: the analysis has a time budget per repository; what is left is marked, not guessed', async () => {
+  const r = await Repo.fromDirectory(join(cases, 'ts-sinks'), { effects: true });
+  const found = r.best.where.map((w) => ({ path: w.path, line: w.line, tool: { name: w.name } }));
+  const files = new Map(); for (const p of ['src/index.ts', 'src/helpers.ts', 'src/models.ts']) files.set(p, readFileSync(join(cases, 'ts-sinks', p), 'utf8'));
+  const out = Fx.analyse(files, found, { timeBudgetMs: -1 });
+  assert.ok(Object.values(out.tools).every((t) => t.status === 'time_budget'));
+  assert.equal(out.summary.truncated, true); assert.equal(out.summary.time_budget_hit, true);
+  const rep = codeEffectsReport(parseList(r.best.tools, 'x').tools, out);
+  assert.deepEqual(rep.findings, []); assert.ok(rep.summary.other > 0);
+  const fine = Fx.analyse(files, found, {});
+  assert.equal(fine.summary.time_budget_hit, undefined);
+});
+
+test('AE-26: off by default everywhere but the CLI flag: the Action, the MCP server, the browser app and a loop run without the switch', async () => {
+  assert.equal(parseArgs(['--repo-dir', '.']).codeEffects, false);
+  const src = (f) => readFileSync(join(root, f), 'utf8');
+  for (const f of ['action.yml', 'src/server.js', 'src/tools.js', 'src/report.js', 'src/engine.js', 'src/index.js']) assert.equal(/code-?effects|repo-effects/i.test(src(f)), false, f + ' does not know the feature');
+  for (const f of readdirSync(join(root, '.github', 'workflows'))) assert.equal(/CODE_EFFECTS|code-effects/.test(src('.github/workflows/' + f)), false, f);
+  assert.match(src('corpus/scan-static.mjs'), /codeEffects: env\.SCAN_STATIC_CODE_EFFECTS === '1'/, 'only the exact value 1 turns it on');
+  assert.equal((src('src/inputs/collect.js').match(/effects: !!opt\.codeEffects/g) || []).length, 2, 'the collector asks only when the option is set');
+  assert.equal('code_effects' in JSON.parse(cli(['--repo-dir', join(cases, 'ts-mixed'), '--format', 'json']).stdout), false);
+  // a browser has no RepoEffects global: the reader loads, and asking for effects there changes nothing
+  const ctx = vm.createContext({ TextDecoder, TextEncoder, URL, console });
+  ctx.self = ctx;
+  for (const f of ['repo-go.cjs', 'repo-rust.cjs', 'repo-csharp.cjs', 'repo-source.cjs']) vm.runInContext(readFileSync(join(root, 'src', 'inputs', f), 'utf8'), ctx, { filename: f });
+  assert.equal(typeof ctx.RepoSource.extractFromFile, 'function');
+  assert.equal(ctx.RepoEffects, undefined);
+  assert.match(src('src/inputs/repo-source.cjs'), /if \(o\.effects && RepoEffects\)/, 'effects are asked for only when the module is there');
 });

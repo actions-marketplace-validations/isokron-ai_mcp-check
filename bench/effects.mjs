@@ -35,7 +35,7 @@ export async function score({ depth = 3, casesDir = CASES, truthFile = join(here
     if (!best) throw new Error('no tools read in case ' + c);
     const parsed = parseList(best.tools, 'case ' + c);
     const rep = analyseList(parsed, { unreadable: best.unreadable || {}, unresolved: best.unresolved || [] });
-    const ce = codeEffectsReport(parsed.tools, best.effects);
+    const ce = codeEffectsReport(parsed.tools, best.effects, { unreadable: best.unreadable });
     for (const t of parsed.tools) {
       const key = c + '/' + t.name; const lab = truth[key];
       if (!lab) throw new Error('no label for ' + key);
