@@ -203,7 +203,7 @@ and the 4x free-disk rule. An image on another host is unassessed until the list
 |---|---|---|---|
 | `bad_subject` (not a GitHub owner/name), `unsupported_package` (cargo, NuGet, MCPB only), `unverified_registry_entry`, `launch_invalid` | `no_runnable_artifact` | tool | no |
 | `oci_host_not_allowed` (the image is not on one of our six registries) | `no_runnable_artifact` | tool | no |
-| `no_package` (no registry search page came back full) | `no_runnable_artifact` | subject | no |
+| `no_package` (no registry search page came back full; having no registry package is no defect: Go and Rust binaries, other npm names and own-registry images exist) | `no_runnable_artifact` | tool | no |
 | `registry_lookup_truncated` (a registry search page came back full, 100 results with no paging: the entry may not have been fetched) | `no_runnable_artifact` | tool | no |
 | `private_registry` | `no_runnable_artifact` | tool (we reach only the default registries, as with `unsupported_package`) | no |
 | `image_too_large` (over our 2 GB cap) | `too_large` | tool | no |
@@ -219,8 +219,9 @@ and the 4x free-disk rule. An image on another host is unassessed until the list
 | `install_timeout` (our install time limit) | `install_failed_registry` | tool | no |
 | `needs_credentials` (the registry entry declares a required env var, the server exited non-zero by itself (not 125, 126, 127 or 137; no signal or time limit), with every argument filled and no guessed PyPI entry, and it made no network attempt) | `start_requires_credentials` | subject | no |
 | `start_needs_network` (the server tried the network, which the run does not have: a lookup or connection in its role, or a connect, looked-up name or network call in its trace) | `timeout_start` | tool (the contract allows only subject for `start_requires_credentials`) | no |
-| `start_failed` (install ok, every argument filled, the server's own non-zero exit (not 125, 126, 127 or 137), the failing probe itself inside half the probe window, no network attempt, and no unresolved PyPI console-script guess) | `timeout_start` | subject | no |
-| `start_env_limited` (any other start failure: a signal, 137, exit 0, a late exit, an unfilled argument, a network attempt, a guessed PyPI entry) | `timeout_start` | tool | no |
+| `start_needs_config` (the server exited with its own code (not 125, 126, 127 or 137; no signal) and its stderr asks for configuration: a config file not found or unreadable, a kubeconfig or current-context, `--config`, a `Usage:` block, a missing or required argument, option, flag or environment variable, or "please create/set/provide/specify") | `timeout_start` | tool | no |
+| `start_failed` (install ok, every argument filled, the server's own non-zero exit (not 125, 126, 127 or 137), the failing probe itself inside half the probe window, no network attempt, no unresolved PyPI console-script guess, AND stderr shows a crash signature: a panic, a traceback, an uncaught or unhandled exception or rejection, a segmentation fault, a missing module, an import, syntax, reference or type error, a fatal error, a stack overflow; and no configuration text) | `timeout_start` | subject | no |
+| `start_env_limited` (any other start failure: a signal, 137, exit 0, a late exit, an unfilled argument, a network attempt, a guessed PyPI entry, or an early exit with no crash signature on stderr, which is no evidence against the server) | `timeout_start` | tool | no |
 | `list_failed` (a JSON-RPC error the server sent, or a malformed result) | `timeout_start` | subject | no |
 | `list_probe_limited` (our time limit, the page cap, the read cap, or an HTTP transport failure while listing) | `timeout_start` | tool | no |
 | `start_timeout` | `timeout_start` | tool (the subject's time budget also pays for the install, so a slow runner or sandbox start can run it out; it is no evidence the server hung) | no |

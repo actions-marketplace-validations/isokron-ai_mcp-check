@@ -97,12 +97,12 @@ const REGISTRY_CAP = 4 * 1024 * 1024;
  * recorded with, whether it is retryable, the stage, and the fault side (SKIP_FAULTS: tool, subject, infra or policy).
  * results/ keeps the detail. R-LP-24..27: our own limits and errors have reasons of their own and fault "tool", never
  * policy_excluded (which reads as a deliberate exclusion, not a coverage gap) and never upstream_unavailable (which
- * reads as somebody else's outage). Only what the subject itself did (no package, a failing install, a server that
+ * reads as somebody else's outage). Only what the subject itself did (a failing install, a server that
  * will not start, one that needs credentials) is the subject's, and only a rate limit or an outage is infra.
  */
 export const DETAILS = Object.freeze({
   bad_subject: ['no_runnable_artifact', false, 'resolve', 'tool'], // not a GitHub owner/name: this lane reads GitHub only
-  no_package: ['no_runnable_artifact', false, 'resolve', 'subject'],
+  no_package: ['no_runnable_artifact', false, 'resolve', 'tool'], // no registry package is no defect: Go and Rust binaries, other npm names and own-registry images exist (R-LP-43)
   unsupported_package: ['no_runnable_artifact', false, 'resolve', 'tool'], // cargo, NuGet, MCPB: we cannot run them yet
   private_registry: ['no_runnable_artifact', false, 'resolve', 'tool'],
   unverified_registry_entry: ['no_runnable_artifact', false, 'resolve', 'tool'], // our provenance checks stop short of it
@@ -127,7 +127,8 @@ export const DETAILS = Object.freeze({
   install_timeout: ['install_failed_registry', false, 'install', 'tool'], // our install time limit
   needs_credentials: ['start_requires_credentials', false, 'start', 'subject'], // a declared required env var, and the server exited non-zero by itself with no network attempt
   start_needs_network: ['timeout_start', false, 'start', 'tool'], // the server tried the network, which the run does not have
-  start_failed: ['timeout_start', false, 'start', 'subject'], // exited with its own non-zero code, early, with every argument filled
+  start_failed: ['timeout_start', false, 'start', 'subject'], // a crash signature on stderr (R-LP-45), and exited with its own non-zero code, early, with every argument filled
+  start_needs_config: ['timeout_start', false, 'start', 'tool'], // the server exited with its own code and asked for configuration we did not give it (R-LP-44)
   start_env_limited: ['timeout_start', false, 'start', 'tool'], // a start failure our environment could have caused
   start_timeout: ['timeout_start', false, 'start', 'tool'],
   list_failed: ['timeout_start', false, 'list', 'subject'], // a JSON-RPC error the server sent, or a malformed result
@@ -1001,6 +1002,33 @@ export function networkEvents(records, cap = 200) {
 
 /** Package-level install errors: the package, its version or its launcher is not there (the server's own publishing). */
 const PACKAGE_ERROR = /\bE404\b|\bETARGET\b|No matching distribution|declares no bin/;
+/**
+ * Stderr that says the server needs configuration (R-LP-44): a config file missing or unreadable, a kubeconfig or
+ * current-context, --config, a usage block, a missing or required argument, option, flag or environment variable, or
+ * "please create/set/provide/specify".
+ */
+export const CONFIG_TEXT = new RegExp([
+  String.raw`\bconfig(?:uration)?(?:[\s_.-]?(?:file|path|dir(?:ectory)?))?\b[^\n]{0,100}?(?:not found|not exist|no such file|missing|not readable|failed to (?:read|load|open)|cannot (?:read|open|load|find)|could not (?:read|open|load|find)|unable to (?:read|open|load|find))`,
+  String.raw`(?:not found|no such file|missing|failed to (?:read|load|open)|cannot (?:read|open|load|find)|could not (?:read|open|load|find)|unable to (?:read|open|load|find))[^\n]{0,100}?\bconfig(?:uration)?\b`,
+  String.raw`kubeconfig`, String.raw`current-context`, String.raw`--config\b`, String.raw`\busage:`,
+  String.raw`\b(?:missing|required|expected)\s+(?:required\s+)?(?:positional\s+)?(?:argument|option|flag|parameter|env(?:ironment)?(?:\s+var(?:iable)?)?)`,
+  String.raw`\b(?:argument|option|flag|parameter|env(?:ironment)?\s+var(?:iable)?)s?\b[^\n]{0,60}?\b(?:is|are)\s+(?:required|missing|not set)`,
+  String.raw`\bplease\s+(?:create|set|provide|specify)\b`,
+].join('|'), 'i');
+
+/**
+ * Stderr that shows the server itself crashed (R-LP-45): a panic, a Python traceback, an uncaught or unhandled
+ * exception or rejection, a segmentation fault, a missing module, an import, syntax, reference or type error, a fatal
+ * error, a stack overflow.
+ */
+export const CRASH_TEXT = new RegExp([
+  String.raw`\bpanic:`, String.raw`thread '[^']*' panicked`, String.raw`traceback \(most recent call last\)`,
+  String.raw`\b(?:uncaught|unhandled)\s+(?:\w+\s+)?(?:exception|rejection|error)`, String.raw`unhandledpromiserejection`,
+  String.raw`segmentation fault|\bSIGSEGV\b|core dumped`, String.raw`cannot find module`,
+  String.raw`\bModuleNotFoundError\b|\bImportError\b|\bSyntaxError\b|\bReferenceError\b|\bTypeError:`,
+  String.raw`\bfatal error:`, String.raw`stack overflow|maximum call stack size exceeded`,
+].join('|'), 'i');
+
 const OOM_TEXT = /\bENOMEM\b|out of memory|\bOOM\b/i;
 /** A list error that is the server's own: a malformed result. (A JSON-RPC error is told by its numeric code.) */
 const MALFORMED_LIST = /^the .* result has no .* array$|^nextCursor is not a string$|^the server repeated the same cursor$|^the answer has no result object$/;
@@ -1109,7 +1137,11 @@ export function failureDetail(rec, bare, envp, { deadlineHit = false, records = 
   if (net) return 'start_env_limited';
   // The probe's own duration, not the record's total (which holds the install and the analysis too, R-LP-40).
   const ms = probeMs(rec, p, p === envp ? 'env' : 'bare');
-  return sound && ms !== null && ms < START_QUICK_MS ? 'start_failed' : 'start_env_limited';
+  // The server's own exit and its stderr: it said it needs configuration we did not give it (R-LP-44), which is no defect.
+  const err = typeof p.stderr === 'string' ? p.stderr : '';
+  if (own && CONFIG_TEXT.test(err)) return 'start_needs_config';
+  // A crash signature is the evidence; an early exit with no telling stderr is not (R-LP-45).
+  return sound && ms !== null && ms < START_QUICK_MS && CRASH_TEXT.test(err) ? 'start_failed' : 'start_env_limited';
 }
 
 // ------------------------------------------------------------------ observations
