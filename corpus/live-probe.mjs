@@ -37,6 +37,7 @@ import { parseList } from '../src/tools.js';
 import { analyseList } from '../src/unreadable.js';
 import { VERSION } from '../src/version.js';
 import { baselineProblems, judgeOracles } from './oracles/judge.mjs';
+import { pypiEntry } from './pypi-entry.mjs';
 
 export const LANE = 'live-probe';
 export const FORMAT = 'isokron-mcp-check-live-probe/1';
@@ -810,6 +811,16 @@ export async function resolveSubject(item, { seed = new Map(), fetch: fetchImpl 
       }
       const s = c.server;
       out.status = 'runnable'; out.launch = r.launch; out.choice = { ...r.choice, matched_by: c.by, verified_by: verifiedBy };
+      // A PyPI launch runs the console script the wheel declares, not a guess from the package name (R-LP-48).
+      if (out.launch.kind === 'pypi' && !out.launch.entry) {
+        const e = await pypiEntry(out.launch.package, out.launch.version, { fetch: fetchImpl });
+        // The sandbox takes at most 40 args: a module launch that would not fit stays on the guess.
+        const fits = !e.args_prefix || e.args_prefix.length + (out.launch.args || []).length <= 40;
+        if (e.entry && fits) out.launch = { ...out.launch, entry: e.entry, ...(e.args_prefix ? { args: [...e.args_prefix, ...(out.launch.args || [])] } : {}) };
+        out.choice.entry_source = e.entry && !fits ? 'too_many_args' : e.entry_source;
+        out.choice.entry_wheel = e.wheel || null;
+        out.choice.entry = (fits && e.entry) || null;
+      }
       if (s) {
         out.registry = { name: s.name, version: typeof s.version === 'string' ? s.version.slice(0, 64) : null, entries: entries.length, transports: [...new Set((s.packages || []).map((p) => (p && p.transport && typeof p.transport.type === 'string' ? p.transport.type : 'stdio')))].slice(0, 5), remotes: Array.isArray(s.remotes) ? s.remotes.length : 0 };
         const sub = s.repository && typeof s.repository.subfolder === 'string' ? s.repository.subfolder.replace(/^\.?\/+|\/+$/g, '') : '';
@@ -1295,7 +1306,7 @@ export function buildItem(item, ctx) {
   };
   if (r) {
     lines.push(...resolutionObs(r));
-    result.install = r.choice ? { method: r.choice.type, matched_by: safeText(r.choice.matched_by, /^[a-z+-]{1,40}$/), verified_by: safeText(r.choice.verified_by, /^[a-z_]{1,20}$/), provenance_signer: safeText(r.choice.provenance_signer, /^[a-z_]{1,40}$/), oci_bytes: int(r.choice.oci_bytes), transport: r.choice.transport, version_requested: safeText(r.choice.version, SAFE_VERSION), args: r.choice.args_n, args_unfilled: r.choice.args_unfilled, env_declared: r.choice.env_names.length, registry_entries: r.registry ? r.registry.entries : 0 } : null;
+    result.install = r.choice ? { method: r.choice.type, matched_by: safeText(r.choice.matched_by, /^[a-z+-]{1,40}$/), verified_by: safeText(r.choice.verified_by, /^[a-z_]{1,20}$/), provenance_signer: safeText(r.choice.provenance_signer, /^[a-z_]{1,40}$/), oci_bytes: int(r.choice.oci_bytes), transport: r.choice.transport, version_requested: safeText(r.choice.version, SAFE_VERSION), args: r.choice.args_n, args_unfilled: r.choice.args_unfilled, env_declared: r.choice.env_names.length, registry_entries: r.registry ? r.registry.entries : 0, entry_source: safeText(r.choice.entry_source, /^[a-z_]{1,30}$/) } : null;
     if (Array.isArray(r.unverified)) result.unverified = r.unverified.map((u) => safeText(u.why, /^[a-z_]{1,40}$/));
     files['raw/resolution.json'] = json({ registry: r.registry, choice: r.choice, candidates: r.candidates, launch: r.launch, subdir: r.subdir, seed_packages: r.seed_packages, invalid: r.invalid ?? null, unverified: r.unverified ?? null });
   }
