@@ -805,12 +805,20 @@ test('R-LP-41: a server\'s network attempt shows in its trace summary when the n
   // No dns_query or connection record anywhere: the trace alone.
   assert.equal(seen(trace({ network: { sockets: [], connects: [{ addr: '93.184.216.34', port: 443, n: 1, failed: 1, errno: 'ENETUNREACH' }], dns_names: [] } })), 'start_needs_network', 'a connect');
   assert.equal(seen(trace({ network: { sockets: [], connects: [], dns_names: [{ name: 'api.example.com', n: 1 }] } })), 'start_needs_network', 'a looked-up name');
-  assert.equal(seen(trace({ counts: { file: 40, process: 3, network: 6, privileged: 0, other: 0 } })), 'start_needs_network', 'network syscalls');
+  assert.equal(seen(trace({ network: { sockets: [], connects: [], sends: [{ addr: '10.0.0.9', port: 53, n: 1 }], dns_names: [] } })), 'start_needs_network', 'a send');
   assert.equal(seen(trace({ failed: { file: 0, process: 0, network: 2, privileged: 0, other: 0 } })), 'start_needs_network', 'failed network calls');
   // A quiet trace, or another role's, is no attempt.
   assert.equal(seen(trace({})), 'needs_credentials');
   assert.equal(seen(trace({ counts: { network: 9 } }, 'install')), 'needs_credentials');
   assert.equal(LP.serverNetworkAttempt([trace({ network: { connects: 3 } })]), true, 'a count works as well as a list');
+});
+
+test('R-LP-42: network syscalls alone (counts.network) are not a network attempt: the real healthy shape stays the server\'s own', () => {
+  // From live-probe-selftest run 45522659823: a healthy server whose list came back, with counts.network 4 and no
+  // connects, sends, names or failed network calls (local sockets inside the runtime).
+  const healthy = trec('trace_summary', { source: 'runsc', role: 'server', summary: { format: 'isokron-trace-summary/1', counts: { file: 40, process: 3, network: 4, privileged: 0, other: 0 }, failed: { file: 0, process: 0, network: 0, privileged: 0, other: 0 }, network: { sockets: [], raw_sockets: 0, connects: [], sends: [], binds: [], dns_names: [] } } });
+  assert.equal(LP.serverNetworkAttempt([healthy]), false);
+  assert.equal(LP.failureDetail(lpRec({ env: needEnv }), probeExit(1), null, { ...OK, records: [healthy] }), 'needs_credentials');
 });
 
 test('a manifest 404 is the registry\'s answer for the name we built: library/ and odd tags are normalised before the request', async () => {

@@ -1022,13 +1022,15 @@ function refusedCount(inst) {
 
 /**
  * Network evidence in a runsc trace summary (mcp-surface-corpus trace-summary.mjs): a failed network call, a connect,
- * a looked-up name or any network syscall. The trace is kept when the netlog files are lost (R-LP-41).
+ * a send or a looked-up name. The trace is kept when the netlog files are lost (R-LP-41). Not counts.network: a healthy
+ * server that touched no network showed counts.network 4 (local sockets inside the runtime), so it would mark every
+ * server as needing the network and nothing could be the server's own failure (R-LP-42).
  */
 function traceNetwork(sum) {
   if (!isObj(sum)) return false;
   const n = isObj(sum.network) ? sum.network : {};
   const len = (v) => (Array.isArray(v) ? v.length : Number(v) || 0);
-  return (isObj(sum.failed) && Number(sum.failed.network) > 0) || len(n.connects) > 0 || len(n.dns_names) > 0 || (isObj(sum.counts) && Number(sum.counts.network) > 0);
+  return (isObj(sum.failed) && Number(sum.failed.network) > 0) || len(n.connects) > 0 || len(n.sends) > 0 || len(n.dns_names) > 0;
 }
 
 /** Whether the server itself tried the network (the run has none): a lookup or connection in its role, or a failed network call in its trace. */
