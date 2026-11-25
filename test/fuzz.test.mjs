@@ -117,9 +117,17 @@ test('R-FZ-08: Unicode in identifiers: only clear cases in a tool name are the s
 test('R-FZ-17: negative fixtures: emoji sequences, non-Latin display names, repeated display names, a declared listChanged and a rejected or restarted foreign cursor are not faults', async () => {
   const emoji = await stage('uni-emoji');
   assert.deepEqual(emoji.results.filter((r) => r.verdict !== 'pass'), [], 'ZWJ and VS16 inside emoji sequences are ordinary names');
-  assert.deepEqual(clearCodePoints('a‍‍b'), ['U+200D'], 'a ZWJ outside an emoji sequence is still a clear case');
-  assert.deepEqual(clearCodePoints('a‮b'), ['U+202E']);
-  assert.deepEqual(clearCodePoints('\u{1F468}‍\u{1F469}️'), []);
+  // Legitimate text that must never be blamed.
+  for (const ok of ['\u{1F469}\u{1F3FD}\u200D\u{1F4BB}', '\u{1F9D1}\u{1F3FF}\u200D\u{1F91D}\u200D\u{1F9D1}\u{1F3FB}', '\u{1F3F4}\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}\u{E007F}', '\u{1F3F4}\u{E0067}\u{E0062}\u{E0073}\u{E0063}\u{E0074}\u{E007F}', '\u{1F3F4}\u{E0067}\u{E0062}\u{E0077}\u{E006C}\u{E0073}\u{E007F}',
+    'क्\u200Dष', '\u{1F468}\u200D\u{1F469}\u200D\u{1F467}', '\u{1F3F3}\uFE0F\u200D\u{1F308}', '❤\uFE0F\u200D\u{1F525}', '1\uFE0F\u20E3', '\u{1F1E9}\u{1F1EA}', '❤\uFE0E', '\u{1F3FD}', 'café']) assert.deepEqual(clearCodePoints(ok), [], JSON.stringify(ok));
+  // Still clear.
+  assert.deepEqual(clearCodePoints('a\u200Db'), ['U+200D'], 'a stray ZWJ in ASCII');
+  assert.deepEqual(clearCodePoints('a\u200D\u200Db'), ['U+200D']);
+  assert.deepEqual(clearCodePoints('a\u202Eb'), ['U+202E'], 'a bidi control');
+  assert.deepEqual(clearCodePoints('a\u{E0067}b'), ['U+E0067'], 'a tag character outside a flag');
+  assert.deepEqual(clearCodePoints('\u{1F3F4}\u{E0067}\u{E0062}'), ['U+E0067', 'U+E0062'], 'a flag with no cancel tag');
+  assert.deepEqual(clearCodePoints('a\u200Bb'), ['U+200B']);
+  assert.deepEqual(clearCodePoints('a\uFE0Fb'), ['U+FE0F'], 'VS16 after a letter');
   const res = await stage('resources-ok');
   assert.deepEqual(bad(res), [], 'display names in any language and one display name on several resources');
   const pag = res.results.find((r) => r.id === 'FZ-PAG-1' && r.primitive === 'resources');
@@ -262,7 +270,7 @@ test('R-FZ-14: the plan adds the stage\'s allowance only when it is on, and a bu
   assert.equal(LP.EMIT_FUZZ_FIELDS, false);
   assert.deepEqual(f.raw.map((x) => x[0]), ['raw/fuzz.json']);
   const text = JSON.stringify(f.summary);
-  assert.ok(!text.includes('charlie') && !text.includes('alpha') && !text.includes('​'), 'no identifier of the server outside raw/');
+  assert.ok(!text.includes('charlie') && !text.includes('alpha') && !text.includes('\u200B'), 'no identifier of the server outside raw/');
   const row = f.summary.results.find((r) => r.id === 'FZ-UNI-1');
   assert.deepEqual([row.verdict, row.fault, row.evidence.findings[0].codepoints], ['fail', 'subject', ['U+200B']]);
   const noRun = LP.fuzzFor(tmp(), { target: { launch: { transport: 'http' } } }, { plan: { fuzz: true } });

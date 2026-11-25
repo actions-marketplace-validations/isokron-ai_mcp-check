@@ -135,8 +135,9 @@ export function judgePag3(sess) {
 /** Anything unusual in an identifier: worth recording, rarely wrong. */
 const UNUSUAL = /[\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Cn}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}\p{Variation_Selector}]|(?! )\p{Zs}/u;
 /** The clear cases, for a tool name: control characters, bidi controls, zero-width and invisible-operator characters, tag characters. */
-const CLEAR = /[\p{Cc}؜​‎‏‪-‮⁠-⁤⁦-⁩﻿᠎\u{E0000}-\u{E007F}]/u;
+const CLEAR = /[\p{Cc}\u061C\u200B\u200E\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF\u180E\u{E0000}-\u{E007F}]/u;
 const PICT = /\p{Extended_Pictographic}/u;
+const MODIFIER = /\p{Emoji_Modifier}/u;
 const KEYCAP = /[0-9#*]/;
 const cp = (c) => 'U+' + c.codePointAt(0).toString(16).toUpperCase().padStart(4, '0');
 /** The look-alikes that matter for a name: Cyrillic and Greek letters drawn like Latin ones. */
@@ -154,15 +155,29 @@ const SCRIPT_LOOKALIKE = /[\p{Script=Cyrillic}\p{Script=Greek}\p{Script=Armenian
 const LATIN = /\p{Script=Latin}/u;
 
 /**
- * The code points of an identifier that are clear cases: a zero-width, bidi or control character, a tag character, but
- * not ZWJ between pictographs or VS15/VS16 after one (emoji sequences are ordinary names). Returns U+ strings.
+ * The code points of an identifier that are clear cases: control, bidi, zero-width and invisible-operator characters,
+ * stray tag characters. Never legitimate text:
+ *  - ZWJ is clear only when both neighbours are ASCII (or absent): "a<ZWJ>b". Between emoji (with skin tones, VS16),
+ *    after a virama in Indic scripts and in other non-Latin text it is ordinary, so it is not judged there;
+ *  - VS15/VS16 is clear only after something that is neither a pictograph, an emoji modifier nor a keycap base;
+ *  - tag characters are clear unless they spell a subdivision flag: U+1F3F4, tag letters, the cancel tag U+E007F.
+ * Returns U+ strings.
  */
 export function clearCodePoints(value) {
   const chars = Array.from(value); const out = [];
+  const tag = (c) => !!c && c.codePointAt(0) >= 0xE0000 && c.codePointAt(0) <= 0xE007F;
+  const okTag = new Set();
   chars.forEach((c, i) => {
-    const prev = chars[i - 1] || ''; const next = chars[i + 1] || '';
-    if (c === '‍') { if (!((PICT.test(prev) || prev === '️') && PICT.test(next))) out.push(cp(c)); return; }
-    if (c === '️' || c === '︎') { if (!(PICT.test(prev) || KEYCAP.test(prev))) out.push(cp(c)); return; }
+    if (c !== '\u{1F3F4}') return;
+    let j = i + 1; while (tag(chars[j]) && chars[j] !== '\u{E007F}') j++;
+    if (j > i + 1 && chars[j] === '\u{E007F}') for (let k = i + 1; k <= j; k++) okTag.add(k);
+  });
+  const ascii = (c) => !c || c.codePointAt(0) < 128;
+  chars.forEach((c, i) => {
+    const prev = chars[i - 1]; const next = chars[i + 1];
+    if (c === '\u200D') { let a = i - 1; while (chars[a] === '\u200D') a--; let z = i + 1; while (chars[z] === '\u200D') z++; if (ascii(chars[a]) && ascii(chars[z])) out.push(cp(c)); return; }
+    if (c === '\uFE0F' || c === '\uFE0E') { if (!(prev && (PICT.test(prev) || MODIFIER.test(prev) || KEYCAP.test(prev)))) out.push(cp(c)); return; }
+    if (tag(c)) { if (!okTag.has(i)) out.push(cp(c)); return; }
     if (CLEAR.test(c)) out.push(cp(c));
   });
   return Array.from(new Set(out));
@@ -207,7 +222,7 @@ export function judgeUnicode(sessions) {
         if (field === 'uri') { const bad = clearCodePoints(value); if (bad.length) add('FZ-UNI-1', { ...base, kind: 'invisible_or_control', clear: false, codepoints: bad.slice(0, 8) }); continue; }
         const clear = clearCodePoints(value);
         if (clear.length) add('FZ-UNI-1', { ...base, kind: 'invisible_or_control', clear: toolName, codepoints: clear.slice(0, 8) });
-        else if (UNUSUAL.test(value.replace(/[‍︎️]/gu, ''))) add('FZ-UNI-1', { ...base, kind: 'unusual_code_point', clear: false, codepoints: Array.from(new Set(Array.from(value).filter((c) => UNUSUAL.test(c) && !'‍︎️'.includes(c)).map(cp))).slice(0, 8) });
+        else if (UNUSUAL.test(value.replace(/[\u200D\uFE0E\uFE0F]/gu, ''))) add('FZ-UNI-1', { ...base, kind: 'unusual_code_point', clear: false, codepoints: Array.from(new Set(Array.from(value).filter((c) => UNUSUAL.test(c) && !'\u200D\uFE0E\uFE0F'.includes(c)).map(cp))).slice(0, 8) });
         if (value.normalize('NFC') !== value) add('FZ-UNI-3', { ...base, kind: 'not_nfc', clear: false, codepoints: [] });
         // Mixed scripts are judged per word: "Report Отчёт" is two words, each in one script.
         const mixed = value.split(WORDS).filter((w) => LATIN.test(w) && SCRIPT_LOOKALIKE.test(w));

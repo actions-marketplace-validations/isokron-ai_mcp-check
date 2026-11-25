@@ -19,14 +19,14 @@ const tools = ['alpha', 'bravo', 'charlie', 'delta', 'echo', 'foxtrot', 'golf'].
 const PAGE = 3;
 const token = 's' + start + 'p' + process.pid;
 
-if (mode === 'uni-invisible') tools[2] = tool('char​lie');                 // zero-width space
+if (mode === 'uni-invisible') tools[2] = tool('char\u200Blie');                 // zero-width space
 if (mode === 'uni-collision') tools.push(tool('dеlta'));                      // Cyrillic е: the same skeleton as "delta"
 if (mode === 'uni-nfc') tools[4] = tool('café');                            // e + combining acute: not NFC
 if (mode === 'uni-illformed') tools[4] = tool('ech\ud800o');                       // a lone surrogate, as JSON allows it
 if (mode === 'uni-emoji') { tools[2] = tool('family\u{1F468}\u200d\u{1F469}\u200d\u{1F467}'); tools[3] = tool('heart\u2764\ufe0f'); } // ZWJ and VS16 in emoji sequences: ordinary names
 if (mode === 'uni-private') tools[3] = tool('icon\ue000');                       // a private-use code point (an icon font): unusual, not wrong
 if (mode === 'uni-mixed') tools[1] = tool('brаvo');                           // Cyrillic а inside a Latin word
-const prompts = [{ name: 'greet', description: 'Greeting' }, { name: mode === 'uni-prompt-invisible' ? 'sum⁠mary' : 'summary', description: 'Summary' }];
+const prompts = [{ name: 'greet', description: 'Greeting' }, { name: mode === 'uni-prompt-invisible' ? 'sum\u2060mary' : 'summary', description: 'Summary' }];
 const caps = { tools: { listChanged: mode === 'cat-listchanged' || mode === 'cat-declared' }, ...(mode === 'resources-ok' ? { resources: {} } : {}), ...(mode === 'uni-prompt-invisible' ? { prompts: {} } : {}) };
 
 const out = (o) => process.stdout.write(JSON.stringify(o) + '\n');

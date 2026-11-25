@@ -28,7 +28,7 @@ export const MIN_SESSION_MS = 6_000;
 export const RECORD_CAP = 3 * 1024 * 1024;
 export const REPRODUCERS_CAP = 1024 * 1024;
 /** Cursors no server issued: one plain, one with bidi and NUL characters and a non-BMP one. */
-export const INVENTED_CURSORS = Object.freeze([['ascii', 'isokron-fuzz-invalid-cursor'], ['unicode', '‮\u0000ünï😀']]);
+export const INVENTED_CURSORS = Object.freeze([['ascii', 'isokron-fuzz-invalid-cursor'], ['unicode', '\u202E\u0000ünï😀']]);
 /** Container name suffixes are -o<k> for the oracles; the fuzz sessions start at 100. */
 const SESSION_K0 = 100;
 
