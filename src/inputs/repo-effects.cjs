@@ -72,15 +72,15 @@
         strs.push({ s: i, e: j + 1, v }); blank(i + 1, j); i = j + 1; lastSig = c; lastWord = ''; continue;
       }
       if (c === '`') {
-        let j = i + 1; let v = ''; let tail = 0;
+        let j = i + 1; let v = ''; let tail = 0; let seg = i + 1; const lit = [];
         while (j < n && src[j] !== '`') {
           if (src[j] === '\\') { v += src[j + 1] || ''; j += 2; continue; }
-          if (src[j] === '$' && src[j + 1] === '{') { let d = 1; j += 2; while (j < n && d) { if (src[j] === '{') d++; else if (src[j] === '}') d--; j++; } v += '?'; continue; }
+          if (src[j] === '$' && src[j + 1] === '{') { lit.push([seg, j + 2]); let d = 1; j += 2; while (j < n && d) { if (src[j] === '{') d++; else if (src[j] === '}') d--; j++; } seg = j - 1; v += '?'; continue; }
           v += src[j++];
         }
-        tail = j;
+        tail = j; lit.push([seg, tail]);
         let tg = i - 1; while (tg >= 0 && /[\w$.]/.test(src[tg])) tg--;
-        strs.push({ s: i, e: tail + 1, v, tpl: true, tag: src.slice(tg + 1, i) }); blank(i + 1, tail); i = tail + 1; lastSig = '`'; lastWord = ''; continue;
+        strs.push({ s: i, e: tail + 1, v, tpl: true, tag: src.slice(tg + 1, i) }); lit.forEach(([x, y]) => blank(x, y)); i = tail + 1; lastSig = '`'; lastWord = ''; continue;
       }
       if (c === '/' && (lastSig === '' || '(,=:[!&|?{};+-*%<>~^'.includes(lastSig) || lastWord === 'return' || lastWord === 'typeof' || lastWord === 'case')) {
         let j = i + 1; let cls = false;
@@ -1036,8 +1036,88 @@ const idsOf = (code) => new Set((code.match(/(?<![.\w$])[A-Za-z_$][\w$]*/g) || [
   }
 
   // ------------------------------------------------------------ one tool
+  // ------------------------------------------------------------ data flow from the tool's arguments
+  // The names a parameter list binds: `(a, { b, c: d }, ...e)` -> a, b, d, e.
+  // The names an object or array pattern binds: `a, b: c, ...d` -> a, c, d.
+  function destructNames(inner) {
+    const out = new Set(); let d = 0; let cur = ''; const parts = [];
+    for (const c of inner) { if ('([{'.includes(c)) d++; else if (')]}'.includes(c)) d--; if (c === ',' && d === 0) { parts.push(cur); cur = ''; } else cur += c; }
+    if (cur.trim()) parts.push(cur);
+    parts.forEach((x) => { const m = /^\s*(?:\.\.\.)?[\w$]+\s*:\s*([A-Za-z_$][\w$]*)/.exec(x) || /^\s*(?:\.\.\.)?([A-Za-z_$][\w$]*)/.exec(x); if (m) out.add(m[1]); });
+    return out;
+  }
+  function paramNames(text) {
+    const out = new Set();
+    const names = (seg) => {
+      let d = 0; let cur = ''; const parts = [];
+      for (const c of seg) { if ('([{'.includes(c)) d++; else if (')]}'.includes(c)) d--; if (c === ',' && d === 0) { parts.push(cur); cur = ''; } else cur += c; }
+      if (cur.trim()) parts.push(cur);
+      return parts;
+    };
+    for (let part of names(text)) {
+      part = part.trim().replace(/^(?:\.\.\.|\*\*?)/, '').trim();
+      if (part[0] === '{' || part[0] === '[') { const close = matchClose(part, 0); const inner = part.slice(1, close > 0 ? close : part.length); names(inner).forEach((x) => { const m = /^\s*(?:\.\.\.)?[\w$]+\s*:\s*([A-Za-z_$][\w$]*)/.exec(x) || /^\s*(?:\.\.\.)?([A-Za-z_$][\w$]*)/.exec(x); if (m) out.add(m[1]); }); continue; }
+      const m = /^([A-Za-z_$][\w$]*)/.exec(part); if (m && !/^(self|cls|this)$/.test(m[1])) out.add(m[1]);
+    }
+    return out;
+  }
+  function paramList(Q, f) {
+    if (!f || !f.params) return [];
+    const [o, c] = f.params; const text = Q.code[o] === '(' ? Q.code.slice(o + 1, c) : (/^[A-Za-z_$][\w$]*/.exec(Q.code.slice(o, o + 80)) || [''])[0];
+    const out = []; let d = 0; let cur = '';
+    for (const ch of text) { if ('([{'.includes(ch)) d++; else if (')]}'.includes(ch)) d--; if (ch === ',' && d === 0) { out.push(cur); cur = ''; } else cur += ch; }
+    if (cur.trim()) out.push(cur);
+    return out.map((x) => Array.from(paramNames(x)));
+  }
+  // Variables that carry an argument: assignments, destructuring and loops over something tainted, to a fixpoint.
+  function propagate(P, a, b, taint) {
+    const code = P.code.slice(a, b); const t = new Set(taint);
+    const rules = P.lang === 'js'
+      ? [[/(?:\b(?:const|let|var)\s+)?(?<![\w$.])([A-Za-z_$][\w$]*)\s*(?::[^=\n]{0,60})?=(?![=>])\s*([^;\n]{0,300})/g, (m) => [[m[1]], m[2]]],
+         [/\b(?:const|let|var)\s*[{[]([^}\]]*)[}\]]\s*=\s*([^;\n]{0,300})/g, (m) => [Array.from(destructNames(m[1])), m[2]]],
+         [/\bfor\s*\(\s*(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s+(?:of|in)\s+([^)]{0,200})\)/g, (m) => [[m[1]], m[2]]]]
+      : [[/^[ \t]*([A-Za-z_]\w*)\s*(?::[^=\n]+)?=(?!=)\s*(.*)$/gm, (m) => [[m[1]], m[2]]],
+         [/^[ \t]*for\s+([A-Za-z_]\w*)\s+in\s+(.*):\s*$/gm, (m) => [[m[1]], m[2]]],
+         [/\bas\s+([A-Za-z_]\w*)\s*[:,]/g, (m) => [[m[1]], code.slice(Math.max(0, m.index - 200), m.index)]]];
+    for (let round = 0; round < 4; round++) {
+      let grew = false;
+      for (const [re, pick] of rules) { re.lastIndex = 0; let m; while ((m = re.exec(code))) { const [lhs, rhs] = pick(m); if (!lhs.some((x) => !t.has(x))) continue; if (Array.from(idsOf(rhs)).some((x) => t.has(x))) lhs.forEach((x) => { if (!t.has(x)) { t.add(x); grew = true; } }); } }
+      if (!grew) break;
+    }
+    return t;
+  }
+  // the whole statement around a call, with the calls chained after it: `db.prepare("UPDATE ...").run(id)`
+  function stmtWindow(P, call) {
+    const code = P.code; let st = call.at; let depth = 0;
+    for (let k = call.at - 1, n = 0; k >= 0 && n < 400; k--, n++) {
+      const c = code[k];
+      if (')}]'.includes(c)) depth++;
+      else if ('({['.includes(c)) { if (depth === 0) break; depth--; }
+      else if (depth === 0 && (c === ';' || (P.lang === 'py' && c === '\n'))) break;
+      st = k;
+    }
+    let end = call.close > call.open ? call.close + 1 : call.open + 1;
+    for (let g = 0; g < 8; g++) { const m = /^\s*\??\.\s*[A-Za-z_$][\w$]*\s*\(/.exec(code.slice(end, end + 120)); if (!m) break; const o = end + m[0].length - 1; const c = matchClose(code, o); if (c < 0) break; end = c + 1; }
+    return code.slice(st, end);
+  }
+  const taintedIn = (text, taint) => Array.from(idsOf(text)).some((x) => taint.has(x));
+  const WRITE_KINDS = new Set(['write', 'delete', 'unsafe_http']);
+  // Is the target of this sink built from the tool's arguments? true / false; null when the rule does not apply.
+  function targetFromArgs(P, call, e, taint, state) {
+    if (!WRITE_KINDS.has(e.kind) || e.conf !== 'definite') return null;
+    const sink = e.sink;
+    if (/^fs\.handle\./.test(sink)) { const h = state.fileHandles(P).get(call.chain[0]); return h ? taintedIn(h, taint) : false; }
+    if (/^fs\./.test(sink)) {
+      if (call.chain[0] === '<expr>' || /^fs\.pathlib\./.test(sink)) return taintedIn(stmtWindow(P, call), taint);
+      return splitArgs(P.code, call.open, call.close).slice(0, 2).some(([x, y]) => taintedIn(P.code.slice(x, y), taint));
+    }
+    if (/^http\./.test(sink)) return taintedIn(P.code.slice(call.open, call.close), taint) || taintedIn(stmtWindow(P, call), taint);
+    if (/^(sql|orm)\./.test(sink)) return taintedIn(stmtWindow(P, call), taint);
+    return null;
+  }
+
   function scanTool(R, regions, how, state) {
-    const idsOfParams = (Q, f) => (f && f.params && Q.code[f.params[0]] ? idsOf(Q.code.slice(f.params[0] + 1, f.params[1])) : new Set());
+    const idsOfParams = (Q, f) => new Set(paramList(Q, f).flat());
     const fx = { read: [], write: [], delete: [], unsafe_http: [], exec: [], unknown_call: [] };
     const seenEv = new Set(); const visited = new Set(); const unresolved = [];
     const add = (e, via, capMay, cond) => {
@@ -1050,10 +1130,20 @@ const idsOf = (code) => new Set((code.match(/(?<![.\w$])[A-Za-z_$][\w$]*/g) || [
     };
     const capMay = how === 'by-name';
     let calls = 0;
-    const walk = (P, a, b, depth, via, f, cond, params) => {
+    const walk = (P, a, b, depth, via, f, cond, params, taintIn) => {
       const key = P.path + ':' + a + ':' + b; if (visited.has(key)) return; visited.add(key);
       if (state.deadline && Date.now() > state.deadline) { state.timedOut = true; return; }
       params = new Set([...(params || []), ...idsOfParams(P, f)]);
+      const calleeTaint = (Q, call, t, tn) => {
+        const plist = paramList(t.P, t.f); const args = splitArgs(Q.code, call.open, call.close); const out = new Set();
+        args.forEach(([x, y], i) => {
+          const txt = Q.code.slice(x, y); const kw = Q.lang === 'py' ? /^\s*([A-Za-z_]\w*)\s*=(?!=)\s*([\s\S]*)$/.exec(txt) : null;
+          if (!taintedIn(kw ? kw[2] : txt, tn)) return;
+          if (kw) out.add(kw[1]); else (plist[i] || []).forEach((n) => out.add(n));
+        });
+        return out;
+      };
+      const taint = propagate(P, f && f.body && f.body[0] <= a && f.body[1] >= b ? f.body[0] : a, f && f.body && f.body[0] <= a && f.body[1] >= b ? f.body[1] : b, taintIn || idsOfParams(P, f));
       const region = { P, a, b, via, f, params };
       const cs = callsIn(P, a, b);
       const strs = strsIn(P, a, b);
@@ -1082,15 +1172,17 @@ const idsOf = (code) => new Set((code.match(/(?<![.\w$])[A-Za-z_$][\w$]*/g) || [
             argTexts(P, call).map(([x, y]) => { const t = P.code.slice(x, y).trim(); return /^[A-Za-z_$][\w$]*$/.test(t) && DB_EXEC.has(lastSeg) ? localStr(t) : null; }).filter(Boolean));
           for (const s of cand) {
             if (sqlSeen.has(s.s)) continue; const k = sqlKind(s.v); if (!k) continue; sqlSeen.add(s.s); claimed.add(s.s); sqlHere = true;
-            add({ kind: k.kind, conf: 'definite', sink: 'sql.' + k.verb, note: s.v.replace(/\s+/g, ' ').slice(0, 60), at: s.s, P }, via, capMay, cond || isCond(P, s.s, a, b));
+            const se = { kind: k.kind, conf: 'definite', sink: 'sql.' + k.verb, note: s.v.replace(/\s+/g, ' ').slice(0, 60), at: s.s, P };
+            const from = targetFromArgs(P, call, se, taint, state);
+            add(from === false ? Object.assign(se, { conf: 'may', note: se.note + '; no argument of the tool reaches the statement' }) : se, via, capMay, cond || isCond(P, s.s, a, b));
           }
         }
         if (sqlHere) effs = effs.filter((e) => e.kind !== 'unknown_call');
         const condCall = cond || isCond(P, call.at, a, b);
-        effs.forEach((e) => add(e, via, capMay, condCall));
+        effs.forEach((e) => { const from = targetFromArgs(P, call, e, taint, state); add(from === false ? Object.assign({}, e, { conf: 'may', note: (e.note ? e.note + '; ' : '') + 'the target does not come from the tool\'s arguments' }) : e, via, capMay, condCall); });
         // follow into the repository
         if (depth < state.depth && !call.chained) {
-          for (const t of targets.slice(0, 3)) { const nm = t.f.name; walk(t.P, t.f.body[0], t.f.body[1], depth + 1, via.concat(nm + '@' + t.P.path + ':' + t.P.line(t.f.start)), t.f, condCall, params); }
+          for (const t of targets.slice(0, 3)) { const nm = t.f.name; walk(t.P, t.f.body[0], t.f.body[1], depth + 1, via.concat(nm + '@' + t.P.path + ':' + t.P.line(t.f.start)), t.f, condCall, params, calleeTaint(P, call, t, taint)); }
           if (!targets.length && call.chain.length >= 1 && P.imports.get(call.chain[0])) {
             const imp = P.imports.get(call.chain[0]);
             if (imp.spec.startsWith('.') || (P.lang === 'py' && imp.spec.startsWith('.'))) {
@@ -1104,7 +1196,7 @@ const idsOf = (code) => new Set((code.match(/(?<![.\w$])[A-Za-z_$][\w$]*/g) || [
       if (!state.disable.has('sql')) for (const s of strs) {
         if (claimed.has(s.s) || sqlSeen.has(s.s) || s.doc) continue;
         const k = sqlKind(s.v); if (!k || k.kind === 'read') continue;
-        if (s.tpl && /sql|execute|query/i.test(s.tag || '')) { sqlSeen.add(s.s); add({ kind: k.kind, conf: 'definite', sink: 'sql.' + k.verb, note: s.v.replace(/\s+/g, ' ').slice(0, 60), at: s.s, P }, via, capMay, cond || isCond(P, s.s, a, b)); continue; }
+        if (s.tpl && /sql|execute|query/i.test(s.tag || '')) { sqlSeen.add(s.s); const from = taintedIn(P.code.slice(Math.max(a, s.s - 200), s.e + 100), taint); add({ kind: k.kind, conf: from ? 'definite' : 'may', sink: 'sql.' + k.verb, note: s.v.replace(/\s+/g, ' ').slice(0, 60) + (from ? '' : '; no argument of the tool reaches the statement'), at: s.s, P }, via, capMay, cond || isCond(P, s.s, a, b)); continue; }
         sqlSeen.add(s.s); add({ kind: k.kind, conf: 'may', sink: 'sql.' + k.verb, note: 'a SQL string that no call in this function receives', at: s.s, P }, via, capMay, cond || isCond(P, s.s, a, b));
       }
     };
@@ -1126,7 +1218,7 @@ const idsOf = (code) => new Set((code.match(/(?<![.\w$])[A-Za-z_$][\w$]*/g) || [
       maxCalls: opts.maxCalls || 3000, disable: new Set(opts.disable || []), family: '', truncated: false,
       deadline: Date.now() + (Number.isFinite(opts.timeBudgetMs) ? opts.timeBudgetMs : 20000), timedOut: false,
       stdlib: stdlibJs,
-      fileHandles: (P) => { if (P._fh) return P._fh; const s = new Set(); const re = /\b(?:const|let|var|using)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:await\s+)?(?:[\w$.]+\.)?open(?:Sync)?\s*\(/g; let m; while ((m = re.exec(P.code))) s.add(m[1]); P._fh = s; return s; },
+      fileHandles: (P) => { if (P._fh) return P._fh; const s = new Map(); const re = /\b(?:const|let|var|using)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:await\s+)?(?:[\w$.]+\.)?open(?:Sync)?\s*\(/g; let m; while ((m = re.exec(P.code))) { const o = m.index + m[0].length - 1; const c = matchClose(P.code, o); s.set(m[1], P.code.slice(o, c > o ? c : o + 200)); } P._fh = s; return s; },
       localDef: (P, n) => P.funcs.some((f) => f.name === n),
       pathlibish: (P, chain) => /path|dir|file|folder|root|\bp\b|cwd|home|target|dest|src|base/i.test(chain.slice(0, -1).join('.')) || /pathlib|Path\(/.test(P.text),
       httpClients: (P) => {

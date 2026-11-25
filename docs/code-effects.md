@@ -39,7 +39,8 @@ has no further effect. Phase 1 covers the first two.
 
 ## Confidence tiers
 
-- **definite**: the write is certain on the handler's unconditional path: a sink call on the straight-line path of the
+- **definite**: the write is certain on the handler's unconditional path, and its target comes from the tool's
+  arguments (see below): a sink call on the straight-line path of the
   handler or of a resolved callee that is itself called on that path, with the kind visible in the code (a method, a
   path, a SQL string). Reachability is not modelled, so a sink inside an `if`/`else`, a loop, a `switch`, a `catch` or
   `finally` (Python: `if`/`elif`/`else`/`for`/`while`/`except`/`finally`/`match`), a callback, a ternary or the right
@@ -66,6 +67,19 @@ never change the exit code. Only `definite` evidence gives `attention`; `may` gi
 `derived.readOnlyHint` is `false` (definite) when a definite write-like sink is reached, null (may) when only `may`
 evidence exists, and `true` with confidence `no_sink_found` otherwise. The last one is the absence of a sink within the
 depth and the files read: it is not proof, and no check uses it. `idempotentHint` is not derived in phase 1.
+
+## Where the target comes from
+
+A file or HTTP sink is `definite` only when its target (the path, the URL or the body, or the id in them) is derived
+from the tool's arguments by data flow: a handler parameter, a variable assigned from an expression that uses one,
+a destructured parameter, a loop variable over one, a parameter of a repository function that is called with one
+(positionally or by keyword). A constant or server-internal target (a string literal, a path built from `__dirname`,
+`cwd` or a module-level constant, a fixed URL) is `may`, with the note "the target does not come from the tool's
+arguments". That covers a server evicting its own session, rewriting its own cache or clearing a fixed folder. A
+SQL or ORM write follows the same rule: definite only when an argument reaches the statement (a bound parameter, a
+`where` value, a chained `.run(id)`); a write on a fixed table with constants only is `may`. The flow is by name and
+within one function and its callees: it does not model aliasing, objects stored and read later, or values returned
+from other functions.
 
 ## Annotations the reader could not read
 

@@ -35,8 +35,8 @@ function snippet(files, tool, opts) {
   const path = Object.keys(files).find((p) => /index\.(ts|js)$|server\.py$/.test(p)) || Object.keys(files)[0];
   return Fx.analyse(map, [{ path, line: 1, tool: { name: tool } }], opts).tools[tool];
 }
-const TS = (body, extra = '') => ({ 'index.ts': "import fs from 'node:fs';\nimport { execSync } from 'node:child_process';\n" + extra + "\nserver.registerTool('t', { description: 'd', inputSchema: {}, annotations: { readOnlyHint: true } }, async () => {\n" + body + "\n});\n" });
-const PY = (body, head = '') => ({ 'server.py': 'import os\nimport shutil\nimport subprocess\nimport requests\n' + head + '\n@mcp.tool()\ndef t():\n' + body.split('\n').map((l) => '    ' + l).join('\n') + '\n' });
+const TS = (body, extra = '') => ({ 'index.ts': "import fs from 'node:fs';\nimport { execSync } from 'node:child_process';\n" + extra + "\nserver.registerTool('t', { description: 'd', inputSchema: {}, annotations: { readOnlyHint: true } }, async (a) => {\n" + body + "\n});\n" });
+const PY = (body, head = '') => ({ 'server.py': 'import os\nimport shutil\nimport subprocess\nimport requests\n' + head + '\n@mcp.tool()\ndef t(p):\n' + body.split('\n').map((l) => '    ' + l).join('\n') + '\n' });
 
 test('R-AE-01: handlers are found for inline functions, referenced functions, class methods, decorators and name switches', async () => {
   const ts = (await read('ts-mixed')).fx.tools;
@@ -108,9 +108,9 @@ test('R-AE-05: HTTP is judged by its method; DELETE is also a delete; a POST to 
   assert.equal(py.requests_post_search.effects.unsafe_http[0].confidence, 'may');
   assert.equal(ts.fetch_put.effects.unsafe_http[0].confidence, 'may', 'PUT may be a read too: only DELETE, a mutation or a write URL is certain');
   assert.equal(ts.got_delete.effects.delete[0].confidence, 'definite');
-  const gql = snippet(TS("await fetch(API, { method: 'POST', body: JSON.stringify({ query: 'mutation { drop(id: 1) { ok } }' }) });"), 't');
+  const gql = snippet(TS("await fetch(a.url, { method: 'POST', body: JSON.stringify({ query: 'mutation { drop(id: 1) { ok } }' }) });"), 't');
   assert.equal(gql.effects.unsafe_http[0].confidence, 'definite', 'a GraphQL mutation written in the call');
-  const url = snippet(TS("await fetch('https://x/api/messages/send', { method: 'POST', body: b });"), 't');
+  const url = snippet(TS("await fetch('https://x/api/messages/send', { method: 'POST', body: a.b });"), 't');
   assert.equal(url.effects.unsafe_http[0].confidence, 'definite', 'a URL that names a write');
   const dyn = snippet(TS("await fetch('https://x', { method: m });"), 't');
   assert.equal(dyn.effects.unsafe_http[0].confidence, 'may', 'a method that is not a literal');
@@ -281,7 +281,7 @@ test('R-AE-20: a POST, PUT or PATCH is "may" on its own: GraphQL, JSON-RPC, sear
     assert.equal(t.effects.unsafe_http[0].confidence, 'may');
     assert.match(t.effects.unsafe_http[0].note, /may be a read/);
   }
-  const del = snippet(PY('requests.delete("https://x/y/1")'), 't');
+  const del = snippet(PY('requests.delete("https://x/y/" + p)'), 't');
   assert.equal(del.effects.delete[0].confidence, 'definite', 'DELETE stays certain');
 });
 
@@ -291,12 +291,12 @@ test('R-AE-21: housekeeping writes are "may": directories, logs, audit trails, m
   assert.equal(ts.ensure.effects.write[0].confidence, 'may'); assert.match(ts.ensure.effects.write[0].note, /directory/);
   assert.equal(py.metrics.effects.write[0].confidence, 'may');
   for (const path of ['audit.log', 'metrics.json', 'app-state.json', 'cache/x', 'job.lock', 'x.pid', 'run/tmp.dat', 'historyFile', 'telemetry.ndjson']) {
-    const t = snippet(TS("fs.writeFileSync('" + path + "', 'x');"), 't');
+    const t = snippet(TS("fs.writeFileSync(a.p + '" + path + "', 'x');"), 't');
     assert.equal(t.effects.write[0].confidence, 'may', path);
   }
-  const plain = snippet(TS("fs.writeFileSync('notes.md', 'x');"), 't');
+  const plain = snippet(TS("fs.writeFileSync(a.p + 'notes.md', 'x');"), 't');
   assert.equal(plain.effects.write[0].confidence, 'definite', 'an ordinary data file stays certain');
-  const stat = snippet(TS("fs.writeFileSync('status-report.md', 'x');"), 't');
+  const stat = snippet(TS("fs.writeFileSync(a.p + 'status-report.md', 'x');"), 't');
   assert.equal(stat.effects.write[0].confidence, 'definite', '"state" inside another word is not a state file');
   const named = snippet({ 'index.ts': "import fs from 'node:fs';\nserver.registerTool('t', { description: 'd', inputSchema: {} }, async ({ file }) => { fs.appendFileSync(file, 'x'); });\n" }, 't');
   assert.equal(named.effects.write[0].confidence, 'definite', 'an append to the file the caller names is a write');
@@ -310,22 +310,22 @@ test('R-AE-22: only the straight-line path is definite: a branch, a loop, a catc
   assert.equal(ts.shared_read.effects.write[0].confidence, 'may', 'a helper branch that depends on an argument');
   assert.equal(py.err_path.effects.delete[0].confidence, 'may', 'an except block');
   const cases = {
-    'if (a) { fs.rmSync("x"); }': 'may', 'for (const x of y) { fs.rmSync(x); }': 'may', 'try { fs.rmSync("x"); } catch (e) {}': 'definite',
-    'try { f(); } catch (e) { fs.rmSync("x"); }': 'may', 'try { f(); } finally { fs.rmSync("x"); }': 'may', 'x && fs.rmSync("x");': 'may', 'const r = a ? fs.rmSync("x") : 1;': 'may',
-    'p.then(() => fs.rmSync("x"));': 'may', 'switch (a) { case 1: fs.rmSync("x"); }': 'may', 'fs.rmSync("x");': 'definite', 'await new Promise((ok) => { fs.rmSync("x"); ok(1); });': 'definite',
-    'if (a) { x(); } else { fs.rmSync("x"); }': 'may',
+    'if (a) { fs.rmSync(a.p); }': 'may', 'for (const x of a.list) { fs.rmSync(x); }': 'may', 'try { fs.rmSync(a.p); } catch (e) {}': 'definite',
+    'try { f(); } catch (e) { fs.rmSync(a.p); }': 'may', 'try { f(); } finally { fs.rmSync(a.p); }': 'may', 'x && fs.rmSync(a.p);': 'may', 'const r = a ? fs.rmSync(a.p) : 1;': 'may',
+    'p.then(() => fs.rmSync(a.p));': 'may', 'switch (a) { case 1: fs.rmSync(a.p); }': 'may', 'fs.rmSync(a.p);': 'definite', 'await new Promise((ok) => { fs.rmSync(a.p); ok(1); });': 'definite',
+    'if (a) { x(); } else { fs.rmSync(a.p); }': 'may',
   };
   for (const [body, want] of Object.entries(cases)) assert.equal(snippet(TS(body), 't').effects.delete[0].confidence, want, body);
-  const pyCases = { 'if a:\n    os.remove("x")': 'may', 'for i in y:\n    os.remove(i)': 'may', 'try:\n    os.remove("x")\nexcept Exception:\n    pass': 'definite', 'try:\n    f()\nexcept Exception:\n    os.remove("x")': 'may', 'with open("a") as f:\n    os.remove("x")': 'definite', 'x and os.remove("x")': 'may', 'os.remove("x")': 'definite' };
+  const pyCases = { 'if a:\n    os.remove(p)': 'may', 'for i in p:\n    os.remove(i)': 'may', 'try:\n    os.remove(p)\nexcept Exception:\n    pass': 'definite', 'try:\n    f()\nexcept Exception:\n    os.remove(p)': 'may', 'with open("a") as f:\n    os.remove(p)': 'definite', 'x and os.remove(p)': 'may', 'os.remove(p)': 'definite' };
   for (const [body, want] of Object.entries(pyCases)) assert.equal(snippet(PY(body), 't').effects.delete[0].confidence, want, body);
-  const viaHelper = snippet({ 'index.ts': "import fs from 'node:fs';\nfunction purge() { fs.rmSync('x'); }\nserver.registerTool('t', {}, async (a) => { if (a.force) { purge(); } });\n" }, 't');
+  const viaHelper = snippet({ 'index.ts': "import fs from 'node:fs';\nfunction purge(p) { fs.rmSync(p); }\nserver.registerTool('t', {}, async (a) => { if (a.force) { purge(a.p); } });\n" }, 't');
   assert.equal(viaHelper.effects.delete[0].confidence, 'may', 'a callee reached from a branch is not certain either');
 });
 
 test('R-AE-23: the reviewer\'s repros give no attention, and every finding is worded as what it is', async () => {
   for (const name of ['fp-ts', 'fp-py']) {
     const { report } = await read(name);
-    assert.deepEqual(report.findings.filter((f) => f.severity === 'attention').map((f) => f.tool), name === 'fp-ts' ? ['dl'] : [], name + ': only dl, a real write to /var/data');
+    assert.deepEqual(report.findings.filter((f) => f.severity === 'attention').map((f) => f.tool), [], name + ': no attention');
     for (const f of report.findings.filter((x) => x.confidence === 'may')) assert.match(f.message, /reaches a possible (write|delete) \(.* at .*:\d+\)/, f.message);
     for (const f of report.findings.filter((x) => x.confidence === 'definite')) assert.doesNotMatch(f.message, /possible/);
   }
@@ -376,4 +376,49 @@ test('R-AE-26: off by default everywhere but the CLI flag: the Action, the MCP s
   assert.equal(typeof ctx.RepoSource.extractFromFile, 'function');
   assert.equal(ctx.RepoEffects, undefined);
   assert.match(src('src/inputs/repo-source.cjs'), /if \(o\.effects && RepoEffects\)/, 'effects are asked for only when the module is there');
+});
+
+test('AE-27: an fs or HTTP sink is definite only when its target comes from the tool\'s arguments; a constant or server-internal target is "may"', async () => {
+  const t = (await read('fp2-ts')).fx.tools;
+  for (const n of ['upd_check', 'sync_status', 'evict', 'rmtemp', 'datacache', 'rmcache', 'gqlmut']) {
+    const all = ['write', 'delete', 'unsafe_http', 'exec'].flatMap((k) => t[n].effects[k]);
+    assert.ok(all.length >= 1, n); assert.ok(all.every((e) => e.confidence === 'may'), n + ' is may');
+  }
+  assert.match(t.evict.effects.delete[0].note, /does not come from the tool's arguments/);
+  assert.equal(t.delete_file.effects.delete[0].confidence, 'definite', 'delete_file(path): unlink(path) on the straight-line path');
+  assert.equal(t.delete_in_dir.effects.delete[0].confidence, 'definite', 'a path built from the argument and a constant');
+  assert.equal(t.evict_user.effects.delete[0].confidence, 'definite', 'DELETE with the id from the arguments in the URL');
+  const { report } = await read('fp2-ts');
+  assert.deepEqual(report.findings.filter((f) => f.severity === 'attention').map((f) => f.tool).sort(), ['delete_file', 'delete_in_dir', 'evict_user']);
+});
+
+test('AE-28: the flow from an argument is followed through local variables, destructuring, loops and the parameters of callees', () => {
+  const via = (body, extra = '') => snippet(TS(body, extra), 't').effects.delete[0].confidence;
+  assert.equal(via("const target = a.dir + '/x'; fs.rmSync(target);"), 'definite', 'a local variable');
+  assert.equal(via("const { dir: d } = a; const full = d + '/x'; fs.rmSync(full);"), 'definite', 'destructuring, then a second variable');
+  assert.equal(via("fs.rmSync(pick(a));", "function pick(x) { return x.p; }"), 'definite', 'an argument inside the target expression');
+  assert.equal(via("const t = 'fixed/x'; fs.rmSync(t);"), 'may', 'a constant held in a variable');
+  assert.equal(via("go(a.p);", "function go(q) { fs.rmSync(q); }"), 'definite', 'a callee parameter that receives an argument');
+  assert.equal(via("go('fixed');", "function go(q) { fs.rmSync(q); }"), 'may', 'a callee that receives a constant');
+  assert.equal(via("go(a.p);", "function go(q) { fs.rmSync('fixed'); }"), 'may', 'a callee that ignores its parameter');
+  const py = (body) => snippet(PY(body), 't').effects.delete[0].confidence;
+  assert.equal(py('target = p + "/x"\nos.remove(target)'), 'definite');
+  assert.equal(py('os.remove("/var/x")'), 'may');
+  assert.equal(py('os.remove(os.path.join(os.getcwd(), "data", "r.json"))'), 'may', 'cwd-relative');
+  const kw = snippet({ 'server.py': 'import os\ndef go(path=None):\n    os.remove(path)\n@mcp.tool()\ndef t(p):\n    go(path=p)\n' }, 't');
+  assert.equal(kw.effects.delete[0].confidence, 'definite', 'a keyword argument');
+  assert.equal(snippet(PY('requests.delete("https://x/session/ours")'), 't').effects.delete[0].confidence, 'may', 'DELETE with no argument in the URL or body');
+  assert.equal(snippet(TS("await fetch('https://x/s/' + a.id, { method: 'DELETE' });"), 't').effects.delete[0].confidence, 'definite');
+});
+
+test('AE-29: a SQL or ORM write is definite only when an argument reaches the statement', () => {
+  const w = (body, head = '') => snippet(TS(body, head), 't').effects.write[0].confidence;
+  assert.equal(w("await db.run('UPDATE counters SET hits = hits + 1');"), 'may', 'a statement on a fixed table with no argument');
+  assert.equal(w("await db.run('UPDATE counters SET hits = ? WHERE id = ?', [1, a.id]);"), 'definite');
+  assert.equal(w("db.prepare('UPDATE counters SET hits = 1 WHERE id = ?').run(a.id);"), 'definite', 'an argument bound on the chained run');
+  assert.equal(w("await prisma.audit.create({ data: { who: 'x' } });"), 'may', 'a create on constants');
+  assert.equal(w("await prisma.user.update({ where: { id: a.id }, data: { n: 1 } });"), 'definite');
+  const py = (body) => snippet(PY(body), 't').effects.write[0].confidence;
+  assert.equal(py('db.execute("INSERT INTO visits VALUES (1)")'), 'may');
+  assert.equal(py('db.execute("INSERT INTO visits VALUES (?)", (p,))'), 'definite');
 });

@@ -449,6 +449,56 @@
    "state_change": false,
    "deletes": false,
    "why": "POST to a login endpoint: no data change"
+  },
+  "fp2-ts/upd_check": {
+   "state_change": false,
+   "deletes": false,
+   "why": "POST to an update-check endpoint"
+  },
+  "fp2-ts/sync_status": {
+   "state_change": false,
+   "deletes": false,
+   "why": "PUT to a sync status endpoint that reports status"
+  },
+  "fp2-ts/evict": {
+   "state_change": false,
+   "deletes": false,
+   "why": "deletes the server's own session at a fixed URL: housekeeping"
+  },
+  "fp2-ts/rmtemp": {
+   "state_change": false,
+   "deletes": false,
+   "why": "removes a cached responses file the server keeps for itself"
+  },
+  "fp2-ts/datacache": {
+   "state_change": false,
+   "deletes": false,
+   "why": "rewrites the server's own index cache"
+  },
+  "fp2-ts/rmcache": {
+   "state_change": false,
+   "deletes": false,
+   "why": "clears a thumbnail cache at a fixed path"
+  },
+  "fp2-ts/gqlmut": {
+   "state_change": false,
+   "deletes": false,
+   "why": "a GraphQL query (not a mutation) sent by POST"
+  },
+  "fp2-ts/delete_file": {
+   "state_change": true,
+   "deletes": true,
+   "why": "unlinks the path the caller gives"
+  },
+  "fp2-ts/delete_in_dir": {
+   "state_change": true,
+   "deletes": true,
+   "why": "removes the file the caller names under a fixed folder"
+  },
+  "fp2-ts/evict_user": {
+   "state_change": true,
+   "deletes": true,
+   "why": "DELETE of the session whose id the caller gives"
   }
  }
 }
