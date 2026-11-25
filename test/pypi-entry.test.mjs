@@ -36,7 +36,7 @@ function pypiFetch({ pkg = 'widget-mcp', version = '1.0.0', wheel, files, status
 test('R-LP-48: the console script the wheel declares becomes the launch entry', async () => {
   const wheel = zip([{ name: 'widget_mcp/__init__.py', data: '' }, { name: 'widget_mcp-1.0.0.dist-info/entry_points.txt', data: EP(['widget-server = widget_mcp.server:main']), deflate: true }]);
   const e = await PE.pypiEntry('widget-mcp', '1.0.0', { fetch: pypiFetch({ wheel }) });
-  assert.deepEqual(e, { entry: 'widget-server', entry_source: 'console_script', script_count: 1 });
+  assert.deepEqual(e, { entry: 'widget-server', entry_source: 'console_script', script_count: 1, wheel: 'widget_mcp-1.0.0-py3-none-any.whl' });
   // Through resolveSubject: the launch carries the entry, so failureDetail no longer treats it as a guess.
   const server = { name: 'io.github.acme/widget', repository: { url: 'https://github.com/acme/widget' }, packages: [{ registryType: 'pypi', identifier: 'widget-mcp', version: '1.0.0', transport: { type: 'stdio' } }] };
   const pf = pypiFetch({ wheel });
@@ -49,7 +49,11 @@ test('R-LP-48: the console script the wheel declares becomes the launch entry', 
 
 test('R-LP-49: which script among several: named like the package, the only one, the only "mcp" one, else none', () => {
   assert.equal(PE.pickScript([['other', 'a:b'], ['Widget_MCP', 'a:c']], 'widget-mcp'), 'Widget_MCP');
-  assert.equal(PE.pickScript([['serve', 'a:b']], 'widget-mcp'), 'serve');
+  // The only script counts only with a server signal in its name or target (a picked entry can be blamed).
+  assert.equal(PE.pickScript([['serve', 'widget_mcp.server:main']], 'widget-mcp'), 'serve');
+  assert.equal(PE.pickScript([['foo-migrate', 'lib.migrate:main']], 'widget-mcp'), null);
+  // The exact name stays first: what ran before keeps running (5 assessed servers declare both <pkg> and <pkg>-mcp).
+  assert.equal(PE.pickScript([['widget', 'widget.cli:main'], ['widget-mcp', 'widget.server:main']], 'widget'), 'widget');
   assert.equal(PE.pickScript([['widget-cli', 'a:b'], ['widget-mcp-server', 'a:c']], 'widget'), 'widget-mcp-server');
   assert.equal(PE.pickScript([['a-mcp', 'a:b'], ['b-mcp', 'a:c']], 'widget'), null);
   // Several mcp scripts: the one named <package>-mcp (seen in production: financetoolkit).
@@ -72,9 +76,21 @@ test('R-LP-50: an ambiguous or missing declaration leaves the run on the guess, 
 
 test('R-LP-51: no console script but a top-level __main__.py runs as python -m <module>', async () => {
   const wheel = zip([{ name: 'widget_mcp/__init__.py', data: '' }, { name: 'widget_mcp/__main__.py', data: 'main()' }, { name: 'tests/__main__.py', data: '' }]);
-  assert.deepEqual(await PE.pypiEntry('widget-mcp', '1.0.0', { fetch: pypiFetch({ wheel }) }), { entry: 'python', args_prefix: ['-m', 'widget_mcp'], entry_source: 'module_main', script_count: 0 });
+  assert.deepEqual(await PE.pypiEntry('widget-mcp', '1.0.0', { fetch: pypiFetch({ wheel }) }), { entry: 'python', args_prefix: ['-m', 'widget_mcp'], entry_source: 'module_main', script_count: 0, wheel: 'widget_mcp-1.0.0-py3-none-any.whl' });
   assert.equal(PE.pickMainModule(['a/__main__.py', 'b/__main__.py'], 'widget'), null, 'two candidates, neither named like the package');
   assert.equal(PE.pickMainModule(['a/b/__main__.py'], 'widget'), null, 'only top-level modules');
+  assert.equal(PE.pickMainModule(['tests/__main__.py'], 'widget'), null, 'tests are never the server');
+  assert.equal(PE.pickMainModule(['tool/__main__.py'], 'widget'), null, 'a lone module needs a server signal');
+  assert.equal(PE.pickMainModule(['examples/__main__.py'], 'examples'), null, 'a folder of examples is not the server even when it is named like the package');
+  assert.equal(PE.pickMainModule(['my_server/__main__.py'], 'widget'), 'my_server');
+  // Through resolveSubject: python -m <module> comes before the registry's own arguments.
+  const server = { name: 'io.github.acme/widget', repository: { url: 'https://github.com/acme/widget' }, packages: [{ registryType: 'pypi', identifier: 'widget-mcp', version: '1.0.0', transport: { type: 'stdio' }, packageArguments: [{ type: 'positional', value: '--stdio' }] }] };
+  const pf = pypiFetch({ wheel });
+  const f = async (u, init) => (new URL(u).hostname === 'registry.modelcontextprotocol.io' ? res(200, { servers: [{ server }] }) : pf(u, init));
+  const r = await LP.resolveSubject({ subject: 'acme/widget', repo: 'acme/widget' }, { fetch: f });
+  assert.equal(r.launch.entry, 'python');
+  assert.deepEqual(r.launch.args.slice(0, 2), ['-m', 'widget_mcp']);
+  assert.equal(r.choice.entry_source, 'module_main');
 });
 
 test('R-LP-52: a hostile or broken wheel is never trusted and never throws', async () => {
@@ -94,6 +110,15 @@ test('R-LP-52: a hostile or broken wheel is never trusted and never throws', asy
   const z = zip([{ name: 'a', data: 'b' }]); z.writeUInt16LE(0xffff, z.length - 22 + 10);
   assert.equal(PE.zipMembers(z), null);
   assert.equal(PE.zipMembers(Buffer.alloc(10)), null);
+  // An entry_points.txt that cannot be read (unknown method) is not "no declaration": no module fallback.
+  const unread = zip([{ name: 'widget_mcp/__main__.py', data: '' }, { name: 'w-1.0.dist-info/entry_points.txt', data: EP(['x-mcp = m:f']) }]);
+  const ms = PE.zipMembers(unread); const lh = ms[1].offset; unread.writeUInt16LE(99, lh + 8);
+  const cdi = unread.lastIndexOf(Buffer.from('w-1.0.dist-info/entry_points.txt')) - 46; unread.writeUInt16LE(99, cdi + 10);
+  assert.equal((await PE.pypiEntry('widget-mcp', '1.0.0', { fetch: fetchW(unread) })).entry_source, 'wheel_unreadable');
+  // An end record followed by a comment is still found.
+  const commented = Buffer.concat([zip([{ name: 'a', data: 'b' }]), Buffer.from('trailing comment')]);
+  commented.writeUInt16LE(16, commented.length - 16 - 2);
+  assert.equal(PE.zipMembers(commented).length, 1);
 });
 
 test('R-LP-53: only wheels on files.pythonhosted.org, under the size cap, are downloaded', async () => {
@@ -104,4 +129,17 @@ test('R-LP-53: only wheels on files.pythonhosted.org, under the size cap, are do
   assert.equal(f.calls.length, 1, 'the oversized wheel is never fetched');
   assert.equal(PE.pickWheel([{ packagetype: 'bdist_wheel', url: 'https://files.pythonhosted.org/a-cp313-linux.whl', filename: 'a-cp313-linux.whl', size: 5 }, { packagetype: 'bdist_wheel', url: 'https://files.pythonhosted.org/a-py3-none-any.whl', filename: 'a-py3-none-any.whl', size: 50 }]).filename, 'a-py3-none-any.whl');
   assert.equal(PE.pickWheel([{ packagetype: 'bdist_wheel', url: 'https://files.pythonhosted.org/a-py3-none-any.whl', filename: 'a-py3-none-any.whl', yanked: true }]), null);
+  for (const url of ['https://files.pythonhosted.org.evil.example/a.whl', 'https://user@files.pythonhosted.org/a.whl', 'https://files.pythonhosted.org:8443/a.whl', 'http://files.pythonhosted.org/a.whl']) assert.equal(PE.pickWheel([{ packagetype: 'bdist_wheel', url, filename: 'a-py3-none-any.whl' }]), null, url);
+  // A chunked response with no content-length is cut at the cap, and redirects are never followed.
+  let seen = null; let reads = 0; let cancelled = false;
+  const chunk = Buffer.alloc(1024 * 1024);
+  const stream = async (u, init) => {
+    seen = init.redirect;
+    if (String(u).startsWith('https://pypi.org/')) return res(200, { urls: [{ packagetype: 'bdist_wheel', url: 'https://files.pythonhosted.org/w-py3-none-any.whl', filename: 'w-py3-none-any.whl' }] });
+    let n = 0;
+    return { ok: true, status: 200, headers: { get: () => null }, body: { getReader: () => ({ read: async () => (reads++, n++ < 64 ? { done: false, value: chunk } : { done: true }), cancel: async () => { cancelled = true; } }) } };
+  };
+  assert.equal((await PE.pypiEntry('widget-mcp', '1.0.0', { fetch: stream })).entry_source, 'wheel_unreadable');
+  assert.equal(seen, 'manual');
+  assert.ok(cancelled && reads < 64, 'the stream is cancelled at the cap, not read to the end');
 });

@@ -814,9 +814,12 @@ export async function resolveSubject(item, { seed = new Map(), fetch: fetchImpl 
       // A PyPI launch runs the console script the wheel declares, not a guess from the package name (R-LP-48).
       if (out.launch.kind === 'pypi' && !out.launch.entry) {
         const e = await pypiEntry(out.launch.package, out.launch.version, { fetch: fetchImpl });
-        if (e.entry) out.launch = { ...out.launch, entry: e.entry, ...(e.args_prefix ? { args: [...e.args_prefix, ...(out.launch.args || [])] } : {}) };
-        out.choice.entry_source = e.entry_source;
-        out.choice.entry = e.entry || null;
+        // The sandbox takes at most 40 args: a module launch that would not fit stays on the guess.
+        const fits = !e.args_prefix || e.args_prefix.length + (out.launch.args || []).length <= 40;
+        if (e.entry && fits) out.launch = { ...out.launch, entry: e.entry, ...(e.args_prefix ? { args: [...e.args_prefix, ...(out.launch.args || [])] } : {}) };
+        out.choice.entry_source = e.entry && !fits ? 'too_many_args' : e.entry_source;
+        out.choice.entry_wheel = e.wheel || null;
+        out.choice.entry = (fits && e.entry) || null;
       }
       if (s) {
         out.registry = { name: s.name, version: typeof s.version === 'string' ? s.version.slice(0, 64) : null, entries: entries.length, transports: [...new Set((s.packages || []).map((p) => (p && p.transport && typeof p.transport.type === 'string' ? p.transport.type : 'stdio')))].slice(0, 5), remotes: Array.isArray(s.remotes) ? s.remotes.length : 0 };

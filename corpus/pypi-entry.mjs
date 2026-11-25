@@ -16,7 +16,7 @@ import { inflateRawSync } from 'node:zlib';
 export const WHEEL_CAP = 30 * 1024 * 1024;
 const JSON_CAP = 8 * 1024 * 1024;
 const MEMBER_CAP = 256 * 1024;
-const WHEEL_HOST = 'https://files.pythonhosted.org/';
+const onWheelHost = (u) => { try { const x = new URL(u); return x.protocol === 'https:' && x.hostname === 'files.pythonhosted.org' && !x.username && !x.password && !x.port; } catch { return false; } };
 // Same shape the sandbox accepts for an entry (mcp-surface-corpus src/targets.mjs BIN).
 const BIN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$/;
 const MODULE = /^[A-Za-z_][A-Za-z0-9_]{0,80}$/;
@@ -27,15 +27,33 @@ export const normName = (s) => String(s).toLowerCase().replace(/[-_.]+/g, '-');
 async function getCapped(fetchImpl, url, { cap, accept, timeoutMs }) {
   let res;
   try {
-    res = await fetchImpl(url, { headers: { accept, 'user-agent': 'isokron-mcp-check-live-probe' }, redirect: 'follow', credentials: 'omit', signal: AbortSignal.timeout(timeoutMs) });
+    // No redirects: the host checked is the host read (pypi.org and files.pythonhosted.org serve directly).
+    res = await fetchImpl(url, { headers: { accept, 'user-agent': 'isokron-mcp-check-live-probe' }, redirect: 'manual', credentials: 'omit', signal: AbortSignal.timeout(timeoutMs) });
   } catch { return { error: 'fetch_failed' }; }
   if (!res.ok) return { error: res.status === 404 ? 'not_found' : 'http_' + res.status };
   const len = Number(res.headers && typeof res.headers.get === 'function' ? res.headers.get('content-length') : 0);
   if (len > cap) return { error: 'too_large' };
-  let buf;
-  try { buf = Buffer.from(await res.arrayBuffer()); } catch { return { error: 'fetch_failed' }; }
-  if (buf.length > cap) return { error: 'too_large' };
-  return { buf };
+  // Read as a stream and stop at the cap: a chunked response has no content-length to check first.
+  const parts = [];
+  let total = 0;
+  try {
+    if (res.body && typeof res.body.getReader === 'function') {
+      const reader = res.body.getReader();
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        total += value.length;
+        if (total > cap) { try { await reader.cancel(); } catch { /* ignore */ } return { error: 'too_large' }; }
+        parts.push(Buffer.from(value));
+      }
+    } else {
+      const b = Buffer.from(await res.arrayBuffer());
+      total = b.length;
+      if (total > cap) return { error: 'too_large' };
+      parts.push(b);
+    }
+  } catch { return { error: 'fetch_failed' }; }
+  return { buf: Buffer.concat(parts, total) };
 }
 
 /**
@@ -107,36 +125,50 @@ export function consoleScripts(text) {
   return out.slice(0, 50);
 }
 
+// A script or module that looks like an MCP server: its name or its target says mcp or server.
+const SERVER_SIGNAL = /mcp|server/i;
+// Top-level folders that are never the server.
+const NOT_SERVER_DIR = /^(tests?|docs?|examples?|scripts?|benchmarks?)$/i;
+
 /**
  * Pick the server's console script among those a package declares, or null when the choice is not clear.
- * Order: the one named like the package; the only one; the only one with "mcp" in its name; the only one named
- * like the package plus an mcp prefix or suffix (`<pkg>-mcp`, `mcp-<pkg>`, `<pkg>-mcp-server`, `mcp-server-<pkg>`).
+ * A picked entry is no longer a guess, so a failure can count against the server: every fallback needs a server
+ * signal. Order: the one named exactly like the package; the only `<pkg>-mcp`-style name (`<pkg>-mcp`, `mcp-<pkg>`,
+ * `<pkg>-mcp-server`, `mcp-server-<pkg>`); the only one with mcp in its name; the only script, if its name or
+ * target says mcp or server.
  */
 export function pickScript(scripts, pkg) {
   if (!scripts.length) return null;
   const want = normName(pkg);
+  // Named exactly like the package first: that is what ran before, and it already works for every assessed server
+  // that also declares a <pkg>-mcp script (sdcreader, prufgate, marketmirror, mathguard, ru-humanizer on 25 Nov).
   const exact = scripts.find(([n]) => normName(n) === want);
   if (exact) return exact[0];
-  if (scripts.length === 1) return scripts[0][0];
-  const mcp = scripts.filter(([n]) => /mcp/i.test(n));
-  if (mcp.length === 1) return mcp[0][0];
   const named = new Set([want + '-mcp', 'mcp-' + want, want + '-mcp-server', 'mcp-server-' + want]);
   const affixed = scripts.filter(([n]) => named.has(normName(n)));
   if (affixed.length === 1) return affixed[0][0];
+  const mcp = scripts.filter(([n]) => /mcp/i.test(n));
+  if (mcp.length === 1) return mcp[0][0];
+  if (scripts.length === 1 && (SERVER_SIGNAL.test(scripts[0][0]) || SERVER_SIGNAL.test(scripts[0][1]))) return scripts[0][0];
   return null;
 }
 
-/** The top-level module with a __main__.py to run as `python -m`, preferring the one named like the package. */
+/**
+ * The top-level module with a __main__.py to run as `python -m`: the one named like the package, else the only one,
+ * if its name says mcp or server. Tests, docs, examples and scripts never count.
+ */
 export function pickMainModule(names, pkg) {
-  const mods = [...new Set(names.map((n) => /^([^/]+)\/__main__\.py$/.exec(n)).filter(Boolean).map((m) => m[1]))].filter((m) => MODULE.test(m));
+  const mods = [...new Set(names.map((n) => /^([^/]+)\/__main__\.py$/.exec(n)).filter(Boolean).map((m) => m[1]))].filter((m) => MODULE.test(m) && !NOT_SERVER_DIR.test(m));
   if (!mods.length) return null;
   const want = normName(pkg);
-  return mods.find((m) => normName(m) === want) || (mods.length === 1 ? mods[0] : null);
+  const same = mods.find((m) => normName(m) === want);
+  if (same) return same;
+  return mods.length === 1 && SERVER_SIGNAL.test(mods[0]) ? mods[0] : null;
 }
 
 /** The wheel to read among a release's files: a pure-Python one first, then the smallest. */
 export function pickWheel(files) {
-  const wheels = (Array.isArray(files) ? files : []).filter((f) => f && f.packagetype === 'bdist_wheel' && typeof f.url === 'string' && f.url.startsWith(WHEEL_HOST) && !f.yanked);
+  const wheels = (Array.isArray(files) ? files : []).filter((f) => f && f.packagetype === 'bdist_wheel' && typeof f.url === 'string' && onWheelHost(f.url) && !f.yanked);
   if (!wheels.length) return null;
   const pure = wheels.filter((f) => /-none-any\.whl$/.test(String(f.filename || f.url)));
   const pool = pure.length ? pure : wheels;
@@ -144,7 +176,7 @@ export function pickWheel(files) {
 }
 
 /**
- * How to run a PyPI package: { entry, args_prefix?, entry_source, script_count? }.
+ * How to run a PyPI package: { entry, args_prefix?, entry_source, script_count?, wheel? } (wheel: the file read).
  * entry_source: console_script | module_main | ambiguous | no_wheel | no_entry_point | wheel_unreadable | lookup_failed.
  * Only the first two set an entry; the rest leave the run on the package-name guess.
  */
@@ -159,17 +191,24 @@ export async function pypiEntry(pkg, version, { fetch: fetchImpl = globalThis.fe
   if (Number(wheel.size) > WHEEL_CAP) return { entry_source: 'wheel_unreadable' };
   const got = await getCapped(fetchImpl, wheel.url, { cap: WHEEL_CAP, accept: 'application/octet-stream', timeoutMs: timeoutMs * 3 });
   if (got.error) return { entry_source: got.error === 'too_large' ? 'wheel_unreadable' : 'lookup_failed' };
+  const whl = String(wheel.filename || '').slice(0, 200);
   const members = zipMembers(got.buf);
   if (!members) return { entry_source: 'wheel_unreadable' };
   // Exactly one top-level *.dist-info/entry_points.txt counts; anything else is not a wheel this trusts.
   const eps = members.filter((m) => /^[^/]+\.dist-info\/entry_points\.txt$/.test(m.name));
   if (eps.length > 1) return { entry_source: 'wheel_unreadable' };
-  const scripts = eps.length ? consoleScripts((zipRead(got.buf, eps[0]) || Buffer.alloc(0)).toString('utf8')) : [];
+  let scripts = [];
+  if (eps.length) {
+    const text = zipRead(got.buf, eps[0]);
+    // A declaration we cannot read is not "no declaration": never fall through to a module guess.
+    if (!text) return { entry_source: 'wheel_unreadable' };
+    scripts = consoleScripts(text.toString('utf8'));
+  }
   if (scripts.length) {
     const entry = pickScript(scripts, pkg);
-    return entry ? { entry, entry_source: 'console_script', script_count: scripts.length } : { entry_source: 'ambiguous', script_count: scripts.length };
+    return entry ? { entry, entry_source: 'console_script', script_count: scripts.length, wheel: whl } : { entry_source: 'ambiguous', script_count: scripts.length };
   }
   const mod = pickMainModule(members.map((m) => m.name), pkg);
-  if (mod) return { entry: 'python', args_prefix: ['-m', mod], entry_source: 'module_main', script_count: 0 };
+  if (mod) return { entry: 'python', args_prefix: ['-m', mod], entry_source: 'module_main', script_count: 0, wheel: whl };
   return { entry_source: 'no_entry_point', script_count: 0 };
 }
