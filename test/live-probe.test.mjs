@@ -544,7 +544,7 @@ test('live-probe bundle: every item gets a bundle that tool-qa\'s contract and f
   const w = workFolder({ subjectsRc: 124 });
   const lines = [];
   const summary = LP.bundleShard({ work: w, log: (l) => lines.push(l) });
-  assert.deepEqual(summary.map((s) => [s.status, s.detail]), [['graded', null], ['skipped', 'start_failed'], ['skipped', 'no_package'], ['skipped', 'shard_deadline']]);
+  assert.deepEqual(summary.map((s) => [s.status, s.detail]), [['graded', null], ['skipped', 'start_env_limited'], ['skipped', 'no_package'], ['skipped', 'shard_deadline']]);
   const plan = JSON.parse(readFileSync(join(w, 'plan.json'), 'utf8'));
   for (const item of plan.items) {
     const dir = join(w, 'out', String(item.index));
@@ -558,8 +558,8 @@ test('live-probe bundle: every item gets a bundle that tool-qa\'s contract and f
   // The skips: codes from tool-qa's list, retryable only for a passing cause.
   const meta = (i) => JSON.parse(readFileSync(join(w, 'out', String(i), 'meta.json'), 'utf8'));
   assert.deepEqual(meta(0).skips, []);
-  assert.deepEqual(meta(1).skips, [{ stage: 'start', reason: 'timeout_start', fault: 'subject', evidence: LP.RESULT_PATH }]);
-  assert.deepEqual(meta(2).skips, [{ stage: 'resolve', reason: 'no_runnable_artifact', fault: 'subject', evidence: LP.RESULT_PATH }]);
+  assert.deepEqual(meta(1).skips, [{ stage: 'start', reason: 'timeout_start', fault: 'tool', evidence: LP.RESULT_PATH }]);
+  assert.deepEqual(meta(2).skips, [{ stage: 'resolve', reason: 'no_runnable_artifact', fault: 'tool', evidence: LP.RESULT_PATH }]);
   assert.deepEqual(meta(3).skips, [{ stage: 'start', reason: 'upstream_unavailable', fault: 'infra', evidence: LP.RESULT_PATH, retryable: true }]);
   assert.equal(meta(0).subject.sha, '5e2668aed07efeb61beb2f3761bc3348af2075c3');
   assert.equal(meta(0).tools[1].name, 'isokron-ai/mcp-surface-corpus');
@@ -661,12 +661,13 @@ test('live-probe failure details: install, start, credentials, list, evidence an
   assert.equal(LP.failureDetail(rec({ install: { kind: 'docker', ok: false, steps: [] } })), 'image_pull_failed');
   assert.equal(LP.failureDetail(rec({ install: { kind: 'npm', ok: false, steps: [{ name: 'install', exit: 1 }] }, }), null, null, { stepsLog: 'npm error code E404' }), 'install_failed');
   assert.equal(LP.failureDetail(rec({ install: { kind: 'npm', ok: false, steps: [{ name: 'install', exit: null, timed_out: true }] } })), 'install_timeout');
-  assert.equal(LP.failureDetail(rec({}), exited(1), null, ctx), 'start_failed');
+  assert.equal(LP.failureDetail(rec({}), { ...exited(1), stderr: 'panic: boom' }, null, ctx), 'start_failed');
+  assert.equal(LP.failureDetail(rec({}), exited(1), null, ctx), 'start_env_limited', 'an early exit with no stderr is no evidence (R-LP-45)');
   assert.equal(LP.failureDetail(rec({}), { error: 'time limit (45000 ms)' }, null, ctx), 'start_timeout');
   assert.equal(LP.failureDetail(rec({}), { initialize: {}, error: null, lists: { 'tools/list': { ok: false, error: 'Method not found', error_code: -32601 } } }, null), 'list_failed');
   assert.equal(LP.failureDetail(rec({ env: { names: { registry: ['API_KEY'] }, secret_named: ['API_KEY'] } }), exited(1), exited(1), ctx), 'needs_credentials');
   // R-LP-07: an optional key named in the README is not a declared credential.
-  assert.equal(LP.failureDetail(rec({ env: { names: { registry: [], readme: ['ANCHOR_KEY'], used: ['ANCHOR_KEY'] }, secret_named: ['ANCHOR_KEY'] } }), { error: null, initialize_error: 'the server exited (exit 1, signal null)', timing: { total_ms: 2000 } }, { error: null, initialize_error: 'the server exited (exit 1, signal null)', timing: { total_ms: 2000 } }, ctx), 'start_failed');
+  assert.equal(LP.failureDetail(rec({ env: { names: { registry: [], readme: ['ANCHOR_KEY'], used: ['ANCHOR_KEY'] }, secret_named: ['ANCHOR_KEY'] } }), { error: null, initialize_error: 'the server exited (exit 1, signal null)', stderr: 'panic: boom', timing: { total_ms: 2000 } }, { error: null, initialize_error: 'the server exited (exit 1, signal null)', stderr: 'panic: boom', timing: { total_ms: 2000 } }, ctx), 'start_failed');
   for (const [d, [reason]] of Object.entries(LP.DETAILS)) assert.ok(SKIP_REASONS.includes(reason), d + ' -> ' + reason);
 });
 
@@ -677,6 +678,9 @@ test('live-probe failure details: install, start, credentials, list, evidence an
 const lpRec = (o = {}) => ({ install: { kind: 'npm', ok: true, steps: [{ name: 'install', exit: 0 }] }, env: { names: { registry: [] }, secret_named: [] }, timing: { total_ms: 60000 }, timed_out: false, ...o });
 const badInstall = (o = {}, step = {}) => lpRec({ install: { kind: 'npm', ok: false, steps: [{ name: 'install', exit: 1, timed_out: false, ...step }], egress_refused: 0, ...o } });
 const probeExit = (exit, signal = null, ms = 3000) => ({ initialize: null, era: null, error: null, initialize_error: 'the server exited (exit ' + exit + ', signal ' + signal + ')', lists: {}, transport: { exit, signal }, ...(ms === null ? {} : { timing: { first_byte_ms: null, total_ms: ms } }) });
+// A crash signature on stderr: the evidence start_failed needs (R-LP-45). An early exit with empty stderr is not.
+const CRASH_ERR = 'panic: runtime error: index out of range [0] with length 0\n\ngoroutine 1 [running]:\n';
+const crashExit = (exit, signal = null, ms = 3000) => ({ ...probeExit(exit, signal, ms), stderr: CRASH_ERR });
 const trec = (type, o = {}) => ({ v: 1, type, run: 'abc', seq: 9, t: '2026-11-23T10:00:09.000Z', subject: 's001', ...o });
 const serverDns = trec('dns_query', { source: 'netlog', role: 'server', qname: 'api.example.com', qtype: 'A', answer: 'sinkhole' });
 const serverConn = trec('connection', { source: 'netlog', role: 'server', proto: 'tcp', port: 443, bytes: 0, sni: 'api.example.com' });
@@ -725,12 +729,12 @@ test('R-LP-33: a server that went to the network (which the run does not have) i
   assert.deepEqual(LP.DETAILS.start_needs_network, ['timeout_start', false, 'start', 'tool']);
   for (const records of [[serverDns], [serverConn], [traceNet(3)]]) {
     assert.equal(LP.failureDetail(lpRec({ env: needEnv }), probeExit(1), null, { ...OK, records }), 'start_needs_network');
-    assert.equal(LP.failureDetail(lpRec(), probeExit(1), null, { ...OK, records }), 'start_env_limited');
+    assert.equal(LP.failureDetail(lpRec(), crashExit(1), null, { ...OK, records }), 'start_env_limited');
   }
   // The install's lookups, a quiet trace and another target's records are no attempt of the server.
   const quiet = [trec('dns_query', { source: 'netlog', role: 'install', qname: 'registry.npmjs.org' }), trec('connection', { source: 'netlog', role: 'install' }), traceNet(0), traceNet(5, 'install')];
   assert.equal(LP.failureDetail(lpRec({ env: needEnv }), probeExit(1), null, { ...OK, records: quiet }), 'needs_credentials');
-  assert.equal(LP.failureDetail(lpRec(), probeExit(1), null, { ...OK, records: quiet }), 'start_failed');
+  assert.equal(LP.failureDetail(lpRec(), crashExit(1), null, { ...OK, records: quiet }), 'start_failed');
   assert.equal(LP.serverNetworkAttempt(LP.telemetryFor(join(FX, 'telemetry.jsonl'), 's001').records), false, 'the saved telemetry has no server-role lookup');
 });
 
@@ -738,19 +742,19 @@ test('R-LP-34: start_failed is the server\'s only with its own early non-zero ex
   assert.equal(typeof LP.START_QUICK_MS, 'number');
   assert.equal(LP.START_QUICK_MS, LP.PROBE_MS / 2);
   assert.deepEqual(LP.DETAILS.start_env_limited, ['timeout_start', false, 'start', 'tool']);
-  assert.equal(LP.failureDetail(lpRec(), probeExit(1), null, OK), 'start_failed');
+  assert.equal(LP.failureDetail(lpRec(), crashExit(1), null, OK), 'start_failed');
   const limited = (what, r, p, c) => assert.equal(LP.failureDetail(r, p, null, c), 'start_env_limited', what);
-  limited('placeholder arguments left unfilled', lpRec(), probeExit(1), { ...OK, argsUnfilled: 2 });
-  limited('arguments not known', lpRec(), probeExit(1), { launch: OK.launch });
-  limited('killed by a signal', lpRec(), probeExit(null, 'SIGSEGV'), OK);
-  limited('exit 137', lpRec(), probeExit(137), OK);
-  limited('exit 0', lpRec(), probeExit(0), OK);
-  limited('late (the probe ran to half its window)', lpRec(), probeExit(1, null, LP.START_QUICK_MS), OK);
-  limited('no probe timing at all', lpRec(), probeExit(1, null, null), OK);
-  limited('PyPI console script guessed from the package name', lpRec(), probeExit(1), { ...OK, launch: { kind: 'pypi', package: 'acme-mcp', version: 'latest' } });
-  limited('no launch known', lpRec(), probeExit(1), { argsUnfilled: 0 });
+  limited('placeholder arguments left unfilled', lpRec(), crashExit(1), { ...OK, argsUnfilled: 2 });
+  limited('arguments not known', lpRec(), crashExit(1), { launch: OK.launch });
+  limited('killed by a signal', lpRec(), crashExit(null, 'SIGSEGV'), OK);
+  limited('exit 137', lpRec(), crashExit(137), OK);
+  limited('exit 0', lpRec(), crashExit(0), OK);
+  limited('late (the probe ran to half its window)', lpRec(), crashExit(1, null, LP.START_QUICK_MS), OK);
+  limited('no probe timing at all', lpRec(), crashExit(1, null, null), OK);
+  limited('PyPI console script guessed from the package name', lpRec(), crashExit(1), { ...OK, launch: { kind: 'pypi', package: 'acme-mcp', version: 'latest' } });
+  limited('no launch known', lpRec(), crashExit(1), { argsUnfilled: 0 });
   // A PyPI launch with a resolved entry is evidence again.
-  assert.equal(LP.failureDetail(lpRec(), probeExit(1), null, { ...OK, launch: { kind: 'pypi', package: 'acme-mcp', entry: 'acme-server' } }), 'start_failed');
+  assert.equal(LP.failureDetail(lpRec(), crashExit(1), null, { ...OK, launch: { kind: 'pypi', package: 'acme-mcp', entry: 'acme-server' } }), 'start_failed');
 });
 
 test('R-LP-35: list_failed is the server\'s only for a JSON-RPC error it sent or a malformed result; our limits are list_probe_limited (tool)', () => {
@@ -766,11 +770,11 @@ test('R-LP-35: list_failed is the server\'s only for a JSON-RPC error it sent or
 
 test('R-LP-40: the quick window is the failing probe\'s own time, not the record\'s total, which holds the install and the analysis', () => {
   // Real selftest records show 24.7 to 72.7 s of total_ms for a server that failed in about a second.
-  for (const total of [24_700, 72_700, 300_000]) assert.equal(LP.failureDetail(lpRec({ timing: { total_ms: total } }), probeExit(1, null, 900), null, OK), 'start_failed', 'total ' + total);
+  for (const total of [24_700, 72_700, 300_000]) assert.equal(LP.failureDetail(lpRec({ timing: { total_ms: total } }), crashExit(1, null, 900), null, OK), 'start_failed', 'total ' + total);
   // A probe that ran to half its window is no early exit, whatever the total.
-  assert.equal(LP.failureDetail(lpRec({ timing: { total_ms: 1000 } }), probeExit(1, null, 30_000), null, OK), 'start_env_limited');
+  assert.equal(LP.failureDetail(lpRec({ timing: { total_ms: 1000 } }), crashExit(1, null, 30_000), null, OK), 'start_env_limited');
   // The record's own probes entry, then captured_at - started_at, when the probe carries no timing.
-  const bare = probeExit(1, null, null);
+  const bare = crashExit(1, null, null);
   assert.equal(LP.failureDetail(lpRec({ probes: { bare: { timing: { total_ms: 800 } } } }), bare, null, OK), 'start_failed');
   assert.equal(LP.failureDetail(lpRec({ probes: { bare: { timing: { total_ms: 40_000 } } } }), bare, null, OK), 'start_env_limited');
   assert.equal(LP.failureDetail(lpRec(), { ...bare, started_at: '2026-11-23T10:00:00.000Z', captured_at: '2026-11-23T10:00:01.500Z' }, null, OK), 'start_failed');
@@ -785,7 +789,7 @@ test('R-LP-39: exits 125, 126 and 127 (docker run, not executable, command not f
   assert.notEqual(LP.failureDetail(r, probeExit(127), null, pypiGuess), 'needs_credentials');
   for (const exit of [125, 126, 127, 137]) {
     assert.equal(LP.failureDetail(r, probeExit(exit), null, OK), 'start_env_limited', 'needs_credentials, exit ' + exit);
-    assert.equal(LP.failureDetail(lpRec(), probeExit(exit), null, OK), 'start_env_limited', 'start_failed, exit ' + exit);
+    assert.equal(LP.failureDetail(lpRec(), crashExit(exit), null, OK), 'start_env_limited', 'start_failed, exit ' + exit);
   }
   // Each guard of start_failed holds for needs_credentials too.
   assert.equal(LP.failureDetail(r, probeExit(1), null, pypiGuess), 'start_env_limited', 'a guessed launch');
@@ -819,6 +823,32 @@ test('R-LP-42: network syscalls alone (counts.network) are not a network attempt
   const healthy = trec('trace_summary', { source: 'runsc', role: 'server', summary: { format: 'isokron-trace-summary/1', counts: { file: 40, process: 3, network: 4, privileged: 0, other: 0 }, failed: { file: 0, process: 0, network: 0, privileged: 0, other: 0 }, network: { sockets: [], raw_sockets: 0, connects: [], sends: [], binds: [], dns_names: [] } } });
   assert.equal(LP.serverNetworkAttempt([healthy]), false);
   assert.equal(LP.failureDetail(lpRec({ env: needEnv }), probeExit(1), null, { ...OK, records: [healthy] }), 'needs_credentials');
+});
+
+test('R-LP-46: a log line or a validation message that mentions a crash word is no crash: an early exit with it stays start_env_limited', () => {
+  // From the review of #40: unanchored, case-insensitive patterns blamed a healthy-but-unconfigured server for these.
+  const notCrashes = [
+    'WARN: ImportError for optional dependency foo', 'validation: TypeError: expected string', 'msg="panic: recovered"',
+    '[PANIC: handled]', 'TypeError: expected string for --port', 'level=error msg="fatal error: bad flag"',
+    'error: x\npanic is not a crash here',
+  ];
+  for (const stderr of notCrashes) {
+    assert.doesNotMatch(stderr, LP.CRASH_TEXT, stderr);
+    assert.equal(LP.failureDetail(lpRec(), { ...probeExit(1), stderr }, null, OK), 'start_env_limited', stderr);
+  }
+});
+
+test('R-LP-47: a server that throws its own "missing setting" error, stack and all, needs configuration: start_needs_config, not start_failed', () => {
+  const frame = '\n    at validate (/app/cfg.js:3:9)';
+  for (const stderr of ['Error: API_KEY missing' + frame, 'Error: GITHUB_TOKEN is required' + frame, 'Error: Missing environment variable DATABASE_URL' + frame, 'TypeError: process.env.OPENAI_API_KEY is undefined' + frame, 'Set SLACK_BOT_TOKEN to run this server' + frame]) {
+    assert.match(stderr, LP.ENV_NAME_TEXT, stderr);
+    assert.equal(LP.failureDetail(lpRec(), { ...probeExit(1), stderr }, null, OK), 'start_needs_config', stderr);
+  }
+  // A real crash naming no setting is still the server's own.
+  assert.equal(LP.failureDetail(lpRec(), { ...probeExit(1), stderr: 'TypeError: x is not a function' + frame }, null, OK), 'start_failed');
+  // Lower-case words are not setting names, and a crash phrase inside a log line is no crash.
+  assert.doesNotMatch('Error: response missing field', LP.ENV_NAME_TEXT);
+  for (const s of ['INFO retry: Unhandled promise rejection count 0', 'log: Error: Cannot find module \'x\' (optional)', 'debug Uncaught Exception handler installed']) assert.doesNotMatch(s, LP.CRASH_TEXT, s);
 });
 
 test('a manifest 404 is the registry\'s answer for the name we built: library/ and odd tags are normalised before the request', async () => {
@@ -893,7 +923,7 @@ test('R-LP-37: a run-stage image pull that failed is image_pull_failed (tool), n
   assert.equal(LP.failureDetail(lpRec({ install: { kind: 'docker', ok: false, steps: [] } })), 'image_pull_failed');
 });
 
-test('R-LP-38: no_package is the subject\'s only when no registry search page came back full; a full page (100, no paging) is registry_lookup_truncated (tool)', async () => {
+test('R-LP-38: no_package (tool, R-LP-43) is recorded only when no registry search page came back full; a full page (100, no paging) is registry_lookup_truncated (tool)', async () => {
   assert.deepEqual(LP.DETAILS.registry_lookup_truncated, ['no_runnable_artifact', false, 'resolve', 'tool']);
   assert.equal(LP.REGISTRY_PAGE, 100);
   const others = (n) => Array.from({ length: n }, (_, i) => server('io.github.zed/box-' + i, 'zed/box-' + i, [npmPkg('box-' + i)]));
@@ -912,7 +942,7 @@ test('live-probe fault evidence (telemetry, steps log, plan) reaches failureDeta
     return out.map((s) => s.detail);
   };
   const addTelemetry = (w, ...recs) => writeFileSync(join(w, 'driver-subjects', '_shard', 'telemetry.jsonl'), readFileSync(join(w, 'driver-subjects', '_shard', 'telemetry.jsonl'), 'utf8') + recs.map((r) => JSON.stringify({ ...r, subject: 's002' })).join('\n') + '\n');
-  assert.equal(run(() => {})[1], 'start_failed', 'the saved kronicle-lite capture: an early exit 1, nothing else');
+  assert.equal(run(() => {})[1], 'start_env_limited', 'the saved kronicle-lite capture: an early exit 1 with empty stderr, no crash signature, so no evidence against the server (R-LP-45)');
   assert.equal(run((w) => addTelemetry(w, serverDns))[1], 'start_env_limited', 'its telemetry shows a server-role lookup');
   const plan = (w, f) => { const p = JSON.parse(readFileSync(join(w, 'plan.json'), 'utf8')); f(p.items[1]); writeFileSync(join(w, 'plan.json'), JSON.stringify(p)); };
   assert.equal(run((w) => plan(w, (it) => { it.resolution.choice.args_unfilled = 1; }))[1], 'start_env_limited', 'the plan says an argument was left unfilled');
@@ -1179,4 +1209,58 @@ test('R-LP-28: a start that ran out of time and a private registry are our limit
   // that is no evidence the server hung. A private registry is unreachable because we reach only the default registries.
   assert.equal(LP.DETAILS.start_timeout[3], 'tool');
   assert.equal(LP.DETAILS.private_registry[3], 'tool');
+});
+
+test('R-LP-43: no_package is the tool\'s: having no registry package is no server defect (Go and Rust binaries, other npm names, own-registry images)', () => {
+  assert.deepEqual(LP.DETAILS.no_package, ['no_runnable_artifact', false, 'resolve', 'tool']);
+  assert.equal(LP.DETAILS.remote_only[3], 'subject', 'remote_only stays the subject\'s');
+});
+
+const CONFIG_ERRS = {
+  'hyper-mcp': 'INFO hyper_mcp::plugins: Using config file at /tmp/home/.config/hyper-mcp/config.json\nError: Config file not found at: /tmp/home/.config/hyper-mcp/config.json. Please create a config file first.',
+  'apollo-mcp-server': "Error: failed to read config file '/config.yaml': No such file or directory (os error 2)",
+  'kubernetes-mcp-server': "Error: unable to create kubernetes target provider: no current-context is set and no contexts are defined in kubeconfig.\nConfigure a context with 'kubectl config set-context <name>' ...\nUsage:\n  kubernetes-mcp-server [flags]",
+};
+
+test('R-LP-44: an exit whose stderr asks for configuration (config file, kubeconfig, usage, required argument) is start_needs_config (tool), not start_failed', () => {
+  assert.deepEqual(LP.DETAILS.start_needs_config, ['timeout_start', false, 'start', 'tool']);
+  for (const [name, stderr] of Object.entries(CONFIG_ERRS)) {
+    assert.match(stderr, LP.CONFIG_TEXT, name);
+    assert.equal(LP.failureDetail(lpRec(), { ...probeExit(1, null, 150), stderr }, null, OK), 'start_needs_config', name);
+  }
+  for (const s of ['error: missing required argument --db', 'Error: the --config flag is required', 'environment variable HOME_DIR is required', 'Please set the ROOT variable', 'usage: srv [options]']) {
+    assert.match(s, LP.CONFIG_TEXT, s);
+  }
+  // Only the server's own exit counts: a signal, 127 or a late exit with the same text are not it.
+  const stderr = CONFIG_ERRS['apollo-mcp-server'];
+  assert.equal(LP.failureDetail(lpRec(), { ...probeExit(127), stderr }, null, OK), 'start_env_limited');
+  assert.equal(LP.failureDetail(lpRec(), { ...probeExit(null, 'SIGTERM'), stderr }, null, OK), 'start_env_limited');
+  // The declared-env path is unchanged.
+  assert.equal(LP.failureDetail(lpRec({ env: needEnv }), { ...probeExit(1), stderr }, null, OK), 'needs_credentials');
+});
+
+test('R-LP-45: start_failed needs a crash signature on stderr; an early exit with empty stderr is start_env_limited; config text wins over crash text', () => {
+  assert.equal(LP.failureDetail(lpRec(), probeExit(1), null, OK), 'start_env_limited', 'empty stderr');
+  assert.equal(LP.failureDetail(lpRec(), { ...probeExit(1), stderr: 'something went wrong' }, null, OK), 'start_env_limited', 'stderr with no signature');
+  const crashes = {
+    panic: "thread 'main' panicked at src/main.rs:10:5:\ncalled `Option::unwrap()` on a `None` value",
+    traceback: 'Traceback (most recent call last):\n  File "server.py", line 3, in <module>\nKeyError: 1',
+    uncaught: 'node:internal/process:1\n  throw err;\nUncaught Exception: boom',
+    unhandled: 'Unhandled promise rejection: Error: x',
+    missing_module: "Error: Cannot find module 'zod'",
+    go_panic: 'panic: runtime error: invalid memory address',
+    segv: 'Segmentation fault (core dumped)',
+  };
+  for (const [name, stderr] of Object.entries(crashes)) {
+    assert.match(stderr, LP.CRASH_TEXT, name);
+    assert.equal(LP.failureDetail(lpRec(), { ...probeExit(1), stderr }, null, OK), 'start_failed', name);
+  }
+  const frame = '\n    at Object.<anonymous> (/app/index.js:3:1)';
+  for (const s of ['ModuleNotFoundError: No module named x', 'ImportError: cannot import name y', 'SyntaxError: invalid syntax', 'ReferenceError: z is not defined' + frame, 'TypeError: x is not a function' + frame, 'fatal error: all goroutines are asleep - deadlock!\n\ngoroutine 1 [chan receive]:', 'RangeError: Maximum call stack size exceeded' + frame]) assert.match(s, LP.CRASH_TEXT, s);
+  // Config text wins over crash text.
+  const both = 'Traceback (most recent call last):\n  File "s.py"\nFileNotFoundError: config file not found at /etc/x.json';
+  assert.match(both, LP.CRASH_TEXT);
+  assert.equal(LP.failureDetail(lpRec(), { ...probeExit(1), stderr: both }, null, OK), 'start_needs_config');
+  // The other guards still apply to a crash.
+  assert.equal(LP.failureDetail(lpRec(), crashExit(1, null, LP.START_QUICK_MS), null, OK), 'start_env_limited');
 });
