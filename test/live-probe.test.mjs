@@ -512,7 +512,7 @@ function workFolder({ marker = MARKER, selftestRc = 0, items: its = null, swept 
   // kronicle-lite: installed, then exited before answering (a native module was not built).
   const rec2 = JSON.parse(fx('record-ok.json')); rec2.layers.live = false;
   put('driver-subjects/s002/record.json', rec2);
-  put('driver-subjects/s002/probe-bare.json', { format: 'isokron-surface-probe/1', era: null, initialize: null, error: 'the server exited before answering', lists: {}, transport: { exit: 1 } });
+  put('driver-subjects/s002/probe-bare.json', { format: 'isokron-surface-probe/1', era: null, initialize: null, error: 'the server exited before answering', lists: {}, transport: { exit: 1 }, timing: { total_ms: 2000 } });
   for (const p of drop) { try { writeFileSync(join(w, p), ''); } catch { /* */ } }
   return w;
 }
@@ -652,9 +652,9 @@ test('live-probe forgery control: the forged texts stay in raw/; leaks() catches
 });
 
 test('live-probe failure details: install, start, credentials, list, evidence and deadline', () => {
-  const rec = (o) => ({ install: { kind: 'npm', ok: true, steps: [] }, env: { names: { registry: [] }, secret_named: [] }, timing: { total_ms: 8000 }, ...o });
+  const rec = (o) => ({ install: { kind: 'npm', ok: true, steps: [] }, env: { names: { registry: [] }, secret_named: [] }, timing: { total_ms: 60000 }, ...o });
   const ctx = { launch: { kind: 'npm' }, argsUnfilled: 0 };
-  const exited = (exit) => ({ error: 'exited', transport: { exit, signal: null } });
+  const exited = (exit) => ({ error: 'exited', transport: { exit, signal: null }, timing: { total_ms: 2000 } });
   assert.equal(LP.failureDetail(null, null, null, { deadlineHit: true }), 'shard_deadline');
   assert.equal(LP.failureDetail(null, null, null), 'harness_error');
   assert.equal(LP.failureDetail(rec({ excluded: 'sandbox evidence missing' })), 'sandbox_evidence_missing');
@@ -666,7 +666,7 @@ test('live-probe failure details: install, start, credentials, list, evidence an
   assert.equal(LP.failureDetail(rec({}), { initialize: {}, error: null, lists: { 'tools/list': { ok: false, error: 'Method not found', error_code: -32601 } } }, null), 'list_failed');
   assert.equal(LP.failureDetail(rec({ env: { names: { registry: ['API_KEY'] }, secret_named: ['API_KEY'] } }), exited(1), exited(1), ctx), 'needs_credentials');
   // R-LP-07: an optional key named in the README is not a declared credential.
-  assert.equal(LP.failureDetail(rec({ env: { names: { registry: [], readme: ['ANCHOR_KEY'], used: ['ANCHOR_KEY'] }, secret_named: ['ANCHOR_KEY'] } }), { error: null, initialize_error: 'the server exited (exit 1, signal null)' }, { error: null, initialize_error: 'the server exited (exit 1, signal null)' }, ctx), 'start_failed');
+  assert.equal(LP.failureDetail(rec({ env: { names: { registry: [], readme: ['ANCHOR_KEY'], used: ['ANCHOR_KEY'] }, secret_named: ['ANCHOR_KEY'] } }), { error: null, initialize_error: 'the server exited (exit 1, signal null)', timing: { total_ms: 2000 } }, { error: null, initialize_error: 'the server exited (exit 1, signal null)', timing: { total_ms: 2000 } }, ctx), 'start_failed');
   for (const [d, [reason]] of Object.entries(LP.DETAILS)) assert.ok(SKIP_REASONS.includes(reason), d + ' -> ' + reason);
 });
 
@@ -674,9 +674,9 @@ test('live-probe failure details: install, start, credentials, list, evidence an
 // A server is recorded as at fault (subject) only with evidence our own environment cannot explain; the records below
 // are in the shapes the lane writes (the driver's record.json and probe, and the sandbox's telemetry.jsonl).
 
-const lpRec = (o = {}) => ({ install: { kind: 'npm', ok: true, steps: [{ name: 'install', exit: 0 }] }, env: { names: { registry: [] }, secret_named: [] }, timing: { total_ms: 8000 }, timed_out: false, ...o });
+const lpRec = (o = {}) => ({ install: { kind: 'npm', ok: true, steps: [{ name: 'install', exit: 0 }] }, env: { names: { registry: [] }, secret_named: [] }, timing: { total_ms: 60000 }, timed_out: false, ...o });
 const badInstall = (o = {}, step = {}) => lpRec({ install: { kind: 'npm', ok: false, steps: [{ name: 'install', exit: 1, timed_out: false, ...step }], egress_refused: 0, ...o } });
-const probeExit = (exit, signal = null) => ({ initialize: null, era: null, error: null, initialize_error: 'the server exited (exit ' + exit + ', signal ' + signal + ')', lists: {}, transport: { exit, signal } });
+const probeExit = (exit, signal = null, ms = 3000) => ({ initialize: null, era: null, error: null, initialize_error: 'the server exited (exit ' + exit + ', signal ' + signal + ')', lists: {}, transport: { exit, signal }, ...(ms === null ? {} : { timing: { first_byte_ms: null, total_ms: ms } }) });
 const trec = (type, o = {}) => ({ v: 1, type, run: 'abc', seq: 9, t: '2026-11-23T10:00:09.000Z', subject: 's001', ...o });
 const serverDns = trec('dns_query', { source: 'netlog', role: 'server', qname: 'api.example.com', qtype: 'A', answer: 'sinkhole' });
 const serverConn = trec('connection', { source: 'netlog', role: 'server', proto: 'tcp', port: 443, bytes: 0, sni: 'api.example.com' });
@@ -695,7 +695,7 @@ test('R-LP-29: an install our proxy refused something for is install_blocked (to
 });
 
 test('R-LP-30: an install killed by a limit (137, 124, out of memory) is install_resource_limit (tool)', () => {
-  for (const step of [{ exit: 137 }, { exit: 124 }, { exit: 1, oom: true }]) assert.equal(LP.failureDetail(badInstall({}, step), null, null, { stepsLog: 'npm error code E404' }), 'install_resource_limit', JSON.stringify(step));
+  for (const step of [{ exit: 137 }, { exit: 124 }]) assert.equal(LP.failureDetail(badInstall({}, step), null, null, { stepsLog: 'npm error code E404' }), 'install_resource_limit', JSON.stringify(step));
   assert.equal(LP.failureDetail(badInstall(), null, null, { stepsLog: 'FATAL ERROR: JavaScript heap out of memory' }), 'install_resource_limit');
   assert.deepEqual(LP.DETAILS.install_resource_limit, ['install_failed_registry', false, 'install', 'tool']);
 });
@@ -745,8 +745,8 @@ test('R-LP-34: start_failed is the server\'s only with its own early non-zero ex
   limited('killed by a signal', lpRec(), probeExit(null, 'SIGSEGV'), OK);
   limited('exit 137', lpRec(), probeExit(137), OK);
   limited('exit 0', lpRec(), probeExit(0), OK);
-  limited('late (not well inside the probe window)', lpRec({ timing: { total_ms: LP.START_QUICK_MS } }), probeExit(1), OK);
-  limited('no timing', lpRec({ timing: {} }), probeExit(1), OK);
+  limited('late (the probe ran to half its window)', lpRec(), probeExit(1, null, LP.START_QUICK_MS), OK);
+  limited('no probe timing at all', lpRec(), probeExit(1, null, null), OK);
   limited('PyPI console script guessed from the package name', lpRec(), probeExit(1), { ...OK, launch: { kind: 'pypi', package: 'acme-mcp', version: 'latest' } });
   limited('no launch known', lpRec(), probeExit(1), { argsUnfilled: 0 });
   // A PyPI launch with a resolved entry is evidence again.
@@ -762,6 +762,79 @@ test('R-LP-35: list_failed is the server\'s only for a JSON-RPC error it sent or
   assert.equal(LP.failureDetail(r, { initialize: {}, error: null }, null), 'list_probe_limited', 'no list answer at all');
   // A declared env var does not turn a list failure into needs_credentials.
   assert.notEqual(LP.failureDetail(r, listed('Method not found', -32601), null), 'needs_credentials');
+});
+
+test('R-LP-40: the quick window is the failing probe\'s own time, not the record\'s total, which holds the install and the analysis', () => {
+  // Real selftest records show 24.7 to 72.7 s of total_ms for a server that failed in about a second.
+  for (const total of [24_700, 72_700, 300_000]) assert.equal(LP.failureDetail(lpRec({ timing: { total_ms: total } }), probeExit(1, null, 900), null, OK), 'start_failed', 'total ' + total);
+  // A probe that ran to half its window is no early exit, whatever the total.
+  assert.equal(LP.failureDetail(lpRec({ timing: { total_ms: 1000 } }), probeExit(1, null, 30_000), null, OK), 'start_env_limited');
+  // The record's own probes entry, then captured_at - started_at, when the probe carries no timing.
+  const bare = probeExit(1, null, null);
+  assert.equal(LP.failureDetail(lpRec({ probes: { bare: { timing: { total_ms: 800 } } } }), bare, null, OK), 'start_failed');
+  assert.equal(LP.failureDetail(lpRec({ probes: { bare: { timing: { total_ms: 40_000 } } } }), bare, null, OK), 'start_env_limited');
+  assert.equal(LP.failureDetail(lpRec(), { ...bare, started_at: '2026-11-23T10:00:00.000Z', captured_at: '2026-11-23T10:00:01.500Z' }, null, OK), 'start_failed');
+  assert.equal(LP.failureDetail(lpRec(), { ...bare, started_at: '2026-11-23T10:00:00.000Z', captured_at: '2026-11-23T10:00:40.000Z' }, null, OK), 'start_env_limited');
+});
+
+test('R-LP-39: exits 125, 126 and 127 (docker run, not executable, command not found) are not the server\'s own; needs_credentials needs the same guards as start_failed', () => {
+  const r = lpRec({ env: needEnv });
+  const pypiGuess = { launch: { kind: 'pypi', package: 'acme-mcp', version: 'latest' }, argsUnfilled: 0 };
+  // The case: a declared env var, a guessed PyPI launch and exit 127 (command not found).
+  assert.equal(LP.failureDetail(r, probeExit(127), null, pypiGuess), 'start_env_limited');
+  assert.notEqual(LP.failureDetail(r, probeExit(127), null, pypiGuess), 'needs_credentials');
+  for (const exit of [125, 126, 127, 137]) {
+    assert.equal(LP.failureDetail(r, probeExit(exit), null, OK), 'start_env_limited', 'needs_credentials, exit ' + exit);
+    assert.equal(LP.failureDetail(lpRec(), probeExit(exit), null, OK), 'start_env_limited', 'start_failed, exit ' + exit);
+  }
+  // Each guard of start_failed holds for needs_credentials too.
+  assert.equal(LP.failureDetail(r, probeExit(1), null, pypiGuess), 'start_env_limited', 'a guessed launch');
+  assert.equal(LP.failureDetail(r, probeExit(1), null, { ...OK, argsUnfilled: 1 }), 'start_env_limited', 'an unfilled argument');
+  assert.equal(LP.failureDetail(r, probeExit(1), null, { launch: OK.launch }), 'start_env_limited', 'arguments not known');
+  assert.equal(LP.failureDetail(r, probeExit(null, 'SIGTERM'), null, OK), 'start_env_limited', 'a signal');
+  // With a network attempt it is the network code, guards or not.
+  assert.equal(LP.failureDetail(r, probeExit(127), null, { ...pypiGuess, records: [serverDns] }), 'start_needs_network');
+  // All guards met: the one credentials case.
+  assert.equal(LP.failureDetail(r, probeExit(1), null, OK), 'needs_credentials');
+  assert.equal(LP.failureDetail(r, probeExit(2), null, { launch: { kind: 'pypi', package: 'a', entry: 'a-server' }, argsUnfilled: 0 }), 'needs_credentials');
+});
+
+test('R-LP-41: a server\'s network attempt shows in its trace summary when the netlog records are lost', () => {
+  const trace = (summary, role = 'server') => trec('trace_summary', { source: 'runsc', role, summary: { format: 'isokron-trace-summary/1', counts: { file: 40, process: 3, network: 0, privileged: 0, other: 0 }, failed: { file: 0, process: 0, network: 0, privileged: 0, other: 0 }, network: { sockets: [], raw_sockets: 0, connects: [], sends: [], binds: [], dns_names: [] }, ...summary } });
+  const seen = (rec) => LP.failureDetail(lpRec({ env: needEnv }), probeExit(1), null, { ...OK, records: [rec] });
+  // No dns_query or connection record anywhere: the trace alone.
+  assert.equal(seen(trace({ network: { sockets: [], connects: [{ addr: '93.184.216.34', port: 443, n: 1, failed: 1, errno: 'ENETUNREACH' }], dns_names: [] } })), 'start_needs_network', 'a connect');
+  assert.equal(seen(trace({ network: { sockets: [], connects: [], dns_names: [{ name: 'api.example.com', n: 1 }] } })), 'start_needs_network', 'a looked-up name');
+  assert.equal(seen(trace({ counts: { file: 40, process: 3, network: 6, privileged: 0, other: 0 } })), 'start_needs_network', 'network syscalls');
+  assert.equal(seen(trace({ failed: { file: 0, process: 0, network: 2, privileged: 0, other: 0 } })), 'start_needs_network', 'failed network calls');
+  // A quiet trace, or another role's, is no attempt.
+  assert.equal(seen(trace({})), 'needs_credentials');
+  assert.equal(seen(trace({ counts: { network: 9 } }, 'install')), 'needs_credentials');
+  assert.equal(LP.serverNetworkAttempt([trace({ network: { connects: 3 } })]), true, 'a count works as well as a list');
+});
+
+test('a manifest 404 is the registry\'s answer for the name we built: library/ and odd tags are normalised before the request', async () => {
+  const asked = [];
+  const f = async (url, init = {}) => {
+    const u = new URL(url); asked.push(u.href);
+    if (u.pathname === '/token') return res(200, { token: 't' });
+    if (!init.headers.authorization) return res(401, '', { 'www-authenticate': 'Bearer realm="https://auth.docker.io/token",service="registry.docker.io"' });
+    return res(404, '');
+  };
+  const cases = [
+    ['node:24', 'https://registry-1.docker.io/v2/library/node/manifests/24'],
+    ['docker.io/node', 'https://registry-1.docker.io/v2/library/node/manifests/latest'],
+    ['index.docker.io/acme/box:1.0-rc.1_x', 'https://registry-1.docker.io/v2/acme/box/manifests/1.0-rc.1_x'],
+    ['docker.io/library/node:24-bookworm-slim', 'https://registry-1.docker.io/v2/library/node/manifests/24-bookworm-slim'],
+  ];
+  for (const [id, url] of cases) {
+    asked.length = 0;
+    const ref = LP.parseOciRef(id);
+    assert.ok(ref, id);
+    assert.equal(await ociCode(f, ref), 'image_unavailable', id);
+    assert.equal(asked.filter((u) => u.includes('/manifests/'))[0], url, id);
+  }
+  assert.equal(LP.parseOciRef('ghcr.io/acme/box:bad tag'), null);
 });
 
 /** An OCI registry fetch stub for resolveOciImage: `reply(url, init)` gives the manifest answers; the token service gives a token. */

@@ -217,9 +217,9 @@ and the 4x free-disk rule. An image on another host is unassessed until the list
 | `install_resource_limit` (exit 137 or 124, or out of memory) | `install_failed_registry` | tool | no |
 | `install_build_failed` (a native build, a missing compiler or library, an engine mismatch, or any other install failure with no package error) | `install_failed_registry` | tool | no |
 | `install_timeout` (our install time limit) | `install_failed_registry` | tool | no |
-| `needs_credentials` (the registry entry declares a required env var, the server exited non-zero by itself with no signal or time limit, and it made no network attempt) | `start_requires_credentials` | subject | no |
-| `start_needs_network` (the server tried the network, which the run does not have: a lookup or connection in its role, or a failed network call in its trace) | `timeout_start` | tool (the contract allows only subject for `start_requires_credentials`) | no |
-| `start_failed` (install ok, every argument filled, the server's own non-zero exit, not 137, inside half the probe window, no network attempt, and no unresolved PyPI console-script guess) | `timeout_start` | subject | no |
+| `needs_credentials` (the registry entry declares a required env var, the server exited non-zero by itself (not 125, 126, 127 or 137; no signal or time limit), with every argument filled and no guessed PyPI entry, and it made no network attempt) | `start_requires_credentials` | subject | no |
+| `start_needs_network` (the server tried the network, which the run does not have: a lookup or connection in its role, or a connect, looked-up name or network call in its trace) | `timeout_start` | tool (the contract allows only subject for `start_requires_credentials`) | no |
+| `start_failed` (install ok, every argument filled, the server's own non-zero exit (not 125, 126, 127 or 137), the failing probe itself inside half the probe window, no network attempt, and no unresolved PyPI console-script guess) | `timeout_start` | subject | no |
 | `start_env_limited` (any other start failure: a signal, 137, exit 0, a late exit, an unfilled argument, a network attempt, a guessed PyPI entry) | `timeout_start` | tool | no |
 | `list_failed` (a JSON-RPC error the server sent, or a malformed result) | `timeout_start` | subject | no |
 | `list_probe_limited` (our time limit, the page cap, the read cap, or an HTTP transport failure while listing) | `timeout_start` | tool | no |

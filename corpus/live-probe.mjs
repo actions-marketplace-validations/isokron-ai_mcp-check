@@ -85,7 +85,7 @@ export const SUBJECT_BUDGET_S = 26 * 60;
 export const SUBJECT_TIMEOUT_MIN_S = 90;
 export const SUBJECT_TIMEOUT_MAX_S = 300;
 export const PROBE_MS = 45_000;
-/** A start that failed on its own account fails well inside the probe window; a later exit may be our limits (R-LP-34). */
+/** A start that failed on its own account fails well inside the probe window; a later exit may be our limits (R-LP-34, R-LP-40). */
 export const START_QUICK_MS = PROBE_MS / 2;
 /** One raw file at most (tool-qa's limit is 8 MiB a file, 64 MiB a bundle). */
 export const RAW_FILE_CAP = 6 * 1024 * 1024;
@@ -1020,10 +1020,21 @@ function refusedCount(inst) {
   return (Array.isArray(inst.egress) ? inst.egress : []).filter((e) => e && e.allowed === false).length;
 }
 
+/**
+ * Network evidence in a runsc trace summary (mcp-surface-corpus trace-summary.mjs): a failed network call, a connect,
+ * a looked-up name or any network syscall. The trace is kept when the netlog files are lost (R-LP-41).
+ */
+function traceNetwork(sum) {
+  if (!isObj(sum)) return false;
+  const n = isObj(sum.network) ? sum.network : {};
+  const len = (v) => (Array.isArray(v) ? v.length : Number(v) || 0);
+  return (isObj(sum.failed) && Number(sum.failed.network) > 0) || len(n.connects) > 0 || len(n.dns_names) > 0 || (isObj(sum.counts) && Number(sum.counts.network) > 0);
+}
+
 /** Whether the server itself tried the network (the run has none): a lookup or connection in its role, or a failed network call in its trace. */
 export function serverNetworkAttempt(records) {
   return (Array.isArray(records) ? records : []).some((r) => isObj(r) && r.role === 'server' && (r.type === 'dns_query' || r.type === 'connection'
-    || (r.type === 'trace_summary' && isObj(r.summary) && isObj(r.summary.failed) && Number(r.summary.failed.network) > 0)));
+    || (r.type === 'trace_summary' && traceNetwork(r.summary))));
 }
 
 /** How the server's process ended, from the probe: { exit, signal }, read from the transport, else from the error text. */
@@ -1032,6 +1043,14 @@ function exitOf(p) {
   if (Number.isInteger(t.exit) || (typeof t.signal === 'string' && t.signal)) return { exit: Number.isInteger(t.exit) ? t.exit : null, signal: t.signal || null };
   const m = /\(exit (-?\d+|null), signal ([A-Za-z0-9]+|null)\)/.exec(String(p.initialize_error || p.error || ''));
   return m ? { exit: m[1] === 'null' ? null : Number(m[1]), signal: m[2] === 'null' ? null : m[2] } : { exit: null, signal: null };
+}
+
+/** How long the probe whose exit we read ran: its own total_ms (in the record's probe entry or the probe), else captured_at - started_at. */
+function probeMs(rec, p, tag) {
+  const t = [isObj(p.timing) ? p.timing.total_ms : null, isObj(rec.probes) && isObj(rec.probes[tag]) && isObj(rec.probes[tag].timing) ? rec.probes[tag].timing.total_ms : null];
+  for (const v of t) if (Number.isFinite(v) && v >= 0) return v;
+  const d = Date.parse(p.captured_at) - Date.parse(p.started_at);
+  return Number.isFinite(d) && d >= 0 ? d : null;
 }
 
 /** A list that did not come: the server's own fault only when it sent a JSON-RPC error or a malformed result. */
@@ -1064,7 +1083,7 @@ export function failureDetail(rec, bare, envp, { deadlineHit = false, records = 
     const failed = steps.filter((s) => s && Number.isInteger(s.exit) && s.exit !== 0);
     if (!failed.length) return 'harness_error';
     const text = installText(inst, stepsLog);
-    if (failed.some((s) => s.exit === 137 || s.exit === 124 || s.oom === true) || OOM_TEXT.test(text)) return 'install_resource_limit';
+    if (failed.some((s) => s.exit === 137 || s.exit === 124) || OOM_TEXT.test(text)) return 'install_resource_limit';
     if (refusedCount(inst) > 0) return 'install_blocked';
     if (PACKAGE_ERROR.test(text)) return 'install_failed';
     return 'install_build_failed';
@@ -1078,13 +1097,17 @@ export function failureDetail(rec, bare, envp, { deadlineHit = false, records = 
   const needsEnv = !!(rec.env && rec.env.names && Array.isArray(rec.env.names.registry) && rec.env.names.registry.length);
   const net = serverNetworkAttempt(records);
   const { exit, signal } = exitOf(p);
-  const own = Number.isInteger(exit) && exit !== 0 && exit !== 137 && !signal;
-  if (needsEnv) return net ? 'start_needs_network' : own ? 'needs_credentials' : 'start_env_limited';
-  if (net) return 'start_env_limited';
-  const quick = Number.isFinite(rec.timing && rec.timing.total_ms) && rec.timing.total_ms < START_QUICK_MS;
+  // 125 is docker run's own failure, 126 and 127 are not-executable and command-not-found (what an unresolved PyPI
+  // venv/bin/<package> guess gives), 137 a kill: none is the server's own exit (R-LP-39).
+  const own = Number.isInteger(exit) && exit !== 0 && ![125, 126, 127, 137].includes(exit) && !signal;
   // A PyPI launch with no entry runs venv/bin/<package name>, a guess: the console script often has another name.
   const guess = !isObj(launch) || !launch.kind || (launch.kind === 'pypi' && !launch.entry);
-  return own && quick && argsUnfilled === 0 && !guess ? 'start_failed' : 'start_env_limited';
+  const sound = own && argsUnfilled === 0 && !guess;
+  if (needsEnv) return net ? 'start_needs_network' : sound ? 'needs_credentials' : 'start_env_limited';
+  if (net) return 'start_env_limited';
+  // The probe's own duration, not the record's total (which holds the install and the analysis too, R-LP-40).
+  const ms = probeMs(rec, p, p === envp ? 'env' : 'bare');
+  return sound && ms !== null && ms < START_QUICK_MS ? 'start_failed' : 'start_env_limited';
 }
 
 // ------------------------------------------------------------------ observations
