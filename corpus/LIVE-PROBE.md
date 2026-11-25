@@ -163,6 +163,12 @@ expected failures and the expected disagreements (none). Any other failure, a ba
 or a disagreement not listed fails the self test. In every bundle of a baselined subject, `results/live-probe.json`
 `oracles.baseline_problems` lists the differences.
 
+## Fuzz stage
+
+An optional stage after the oracle stage, off unless the repository variable `LANE_LIVE_PROBE_FUZZ` is `on`: read-only protocol sessions
+that check catalog stability, pagination and cursor handling and Unicode in identifiers. Design, invariants, fault rules
+and how a reproducer becomes a regression test are in [FUZZ.md](FUZZ.md).
+
 ## Bundle
 
 | Path | Holds |

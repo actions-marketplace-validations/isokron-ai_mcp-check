@@ -66,6 +66,8 @@ export const ORACLE_PINS_FILE = join(here, 'oracles', 'pins.json');
 export const ORACLE_BASELINE_FILE = join(FIXTURES, 'oracle-baseline.json');
 /** Each target's time limit grows by this much for the oracle stage (corpus/live-probe-driver.mjs ORACLE_BUDGET_MS). */
 export const ORACLE_ALLOWANCE_S = 150;
+/** The fuzz stage's allowance per stdio target, only while the stage is on (corpus/FUZZ.md). */
+export const FUZZ_ALLOWANCE_S = 60;
 
 /**
  * The known-answer control: our own published server, @isokron/mcp-check 1.3.1, installed from npm and started in the
@@ -171,6 +173,13 @@ export const ORACLE_FIELDS = Object.freeze({
  */
 export const EMIT_TOOL_LIST_FIELDS = true;
 export const TOOL_LIST_FIELDS = Object.freeze({ tool_count: 'integer', tool_list_sha256: 'hash' });
+/**
+ * The fuzz stage's fields (corpus/FUZZ.md): written only while EMIT_FUZZ_FIELDS is on, which needs the mcp-results
+ * registry to hold them and tool-qa's ingest to pin that registry. list_determinism is already a planned field there
+ * (boolean); fuzz_stage, invariant_results and unicode_identifier_findings are proposed.
+ */
+export const EMIT_FUZZ_FIELDS = false;
+export const FUZZ_FIELDS = Object.freeze({ fuzz_stage: 'object', invariant_results: 'array', unicode_identifier_findings: 'array', list_determinism: 'boolean' });
 const ENUM_RE = /^[A-Za-z0-9][A-Za-z0-9._:/+-]{0,127}$/;
 const DATE_TIME_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(\.\d{1,9})?(Z|[+-](\d{2}):(\d{2}))$/;
 
@@ -857,8 +866,8 @@ export function targetLists(plan, { node24Image, forgery = forgeryScript() }) {
   const controls = {
     format: TARGETS_FORMAT, about: 'live-probe controls', defaults: { timeout_s: 300 },
     targets: [
-      { id: KNOWN_ANSWER.id, repo: KNOWN_ANSWER.repo, commit: KNOWN_ANSWER.commit, registry: KNOWN_ANSWER.registry, launch: { ...KNOWN_ANSWER.launch, args: [...KNOWN_ANSWER.launch.args] }, timeout_s: KNOWN_ANSWER.timeout_s + ORACLE_ALLOWANCE_S },
-      { id: FORGERY.id, repo: FORGERY.repo, commit: FORGERY.commit, launch: { kind: 'docker', image: node24Image, entrypoint: 'node', args: ['-e', forgery, plan.marker] }, timeout_s: FORGERY.timeout_s + ORACLE_ALLOWANCE_S },
+      { id: KNOWN_ANSWER.id, repo: KNOWN_ANSWER.repo, commit: KNOWN_ANSWER.commit, registry: KNOWN_ANSWER.registry, launch: { ...KNOWN_ANSWER.launch, args: [...KNOWN_ANSWER.launch.args] }, timeout_s: KNOWN_ANSWER.timeout_s + ORACLE_ALLOWANCE_S + (plan.fuzz ? FUZZ_ALLOWANCE_S : 0) },
+      { id: FORGERY.id, repo: FORGERY.repo, commit: FORGERY.commit, launch: { kind: 'docker', image: node24Image, entrypoint: 'node', args: ['-e', forgery, plan.marker] }, timeout_s: FORGERY.timeout_s + ORACLE_ALLOWANCE_S + (plan.fuzz ? FUZZ_ALLOWANCE_S : 0) },
     ],
   };
   const isOci = (x) => x.target && x.target.launch.kind === 'docker';
@@ -875,7 +884,7 @@ export const subjectTimeout = (n) => Math.max(SUBJECT_TIMEOUT_MIN_S, Math.min(SU
  * The shard plan. validateTarget is the sandbox's own check of one target (mcp-surface-corpus src/targets.mjs): a
  * target it refuses becomes a launch_invalid skip instead of stopping the whole list.
  */
-export async function planShard({ inputs, seed = new Map(), fetch: fetchImpl = globalThis.fetch, validateTarget = () => {}, marker = newMarker(), now = () => new Date(), clock = () => Date.now(), base = REGISTRY_BASE }) {
+export async function planShard({ inputs, seed = new Map(), fetch: fetchImpl = globalThis.fetch, validateTarget = () => {}, marker = newMarker(), now = () => new Date(), clock = () => Date.now(), base = REGISTRY_BASE, fuzz = false }) {
   const items = [];
   for (const it of inputs.items) {
     const t0 = clock();
@@ -892,8 +901,10 @@ export async function planShard({ inputs, seed = new Map(), fetch: fetchImpl = g
   const runnable = items.filter((x) => x.target).length;
   const timeout = subjectTimeout(runnable);
   // The oracle stage runs only for stdio targets (corpus/live-probe-driver.mjs): only they get its allowance.
+  // The fuzz stage (off unless switched on) runs for the same targets and has an allowance of its own.
   for (const x of items) if (x.target) x.target.timeout_s = timeout + ((x.target.launch.transport || 'stdio') === 'stdio' ? ORACLE_ALLOWANCE_S : 0);
-  return { format: PLAN_FORMAT, shard_id: inputs.shardId, attempt_id: inputs.attemptId, marker, planned_at: now().toISOString(), subject_timeout_s: timeout, runnable, items };
+  if (fuzz) for (const x of items) if (x.target && (x.target.launch.transport || 'stdio') === 'stdio') x.target.timeout_s += FUZZ_ALLOWANCE_S;
+  return { format: PLAN_FORMAT, shard_id: inputs.shardId, attempt_id: inputs.attemptId, marker, planned_at: now().toISOString(), subject_timeout_s: timeout, runnable, ...(fuzz ? { fuzz: true } : {}), items };
 }
 
 // ------------------------------------------------------------------ grading
@@ -1174,7 +1185,7 @@ export function failureDetail(rec, bare, envp, { deadlineHit = false, records = 
 
 /** One observations line, checked against FIELDS. A value of the wrong type is written as null with why. */
 export function obs(field, value, why) {
-  const type = FIELDS[field] || (EMIT_TOOL_LIST_FIELDS ? TOOL_LIST_FIELDS[field] : undefined) || (EMIT_ORACLE_FIELDS ? ORACLE_FIELDS[field] : undefined);
+  const type = FIELDS[field] || (EMIT_TOOL_LIST_FIELDS ? TOOL_LIST_FIELDS[field] : undefined) || (EMIT_ORACLE_FIELDS ? ORACLE_FIELDS[field] : undefined) || (EMIT_FUZZ_FIELDS ? FUZZ_FIELDS[field] : undefined);
   if (!type) throw new Error('not a field of this lane: ' + field);
   const ok = value !== null && value !== undefined && checkType(type, value);
   return JSON.stringify(ok ? { field, value, stage: STAGE } : { field, value: null, why: why || (value === null || value === undefined ? 'not observed' : 'not of the registry type'), stage: STAGE });
@@ -1291,6 +1302,61 @@ export function oracleFor(dir, item, reader, ctx) {
   return { lines, raw, summary, components: j.components };
 }
 
+
+// ------------------------------------------------------------------ the fuzz stage
+
+const FUZZ_WORD = /^[a-z][a-z0-9_-]{0,59}$/;
+const CODEPOINT = /^U\+[0-9A-F]{4,6}$/;
+const HEX64 = /^[0-9a-f]{64}$/;
+/** Evidence as it may leave raw/: counts, hashes and code points only. A server's strings never pass. */
+export function safeEvidence(ev) {
+  if (!isObj(ev)) return {};
+  const out = {};
+  for (const [k, v] of Object.entries(ev)) {
+    if (!FUZZ_WORD.test(k)) continue;
+    if (Number.isSafeInteger(v) || typeof v === 'boolean') out[k] = v;
+    else if (typeof v === 'string' && (HEX64.test(v) || FUZZ_WORD.test(v))) out[k] = v;
+    else if (k === 'findings' && Array.isArray(v)) out[k] = v.slice(0, 50).map((f) => ({ primitive: safeText(f.primitive, /^(tools|prompts|resources|templates|\*)$/), field: safeText(f.field, /^(name|uri|\*)$/), index: int(f.index), kind: safeText(f.kind, FUZZ_WORD), codepoints: (Array.isArray(f.codepoints) ? f.codepoints : []).filter((c) => typeof c === 'string' && CODEPOINT.test(c)).slice(0, 8), name_sha256: HEX64.test(f.name_sha256) ? f.name_sha256 : null }));
+  }
+  return out;
+}
+
+/** One result as it goes into results/ and the fields. */
+export function fuzzRow(r) {
+  return { id: safeText(r.id, /^(FZ-[A-Z]+-[0-9]|\*)$/), primitive: safeText(r.primitive, /^(tools|prompts|resources|templates|\*)$/), verdict: safeText(r.verdict, /^(pass|fail|warn|na|inconclusive)$/), kind: safeText(r.kind, FUZZ_WORD), fault: r.fault === 'subject' || r.fault === 'tool' ? r.fault : null, reproduced: r.reproduced === true ? true : r.reproduced === false ? false : null, evidence: safeEvidence(r.evidence) };
+}
+
+export function fuzzRecord(dir) {
+  const rec = dir ? readJson(join(dir, 'fuzz.json')) : null;
+  return isObj(rec) && rec.format === 'isokron-live-probe-fuzz/1' ? rec : null;
+}
+
+/**
+ * One target's fuzz results: the field lines (only while EMIT_FUZZ_FIELDS), the raw record, and a summary for
+ * results/. Null when the stage is not switched on for this shard: such a bundle holds nothing of it.
+ */
+export function fuzzFor(dir, item, ctx) {
+  if (!ctx.plan || ctx.plan.fuzz !== true) return null;
+  const transport = item.target && item.target.launch ? item.target.launch.transport || 'stdio' : null;
+  const rec = fuzzRecord(dir);
+  const lines = []; const raw = [];
+  const status = !rec ? 'not_run' : rec.mode === 'full' ? 'ran' : rec.mode === 'skipped' ? 'skipped' : 'error';
+  const why = !rec ? (transport && transport !== 'stdio' ? 'http_transport' : 'not_run') : safeText(rec.why, FUZZ_WORD);
+  const rows = rec && Array.isArray(rec.results) ? rec.results.map(fuzzRow) : [];
+  const stage = { status, mode: rec ? safeText(rec.mode, FUZZ_WORD) : null, why, ms: rec ? int(rec.ms) : null, rounds: rec && Array.isArray(rec.rounds) ? rec.rounds.length : 0, sessions: rec && Array.isArray(rec.containers) ? rec.containers.length : 0 };
+  if (rec) raw.push(['raw/fuzz.json', Buffer.from(json(rec))]);
+  if (EMIT_FUZZ_FIELDS) {
+    lines.push(obs('fuzz_stage', stage));
+    if (status === 'ran') {
+      lines.push(obs('invariant_results', rows.filter((r) => !r.id || !r.id.startsWith('FZ-UNI'))));
+      lines.push(obs('unicode_identifier_findings', rows.filter((r) => r.id && r.id.startsWith('FZ-UNI'))));
+      const det = rows.filter((r) => (r.id === 'FZ-CAT-1' || r.id === 'FZ-CAT-2') && r.primitive === 'tools' && (r.verdict === 'pass' || r.verdict === 'fail' || r.verdict === 'warn'));
+      if (det.length) lines.push(obs('list_determinism', det.every((r) => r.verdict === 'pass')));
+    }
+  }
+  return { lines, raw, summary: { ...stage, counts: rec && rec.summary ? rec.summary : null, results: rows } };
+}
+
 // ------------------------------------------------------------------ one item
 
 /** Everything about one item: { status, detail, files, skips, subjectSha }. Never throws on subject data. */
@@ -1389,6 +1455,8 @@ export function buildItem(item, ctx) {
     oracle = oracleFor(dir, item, reader, ctx);
     lines.push(...oracle.lines);
     result.oracles = oracle.summary;
+    const fuzz = fuzzFor(dir, item, ctx);
+    if (fuzz) { lines.push(...fuzz.lines); result.fuzz = fuzz.summary; }
     // The driver times its probe around the probe option, so its probe_ms holds the oracle stage too (R-ORC-02):
     // step_telemetry keeps the two apart.
     const oms = oracle.summary ? int(oracle.summary.ms) : null;
@@ -1406,6 +1474,7 @@ export function buildItem(item, ctx) {
     if (tel.lines.length) raw.push(['raw/telemetry.jsonl', Buffer.from(tel.lines.join('\n') + '\n')]);
     lines.push(...networkEvents(tel.records).map((e) => obs('network_event', e)));
     raw.push(...oracle.raw);
+    if (fuzz) raw.push(...fuzz.raw);
     addRaw(files, raw, result);
   }
   lines.push(obs('step_telemetry', result.timing));
@@ -1639,6 +1708,14 @@ export function oracleExpectProblems(res, manifest) {
   return p;
 }
 
+/** The self test's checks of the fuzz stage on our own servers: it ran, and found nothing (they are the controls of the invariants). */
+export function fuzzExpectProblems(res) {
+  const f = res.fuzz;
+  if (!f || f.status !== 'ran') return [{ reason: 'fuzz_not_run', got: f ? f.status + (f.why ? ' (' + f.why + ')' : '') : null }];
+  const bad = f.results.filter((r) => r.verdict === 'fail' || r.verdict === 'warn' || r.fault === 'subject').map((r) => r.id + ' ' + r.primitive + ' ' + r.verdict + ' ' + r.kind);
+  return bad.length ? [{ reason: 'fuzz_finding_on_our_own_server', results: bad }] : [];
+}
+
 /** What ingest would check a self test bundle's identity against: the worker kit records GITHUB_WORKFLOW_SHA. */
 export function expectedIdentity(manifest, item, expect, env) {
   return { attempt_id: env.ATTEMPT_ID || expect.attempt_id, fence: item.fence, run_key: item.run_key, repo: env.GITHUB_REPOSITORY, workflow_file: manifest.workflow && manifest.workflow.file, workflow_sha: env.GITHUB_WORKFLOW_SHA, run_id: Number(env.GITHUB_RUN_ID) };
@@ -1684,6 +1761,7 @@ export async function verifyBundles({ toolQa, ingest = toolQa, tars, expect, env
     if (manifest.controls.length !== (oracleRun ? 4 : 3)) problems.push({ tar: t, reason: 'controls_missing', got: manifest.controls.length });
     if (oracleRun && !manifest.controls.some((c) => c.kind === 'known_good' && c.output === 'controls/oracle-known-answer.json' && c.observed === 'match')) problems.push({ tar: t, reason: 'oracle_control_missing' });
     if (want.oracles) for (const p of oracleExpectProblems(res, manifest)) problems.push({ tar: t, ...p });
+    if (want.fuzz) for (const p of fuzzExpectProblems(res)) problems.push({ tar: t, ...p });
   }
   if (results.length !== expect.items.length) problems.push({ reason: 'bundle_count', want: expect.items.length, got: results.length });
   return { problems, results };
@@ -1713,7 +1791,7 @@ export async function main(argv, { env = process.env, stdout = process.stdout, s
     const { validateTarget } = await import(pathToFileURL(join(resolve(opt['--msc']), 'src', 'targets.mjs')).href);
     const images = JSON.parse(readFileSync(join(resolve(opt['--msc']), 'images.json'), 'utf8'));
     const seed = loadSeed(opt['--seed']);
-    const plan = await planShard({ inputs, seed, fetch: fetchImpl, validateTarget });
+    const plan = await planShard({ inputs, seed, fetch: fetchImpl, validateTarget, fuzz: env.LIVE_PROBE_FUZZ === 'on' });
     const lists = targetLists(plan, { node24Image: images.node24 });
     mkdirSync(work, { recursive: true });
     writeFileSync(join(work, 'plan.json'), json(plan));
@@ -1722,7 +1800,7 @@ export async function main(argv, { env = process.env, stdout = process.stdout, s
     mkdirSync(join(work, 'oci'), { recursive: true });
     for (const o of lists.oci) writeFileSync(join(work, 'oci', o.id + '.json'), json(o.list));
     writeFileSync(join(work, 'oci.json'), json(lists.oci.map((o) => ({ id: o.id, image: o.image, bytes: o.bytes }))));
-    const lines = ['subject_timeout_s=' + plan.subject_timeout_s, 'runnable=' + plan.runnable];
+    const lines = ['subject_timeout_s=' + plan.subject_timeout_s, 'runnable=' + plan.runnable, 'fuzz=' + (plan.fuzz ? 'on' : 'off')];
     for (const it of plan.items) lines.push('has_' + it.index + '=true', 'fence_' + it.index + '=' + it.fence, 'run_key_' + it.index + '=' + it.run_key);
     output(env, lines, stdout);
     for (const it of plan.items) say('item ' + it.index + ': ' + (it.target ? 'runnable (' + it.resolution.choice.type + ', ' + it.resolution.choice.transport + ')' : 'skipped (' + it.resolution.detail + ')'));

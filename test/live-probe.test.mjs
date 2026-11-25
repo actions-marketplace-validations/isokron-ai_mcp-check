@@ -416,7 +416,7 @@ test('R-LP-20: tool_count and tool_list_sha256 are written as fields of their ow
 test('R-LP-21: the sandbox at mcp-surface-corpus 73a2669 builds native modules, so kronicle-lite is expected to start in the self test', () => {
   for (const f of ['live-probe.yml', 'live-probe-selftest.yml']) assert.equal(wf(f).split(SANDBOX_PIN).length - 1, 3, f + ': the env pin, the conformance workflow and the guard');
   const shard = JSON.parse(readFileSync(join(root, 'corpus', 'fixtures', 'live-probe', 'selftest-shard.json'), 'utf8'));
-  assert.deepEqual(shard.items.find((x) => x.subject === 'isokron-ai/kronicle-lite').expect, { status: 'graded', min_tools: 1, oracles: true });
+  assert.deepEqual(shard.items.find((x) => x.subject === 'isokron-ai/kronicle-lite').expect, { status: 'graded', min_tools: 1, oracles: true, fuzz: true });
 });
 
 test('R-LP-22: the self test judges the bundles with the ingest tool-qa runs, whose registry declares every field the lane writes', () => {
@@ -1112,7 +1112,7 @@ test('live-probe self test workflow: runs on pull requests the same steps as the
   assert.ok(!/pull_request_target|secrets\./.test(y.replace(/^\s*#.*$/gm, '')));
   for (const k of ['WORKER_KIT_REF', 'SURFACE_CORPUS_REF']) assert.equal(new RegExp('\\n  ' + k + ": '([0-9a-f]{40})'\\n").exec(y)[1], new RegExp('\\n  ' + k + ": '([0-9a-f]{40})'\\n").exec(w)[1], k);
   const between = (s) => s.slice(s.indexOf('      - id: deadline'), s.indexOf('      - id: bundle'));
-  const norm = (s) => between(s).replace(/inputs\.shard_id/g, 'env.SHARD_ID').replace(/inputs\.attempt_id/g, 'env.ATTEMPT_ID').replace(/inputs\.items/g, 'env.ITEMS').replace(/      - name: The fixture items\n        run: .*\n/, '');
+  const norm = (s) => between(s).replace(/inputs\.shard_id/g, 'env.SHARD_ID').replace(/inputs\.attempt_id/g, 'env.ATTEMPT_ID').replace(/inputs\.items/g, 'env.ITEMS').replace(/LIVE_PROBE_FUZZ: .*\n/, 'LIVE_PROBE_FUZZ: X\n').replace(/      - name: The fixture items\n        run: .*\n/, '');
   assert.equal(norm(y), norm(w), 'the self test runs exactly the worker\'s steps');
   assert.equal((y.match(/dry-run: 'true'/g) || []).length, 4);
   assert.match(y, /node corpus\/live-probe\.mjs verify --ingest tool-qa-ingest tool-qa corpus\/fixtures\/live-probe\/selftest-shard\.json/);
