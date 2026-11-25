@@ -825,6 +825,19 @@ test('R-LP-42: network syscalls alone (counts.network) are not a network attempt
   assert.equal(LP.failureDetail(lpRec({ env: needEnv }), probeExit(1), null, { ...OK, records: [healthy] }), 'needs_credentials');
 });
 
+test('R-LP-46: a log line or a validation message that mentions a crash word is no crash: an early exit with it stays start_env_limited', () => {
+  // From the review of #40: unanchored, case-insensitive patterns blamed a healthy-but-unconfigured server for these.
+  const notCrashes = [
+    'WARN: ImportError for optional dependency foo', 'validation: TypeError: expected string', 'msg="panic: recovered"',
+    '[PANIC: handled]', 'TypeError: expected string for --port', 'level=error msg="fatal error: bad flag"',
+    'error: x\npanic is not a crash here',
+  ];
+  for (const stderr of notCrashes) {
+    assert.doesNotMatch(stderr, LP.CRASH_TEXT, stderr);
+    assert.equal(LP.failureDetail(lpRec(), { ...probeExit(1), stderr }, null, OK), 'start_env_limited', stderr);
+  }
+});
+
 test('a manifest 404 is the registry\'s answer for the name we built: library/ and odd tags are normalised before the request', async () => {
   const asked = [];
   const f = async (url, init = {}) => {
@@ -1187,7 +1200,6 @@ test('R-LP-28: a start that ran out of time and a private registry are our limit
 
 test('R-LP-43: no_package is the tool\'s: having no registry package is no server defect (Go and Rust binaries, other npm names, own-registry images)', () => {
   assert.deepEqual(LP.DETAILS.no_package, ['no_runnable_artifact', false, 'resolve', 'tool']);
-  assert.deepEqual(LP.DETAILS.remote_only.slice(2), ['resolve', 'subject'].slice(0, 0).concat(LP.DETAILS.remote_only.slice(2)));
   assert.equal(LP.DETAILS.remote_only[3], 'subject', 'remote_only stays the subject\'s');
 });
 
@@ -1230,7 +1242,8 @@ test('R-LP-45: start_failed needs a crash signature on stderr; an early exit wit
     assert.match(stderr, LP.CRASH_TEXT, name);
     assert.equal(LP.failureDetail(lpRec(), { ...probeExit(1), stderr }, null, OK), 'start_failed', name);
   }
-  for (const s of ['ModuleNotFoundError: No module named x', 'ImportError: cannot import name y', 'SyntaxError: Unexpected token', 'ReferenceError: z is not defined', 'TypeError: x is not a function', 'fatal error: all goroutines are asleep', 'RangeError: Maximum call stack size exceeded']) assert.match(s, LP.CRASH_TEXT, s);
+  const frame = '\n    at Object.<anonymous> (/app/index.js:3:1)';
+  for (const s of ['ModuleNotFoundError: No module named x', 'ImportError: cannot import name y', 'SyntaxError: invalid syntax', 'ReferenceError: z is not defined' + frame, 'TypeError: x is not a function' + frame, 'fatal error: all goroutines are asleep - deadlock!\n\ngoroutine 1 [chan receive]:', 'RangeError: Maximum call stack size exceeded' + frame]) assert.match(s, LP.CRASH_TEXT, s);
   // Config text wins over crash text.
   const both = 'Traceback (most recent call last):\n  File "s.py"\nFileNotFoundError: config file not found at /etc/x.json';
   assert.match(both, LP.CRASH_TEXT);

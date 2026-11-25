@@ -1022,12 +1022,17 @@ export const CONFIG_TEXT = new RegExp([
  * error, a stack overflow.
  */
 export const CRASH_TEXT = new RegExp([
-  String.raw`\bpanic:`, String.raw`thread '[^']*' panicked`, String.raw`traceback \(most recent call last\)`,
-  String.raw`\b(?:uncaught|unhandled)\s+(?:\w+\s+)?(?:exception|rejection|error)`, String.raw`unhandledpromiserejection`,
-  String.raw`segmentation fault|\bSIGSEGV\b|core dumped`, String.raw`cannot find module`,
-  String.raw`\bModuleNotFoundError\b|\bImportError\b|\bSyntaxError\b|\bReferenceError\b|\bTypeError:`,
-  String.raw`\bfatal error:`, String.raw`stack overflow|maximum call stack size exceeded`,
-].join('|'), 'i');
+  // Case-sensitive and in the form each runtime prints, at the start of a line: a log line or a validation message that
+  // merely mentions "panic:", "ImportError" or "TypeError" is no crash (R-LP-46).
+  String.raw`(?:^|\n)panic: `, String.raw`thread '[^']*' panicked at `, String.raw`thread '[^']*' has overflowed its stack`,
+  String.raw`(?:^|\n)Traceback \(most recent call last\):`, String.raw`(?:^|\n)(?:ModuleNotFoundError|ImportError|SyntaxError): `,
+  // A JavaScript error is a crash only with its stack: the next line is a frame ("    at ...").
+  String.raw`(?:^|\n)(?:Uncaught )?(?:TypeError|ReferenceError|SyntaxError|RangeError|Error): [^\n]*\n\s+at `,
+  String.raw`Uncaught \w*(?:Error|Exception)`, String.raw`Unhandled promise rejection|UnhandledPromiseRejection`,
+  String.raw`Error: Cannot find module '`, String.raw`Segmentation fault|\bSIGSEGV\b|\(core dumped\)`,
+  // A Go runtime fatal error prints its goroutine dump after it.
+  String.raw`(?:^|\n)fatal error: [^\n]*\n(?:[^\n]*\n){0,4}goroutine \d+ \[`,
+].join('|'));
 
 const OOM_TEXT = /\bENOMEM\b|out of memory|\bOOM\b/i;
 /** A list error that is the server's own: a malformed result. (A JSON-RPC error is told by its numeric code.) */
