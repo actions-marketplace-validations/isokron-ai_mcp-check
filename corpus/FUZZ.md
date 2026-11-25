@@ -114,9 +114,9 @@ invariant, one list, the sessions involved); shrinking items inside a list is ph
 1. Take the reproducer from the bundle's `raw/fuzz.json`.
 2. Save it as `test/fixtures/fuzz/<R-FZ-NN>.json`. Third-party names may stay (names are public by policy) except for
    security-class findings, which go to Joshua first.
-3. Add a test `R-FZ-NN: <what it was>` to `test/fuzz.test.mjs` using `replayCase(file)`: it starts
-   `corpus/fuzz/replay-server.mjs` for every session of the spec, runs the stage, and asserts the same invariant and
-   kind. It must fail with the invariant muted (`setMutation`), which is the mutation check.
+3. Add a test `R-FZ-NN: <what it was>` to `test/fuzz.test.mjs` using `replayCase(JSON.parse(file))` (exported by
+   `test/fuzz.test.mjs`): it starts `corpus/fuzz/replay-server.mjs` for every session of the spec, runs the stage, and
+   asserts the same invariant and kind (see `R-FZ-12`). It must fail with the invariant muted (`setMutation`), which is the mutation check.
 4. Add the row to `REGRESSIONS.md` (ID `R-FZ-NN`, next free number) with the test and the fix commit.
 
 ## Not in this slice (phase 2)

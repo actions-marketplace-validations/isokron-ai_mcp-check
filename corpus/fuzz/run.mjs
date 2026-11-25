@@ -119,8 +119,9 @@ export function reproducerOf(result, sessions) {
  * @param {(cid: string) => Promise<object|null>} [o.takeTrace]
  * @param {(name: string) => Promise<void>} [o.removeContainer]
  * @param {(command: string[], k: number) => { command, name, cidfile }} [o.variant]  for tests: the session command
+ * @param {number} [o.requestMs]  for tests: the time limit of one request (default 10 s)
  */
-export async function runFuzz({ command, dockerEnv, budgetMs, takeTrace = async () => null, removeContainer, variant = variantCommand, now = () => Date.now() }) {
+export async function runFuzz({ command, dockerEnv, budgetMs, takeTrace = async () => null, removeContainer, variant = variantCommand, now = () => Date.now(), requestMs = undefined }) {
   const t0 = now(); const deadline = t0 + budgetMs;
   const out = { format: FORMAT, mode: 'full', started_at: new Date(t0).toISOString(), budget_ms: budgetMs, ms: null, rounds: [], results: [], reproducers: [], containers: [], errors: [], summary: null };
   const env = { PATH: process.env.PATH || '/usr/local/bin:/usr/bin:/bin', LANG: 'C.UTF-8' };
@@ -132,7 +133,7 @@ export async function runFuzz({ command, dockerEnv, budgetMs, takeTrace = async 
   const session = async (role, label, shared, roundDeadline) => {
     const v = variant(command, ++k);
     if (v.cidfile) rmSync(v.cidfile, { force: true });
-    const s = new Session(v.command, { env }).start();
+    const s = new Session(v.command, { env, ...(requestMs ? { requestMs } : {}) }).start();
     let rec;
     const guard = setTimeout(() => { s.stop('timeout'); }, Math.max(1000, Math.min(SESSION_MS, roundDeadline - now())));
     try { rec = await exercise(s, role, label, shared, { deadline: Math.min(roundDeadline, now() + SESSION_MS), now }); } finally { clearTimeout(guard); }

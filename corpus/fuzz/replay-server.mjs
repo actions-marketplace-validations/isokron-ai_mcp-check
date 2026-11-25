@@ -4,7 +4,7 @@
  *
  *   node corpus/fuzz/replay-server.mjs <reproducer.json> <state file>
  *
- * The state file counts starts: the k-th start plays session `order[k]` of the spec. Within a session, the answer to
+ * The state file counts starts: the k-th start plays session `order[k mod length]` of the spec. Within a session, the answer to
  * a request is the next recorded answer for the same method and cursor (a second request for one cursor gets the
  * second recorded answer); a request with no recorded answer gets a JSON-RPC internal error. It never executes
  * anything the spec holds: the spec is data.
@@ -17,7 +17,7 @@ const spec = JSON.parse(readFileSync(specFile, 'utf8'));
 let start = 0;
 try { start = Number(readFileSync(stateFile, 'utf8')); } catch { start = 0; }
 writeFileSync(stateFile, String(start + 1));
-const label = spec.order[Math.min(start, spec.order.length - 1)];
+const label = spec.order[start % spec.order.length];
 const queues = new Map();
 let init = null;
 for (const s of spec.sessions[label] || []) {
