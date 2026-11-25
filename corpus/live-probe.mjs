@@ -1017,6 +1017,16 @@ export const CONFIG_TEXT = new RegExp([
 ].join('|'), 'i');
 
 /**
+ * A named setting the server says is missing (R-LP-47): an environment-style name (with an underscore, case-sensitive) next
+ * to missing, required, not set or undefined. A server that throws its own "API_KEY missing" error with a stack is asking
+ * for configuration, not crashing.
+ */
+export const ENV_NAME_TEXT = new RegExp([
+  String.raw`\b[A-Z][A-Z0-9]*_[A-Z0-9_]+\b[^\n]{0,40}?\b(?:missing|required|not set|is not defined|undefined|must be set)\b`,
+  String.raw`\b(?:[Mm]issing|[Rr]equired|[Ss]et(?: the)?)\s+(?:env(?:ironment)?\s+(?:var(?:iable)?\s+)?)?[A-Z][A-Z0-9]*_[A-Z0-9_]+\b`,
+].join('|'));
+
+/**
  * Stderr that shows the server itself crashed (R-LP-45): a panic, a Python traceback, an uncaught or unhandled
  * exception or rejection, a segmentation fault, a missing module, an import, syntax, reference or type error, a fatal
  * error, a stack overflow.
@@ -1028,8 +1038,8 @@ export const CRASH_TEXT = new RegExp([
   String.raw`(?:^|\n)Traceback \(most recent call last\):`, String.raw`(?:^|\n)(?:ModuleNotFoundError|ImportError|SyntaxError): `,
   // A JavaScript error is a crash only with its stack: the next line is a frame ("    at ...").
   String.raw`(?:^|\n)(?:Uncaught )?(?:TypeError|ReferenceError|SyntaxError|RangeError|Error): [^\n]*\n\s+at `,
-  String.raw`Uncaught \w*(?:Error|Exception)`, String.raw`Unhandled promise rejection|UnhandledPromiseRejection`,
-  String.raw`Error: Cannot find module '`, String.raw`Segmentation fault|\bSIGSEGV\b|\(core dumped\)`,
+  String.raw`(?:^|\n)(?:\(node:\d+\) )?(?:Uncaught \w*(?:Error|Exception)|Unhandled promise rejection|UnhandledPromiseRejection)`,
+  String.raw`(?:^|\n)Error: Cannot find module '`, String.raw`Segmentation fault|\bSIGSEGV\b|\(core dumped\)`,
   // A Go runtime fatal error prints its goroutine dump after it.
   String.raw`(?:^|\n)fatal error: [^\n]*\n(?:[^\n]*\n){0,4}goroutine \d+ \[`,
 ].join('|'));
@@ -1144,7 +1154,7 @@ export function failureDetail(rec, bare, envp, { deadlineHit = false, records = 
   const ms = probeMs(rec, p, p === envp ? 'env' : 'bare');
   // The server's own exit and its stderr: it said it needs configuration we did not give it (R-LP-44), which is no defect.
   const err = typeof p.stderr === 'string' ? p.stderr : '';
-  if (own && CONFIG_TEXT.test(err)) return 'start_needs_config';
+  if (own && (CONFIG_TEXT.test(err) || ENV_NAME_TEXT.test(err))) return 'start_needs_config';
   // A crash signature is the evidence; an early exit with no telling stderr is not (R-LP-45).
   return sound && ms !== null && ms < START_QUICK_MS && CRASH_TEXT.test(err) ? 'start_failed' : 'start_env_limited';
 }

@@ -838,6 +838,19 @@ test('R-LP-46: a log line or a validation message that mentions a crash word is 
   }
 });
 
+test('R-LP-47: a server that throws its own "missing setting" error, stack and all, needs configuration: start_needs_config, not start_failed', () => {
+  const frame = '\n    at validate (/app/cfg.js:3:9)';
+  for (const stderr of ['Error: API_KEY missing' + frame, 'Error: GITHUB_TOKEN is required' + frame, 'Error: Missing environment variable DATABASE_URL' + frame, 'TypeError: process.env.OPENAI_API_KEY is undefined' + frame, 'Set SLACK_BOT_TOKEN to run this server' + frame]) {
+    assert.match(stderr, LP.ENV_NAME_TEXT, stderr);
+    assert.equal(LP.failureDetail(lpRec(), { ...probeExit(1), stderr }, null, OK), 'start_needs_config', stderr);
+  }
+  // A real crash naming no setting is still the server's own.
+  assert.equal(LP.failureDetail(lpRec(), { ...probeExit(1), stderr: 'TypeError: x is not a function' + frame }, null, OK), 'start_failed');
+  // Lower-case words are not setting names, and a crash phrase inside a log line is no crash.
+  assert.doesNotMatch('Error: response missing field', LP.ENV_NAME_TEXT);
+  for (const s of ['INFO retry: Unhandled promise rejection count 0', 'log: Error: Cannot find module \'x\' (optional)', 'debug Uncaught Exception handler installed']) assert.doesNotMatch(s, LP.CRASH_TEXT, s);
+});
+
 test('a manifest 404 is the registry\'s answer for the name we built: library/ and odd tags are normalised before the request', async () => {
   const asked = [];
   const f = async (url, init = {}) => {
