@@ -186,19 +186,29 @@ lists the suite and each SDK client that ran, with its version.
 
 A subject that cannot be installed, started or listed is a skip, never a failed job:
 
-| Detail | Skip reason | Retryable |
-|---|---|---|
-| `bad_subject`, `no_package`, `unsupported_package` (cargo, NuGet, MCPB only), `private_registry`, `launch_invalid`, `unverified_registry_entry` | `no_runnable_artifact` | no |
-| `oci_host_not_allowed`, `image_too_large` | `policy_excluded` | no |
-| `remote_only` | `remote_only` | no |
-| `unsupported_transport` (SSE, or HTTP with no fixed local port) | `unsupported_transport` | no |
-| `image_unavailable`, `install_failed`, `install_timeout` | `install_failed_registry` | no |
-| `needs_credentials` (the registry entry declares a required env var, and no list with dummy values) | `start_requires_credentials` | no |
-| `start_failed`, `start_timeout`, `list_failed` | `timeout_start` | no |
-| `list_rejected` (the engine refused the list) | `no_runnable_artifact` | no |
-| `rate_limited` | `rate_limited` | yes |
-| `upstream_error`, `harness_error`, `shard_deadline`, `disk_low` | `upstream_unavailable` | yes |
-| `sandbox_evidence_missing` (no syscall trace or firewall log for it) | `trace_unavailable` | yes |
+Every skip names its fault side (tool-qa's `SKIP_FAULTS`; R-LP-24..27). Our own limits and errors have reasons of
+their own and fault `tool`: they count as unassessed on our side, never as an exclusion and never as the server's or
+an upstream's failure. `oci_host_not_allowed` is a deliberate safety choice (the sandbox's egress is deny by default,
+so only six OCI hosts are reachable), but it says nothing about the server, so it is recorded as our gap rather than
+as `policy_excluded`, which would take the subject out of the coverage denominator and hide the gap.
+
+| Detail | Skip reason | Fault | Retryable |
+|---|---|---|---|
+| `bad_subject` (not a GitHub owner/name), `unsupported_package` (cargo, NuGet, MCPB only), `unverified_registry_entry`, `launch_invalid` | `no_runnable_artifact` | tool | no |
+| `oci_host_not_allowed` (the image is not on one of our six registries) | `no_runnable_artifact` | tool | no |
+| `no_package`, `private_registry` | `no_runnable_artifact` | subject | no |
+| `image_too_large` (over our 2 GB cap) | `too_large` | tool | no |
+| `remote_only` | `remote_only` | subject | no |
+| `unsupported_transport` (SSE, or HTTP with no fixed local port) | `unsupported_transport` | tool | no |
+| `image_unavailable`, `install_failed` | `install_failed_registry` | subject | no |
+| `install_timeout` (our install time limit) | `install_failed_registry` | tool | no |
+| `needs_credentials` (the registry entry declares a required env var, and no list with dummy values) | `start_requires_credentials` | subject | no |
+| `start_failed`, `start_timeout`, `list_failed` | `timeout_start` | subject | no |
+| `list_rejected` (the engine refused the list) | `tool_error` | tool | no |
+| `harness_error` (our driver or bundle step failed) | `tool_error` | tool | yes |
+| `rate_limited` | `rate_limited` | infra | yes |
+| `upstream_error`, `shard_deadline`, `disk_low` | `upstream_unavailable` | infra | yes |
+| `sandbox_evidence_missing` (no syscall trace or firewall log for it) | `trace_unavailable` | tool | yes |
 
 ## Controls
 

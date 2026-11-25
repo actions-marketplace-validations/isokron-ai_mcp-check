@@ -11,7 +11,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as LP from '../corpus/live-probe.mjs';
 import { evaluateGuard } from '../corpus/loop-guard.mjs';
-import { buildManifest, collectFiles, validateManifest, SKIP_REASONS } from './tool-qa/worker-kit/contract.mjs';
+import { buildManifest, collectFiles, validateManifest, resultFault, SKIP_REASONS, SKIP_FAULTS } from './tool-qa/worker-kit/contract.mjs';
 import { readTar, writeTar } from './tool-qa/worker-kit/tar.mjs';
 import { checkBundle } from './tool-qa/ingest/forgery.mjs';
 import { scanFiles } from './tool-qa/ingest/redact.mjs';
@@ -190,7 +190,7 @@ test('R-LP-09: an OCI image only from the allowed registries, token services inc
   const g = fakeFetch([server('io.github.acme/box', 'acme/box', [{ registryType: 'oci', identifier: 'ghcr.io/acme/box:1.4', transport: { type: 'stdio' } }])], { oci: { 'ghcr.io': ok.handler }, realm: 'https://169.254.169.254/token' });
   assert.equal((await LP.resolveSubject({ subject: 'acme/box', repo: 'acme/box' }, { fetch: g })).detail, 'oci_host_not_allowed');
   assert.ok(!g.calls.some((c) => c.url.includes('169.254')));
-  assert.deepEqual(LP.DETAILS.oci_host_not_allowed.slice(0, 2), ['policy_excluded', false]);
+  assert.deepEqual(LP.DETAILS.oci_host_not_allowed, ['no_runnable_artifact', false, 'resolve', 'tool'], 'R-LP-25');
   assert.deepEqual(LP.OCI_HOSTS, ['docker.io', 'ghcr.io', 'quay.io', 'public.ecr.aws', 'mcr.microsoft.com', 'registry.gitlab.com']);
 });
 
@@ -200,7 +200,7 @@ test('R-LP-10: an image over 2 GB, or with no linux/amd64 image, is not pulled',
   const f = (h) => fakeFetch([server('io.github.acme/box', 'acme/box', [{ registryType: 'oci', identifier: 'quay.io/acme/box:2', transport: { type: 'stdio' } }])], { oci: { 'quay.io': h }, realm: 'https://quay.io/token' });
   const a = await LP.resolveSubject({ subject: 'acme/box', repo: 'acme/box' }, { fetch: f(big.handler) });
   assert.equal(a.detail, 'image_too_large');
-  assert.deepEqual(LP.DETAILS.image_too_large.slice(0, 2), ['policy_excluded', false]);
+  assert.deepEqual(LP.DETAILS.image_too_large, ['too_large', false, 'resolve', 'tool'], 'R-LP-24');
   assert.equal((await LP.resolveSubject({ subject: 'acme/box', repo: 'acme/box' }, { fetch: f(arm.handler) })).detail, 'image_unavailable');
 });
 
@@ -322,7 +322,7 @@ test('R-LP-16: OCI subjects run one at a time, each only with about 4x its image
   assert.deepEqual(summary.map((x) => [x.status, x.detail]), [['graded', null], ['skipped', 'disk_low'], ['skipped', 'disk_low']]);
   assert.deepEqual(LP.DETAILS.disk_low.slice(0, 2), ['upstream_unavailable', true]);
   const meta = JSON.parse(readFileSync(join(w, 'out', '1', 'meta.json'), 'utf8'));
-  assert.deepEqual(meta.skips, [{ stage: 'install', reason: 'upstream_unavailable', evidence: LP.RESULT_PATH, retryable: true }]);
+  assert.deepEqual(meta.skips, [{ stage: 'install', reason: 'upstream_unavailable', fault: 'infra', evidence: LP.RESULT_PATH, retryable: true }]);
   assert.match(readFileSync(join(w, 'out', '0', 'bundle', 'raw', 'telemetry.jsonl'), 'utf8'), /registry\.npmjs\.org/, 'its own run\'s telemetry');
   // The script: free space against four times the declared size, before each image, and the image removed after.
   const sh = readFileSync(join(root, 'corpus', 'live-probe-sandbox.sh'), 'utf8');
@@ -558,12 +558,12 @@ test('live-probe bundle: every item gets a bundle that tool-qa\'s contract and f
   // The skips: codes from tool-qa's list, retryable only for a passing cause.
   const meta = (i) => JSON.parse(readFileSync(join(w, 'out', String(i), 'meta.json'), 'utf8'));
   assert.deepEqual(meta(0).skips, []);
-  assert.deepEqual(meta(1).skips, [{ stage: 'start', reason: 'timeout_start', evidence: LP.RESULT_PATH }]);
-  assert.deepEqual(meta(2).skips, [{ stage: 'resolve', reason: 'no_runnable_artifact', evidence: LP.RESULT_PATH }]);
-  assert.deepEqual(meta(3).skips, [{ stage: 'start', reason: 'upstream_unavailable', evidence: LP.RESULT_PATH, retryable: true }]);
+  assert.deepEqual(meta(1).skips, [{ stage: 'start', reason: 'timeout_start', fault: 'subject', evidence: LP.RESULT_PATH }]);
+  assert.deepEqual(meta(2).skips, [{ stage: 'resolve', reason: 'no_runnable_artifact', fault: 'subject', evidence: LP.RESULT_PATH }]);
+  assert.deepEqual(meta(3).skips, [{ stage: 'start', reason: 'upstream_unavailable', fault: 'infra', evidence: LP.RESULT_PATH, retryable: true }]);
   assert.equal(meta(0).subject.sha, '5e2668aed07efeb61beb2f3761bc3348af2075c3');
   assert.equal(meta(0).tools[1].name, 'isokron-ai/mcp-surface-corpus');
-  assert.match(lines.join('\n'), /item 3: skipped \(shard_deadline, upstream_unavailable, retryable\)/);
+  assert.match(lines.join('\n'), /item 3: skipped \(shard_deadline, upstream_unavailable, infra, retryable\)/);
 });
 
 test('live-probe bundle: the live grade, the static comparison and the field records', () => {
@@ -829,6 +829,70 @@ test('the vendored tool-qa contract is unedited and at the commit WORKER_KIT_REF
   for (const f of vendored.files) assert.equal(createHash('sha256').update(readFileSync(join(root, 'test', 'tool-qa', f.path))).digest('hex'), f.sha256, f.path);
   assert.equal(vendored.commit, /\n  WORKER_KIT_REF: '([0-9a-f]{40})'\n/.exec(wf('live-probe.yml'))[1]);
   for (const r of new Set(Object.values(LP.DETAILS).map((d) => d[0]))) assert.ok(SKIP_REASONS.includes(r), r);
+});
+
+// ------------------------------------------------------------------ explicit skip reasons and faults (gate E)
+
+/** One bundle per detail code, each built from a skipped resolution and judged by tool-qa's contract. */
+function bundleEveryDetail() {
+  const rk = (n) => n.toString(16).padStart(64, '0');
+  const names = Object.keys(LP.DETAILS);
+  const its = names.map((d, i) => ({ index: i, subject: 'acme/s' + i, repo: 'acme/s' + i, run_key: rk(i + 1), fence: i + 1, target_id: null, resolve_ms: 1,
+    resolution: { status: 'skipped', detail: d, registry: null, choice: null, candidates: [], launch: null, subdir: null, seed_packages: 0 } }));
+  const w = workFolder({ items: its });
+  LP.bundleShard({ work: w });
+  const out = {};
+  names.forEach((d, i) => {
+    const dir = join(w, 'out', String(i));
+    const j = judge(dir, its[i]);
+    out[d] = { meta: JSON.parse(readFileSync(join(dir, 'meta.json'), 'utf8')), j, result: JSON.parse(j.files.get(LP.RESULT_PATH).toString('utf8')) };
+  });
+  return out;
+}
+
+test('R-LP-24: an image over our size cap is too_large with fault tool, never policy_excluded', () => {
+  const b = bundleEveryDetail().image_too_large;
+  assert.deepEqual(b.meta.skips, [{ stage: 'resolve', reason: 'too_large', fault: 'tool', evidence: LP.RESULT_PATH }]);
+  assert.ok(b.j.v.ok, JSON.stringify(b.j.v.errors));
+  assert.deepEqual(resultFault(b.j.manifest.skips), { fault: 'tool', coverage: 'unassessed_tool', faults: { tool: 1 } });
+  assert.equal(b.result.skip_reason, 'too_large');
+  assert.equal(b.result.fault, 'tool');
+});
+
+test('R-LP-25: an OCI host off our allowlist is our gap (no_runnable_artifact, fault tool), not an exclusion', () => {
+  const b = bundleEveryDetail().oci_host_not_allowed;
+  assert.deepEqual(b.meta.skips, [{ stage: 'resolve', reason: 'no_runnable_artifact', fault: 'tool', evidence: LP.RESULT_PATH }]);
+  assert.ok(b.j.v.ok, JSON.stringify(b.j.v.errors));
+  assert.equal(resultFault(b.j.manifest.skips).coverage, 'unassessed_tool', 'counted as unassessed on our side, not excluded');
+  assert.equal(b.result.fault, 'tool');
+});
+
+test('R-LP-26: a harness failure is tool_error with fault tool (retryable), not upstream_unavailable', () => {
+  const all = bundleEveryDetail();
+  const b = all.harness_error;
+  assert.deepEqual(b.meta.skips, [{ stage: 'start', reason: 'tool_error', fault: 'tool', evidence: LP.RESULT_PATH, retryable: true }]);
+  assert.ok(b.j.v.ok, JSON.stringify(b.j.v.errors));
+  assert.equal(resultFault(b.j.manifest.skips).fault, 'tool');
+  // An unknown detail falls back to the same record.
+  assert.deepEqual(LP.DETAILS.harness_error.slice(0, 2), ['tool_error', true]);
+  // The engine refusing a list is our error too.
+  assert.deepEqual(all.list_rejected.meta.skips, [{ stage: 'grade', reason: 'tool_error', fault: 'tool', evidence: LP.RESULT_PATH }]);
+});
+
+test('R-LP-27: every skip names its fault explicitly, tool-qa allows that fault for its reason, and no limit of ours is policy or infra', () => {
+  const all = bundleEveryDetail();
+  for (const [d, [reason, , , fault]] of Object.entries(LP.DETAILS)) {
+    const { meta, j, result } = all[d];
+    assert.equal(meta.skips.length, 1, d);
+    assert.equal(meta.skips[0].reason, reason, d);
+    assert.equal(meta.skips[0].fault, fault, d + ': fault is set on the skip');
+    assert.ok(SKIP_FAULTS[reason].allowed.includes(fault), d + ': ' + fault + ' is allowed for ' + reason);
+    assert.ok(j.v.ok, d + ' ' + JSON.stringify(j.v.errors));
+    assert.equal(result.fault, fault, d);
+  }
+  // Our own limits and errors: tool, and none under policy_excluded.
+  for (const d of ['bad_subject', 'unsupported_package', 'unverified_registry_entry', 'oci_host_not_allowed', 'image_too_large', 'launch_invalid', 'unsupported_transport', 'install_timeout', 'list_rejected', 'harness_error', 'sandbox_evidence_missing']) assert.equal(LP.DETAILS[d][3], 'tool', d);
+  assert.ok(!Object.values(LP.DETAILS).some((x) => x[0] === 'policy_excluded'), 'this lane never excludes by policy');
 });
 
 test('live-probe docs exist and name the fixtures', () => {

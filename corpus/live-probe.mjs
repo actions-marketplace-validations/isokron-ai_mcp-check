@@ -92,33 +92,40 @@ const REGISTRY_CAP = 4 * 1024 * 1024;
 
 /**
  * Why an item has no live grade: our detail code, the tool-qa skip reason (worker-kit/contract.mjs SKIP_REASONS) it is
- * recorded with, whether it is retryable, and the stage. results/ keeps the detail.
+ * recorded with, whether it is retryable, the stage, and the fault side (SKIP_FAULTS: tool, subject, infra or policy).
+ * results/ keeps the detail. R-LP-24..27: our own limits and errors have reasons of their own and fault "tool", never
+ * policy_excluded (which reads as a deliberate exclusion, not a coverage gap) and never upstream_unavailable (which
+ * reads as somebody else's outage). Only what the subject itself did (no package, a failing install, a server that
+ * will not start, one that needs credentials) is the subject's, and only a rate limit or an outage is infra.
  */
 export const DETAILS = Object.freeze({
-  bad_subject: ['no_runnable_artifact', false, 'resolve'],
-  no_package: ['no_runnable_artifact', false, 'resolve'],
-  unsupported_package: ['no_runnable_artifact', false, 'resolve'],
-  private_registry: ['no_runnable_artifact', false, 'resolve'],
-  unverified_registry_entry: ['no_runnable_artifact', false, 'resolve'],
-  oci_host_not_allowed: ['policy_excluded', false, 'resolve'],
-  image_too_large: ['policy_excluded', false, 'resolve'],
-  launch_invalid: ['no_runnable_artifact', false, 'resolve'],
-  remote_only: ['remote_only', false, 'resolve'],
-  unsupported_transport: ['unsupported_transport', false, 'resolve'],
-  image_unavailable: ['install_failed_registry', false, 'install'],
-  install_failed: ['install_failed_registry', false, 'install'],
-  install_timeout: ['install_failed_registry', false, 'install'],
-  needs_credentials: ['start_requires_credentials', false, 'start'],
-  start_failed: ['timeout_start', false, 'start'],
-  start_timeout: ['timeout_start', false, 'start'],
-  list_failed: ['timeout_start', false, 'list'],
-  list_rejected: ['no_runnable_artifact', false, 'grade'],
-  rate_limited: ['rate_limited', true, 'resolve'],
-  upstream_error: ['upstream_unavailable', true, 'resolve'],
-  harness_error: ['upstream_unavailable', true, 'start'],
-  shard_deadline: ['upstream_unavailable', true, 'start'],
-  sandbox_evidence_missing: ['trace_unavailable', true, 'start'],
-  disk_low: ['upstream_unavailable', true, 'install'],
+  bad_subject: ['no_runnable_artifact', false, 'resolve', 'tool'], // not a GitHub owner/name: this lane reads GitHub only
+  no_package: ['no_runnable_artifact', false, 'resolve', 'subject'],
+  unsupported_package: ['no_runnable_artifact', false, 'resolve', 'tool'], // cargo, NuGet, MCPB: we cannot run them yet
+  private_registry: ['no_runnable_artifact', false, 'resolve', 'subject'],
+  unverified_registry_entry: ['no_runnable_artifact', false, 'resolve', 'tool'], // our provenance checks stop short of it
+  // Our allowlist of OCI hosts (sandbox egress is deny by default). A deliberate safety choice, but it is a limit of
+  // ours, not a statement about the server: recorded as a gap of ours (tool), so it counts as unassessed and is not
+  // hidden as an exclusion. no_runnable_artifact is the one reason that fits: there is no artifact we can run.
+  oci_host_not_allowed: ['no_runnable_artifact', false, 'resolve', 'tool'],
+  image_too_large: ['too_large', false, 'resolve', 'tool'], // over our 2 GB image cap
+  launch_invalid: ['no_runnable_artifact', false, 'resolve', 'tool'], // the entry's package id failed our own name check
+  remote_only: ['remote_only', false, 'resolve', 'subject'],
+  unsupported_transport: ['unsupported_transport', false, 'resolve', 'tool'],
+  image_unavailable: ['install_failed_registry', false, 'install', 'subject'],
+  install_failed: ['install_failed_registry', false, 'install', 'subject'],
+  install_timeout: ['install_failed_registry', false, 'install', 'tool'], // our install time limit
+  needs_credentials: ['start_requires_credentials', false, 'start', 'subject'],
+  start_failed: ['timeout_start', false, 'start', 'subject'],
+  start_timeout: ['timeout_start', false, 'start', 'subject'],
+  list_failed: ['timeout_start', false, 'list', 'subject'],
+  list_rejected: ['tool_error', false, 'grade', 'tool'], // our engine refused the list it was given
+  rate_limited: ['rate_limited', true, 'resolve', 'infra'],
+  upstream_error: ['upstream_unavailable', true, 'resolve', 'infra'],
+  harness_error: ['tool_error', true, 'start', 'tool'], // our driver or bundle step failed; tried again, then accepted as a gap
+  shard_deadline: ['upstream_unavailable', true, 'start', 'infra'],
+  sandbox_evidence_missing: ['trace_unavailable', true, 'start', 'tool'],
+  disk_low: ['upstream_unavailable', true, 'install', 'infra'], // the runner's disk
 });
 
 /** The fields this lane writes, with their types in mcp-results fields/registry.yaml (at tool-qa's pinned commit). */
@@ -1122,7 +1129,7 @@ export function buildItem(item, ctx) {
   const r = item.resolution;
   const lines = [obs('subject_id', item.subject)];
   const result = {
-    format: FORMAT, lane: LANE, subject: item.subject, status: null, detail: null, skip_reason: null, retryable: false,
+    format: FORMAT, lane: LANE, subject: item.subject, status: null, detail: null, skip_reason: null, fault: null, retryable: false,
     engine_version: VERSION, rubric_version: M.RUBRIC_VERSION, spec_version: M.SPEC_VERSION,
     install: null, unverified: null, live: null, static_vs_live: null, timing: { resolve_ms: int(item.resolve_ms) }, sandbox: ctx.sandboxSummary,
     driver: null, oracles: null, raw_truncated: [],
@@ -1235,12 +1242,12 @@ export function buildItem(item, ctx) {
   lines.push(obs('runner_env', ctx.runnerEnv, 'the sandbox wrote no shard record'));
   lines.push(obs('our_tool_versions', ctx.toolVersions));
   if (detail) {
-    const [reason, retryable, stage] = DETAILS[detail] || DETAILS.harness_error;
-    result.status = 'skipped'; result.detail = detail; result.skip_reason = reason; result.retryable = retryable;
+    const [reason, retryable, stage, fault] = DETAILS[detail] || DETAILS.harness_error;
+    result.status = 'skipped'; result.detail = detail; result.skip_reason = reason; result.fault = fault; result.retryable = retryable;
     lines.push(obs('error_taxonomy_code', detail));
     files[RESULT_PATH] = json(result);
     files['observations/live.ndjson'] = lines.join('\n') + '\n';
-    return { status: 'skipped', detail, files, skips: [{ stage, reason, evidence: RESULT_PATH, ...(retryable ? { retryable: true } : {}) }], subjectSha, components: oracle.components };
+    return { status: 'skipped', detail, files, skips: [{ stage, reason, fault, evidence: RESULT_PATH, ...(retryable ? { retryable: true } : {}) }], subjectSha, components: oracle.components };
   }
   result.status = 'graded';
   files[RESULT_PATH] = json(result);
@@ -1430,7 +1437,7 @@ export function bundleShard({ work, now = () => new Date(), log = () => {}, know
     };
     writeFileSync(join(dir, 'meta.json'), json(meta));
     summary.push({ index: item.index, status: b.status, detail: b.detail });
-    log('item ' + item.index + ': ' + b.status + (b.detail ? ' (' + b.detail + ', ' + DETAILS[b.detail][0] + (DETAILS[b.detail][1] ? ', retryable' : '') + ')' : ''));
+    log('item ' + item.index + ': ' + b.status + (b.detail ? ' (' + b.detail + ', ' + DETAILS[b.detail][0] + ', ' + DETAILS[b.detail][3] + (DETAILS[b.detail][1] ? ', retryable' : '') + ')' : ''));
   }
   return summary;
 }
