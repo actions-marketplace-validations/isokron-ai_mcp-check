@@ -270,7 +270,7 @@ test('R-AE-16: the first score on the labelled servers: nothing the check calls 
   assert.ok(w.code_lenient.tp >= 19 && w.code_lenient.recall.p >= 0.5, 'recall ' + JSON.stringify(w.code_lenient.recall));
   assert.equal(res.summary['annot-code-deletes-marked-safe'].code_lenient.fp, 0);
   const missed = res.rows.filter((r) => r.checks['annot-code-writes-marked-readonly'].positive && !r.checks['annot-code-writes-marked-readonly'].attention && !r.label.ambiguous).map((r) => r.key).sort();
-  assert.deepEqual(missed, ['py-fastmcp/bill_user', 'py-sinks/aiohttp_patch', 'py-sinks/deep_write', 'py-sinks/httpx_put', 'py-sinks/open_append', 'py-sinks/requests_post', 'py-sinks/sdk_may', 'py-sinks/table_dispatch', 'ts-mixed/export_report', 'ts-sinks/axios_post', 'ts-sinks/callback_write', 'ts-sinks/deep_write', 'ts-sinks/fetch_put', 'ts-sinks/fs_append', 'ts-sinks/fs_mkdir', 'ts-sinks/table_dispatch'], 'POST/PUT/PATCH and housekeeping-shaped writes and opaque clients (advice only), callbacks, depth, and a table of functions');
+  assert.deepEqual(missed, ['py-fastmcp/bill_user', 'py-sinks/aiohttp_patch', 'py-sinks/deep_write', 'py-sinks/httpx_put', 'py-sinks/open_append', 'py-sinks/requests_post', 'py-sinks/sdk_may', 'py-sinks/table_dispatch', 'ts-mixed/export_report', 'ts-sinks/axios_post', 'ts-sinks/callback_write', 'ts-sinks/deep_write', 'ts-sinks/exec_rm', 'ts-sinks/fetch_put', 'ts-sinks/fs_append', 'ts-sinks/fs_mkdir', 'ts-sinks/table_dispatch'], 'POST/PUT/PATCH and housekeeping-shaped writes and opaque clients (advice only), callbacks, depth, a table of functions, and a constant command no argument reaches (R-AE-31)');
   assert.deepEqual(res.summary.not_analysed, []);
 });
 
@@ -421,4 +421,184 @@ test('R-AE-29: a SQL or ORM write is definite only when an argument reaches the 
   const py = (body) => snippet(PY(body), 't').effects.write[0].confidence;
   assert.equal(py('db.execute("INSERT INTO visits VALUES (1)")'), 'may');
   assert.equal(py('db.execute("INSERT INTO visits VALUES (?)", (p,))'), 'definite');
+});
+
+test('R-AE-30: a process run through a guard wrapper takes its program and arguments from the callers; a command that is still not a literal and not from the arguments is "may"', () => {
+  // QA-40 repro r1 (k8s-flux159@f93604a20e388a08caac548c380cde8a5c532d5c): runSafe(file, args) calls execFileSync(file, args); every caller passes "kubectl" and a literal sub-command.
+  const wrap = "import { execFileSync } from 'child_process';\nfunction runSafe(file: string, args: string[]): string {\n  return execFileSync(file, args, { encoding: 'utf8' });\n}\n";
+  const reg = (body) => ({ 'index.ts': wrap + "server.registerTool('t', { description: 'd', inputSchema: {}, annotations: { readOnlyHint: true } }, async ({ resource }) => {\n" + body + "\n});\n" });
+  const ro = snippet(reg("const out = runSafe('kubectl', ['explain', resource]);\nreturn out;"), 't');
+  assert.deepEqual(ro.effects.exec, [], 'kubectl explain through the wrapper is a read');
+  assert.deepEqual(ro.effects.read.filter((e) => e.sink === 'exec.readonly').map((e) => e.note), ['kubectl explain']);
+  // two wrappers deep, with the literals in local variables and flags pushed later (k8s-flux159 explain_resource)
+  const deep = snippet({ 'index.ts': wrap + "const run = (command: string, args: string[]) => runSafe(command, args);\nserver.registerTool('t', { description: 'd', inputSchema: {}, annotations: { readOnlyHint: true } }, async (params) => {\n  const command = 'kubectl';\n  const args = ['api-resources'];\n  if (params.output) { args.push('-o', params.output); }\n  return run(command, args);\n});\n" }, 't');
+  assert.deepEqual(deep.effects.exec, []);
+  // positive controls: a literal sub-command that writes, with an argument in the argv, stays definite
+  const w = snippet(reg("return runSafe('kubectl', ['delete', 'pod', resource]);"), 't');
+  assert.deepEqual(w.effects.exec.map((e) => [e.sink, e.confidence]), [['exec.execFileSync', 'definite']]);
+  // the command itself comes from the tool's arguments: definite
+  const shell = snippet(TS("execSync(a.command);"), 't');
+  assert.deepEqual(shell.effects.exec.map((e) => e.confidence), ['definite']);
+  // a program nobody passes as a literal and the arguments do not name: may, worded as such
+  const opaque = snippet({ 'index.ts': wrap + "server.registerTool('t', { description: 'd', inputSchema: {}, annotations: { readOnlyHint: true } }, async ({ resource }) => {\n  return runSafe(process.env.TOOL_BIN, ['x', resource]);\n});\n" }, 't');
+  assert.deepEqual(opaque.effects.exec.map((e) => [e.confidence, e.note]), [['may', 'command is not a literal']]);
+});
+
+test('R-AE-31: an exec that no argument of the tool reaches is "may", and so is everything after an early return the arguments do not decide', () => {
+  // QA-40 repro r2 (mysql-designcomputer@943ce83816372a03e5872be5424ebfcf252aa5ac get_schema_info, get_table_sample): an SSH tunnel built from the environment,
+  // after `if not ssh: yield; return` in a context manager.
+  const r2 = { 'server.py': 'import os\nimport subprocess\nfrom contextlib import contextmanager\n\n@contextmanager\ndef maybe_tunnel():\n    if os.getenv("USE_SSH", "false") != "true":\n        yield "127.0.0.1"\n        return\n    proc = subprocess.Popen(["ssh", "-N", "-L", "3330:localhost:3306", os.getenv("SSH_HOST")])\n    try:\n        yield "127.0.0.1"\n    finally:\n        proc.terminate()\n\n@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))\ndef t(table: str) -> str:\n    with maybe_tunnel() as host:\n        return f"SELECT * FROM {table} LIMIT 5 on {host}"\n' };
+  const tun = snippet(r2, 't');
+  assert.deepEqual(tun.effects.exec.map((e) => [e.sink, e.confidence]), [['exec.subprocess.Popen', 'may']]);
+  assert.match(tun.effects.exec[0].note, /does not come from the tool's arguments/);
+  // a literal command with no argument in it, on the straight-line path: may (TS and Python)
+  assert.deepEqual(snippet(TS("execSync('git pull --rebase');"), 't').effects.exec.map((e) => e.confidence), ['may']);
+  assert.deepEqual(snippet(PY('subprocess.run(["make", "clean"])'), 't').effects.exec.map((e) => e.confidence), ['may']);
+  // positive controls: the tool's argument reaches the argv, directly or through a list built up with append/push
+  assert.deepEqual(snippet(PY('subprocess.run(["git", "checkout", p])'), 't').effects.exec.map((e) => e.confidence), ['definite']);
+  assert.deepEqual(snippet(PY('cmd = ["git", "branch", "-D"]\ncmd.append(p)\nsubprocess.run(cmd)'), 't').effects.exec.map((e) => e.confidence), ['definite']);
+  assert.deepEqual(snippet(TS("const argv = ['rm'];\nargv.push(a.path);\nexecFileSync('rm', argv);", "import { execFileSync } from 'node:child_process';"), 't').effects.exec.map((e) => e.confidence), ['definite']);
+  // early return: decided by the environment, the rest of the function is conditional; decided by an argument, it is not
+  const envGuard = snippet(PY('if not os.getenv("ALLOW"):\n    return "off"\nos.remove(p)'), 't');
+  assert.deepEqual(envGuard.effects.delete.map((e) => [e.confidence, e.note]), [['may', 'on a conditional path']]);
+  const argGuard = snippet(PY('if not p:\n    return "no path"\nos.remove(p)'), 't');
+  assert.deepEqual(argGuard.effects.delete.map((e) => e.confidence), ['definite']);
+  const jsEnv = snippet(TS("if (!process.env.ALLOW) return 'off';\nfs.rmSync(a.path);"), 't');
+  assert.deepEqual(jsEnv.effects.delete.map((e) => e.confidence), ['may']);
+  const jsArg = snippet(TS("if (!a.path) { return 'no path'; }\nfs.rmSync(a.path);"), 't');
+  assert.deepEqual(jsArg.effects.delete.map((e) => e.confidence), ['definite']);
+});
+
+test('R-AE-32: deleting a file the same function wrote, directly or through a callee given the same value, is housekeeping ("may"); so is a pending, spool, queue, outbox or staging path', () => {
+  // QA-40 repro r3 (reg-fabric-verify-mcp@39ca1ba34fddd6a77187d81183d99e037c98d49c record_action, record_event): write a pending record, POST it, remove it.
+  const reg = (body, extra = '') => ({ 'index.ts': "import { writeFileSync, renameSync, rmSync } from 'fs';\nimport { join } from 'path';\nconst HOME = process.env.APP_HOME || '/var/lib/app';\n" + extra + "\nserver.registerTool('t', { description: 'd', inputSchema: {}, annotations: { readOnlyHint: false, destructiveHint: false } }, async ({ key, text }) => {\n" + body + "\n});\n" });
+  const r3 = snippet(reg("const pPath = join(HOME, 'pending', key + '.json');\nwriteFileSync(pPath, text);\nawait fetch('https://api.example.com/v1/log/append', { method: 'POST', body: text });\nrmSync(pPath, { force: true });"), 't');
+  assert.deepEqual(r3.effects.delete.map((e) => e.confidence), ['may']);
+  // the own-write rule alone, on a path with no housekeeping word, through a callee (writePrivate in fabric.js)
+  const helper = "function writePrivate(path: string, data: string) {\n  const tmp = path + '.part';\n  writeFileSync(tmp, data);\n  renameSync(tmp, path);\n}\n";
+  const own = snippet(reg("const out = join(HOME, key + '.json');\nwritePrivate(out, text);\nawait fetch('https://api.example.com/v1/append', { method: 'POST', body: text });\nrmSync(out, { force: true });", helper), 't');
+  assert.deepEqual(own.effects.delete.map((e) => [e.confidence, e.note]), [['may', 'removes a file this function wrote']]);
+  const direct = snippet(reg("const out = join(HOME, key + '.json');\nwriteFileSync(out, text);\nrmSync(out);"), 't');
+  assert.deepEqual(direct.effects.delete.map((e) => e.confidence), ['may']);
+  // positive controls: a file the function did not write stays definite, and so does a different path than the one written
+  const other = snippet(reg("const out = join(HOME, key + '.json');\nconst old = join(HOME, key + '.bak');\nwriteFileSync(out, text);\nrmSync(old);"), 't');
+  assert.deepEqual(other.effects.delete.map((e) => e.confidence), ['definite']);
+  const plain = snippet(reg("rmSync(join(HOME, key));"), 't');
+  assert.deepEqual(plain.effects.delete.map((e) => e.confidence), ['definite']);
+  // the housekeeping words
+  for (const w of ['pending', 'spool', 'queue', 'outbox', 'staging']) {
+    const t = snippet(reg("rmSync(join(HOME, '" + w + "', key));"), 't');
+    assert.deepEqual(t.effects.delete.map((e) => e.confidence), ['may'], w);
+  }
+});
+
+test('R-AE-30b: a guard wrapper reached from a second caller with different literals is walked again, never dropped (a read first, then a delete)', () => {
+  // review of PR 48: the visited key ignored the literals, so runSafe('kubectl', ['get', ...]) hid runSafe('kubectl', ['delete', ...]).
+  const wrap = "import { execFileSync } from 'child_process';\nfunction runSafe(file: string, args: string[]): string {\n  return execFileSync(file, args, { encoding: 'utf8' });\n}\n";
+  const reg = (body) => ({ 'index.ts': wrap + "server.registerTool('t', { description: 'd', inputSchema: {}, annotations: { readOnlyHint: true } }, async ({ r }) => {\n" + body + "\n});\n" });
+  const arg = snippet(reg("runSafe('kubectl', ['get', 'pods']);\nreturn runSafe('kubectl', ['delete', 'pod', r]);"), 't');
+  assert.deepEqual(arg.effects.exec.map((e) => [e.sink, e.confidence]), [['exec.execFileSync', 'definite']]);
+  const lit = snippet(reg("runSafe('kubectl', ['get', 'pods']);\nreturn runSafe('kubectl', ['delete', 'pod', 'x']);"), 't');
+  assert.equal(lit.effects.exec.length, 1, 'the second caller is reported, not dropped');
+  assert.match(lit.effects.exec[0].note, /kubectl delete/);
+  // the same wrapper reached twice with the same literals is still walked once
+  const same = snippet(reg("runSafe('kubectl', ['get', 'pods']);\nreturn runSafe('kubectl', ['get', 'pods']);"), 't');
+  assert.deepEqual(same.effects.exec, []);
+  // more variants than the bound: still reported (may or definite), not silently lost
+  const many = snippet(reg(Array.from({ length: 12 }, (_, i) => "runSafe('kubectl', ['get', 'p" + i + "']);").join('\n') + "\nreturn runSafe('kubectl', ['delete', 'pod', r]);"), 't');
+  assert.ok(many.effects.exec.length >= 1);
+});
+
+test('R-AE-32b: a copy writes its destination, not its source, so deleting the source after the copy stays definite, directly or through a helper', () => {
+  // review of PR 48: shutil.copy(src, dst); os.remove(src) marked src as "written by this function".
+  const direct = snippet(PY('shutil.copy(p, "/tmp/x")\nos.remove(p)'), 't');
+  assert.deepEqual(direct.effects.delete.map((e) => e.confidence), ['definite']);
+  const mv = snippet(PY('os.rename(p, "/tmp/x")\nos.remove(p)'), 't');
+  assert.deepEqual(mv.effects.delete.map((e) => e.confidence), ['definite']);
+  const viaHelper = snippet({ 'server.py': "import os, shutil\n\ndef copy_it(a, b):\n    shutil.copy(a, b)\n\n@mcp.tool()\ndef t(src: str, dst: str) -> str:\n    copy_it(src, dst)\n    os.remove(src)\n    return 'ok'\n" }, 't');
+  assert.deepEqual(viaHelper.effects.delete.map((e) => e.confidence), ['definite']);
+  const viaOpen = snippet({ 'server.py': "import os\n\ndef copy_it(a, b):\n    with open(b, 'w') as f:\n        f.write(open(a).read())\n\n@mcp.tool()\ndef t(src: str, dst: str) -> str:\n    copy_it(src, dst)\n    os.remove(src)\n    return 'ok'\n" }, 't');
+  assert.deepEqual(viaOpen.effects.delete.map((e) => e.confidence), ['definite']);
+  // positive control: deleting the destination just written is still housekeeping
+  const dstDel = snippet(PY('dst = os.path.join("/tmp", "x")\nshutil.copy(p, dst)\nos.remove(dst)'), 't');
+  assert.deepEqual(dstDel.effects.delete.map((e) => e.confidence), ['may']);
+  // known recall loss (recorded, accepted): a housekeeping word in the path (pending, spool, queue, outbox, staging) turns a
+  // real delete such as delete_queue_item into "may"
+  const known = snippet(TS("fs.rmSync('/data/queue/' + a.id);"), 't');
+  assert.deepEqual(known.effects.delete.map((e) => e.confidence), ['may']);
+});
+
+test('R-AE-31b: an early return decided by a local flag or a lookup (not the environment or configuration) does not make the rest conditional', () => {
+  const flag = snippet(PY('ready = os.path.exists("/x")\nif not ready:\n    return "no"\nos.remove(p)'), 't');
+  assert.deepEqual(flag.effects.delete.map((e) => e.confidence), ['definite']);
+  const jsFlag = snippet(TS("const ok = fs.existsSync('/x');\nif (!ok) return 'no';\nfs.rmSync(a.path);"), 't');
+  assert.deepEqual(jsFlag.effects.delete.map((e) => e.confidence), ['definite']);
+  const cfg = snippet(PY('if not config.enabled:\n    return "off"\nos.remove(p)'), 't');
+  assert.deepEqual(cfg.effects.delete.map((e) => e.confidence), ['may']);
+});
+
+test('R-AE-33: a client returned by a factory, held in an attribute or annotated is recognised; a Redis command is definite only when an argument reaches it, any other client verb is "may"', () => {
+  // QA-40 repro r4 (redis-py@69e0181d92cdc81acdb9fa7cc62b5597f5ec3850 delete): r = get_connection() from another module, which returns redis.Redis(...)
+  const r4 = { 'conn.py': 'import redis\n\n\ndef get_connection():\n    return redis.Redis(host="localhost")\n', 'server.py': 'from mcp.server.fastmcp import FastMCP\n\nfrom .conn import get_connection\n\nmcp = FastMCP("r4")\n\n\n@mcp.tool()\ndef t(key: str) -> str:\n    r = get_connection()\n    return str(r.delete(key))\n' };
+  const del = snippet(r4, 't');
+  assert.deepEqual(del.effects.delete.map((e) => [e.sink, e.confidence]), [['client.redis.delete', 'definite']]);
+  // a factory known only by its return annotation (a classmethod of a connection manager)
+  const ann = { 'conn.py': 'from redis import Redis\n\nclass Manager:\n    _instance = None\n\n    @classmethod\n    def get_connection(cls) -> Redis:\n        return cls._instance\n', 'server.py': 'from .conn import Manager\n\n@mcp.tool()\ndef t(name: str, value: str) -> str:\n    r = Manager.get_connection()\n    return str(r.lpush(name, value))\n' };
+  assert.deepEqual(snippet(ann, 't').effects.write.map((e) => [e.sink, e.confidence]), [['client.redis.lpush', 'definite']]);
+  // an attribute: self.client = redis.Redis(...) in __init__
+  const attr = { 'server.py': 'import redis\n\nclass Store:\n    def __init__(self):\n        self.client = redis.Redis()\n\n    def drop(self, key):\n        self.client.delete(key)\n\nstore = Store()\n\n@mcp.tool()\ndef t(key: str) -> str:\n    store.drop(key)\n    return "ok"\n' };
+  assert.deepEqual(snippet(attr, 't').effects.delete.map((e) => [e.sink, e.confidence]), [['client.redis.delete', 'definite']]);
+  // a key that does not come from the tool's arguments: may
+  const fixed = { ...r4, 'server.py': r4['server.py'].replace('r.delete(key)', 'r.delete("session:last")') };
+  assert.deepEqual(snippet(fixed, 't').effects.delete.map((e) => e.confidence), ['may']);
+  // another library's client, from a factory with a return annotation, and an object obtained from it: may
+  const dock = { 'server.py': 'import docker\n\ndef _client(ctx) -> docker.DockerClient:\n    return ctx.request_context.lifespan_context.docker\n\n@mcp.tool()\ndef t(ctx, volume_name: str) -> str:\n    volume = _client(ctx).volumes.get(volume_name)\n    volume.remove(force=True)\n    return "ok"\n' };
+  assert.deepEqual(snippet(dock, 't').effects.delete.map((e) => [e.sink, e.confidence]), [['client.docker.remove', 'may']]);
+  const aws = { 'utils.py': 'import boto3\nfrom botocore.client import BaseClient\n\ndef get_client(region) -> BaseClient:\n    return boto3.client("s3tables", region_name=region)\n', 'server.py': 'from .utils import get_client\n\n@mcp.tool()\ndef t(arn: str, ns: str) -> dict:\n    client = get_client(None)\n    return client.create_namespace(tableBucketARN=arn, namespace=[ns])\n' };
+  assert.deepEqual(snippet(aws, 't').effects.write.map((e) => [e.sink, e.confidence]), [['client.aws.create_namespace', 'may']]);
+  // not a client: a local dict, and a repository class imported by an absolute module path
+  assert.deepEqual(snippet(PY('d = {}\nd.update(x=p)\nd.pop("x")'), 't').effects.write, []);
+  const local = { 'pkg/store.py': 'class Store:\n    def delete(self, key):\n        return key\n', 'server.py': 'from pkg.store import Store\n\n@mcp.tool()\ndef t(key: str) -> str:\n    s = Store()\n    return s.delete(key)\n' };
+  const lt = snippet(local, 't');
+  assert.deepEqual(lt.effects.delete.filter((e) => /^client\./.test(e.sink)), [], 'a repository class is followed, not guessed');
+});
+
+test('R-AE-34: opening a file for append and writing nothing through it is a writability check, not a definite write; a keyword argument is not the mode', () => {
+  // Found by the QA-40 re-run of this patch: word-gongrzhe@a3bbbb6d6167e68cf855d73ef7dc6cd8cfbfedba check_file_writeable() does `with open(filepath, 'a'): pass`.
+  const w = (body) => snippet(PY(body), 't').effects.write.map((e) => [e.confidence, e.note]);
+  assert.deepEqual(w("try:\n    with open(p, 'a'):\n        pass\n    return True\nexcept IOError:\n    return False"), [['may', 'opens for append and writes nothing (a writability check)']]);
+  assert.deepEqual(w("with open(p, 'a') as f:\n    n = 1\nreturn n"), [['may', 'opens for append and writes nothing (a writability check)']]);
+  // positive controls: a write through the handle, print(file=f), truncation by 'w', and a handle kept open
+  assert.deepEqual(w("with open(p, 'a') as f:\n    f.write('x')"), [['definite', 'mode a']]);
+  assert.deepEqual(w("with open(p, 'a') as f:\n    print('x', file=f)"), [['definite', 'mode a']]);
+  assert.deepEqual(w("with open(p, 'w'):\n    pass"), [['definite', 'mode w']]);
+  assert.deepEqual(w("f = open(p, 'a')\nf.write('x')"), [['definite', 'mode a']]);
+  // a keyword argument in second place is not the mode (jupyter-datalayer cell_ids.py: open(path, encoding="utf-8"))
+  assert.deepEqual(w('with open(p, encoding="utf-8") as h:\n    return h.read()'), []);
+  assert.deepEqual(w('with open(p, encoding="utf-8", mode="w") as h:\n    h.write("x")'), [['definite', 'mode w']]);
+});
+
+test('R-AE-35: from pkg import mod, then mod.fn(), is followed into pkg/mod.py when pkg/__init__.py does not define fn', () => {
+  // QA-40 misses in aws-s3tables@a760620171c17f7c5c08fcfefbc9b0747727cd6a: server.py imports the submodule `namespaces` from its package and calls
+  // namespaces.create_namespace(...); the call stopped at the package's __init__.py.
+  const files = { 'pkg/__init__.py': '__version__ = "1"\n', 'pkg/ops.py': 'import os\n\ndef remove(path):\n    os.remove(path)\n', 'pkg/server.py': 'from pkg import ops\n\n@mcp.tool()\ndef t(path: str) -> str:\n    ops.remove(path)\n    return "ok"\n' };
+  const t = Fx.analyse(new Map(Object.entries(files)), [{ path: 'pkg/server.py', line: 1, tool: { name: 't' } }]).tools.t;
+  assert.deepEqual(t.effects.delete.map((e) => [e.sink, e.file, e.confidence]), [['fs.os.remove', 'pkg/ops.py', 'definite']]);
+  // a function the package's __init__.py defines is still taken from there
+  const init = { ...files, 'pkg/__init__.py': 'import shutil\n\ndef ops_remove(path):\n    shutil.rmtree(path)\n' };
+  const t2 = Fx.analyse(new Map(Object.entries({ ...init, 'pkg/server.py': 'import pkg\n\n@mcp.tool()\ndef t(path: str) -> str:\n    pkg.ops_remove(path)\n    return "ok"\n' })), [{ path: 'pkg/server.py', line: 1, tool: { name: 't' } }]).tools.t;
+  assert.deepEqual(t2.effects.delete.map((e) => e.sink), ['fs.shutil.rmtree']);
+});
+
+test('R-AE-36: Python tuple unpacking carries an argument, so a guard on its result is validation, not a mode', () => {
+  // Found by checking what the early-return rule (R-AE-31) cost on the QA-40 repos: word-gongrzhe@a3bbbb6d6167e68cf855d73ef7dc6cd8cfbfedba protect_document does
+  // `is_writeable, error_message = check_file_writeable(filename)`, `if not is_writeable: return ...`, then writes filename.
+  const head = 'def check(path):\n    return os.access(path, os.W_OK), ""\n';
+  const t = snippet(PY('ok, msg = check(p)\nif not ok:\n    return msg\nos.remove(p)', head), 't');
+  assert.deepEqual(t.effects.delete.map((e) => e.confidence), ['definite']);
+  const paren = snippet(PY('(ok, msg) = check(p)\nif not ok:\n    return msg\nos.remove(p)', head), 't');
+  assert.deepEqual(paren.effects.delete.map((e) => e.confidence), ['definite']);
+  // a tuple that no argument reaches still makes the guard a mode switch
+  const env = snippet(PY('on, why = os.getenv("A"), os.getenv("B")\nif not on:\n    return why\nos.remove(p)'), 't');
+  assert.deepEqual(env.effects.delete.map((e) => e.confidence), ['may']);
 });

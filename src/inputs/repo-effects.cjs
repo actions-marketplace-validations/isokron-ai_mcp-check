@@ -464,7 +464,8 @@
           if (chain.length === 2) {
             let r = inFile(Q, second).map((f) => ({ P: Q, f })); if (r.length) return r;
             if (t.im.name !== '*' && t.im.name !== 'default') { const nm = t.im.name; r = methodsOf(Q, nm, second); if (r.length) return r; }
-            // from pkg import mod  ->  pkg/mod.py
+            // from pkg import mod  ->  pkg/mod.py, when pkg/__init__.py does not define the function
+            if (P.lang === 'py' && t.im.name !== '*') { const sub = R.resolvePy(P.path, t.im.spec + '.' + t.im.name); const Q2 = sub && sub !== t.file ? R.get(sub) : null; if (Q2) { r = inFile(Q2, second).map((f) => ({ P: Q2, f })); if (r.length) return r; } }
             return [];
           }
           if (Q.classes.some((c) => c.name === second)) return methodsOf(Q, second, chain[2]);
@@ -694,9 +695,10 @@
   // Bookkeeping files: logs, audit trails, metrics, state, caches, locks, pid files, temporary files. A write to one of
 // these is "may": it is the server's own housekeeping, not the data the tool is about. Words in snake_case, dotted and
 // camelCase names.
-const BOOK_WORD = /(?:^|[^A-Za-z])(?:log|logs|logging|audit|metric|metrics|state|cache|caches|lock|locks|pid|tmp|temp|scratch|history|journal|telemetry|trace|traces)(?:[^a-z]|$)/;
-const BOOK_CAMEL = /[a-z0-9](?:Log|Audit|Metric|State|Cache|Lock|Pid|Tmp|Temp|Scratch|History|Journal|Telemetry|Trace)(?:[^a-z]|$)/;
+const BOOK_WORD = /(?:^|[^A-Za-z])(?:log|logs|logging|audit|metric|metrics|state|cache|caches|lock|locks|pid|tmp|temp|scratch|history|journal|telemetry|trace|traces|pending|spool|queue|outbox|staging)(?:[^a-z]|$)/;
+const BOOK_CAMEL = /[a-z0-9](?:Log|Audit|Metric|State|Cache|Lock|Pid|Tmp|Temp|Scratch|History|Journal|Telemetry|Trace|Pending|Spool|Queue|Outbox|Staging)(?:[^a-z]|$)/;
 const BOOK_OTHER = /\.log\b|tmpdir|mkdtemp|pidfile|lockfile|\.cache\b/i;
+// pending, spool, queue, outbox and staging: a server's own files waiting to be sent (QA-40, R-AE-32)
 const bookkeeping = (t) => BOOK_WORD.test(t) || BOOK_CAMEL.test(t) || BOOK_OTHER.test(t);
 const APPEND_ONLY = new Set(['appendFile', 'appendFileSync']);
 // the identifiers a path expression is built from, not counting members (os.path) or strings
@@ -766,6 +768,50 @@ const idsOf = (code) => new Set((code.match(/(?<![.\w$])[A-Za-z_$][\w$]*/g) || [
     }
     const lineStart = P.lineStart[li]; const pre = P.code.slice(lineStart, pos);
     return /\b(if|and|or|for|lambda)\b/.test(pre);
+  }
+
+  // Is there an early `return` before pos in this function, inside an `if` whose condition no argument of the tool
+  // reaches? Then pos runs only in one mode (`if not use_ssh: yield; return`), not on every call. A guard on the tool's
+  // own arguments (`if (!path) return error`) is validation: the path after it is still the tool's normal path.
+  // Only a condition that reads the environment or configuration counts: it is a mode the caller does not choose. Any other
+  // untainted condition (a local flag, a lookup result) is ordinary control flow and says nothing about the path.
+  const ENV_COND = /\b(?:os\s*\.\s*environ|os\s*\.\s*getenv|environ|getenv|process\s*\.\s*env|Deno\s*\.\s*env|env\s*\.\s*get|config|configs|settings|cfg|conf)\b|\bCONFIG\b|\bSETTINGS\b/i;
+  // the condition reads the environment or configuration, directly or through a local assigned from it
+  function envDecided(P, cond, a, pos) {
+    if (ENV_COND.test(cond)) return true;
+    const ids = new Set(cond.match(/[A-Za-z_$][\w$]*/g) || []); if (!ids.size) return false;
+    // `on, why = os.getenv("A"), os.getenv("B")` or `const on = process.env.X`: the local is the environment's value
+    return P.code.slice(a, pos).split('\n').some((l) => { const m = /^(.*?[^=!<>])=(?![=>])(.*)$/.exec(l); return m && ENV_COND.test(m[2]) && (m[1].match(/[A-Za-z_$][\w$]*/g) || []).some((x) => ids.has(x)); });
+  }
+  function earlyExit(P, pos, a, b, taint) {
+    if (P.lang === 'js') {
+      const code = P.code; const re = /\bif\s*\(/g; re.lastIndex = a; let m;
+      const anon = P.funcs.filter((g) => g.anon && g.body && g.body[0] > a && g.body[1] < b);
+      while ((m = re.exec(code)) && m.index < pos) {
+        if (anon.some((g) => g.body[0] <= m.index && m.index < g.body[1])) continue;
+        const open = m.index + m[0].length - 1; const close = matchClose(code, open); if (close < open || close >= pos) continue;
+        const b0 = nextSig(code, close + 1); const end = code[b0] === '{' ? matchClose(code, b0) : exprEnd(code, b0);
+        if (end < b0 || end >= pos) continue;
+        if (!/\breturn\b/.test(code.slice(b0, end + 1))) continue;
+        if (taintedIn(code.slice(open + 1, close), taint)) continue;
+        if (!envDecided(P, code.slice(open + 1, close), a, m.index)) continue;
+        return true;
+      }
+      return false;
+    }
+    // python: `if <cond>: return` or an `if <cond>:` block holding a return, ended before pos
+    const li = P.line(pos) - 1; const li0 = Math.max(0, P.line(a) - 1);
+    for (let k = li0; k < li; k++) {
+      const l = P.lines[k]; const m = /^\s*if\s+(.*?):\s*(.*)$/.exec(l); if (!m) continue;
+      const ind = P.indentOf(l); let body = m[2]; let j = k + 1;
+      if (!body.trim()) { while (j < P.lines.length && (!P.lines[j].trim() || P.indentOf(P.lines[j]) > ind)) { body += '\n' + P.lines[j]; j++; } }
+      if (j > li) continue; // pos is inside this if's body
+      if (!/(^|\n)\s*return\b/.test(body)) continue;
+      if (taintedIn(m[1], taint)) continue;
+      if (!envDecided(P, m[1], a, pos)) continue;
+      return true;
+    }
+    return false;
   }
 
   // ------------------------------------------------------------ scanning a region
@@ -840,9 +886,7 @@ const idsOf = (code) => new Set((code.match(/(?<![.\w$])[A-Za-z_$][\w$]*/g) || [
       if (head === 'Bun' && last === 'write' && chain.length === 2) { fam('fs'); emit('write', 'definite', 'fs.Bun.write'); return out; }
       // ---- exec
       if ((imp && CP_MODS.test(impMod) && ((chain.length === 1 && (imp.name === '*' || imp.name === 'default' ? CP_FNS.has(head) : CP_FNS.has(imp.name))) || (chain.length === 2 && (imp.name === '*' || imp.name === 'default') && CP_FNS.has(last)))) || (head === 'Bun' && last === 'spawn') || (head === 'Deno' && last === 'Command')) {
-        fam('exec'); const w = cmdWords(P, call);
-        if (w.words && roCommand(w.words)) emit('read', 'definite', 'exec.readonly', w.words.slice(0, 3).join(' '));
-        else emit('exec', 'definite', 'exec.' + (chain.length === 1 ? (imp && imp.name !== '*' && imp.name !== 'default' ? imp.name : head) : last), w.words ? w.words.slice(0, 3).join(' ') : 'command is not a literal');
+        fam('exec'); execEffect(P, call, region, 'exec.' + (chain.length === 1 ? (imp && imp.name !== '*' && imp.name !== 'default' ? imp.name : head) : last), emit);
         return out;
       }
       // ---- http
@@ -864,17 +908,19 @@ const idsOf = (code) => new Set((code.match(/(?<![.\w$])[A-Za-z_$][\w$]*/g) || [
       // ---- python fs
       const impHead = imp ? imp.spec : null;
       if (head === 'open' && chain.length === 1) {
-        fam('fs'); const args = argTexts(P, call); const modeArg = args[1] ? origSlice(P, args[1][0], args[1][1]) : (args.find(([a, b]) => /^mode\s*=/.test(P.code.slice(a, b))) ? origSlice(P, ...args.find(([a, b]) => /^mode\s*=/.test(P.code.slice(a, b)))).replace(/^mode\s*=\s*/, '') : '');
+        fam('fs'); const args = argTexts(P, call); const modeArg = args[1] && !/^\s*[A-Za-z_]\w*\s*=(?!=)/.test(P.code.slice(args[1][0], args[1][1])) ? origSlice(P, args[1][0], args[1][1]) : (args.find(([a, b]) => /^mode\s*=/.test(P.code.slice(a, b))) ? origSlice(P, ...args.find(([a, b]) => /^mode\s*=/.test(P.code.slice(a, b)))).replace(/^mode\s*=\s*/, '') : '');
         const pathText = pathText0(P, region, args[0]);
         const lit = /^\s*[rbu]*(['"])([^'"]*)\1\s*$/.exec(modeArg);
         if (!modeArg) { emit('read', 'definite', 'fs.open'); return out; }
+        // `with open(p, 'a'): pass`: a probe that the file can be opened for writing, which writes nothing
+        if (lit && /^[bt]*a[bt]*$/.test(lit[2])) { const rest = P.code.slice(call.close + 1, call.close + 400); const w = /^\s*(?:as\s+([A-Za-z_]\w*)\s*)?:\s*(?:#[^\n]*)?\n?([\s\S]*)$/.exec(rest); if (w) { const body = w[2].split('\n').filter((l) => l.trim()).slice(0, 12); const first = body[0] || ''; const ind = P.indentOf(first); const block = body.filter((l, i) => i === 0 || P.indentOf(l) >= ind && P.indentOf(l) > 0).slice(0, 12); const blockTxt = block.join('\n'); const writes = w[1] ? new RegExp('\\b' + w[1] + '\\s*\\.\\s*(write|writelines|truncate)\\b|file\\s*=\\s*' + w[1] + '\\b').test(blockTxt) : false; if (/^\s*pass\b/.test(first) && block.length <= 1 || (w[1] && !writes) || (!w[1] && /^\s*pass\b/.test(first))) { emit('write', 'may', 'fs.open', 'opens for append and writes nothing (a writability check)'); return out; } } }
         if (lit) { if (/[wax+]/.test(lit[2])) { const why = softFs(P, region, 'open', args[0], pathText, /^[rb]*a[b]*$/.test(lit[2])); emit('write', why ? 'may' : 'definite', 'fs.open', why || 'mode ' + lit[2]); } else emit('read', 'definite', 'fs.open'); return out; }
         emit('write', 'may', 'fs.open', 'mode is not a literal'); return out;
       }
       if ((head === 'os' || (imp && /^os$/.test(impHead))) && chain.length === 2) {
         fam('fs'); if (/^(remove|unlink|rmdir|removedirs)$/.test(last)) { emit('delete', 'definite', 'fs.os.' + last); return out; }
         if (/^(rename|replace|mkdir|makedirs|truncate|symlink|link|chmod|chown|utime|renames)$/.test(last)) { const why = softFs(P, region, last, argTexts(P, call)[0], pathText0(P, region, argTexts(P, call)[0]), false); emit('write', why ? 'may' : 'definite', 'fs.os.' + last, why || ''); return out; }
-        if (/^(system|popen|execv|execve|execvp|execl|execlp|spawnl|spawnv|spawnlp|spawnvp|startfile)$/.test(last)) { fam('exec'); const w = cmdWords(P, call); if (w.words && roCommand(w.words)) emit('read', 'definite', 'exec.readonly', w.words.slice(0, 3).join(' ')); else emit('exec', 'definite', 'exec.os.' + last, w.words ? w.words.slice(0, 3).join(' ') : 'command is not a literal'); return out; }
+        if (/^(system|popen|execv|execve|execvp|execl|execlp|spawnl|spawnv|spawnlp|spawnvp|startfile)$/.test(last)) { fam('exec'); execEffect(P, call, region, 'exec.os.' + last, emit); return out; }
         if (/^(listdir|scandir|stat|walk|getcwd|getenv|readlink|access)$/.test(last)) { emit('read', 'definite', 'fs.os.' + last); return out; }
       }
       if ((head === 'shutil' || (imp && /^shutil$/.test(impHead))) && chain.length === 2) {
@@ -894,9 +940,9 @@ const idsOf = (code) => new Set((code.match(/(?<![.\w$])[A-Za-z_$][\w$]*/g) || [
       // ---- python exec
       if ((head === 'subprocess' || (imp && /^subprocess$/.test(impHead))) && (chain.length === 2 || (imp && imp.name !== '*' && chain.length === 1))) {
         const fn = chain.length === 2 ? last : imp.name;
-        if (/^(run|call|check_call|check_output|Popen|getoutput|getstatusoutput)$/.test(fn)) { fam('exec'); const w = cmdWords(P, call); if (w.words && roCommand(w.words)) emit('read', 'definite', 'exec.readonly', w.words.slice(0, 3).join(' ')); else emit('exec', 'definite', 'exec.subprocess.' + fn, w.words ? w.words.slice(0, 3).join(' ') : 'command is not a literal'); return out; }
+        if (/^(run|call|check_call|check_output|Popen|getoutput|getstatusoutput)$/.test(fn)) { fam('exec'); execEffect(P, call, region, 'exec.subprocess.' + fn, emit); return out; }
       }
-      if (head === 'asyncio' && /^create_subprocess_(exec|shell)$/.test(last)) { fam('exec'); emit('exec', 'definite', 'exec.asyncio.' + last); return out; }
+      if (head === 'asyncio' && /^create_subprocess_(exec|shell)$/.test(last)) { fam('exec'); execEffect(P, call, region, 'exec.asyncio.' + last, emit); return out; }
       if (chain.length === 1 && (head === 'exec' || head === 'eval') && !state.localDef(P, head)) { fam('exec'); emit('exec', 'may', 'exec.' + head, 'dynamic code'); return out; }
       // ---- python http
       const httpMod = (head === 'requests' || head === 'httpx' || head === 'aiohttp' || head === 'urllib3' || (imp && /^(requests|httpx|aiohttp)$/.test(impHead)));
@@ -910,6 +956,9 @@ const idsOf = (code) => new Set((code.match(/(?<![.\w$])[A-Za-z_$][\w$]*/g) || [
       if (chain.length >= 2 && (last === 'get') && state.httpClients(P).has(chain.slice(0, -1).join('.'))) { fam('http'); emit('read', 'definite', 'http.GET', chain.join('.')); return out; }
       if (chain.length >= 2 && last === 'request' && state.httpClients(P).has(chain.slice(0, -1).join('.'))) { fam('http'); const a0 = argTexts(P, call)[0]; const s = a0 && P.strs.find((x) => x.s === a0[0]); return out.concat(httpEffects(P, call, chain.join('.'), s ? { method: s.v.toUpperCase(), dynamic: false } : { method: null, dynamic: true }, '', state, region)); }
     }
+    // ---- a Redis client from a factory, an attribute or an annotation (before the name-based Redis rules below)
+    fam('sdk');
+    if (clientCall(R, P, call, region, emit, true)) return out;
     // ---- ORM and document stores (both languages)
     fam('orm');
     if (chain.length >= 2) {
@@ -944,8 +993,10 @@ const idsOf = (code) => new Set((code.match(/(?<![.\w$])[A-Za-z_$][\w$]*/g) || [
     }
     if (P.lang === 'py' && chain.length === 1 && P.imports.get(head) && /sqlalchemy|sqlmodel/.test(P.imports.get(head).spec) && /^(insert|update|delete)$/.test(P.imports.get(head).name)) { emit(P.imports.get(head).name === 'delete' ? 'delete' : 'write', 'definite', 'orm.sqlalchemy.core.' + P.imports.get(head).name); return out; }
     if (P.lang === 'py' && chain.length >= 2 && P.ormFile && (last === 'delete' || last === 'save') && call.close - call.open <= 2 && !/^(self|cls)$/.test(head)) { emit(last === 'delete' ? 'delete' : 'write', 'definite', 'orm.' + last); return out; }
-    // ---- client verbs: lower confidence
+    // ---- client objects whose library the reader can see (a factory, an attribute, an annotation)
     fam('sdk');
+    if (clientCall(R, P, call, region, emit)) return out;
+    // ---- client verbs: lower confidence
     if (chain.length >= 2) {
       const mid = chain.slice(0, -1);
       const upper = /^[A-Z]/.test(last);
@@ -964,6 +1015,100 @@ const idsOf = (code) => new Set((code.match(/(?<![.\w$])[A-Za-z_$][\w$]*/g) || [
       }
     }
     return out;
+  }
+
+  // ------------------------------------------------------------ client objects from factories and attributes
+  // The library a receiver comes from, when the reader can see it: a constructor or factory imported from a client
+  // library, a repository function whose return annotation or return value is one, an attribute (self.x, this.x) the
+  // class assigns one, a parameter annotated with one, or an object obtained from such a client (client.volumes.get(x)).
+  const CLIENT_LIBS = [[/^(redis|redis\.asyncio|redis\.client|redis\.cluster|ioredis|@redis\/client|@upstash\/redis)$/, 'redis'], [/^(docker|dockerode)$/, 'docker'], [/^(boto3|aioboto3|botocore(\..*)?|@aws-sdk\/.*)$/, 'aws'], [/^atlassian(\..*)?$/, 'atlassian']];
+  // a module of the repository itself (`from src.common.connection import X`), not a library
+  function repoSpec(R, P, spec) { try { return !!(P.lang === 'js' ? R.resolveJs(P.path, spec) : R.resolvePy(P.path, spec)); } catch (e) { return false; } }
+  function libOfSpec(spec, name) {
+    if (!spec || spec.startsWith('.') || stdlibJs(spec)) return null;
+    for (const [re, k] of CLIENT_LIBS) if (re.test(spec)) return k;
+    if (CLIENTISH.test(spec) || /(Client|Session|Connection|Api|API|Service|Manager)$/.test(name || '')) return 'sdk:' + spec;
+    return null;
+  }
+  // the library of the first imported identifier in a type or expression text
+  function libOfIds(R, P, text) {
+    for (const id of (text.match(/[A-Za-z_$][\w$]*/g) || [])) { const im = P.imports.get(id); if (im && !repoSpec(R, P, im.spec)) { const l = libOfSpec(im.spec, im.name === '*' || im.name === 'default' ? id : im.name); if (l) return l; } }
+    return null;
+  }
+  function clientOfExpr(R, P, f, text, depth, seen) {
+    const t = text.trim().replace(/^await\s+/, '').replace(/^new\s+/, '');
+    if (depth > 3 || !t) return null;
+    const m = /^([A-Za-z_$][\w$]*)((?:\s*\.\s*[A-Za-z_$][\w$]*)*)/.exec(t); if (!m) return null;
+    const head = m[1]; const chain = (head + m[2]).replace(/\s+/g, '').split('.');
+    if (/^(self|this|cls)$/.test(head) && chain.length >= 2) return clientOfAttr(R, P, chain[1], depth + 1, seen);
+    const im = P.imports.get(head);
+    if (im && !im.spec.startsWith('.') && !repoSpec(R, P, im.spec)) return libOfSpec(im.spec, chain[chain.length - 1]) || libOfSpec(im.spec, im.name === '*' || im.name === 'default' ? head : im.name);
+    const called = t.charAt(m[0].length) === '(' || /^\s*\(/.test(t.slice(m[0].length));
+    if (!called || chain.length > 1) { const v = clientOfVar(R, P, f, head, depth + 1, seen); if (v) return v; }
+    if (!called) return null;
+    // a factory in the repository: its return annotation, or what it returns
+    let targets = []; try { targets = resolveName(R, P, chain, { f }); } catch (e) { targets = []; }
+    for (const tg of targets.slice(0, 3)) {
+      const key = tg.P.path + ':' + tg.f.start; if (seen.has(key)) continue; seen.add(key);
+      const Q = tg.P; const after = tg.f.params ? Q.text.slice(tg.f.params[1] + 1, tg.f.body ? Math.min(tg.f.body[0] + 1, tg.f.params[1] + 200) : tg.f.params[1] + 200) : '';
+      const ann = Q.lang === 'py' ? /^\s*->\s*([^:]+):/.exec(after) : /^\s*:\s*([^={]+?)\s*(?:=>|\{)/.exec(after);
+      if (ann) { const l = libOfIds(R, Q, ann[1]); if (l) return l; }
+      if (!tg.f.body) continue;
+      const body = Q.code.slice(tg.f.body[0], tg.f.body[1]); const re = /\breturn\s+([^\n;]+)/g; let r;
+      while ((r = re.exec(body))) { const l = clientOfExpr(R, Q, tg.f, r[1], depth + 1, seen); if (l) return l; }
+    }
+    return null;
+  }
+  function clientOfVar(R, P, f, name, depth, seen) {
+    if (depth > 3 || !f) return null;
+    if (f.params) { const ptxt = P.text.slice(f.params[0], f.params[1] + 1); const a = new RegExp('(?<![\\w$])' + name.replace(/\$/g, '\\$') + '\\s*\\??\\s*:\\s*([^,=)]+)').exec(ptxt); if (a) { const l = libOfIds(R, P, a[1]); if (l) return l; } }
+    if (!f.body) return null;
+    const body = P.code.slice(f.body[0], f.body[1]);
+    const re = new RegExp('(?<![\\w$.])' + name.replace(/\$/g, '\\$') + '\\s*(?::\\s*([^=\\n]+))?=(?![=>])\\s*([^;\\n]+)', 'g'); let m;
+    while ((m = re.exec(body))) {
+      if (m[1]) { const l = libOfIds(R, P, m[1]); if (l) return l; }
+      const l = clientOfExpr(R, P, f, m[2], depth + 1, seen); if (l) return l;
+    }
+    return null;
+  }
+  function clientOfAttr(R, P, attr, depth, seen) {
+    if (depth > 3) return null;
+    const key = P.path + '#' + attr; if (seen.has(key)) return null; seen.add(key);
+    const esc = attr.replace(/\$/g, '\\$');
+    // a declared type: `attr: Optional[Redis]`, `private attr: S3Client`
+    const decl = new RegExp('^\\s*(?:(?:private|public|protected|readonly|static)\\s+)*' + esc + '\\s*\\??\\s*:\\s*([^=;\\n]+)', 'gm'); let m;
+    while ((m = decl.exec(P.text))) { const l = libOfIds(R, P, m[1]); if (l) return l; }
+    const re = new RegExp('\\b(?:self|this|cls)\\s*\\.\\s*' + esc + '\\s*(?::\\s*([^=\\n]+))?=(?![=>])\\s*([^;\\n]+)', 'g');
+    while ((m = re.exec(P.code))) {
+      if (m[1]) { const l = libOfIds(R, P, m[1]); if (l) return l; }
+      const at = m.index; const f = P.funcs.filter((g) => g.body && g.body[0] <= at && at < g.body[1]).sort((x, y) => (x.body[1] - x.body[0]) - (y.body[1] - y.body[0]))[0] || null;
+      const l = clientOfExpr(R, P, f, m[2], depth + 1, seen); if (l) return l;
+    }
+    return null;
+  }
+  const REDIS_W2 = new Set([...REDIS_W, 'lset', 'linsert', 'rpoplpush', 'lmove', 'hincrby', 'hincrbyfloat', 'zincrby', 'setrange', 'getset', 'rename', 'renamenx', 'persist', 'pexpire', 'expireat', 'xgroup_create', 'xack', 'smove', 'hsetnx', 'psetex', 'restore', 'copy']);
+  const REDIS_D2 = new Set([...REDIS_D, 'delete', 'xdel', 'lrem', 'getdel', 'xtrim', 'ltrim', 'xgroup_destroy', 'zremrangebyscore', 'zremrangebyrank', 'zremrangebylex', 'spop', 'zpopmin', 'zpopmax']);
+  const CLIENT_EXTRA_VERBS = new Set(['run', 'build', 'pull', 'put', 'add', 'edit', 'set', 'execute', 'exec', 'append', 'overwrite', 'prune']);
+  // A call on a client object of a known library: Redis writes and deletes by command name ("definite" only when an
+  // argument of the tool reaches the call), any other client's write- or delete-named method as "may".
+  function clientCall(R, P, call, region, emit, onlyRedis) {
+    const chain = call.chain; if (chain.length < 2 || chain[0] === '<expr>') return false;
+    const last = chain[chain.length - 1]; const head = chain[0];
+    const seen = new Set(); let lib = null;
+    if (/^(self|this|cls)$/.test(head)) { if (chain.length < 3) return false; lib = clientOfAttr(R, P, chain[1], 0, seen); }
+    else if (!P.imports.get(head)) lib = clientOfVar(R, P, region.f, head, 0, seen);
+    if (!lib || (onlyRedis && lib !== 'redis')) return false;
+    if (lib === 'redis') {
+      const del = REDIS_D2.has(last); if (!del && !REDIS_W2.has(last)) return false;
+      const from = taintedIn(P.code.slice(call.open, call.close), region.taint || new Set());
+      emit(del ? 'delete' : 'write', from ? 'definite' : 'may', 'client.redis.' + last, from ? 'a Redis command on a client from ' + (head === 'self' || head === 'this' ? 'an attribute' : 'a factory or constructor') : 'a Redis command whose key does not come from the tool\'s arguments');
+      return true;
+    }
+    const verb = last.replace(/[A-Z_].*$/, '').toLowerCase();
+    const del = SDK_DELETE_VERBS.has(verb);
+    if (!del && !SDK_VERBS.has(verb) && !CLIENT_EXTRA_VERBS.has(verb)) return false;
+    emit(del ? 'delete' : 'write', 'may', 'client.' + lib.replace(/^sdk:/, '') + '.' + chain.slice(1).join('.'), 'a client method (' + lib.replace(/^sdk:/, '') + ') named like a ' + (del ? 'delete' : 'write'));
+    return true;
   }
 
   // Why a file write or delete is only a "may": a bookkeeping file, a directory made on the way, an append to a file the
@@ -1007,18 +1152,77 @@ const idsOf = (code) => new Set((code.match(/(?<![.\w$])[A-Za-z_$][\w$]*/g) || [
     return out;
   }
 
-  function cmdWords(P, call) {
+  // The literal value of an argument expression: a string ({ s }), or an array ({ arr, full }: its literal strings, and
+  // whether every element is one). An identifier is looked up in the literals its caller passed (region.lits, one value
+  // per parameter, forwarded through every level of wrappers) and then in its own assignment in this function, with the
+  // literal strings later pushed onto it. null when the value is not a literal.
+  function litValue(P, region, range) {
+    if (!range) return null;
+    const [a, b] = trimRange(P.code, range[0], range[1]); if (a >= b) return null;
+    const s = P.strs.find((x) => x.s === a);
+    if (s && s.e >= b) return s.tpl && /\$\{/.test(P.text.slice(s.s, s.e)) ? null : { s: s.v };
+    if (P.code[a] === '[' && matchClose(P.code, a) === b - 1) {
+      const parts = splitArgs(P.code, a, b - 1).map(([x, y]) => trimRange(P.code, x, y)).filter(([x, y]) => x < y);
+      const arr = []; let full = true;
+      for (const [x, y] of parts) { const q = P.strs.find((z) => z.s === x); if (q && q.e >= y && !(q.tpl && /\$\{/.test(P.text.slice(q.s, q.e)))) arr.push(q.v); else full = false; }
+      return { arr, full };
+    }
+    const id = P.code.slice(a, b);
+    if (!/^[A-Za-z_$][\w$]*$/.test(id)) return null;
+    if (region && region.lits && region.lits.has(id)) return region.lits.get(id);
+    if (!region) return null;
+    const fa = region.f && region.f.body ? region.f.body[0] : region.a; const fb = region.f && region.f.body ? region.f.body[1] : region.b;
+    const seg = P.code.slice(fa, fb); const esc = id.replace(/\$/g, '\\$');
+    const m = new RegExp('(?<![\\w$.])' + esc + '\\s*(?::[^=\\n]+)?=(?![=>])\\s*').exec(seg);
+    if (!m) return P.consts.has(id) ? { s: P.consts.get(id).v } : null;
+    const at = fa + m.index + m[0].length; const end = P.code[at] === '[' ? matchClose(P.code, at) + 1 : exprEnd(P.code, at);
+    if (end <= at) return null;
+    const v = litValue(P, null, [at, end]);
+    if (v && v.arr) {
+      // args.push("--recursive"), args.append("x"), args.extend([...]): later literal elements, in order
+      const re = new RegExp('(?<![\\w$.])' + esc + '\\s*\\.\\s*(push|append|extend|unshift|insert)\\s*\\(', 'g'); let mm; const arr = v.arr.slice(); let full = v.full;
+      while ((mm = re.exec(seg))) {
+        const o = fa + mm.index + mm[0].length - 1; const c = matchClose(P.code, o); if (c < o) { full = false; continue; }
+        if (mm[1] === 'unshift' || mm[1] === 'insert') { full = false; continue; }
+        for (const [x, y] of splitArgs(P.code, o, c)) { const w = litValue(P, null, [x, y]); if (w && w.s !== undefined) arr.push(w.s); else if (w && w.arr) { arr.push(...w.arr); full = full && w.full; } else full = false; }
+      }
+      return { arr, full };
+    }
+    return v;
+  }
+  // The words of a command line: the program and the arguments that are literals at the call or in what its callers
+  // passed. full: every word is known.
+  function cmdWords(P, call, region) {
     const args = argTexts(P, call); if (!args.length) return { words: null };
-    const [a, b] = args[0]; const s = P.strs.find((x) => x.s === nextSig(P.code, a));
-    // list form: ["git", "status"]  /  spawn("git", ["status"])
-    const lit = (x, y) => P.strs.filter((q) => q.s >= x && q.s < y).map((q) => q.v);
-    if (P.code[nextSig(P.code, a)] === '[') { const w = lit(a, b); return { words: w.length ? w : null }; }
-    if (s && s.s === nextSig(P.code, a) && trimRange(P.code, s.e, b)[0] >= b) {
-      let words = s.v.trim().split(/\s+/);
-      if (args[1] && P.code[nextSig(P.code, args[1][0])] === '[') words = words.concat(lit(args[1][0], args[1][1]));
-      return { words, whole: s.v };
+    const v0 = litValue(P, region, args[0]);
+    // list form: ["git", "status"]
+    if (v0 && v0.arr) return { words: v0.arr.length ? v0.arr : null, full: v0.full };
+    if (v0 && v0.s !== undefined) {
+      let words = v0.s.trim().split(/\s+/).filter(Boolean); let full = true;
+      // spawn("git", ["status"]), create_subprocess_exec("git", "status", ...)
+      const v1 = args[1] ? litValue(P, region, args[1]) : null;
+      if (v1 && v1.arr) { words = words.concat(v1.arr); full = v1.full; }
+      else if (v1 && v1.s !== undefined) { for (let i = 1; i < args.length; i++) { const w = litValue(P, region, args[i]); if (w && w.s !== undefined) words.push(w.s); else { if (!/^\s*(?:\{|[A-Za-z_]\w*\s*=)/.test(P.code.slice(args[i][0], args[i][1]))) full = false; break; } } }
+      else if (args[1] && !/^\s*(?:\{|[A-Za-z_]\w*\s*=)/.test(P.code.slice(args[1][0], args[1][1]))) full = false;
+      return { words: words.length ? words : null, whole: v0.s, full };
     }
     return { words: null };
+  }
+  // A process call. A known read-only command is a read. Otherwise it is "definite" only when the program is known (a
+  // literal at the call or passed as one by the callers that reach it) with its sub-command where the program has
+  // read-only sub-commands, or when the command itself comes from the tool's arguments. Anything else is "may".
+  function execEffect(P, call, region, sink, emit) {
+    const w = cmdWords(P, call, region);
+    if (w.words && roCommand(w.words)) { emit('read', 'definite', 'exec.readonly', w.words.slice(0, 3).join(' ')); return; }
+    const args = argTexts(P, call);
+    const taint = region.taint || new Set();
+    const cmdTainted = args.length > 0 && taintedIn(P.code.slice(args[0][0], args[0][1]), taint);
+    const prog = w.words ? w.words[0].split('/').pop() : null;
+    const known = !!prog && (!RO_SUB[prog] || w.words.slice(1).some((x) => !x.startsWith('-')) || w.full === true);
+    const label = w.words ? w.words.slice(0, 3).join(' ') : '';
+    if (!known && !cmdTainted) { emit('exec', 'may', sink, (label ? label + '; ' : '') + (prog ? 'the sub-command is not a literal' : 'command is not a literal')); return; }
+    if (!taintedIn(P.code.slice(call.open, call.close), taint)) { emit('exec', 'may', sink, (label ? label + '; ' : '') + 'the command does not come from the tool\'s arguments'); return; }
+    emit('exec', 'definite', sink, label || 'the command comes from the tool\'s arguments');
   }
   function roCommand(words) {
     if (!words || !words.length) return false;
@@ -1075,10 +1279,14 @@ const idsOf = (code) => new Set((code.match(/(?<![.\w$])[A-Za-z_$][\w$]*/g) || [
     const rules = P.lang === 'js'
       ? [[/(?:\b(?:const|let|var)\s+)?(?<![\w$.])([A-Za-z_$][\w$]*)\s*(?::[^=\n]{0,60})?=(?![=>])\s*([^;\n]{0,300})/g, (m) => [[m[1]], m[2]]],
          [/\b(?:const|let|var)\s*[{[]([^}\]]*)[}\]]\s*=\s*([^;\n]{0,300})/g, (m) => [Array.from(destructNames(m[1])), m[2]]],
-         [/\bfor\s*\(\s*(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s+(?:of|in)\s+([^)]{0,200})\)/g, (m) => [[m[1]], m[2]]]]
+         [/\bfor\s*\(\s*(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s+(?:of|in)\s+([^)]{0,200})\)/g, (m) => [[m[1]], m[2]]],
+         [/(?<![\w$.])([A-Za-z_$][\w$]*)\s*\.\s*(?:push|unshift|splice)\s*\(([^;\n]{0,300})/g, (m) => [[m[1]], m[2]]]]
       : [[/^[ \t]*([A-Za-z_]\w*)\s*(?::[^=\n]+)?=(?!=)\s*(.*)$/gm, (m) => [[m[1]], m[2]]],
+         // tuple unpacking: `ok, msg = check(path)`
+         [/^[ \t]*\(?\s*([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)+)\s*,?\s*\)?\s*=(?!=)\s*(.*)$/gm, (m) => [m[1].split(/\s*,\s*/), m[2]]],
          [/^[ \t]*for\s+([A-Za-z_]\w*)\s+in\s+(.*):\s*$/gm, (m) => [[m[1]], m[2]]],
-         [/\bas\s+([A-Za-z_]\w*)\s*[:,]/g, (m) => [[m[1]], code.slice(Math.max(0, m.index - 200), m.index)]]];
+         [/\bas\s+([A-Za-z_]\w*)\s*[:,]/g, (m) => [[m[1]], code.slice(Math.max(0, m.index - 200), m.index)]],
+         [/^[ \t]*([A-Za-z_]\w*)\s*\.\s*(?:append|extend|insert)\s*\((.*)$/gm, (m) => [[m[1]], m[2]]]];
     for (let round = 0; round < 4; round++) {
       let grew = false;
       for (const [re, pick] of rules) { re.lastIndex = 0; let m; while ((m = re.exec(code))) { const [lhs, rhs] = pick(m); if (!lhs.some((x) => !t.has(x))) continue; if (Array.from(idsOf(rhs)).some((x) => t.has(x))) lhs.forEach((x) => { if (!t.has(x)) { t.add(x); grew = true; } }); } }
@@ -1116,10 +1324,22 @@ const idsOf = (code) => new Set((code.match(/(?<![.\w$])[A-Za-z_$][\w$]*/g) || [
     return null;
   }
 
+  // The parameters a call's positional arguments bind: a Python method called on an object (obj.m(a)) binds `self`
+  // (or `cls`) without an argument, so its first argument goes to the second parameter.
+  function boundParams(t, call) {
+    const plist = paramList(t.P, t.f);
+    if (t.P.lang !== 'py' || call.chain.length < 2 || !t.f || !t.f.params || !plist.length || plist[0].length) return plist;
+    const first = t.P.code.slice(t.f.params[0] + 1, t.f.params[1]).split(',')[0].trim();
+    return /^(self|cls)\b/.test(first) ? plist.slice(1) : plist;
+  }
+
   function scanTool(R, regions, how, state) {
     const idsOfParams = (Q, f) => new Set(paramList(Q, f).flat());
     const fx = { read: [], write: [], delete: [], unsafe_http: [], exec: [], unknown_call: [] };
     const seenEv = new Set(); const visited = new Set(); const unresolved = [];
+    // the functions (by region key) whose walk reached a file write, for "a delete of a file this function wrote"
+    const fnWrites = new Map(); const active = []; const variants = new Map(); const wroteParams = new Map();
+    const litsKey = (m) => { if (!m || !m.size) return ''; return [...m.entries()].map(([k, v]) => k + '=' + JSON.stringify(v)).sort().join('&').slice(0, 2000); };
     const add = (e, via, capMay, cond) => {
       let conf = capMay && e.conf === 'definite' ? 'may' : e.conf;
       if (cond && conf === 'definite') { conf = 'may'; e = Object.assign({}, e, { note: (e.note ? e.note + '; ' : '') + 'on a conditional path' }); }
@@ -1130,12 +1350,21 @@ const idsOf = (code) => new Set((code.match(/(?<![.\w$])[A-Za-z_$][\w$]*/g) || [
     };
     const capMay = how === 'by-name';
     let calls = 0;
-    const walk = (P, a, b, depth, via, f, cond, params, taintIn) => {
-      const key = P.path + ':' + a + ':' + b; if (visited.has(key)) return; visited.add(key);
+    const walk = (P, a, b, depth, via, f, cond, params, taintIn, litsIn) => {
+      // the same body reached with different literals (a guard wrapper called with 'get' and then with 'delete') is walked
+      // again, so the second caller is never dropped; the number of variants per body is bounded, and past the bound the
+      // body is walked once with no literals, which reports what it cannot resolve as "may"
+      const base = P.path + ':' + a + ':' + b;
+      let vk = litsKey(litsIn); const seen = (variants.get(base) || 0);
+      if (!visited.has(base + '|' + vk)) { if (seen >= 8) { vk = 'overflow'; litsIn = null; if (visited.has(base + '|' + vk)) return; } variants.set(base, seen + 1); } else return;
+      visited.add(base + '|' + vk);
+      active.push(base); try { walkBody(P, a, b, depth, via, f, cond, params, taintIn, litsIn, base); } finally { active.pop(); }
+    };
+    const walkBody = (P, a, b, depth, via, f, cond, params, taintIn, litsIn, key) => {
       if (state.deadline && Date.now() > state.deadline) { state.timedOut = true; return; }
       params = new Set([...(params || []), ...idsOfParams(P, f)]);
       const calleeTaint = (Q, call, t, tn) => {
-        const plist = paramList(t.P, t.f); const args = splitArgs(Q.code, call.open, call.close); const out = new Set();
+        const plist = boundParams(t, call); const args = splitArgs(Q.code, call.open, call.close); const out = new Set();
         args.forEach(([x, y], i) => {
           const txt = Q.code.slice(x, y); const kw = Q.lang === 'py' ? /^\s*([A-Za-z_]\w*)\s*=(?!=)\s*([\s\S]*)$/.exec(txt) : null;
           if (!taintedIn(kw ? kw[2] : txt, tn)) return;
@@ -1144,7 +1373,18 @@ const idsOf = (code) => new Set((code.match(/(?<![.\w$])[A-Za-z_$][\w$]*/g) || [
         return out;
       };
       const taint = propagate(P, f && f.body && f.body[0] <= a && f.body[1] >= b ? f.body[0] : a, f && f.body && f.body[0] <= a && f.body[1] >= b ? f.body[1] : b, taintIn || idsOfParams(P, f));
-      const region = { P, a, b, via, f, params };
+      const region = { P, a, b, via, f, params, taint, lits: litsIn || new Map() };
+      const condAt = (pos) => isCond(P, pos, a, b) || earlyExit(P, pos, a, b, taint);
+      // the literal values this call passes to the callee's parameters (a program name, an argv array)
+      const calleeLits = (call, t) => {
+        const plist = boundParams(t, call); const out = new Map();
+        splitArgs(P.code, call.open, call.close).forEach(([x, y], i) => {
+          const txt = P.code.slice(x, y); const kw = P.lang === 'py' ? /^\s*([A-Za-z_]\w*)\s*=(?!=)\s*/.exec(txt) : null;
+          const v = litValue(P, region, kw ? [x + kw[0].length, y] : [x, y]); if (!v) return;
+          const names = kw ? [kw[1]] : (plist[i] || []); if (names.length === 1) out.set(names[0], v);
+        });
+        return out;
+      };
       const cs = callsIn(P, a, b);
       const strs = strsIn(P, a, b);
       // SQL: strings that are arguments of a call (definite when it is not a log or error), others "may"
@@ -1157,6 +1397,13 @@ const idsOf = (code) => new Set((code.match(/(?<![.\w$])[A-Za-z_$][\w$]*/g) || [
       };
       // strings handed to a logger, print or an error constructor are messages, never queries
       for (const c of cs) { const l = c.chain[c.chain.length - 1]; if (DB_NOT_CALLS.test(c.chain[0]) || DB_NOT_CALLS.test(l)) regionStrs(c.open, c.close).forEach((q) => claimed.add(q.s)); }
+      // identifiers this function passed as the path of a file write, directly or to a callee that wrote a file
+      const wroteIds = new Set();
+      // the identifier a file operation writes to: the destination of a copy, move or rename, otherwise the first argument
+      const DEST_OPS = /^(?:copy|copy2|copyfile|copyfileobj|copytree|move|rename|renames|replace|copyFile|copyFileSync|cp|cpSync|renameSync)$/;
+      const idArg = (call, i) => { const r = argTexts(P, call)[i]; const t = r ? P.code.slice(r[0], r[1]).trim() : ''; return /^[A-Za-z_$][\w$]*$/.test(t) && !/^(self|this)$/.test(t) ? t : null; };
+      const firstId = (call) => idArg(call, 0);
+      const writtenId = (call) => DEST_OPS.test(call.chain[call.chain.length - 1]) ? idArg(call, 1) : idArg(call, 0);
       for (const call of cs) {
         if (++calls > state.maxCalls) { state.truncated = true; return; }
         let effs = classify(R, P, call, region, state);
@@ -1174,15 +1421,23 @@ const idsOf = (code) => new Set((code.match(/(?<![.\w$])[A-Za-z_$][\w$]*/g) || [
             if (sqlSeen.has(s.s)) continue; const k = sqlKind(s.v); if (!k) continue; sqlSeen.add(s.s); claimed.add(s.s); sqlHere = true;
             const se = { kind: k.kind, conf: 'definite', sink: 'sql.' + k.verb, note: s.v.replace(/\s+/g, ' ').slice(0, 60), at: s.s, P };
             const from = targetFromArgs(P, call, se, taint, state);
-            add(from === false ? Object.assign(se, { conf: 'may', note: se.note + '; no argument of the tool reaches the statement' }) : se, via, capMay, cond || isCond(P, s.s, a, b));
+            add(from === false ? Object.assign(se, { conf: 'may', note: se.note + '; no argument of the tool reaches the statement' }) : se, via, capMay, cond || condAt(s.s));
           }
         }
         if (sqlHere) effs = effs.filter((e) => e.kind !== 'unknown_call');
-        const condCall = cond || isCond(P, call.at, a, b);
-        effs.forEach((e) => { const from = targetFromArgs(P, call, e, taint, state); add(from === false ? Object.assign({}, e, { conf: 'may', note: (e.note ? e.note + '; ' : '') + 'the target does not come from the tool\'s arguments' }) : e, via, capMay, condCall); });
+        const condCall = cond || condAt(call.at);
+        const fid = firstId(call); const wid = writtenId(call);
+        effs.forEach((e) => {
+          const from = targetFromArgs(P, call, e, taint, state);
+          let e2 = from === false ? Object.assign({}, e, { conf: 'may', note: (e.note ? e.note + '; ' : '') + 'the target does not come from the tool\'s arguments' }) : e;
+          // removing a file this function wrote earlier (a pending record, a temporary copy) undoes its own write
+          if (e2.kind === 'delete' && /^fs\./.test(e2.sink) && fid && wroteIds.has(fid) && e2.conf === 'definite') e2 = Object.assign({}, e2, { conf: 'may', note: (e2.note ? e2.note + '; ' : '') + 'removes a file this function wrote' });
+          add(e2, via, capMay, condCall);
+        });
+        if (wid && effs.some((e) => e.kind === 'write' && /^fs\./.test(e.sink))) wroteIds.add(wid);
         // follow into the repository
         if (depth < state.depth && !call.chained) {
-          for (const t of targets.slice(0, 3)) { const nm = t.f.name; walk(t.P, t.f.body[0], t.f.body[1], depth + 1, via.concat(nm + '@' + t.P.path + ':' + t.P.line(t.f.start)), t.f, condCall, params, calleeTaint(P, call, t, taint)); }
+          for (const t of targets.slice(0, 3)) { const nm = t.f.name; const tkey = t.P.path + ':' + t.f.body[0] + ':' + t.f.body[1]; walk(t.P, t.f.body[0], t.f.body[1], depth + 1, via.concat(nm + '@' + t.P.path + ':' + t.P.line(t.f.start)), t.f, condCall, params, calleeTaint(P, call, t, taint), calleeLits(call, t)); const wp = wroteParams.get(tkey); if (wp && wp.size) { const plist = boundParams(t, call); argTexts(P, call).forEach(([x, y], i) => { const id = P.code.slice(x, y).trim(); if (/^[A-Za-z_$][\w$]*$/.test(id) && (plist[i] || []).some((n) => wp.has(n))) wroteIds.add(id); }); } }
           if (!targets.length && call.chain.length >= 1 && P.imports.get(call.chain[0])) {
             const imp = P.imports.get(call.chain[0]);
             if (imp.spec.startsWith('.') || (P.lang === 'py' && imp.spec.startsWith('.'))) {
@@ -1192,12 +1447,13 @@ const idsOf = (code) => new Set((code.match(/(?<![.\w$])[A-Za-z_$][\w$]*/g) || [
           }
         }
       }
+      { const own = idsOfParams(P, f); const w = wroteParams.get(key) || new Set(); wroteIds.forEach((n) => { if (own.has(n)) w.add(n); }); wroteParams.set(key, w); }
       // SQL strings in the region that no call claimed: may (a query built here and run elsewhere)
       if (!state.disable.has('sql')) for (const s of strs) {
         if (claimed.has(s.s) || sqlSeen.has(s.s) || s.doc) continue;
         const k = sqlKind(s.v); if (!k || k.kind === 'read') continue;
-        if (s.tpl && /sql|execute|query/i.test(s.tag || '')) { sqlSeen.add(s.s); const from = taintedIn(P.code.slice(Math.max(a, s.s - 200), s.e + 100), taint); add({ kind: k.kind, conf: from ? 'definite' : 'may', sink: 'sql.' + k.verb, note: s.v.replace(/\s+/g, ' ').slice(0, 60) + (from ? '' : '; no argument of the tool reaches the statement'), at: s.s, P }, via, capMay, cond || isCond(P, s.s, a, b)); continue; }
-        sqlSeen.add(s.s); add({ kind: k.kind, conf: 'may', sink: 'sql.' + k.verb, note: 'a SQL string that no call in this function receives', at: s.s, P }, via, capMay, cond || isCond(P, s.s, a, b));
+        if (s.tpl && /sql|execute|query/i.test(s.tag || '')) { sqlSeen.add(s.s); const from = taintedIn(P.code.slice(Math.max(a, s.s - 200), s.e + 100), taint); add({ kind: k.kind, conf: from ? 'definite' : 'may', sink: 'sql.' + k.verb, note: s.v.replace(/\s+/g, ' ').slice(0, 60) + (from ? '' : '; no argument of the tool reaches the statement'), at: s.s, P }, via, capMay, cond || condAt(s.s)); continue; }
+        sqlSeen.add(s.s); add({ kind: k.kind, conf: 'may', sink: 'sql.' + k.verb, note: 'a SQL string that no call in this function receives', at: s.s, P }, via, capMay, cond || condAt(s.s));
       }
     };
     for (const r of regions) {
