@@ -602,6 +602,7 @@
   }
   function zodToSchema(calls, ctx) {
     let s = {}; let exact = true; let optional = false;
+    const fl = ctx && ctx.fl; const zod3 = !fl || !(fl.zod >= 4);
     const base = calls[0]; const argv = (k) => (base.args[k] ? base.args[k].value : undefined);
     switch (base.name) {
       case '__const': s = JSON.parse(JSON.stringify(base.base.value || {})); exact = base.base.exact !== false; optional = !!base.base.optional; break;
@@ -621,7 +622,7 @@
       case 'array': { const it = argv(0); s = { type: 'array', items: it && it !== SKIP ? it : {} }; if (!it || it === SKIP || base.args[0].exact === false) exact = false; break; }
       case 'object': case 'strictObject': case 'looseObject': { const sh = argv(0); const r = shapeToSchema(sh && sh !== SKIP ? sh : {}, base.args[0] ? base.args[0].optionalKeys : null, ctx && ctx.fl); if (base.name === 'strictObject') r.schema.additionalProperties = false; s = r.schema; if (!sh || sh === SKIP || base.args[0].exact === false) exact = false; break; }
       case 'record': { const v = base.args.length > 1 ? argv(1) : argv(0); s = { type: 'object', additionalProperties: v && v !== SKIP ? v : {} }; if (ctx && ctx.fl && ctx.fl.zod >= 4) { const kk = base.args.length > 1 ? argv(0) : { type: 'string' }; s = { type: 'object', propertyNames: kk && kk !== SKIP ? kk : { type: 'string' }, additionalProperties: s.additionalProperties }; } break; }
-      case 'union': { const a = argv(0); s = Array.isArray(a) ? { anyOf: a } : {}; if (!Array.isArray(a)) exact = false; break; }
+      case 'union': { const a = argv(0); s = Array.isArray(a) ? zod3 ? zod3Union(a) : { anyOf: a } : {}; if (!Array.isArray(a)) exact = false; break; }
       case 'url': s = { type: 'string', format: 'uri' }; break;
       case 'email': s = { type: 'string', format: 'email' }; break;
       case 'uuid': s = { type: 'string', format: 'uuid' }; break;
@@ -632,7 +633,7 @@
       switch (c.name) {
         case 'describe': if (typeof a0 === 'string') s.description = a0; else exact = false; break;
         case 'optional': case 'nullish': optional = true; break;
-        case 'nullable': s = s.type ? Object.assign({}, s, { type: [].concat(s.type, 'null') }) : s; break;
+        case 'nullable': s = nullableOf(withIntBounds(s, fl), zod3); break;
         case 'default': optional = true; if (a0 !== SKIP && a0 !== undefined) s.default = a0; break;
         case 'int': s.type = 'integer'; break;
         case 'min': if (typeof a0 === 'number') s[s.type === 'string' ? 'minLength' : s.type === 'array' ? 'minItems' : 'minimum'] = a0; else exact = false; break;
@@ -659,12 +660,49 @@
         default: exact = false;
       }
     }
-    const fl = ctx && ctx.fl;
+    s = withIntBounds(s, fl);
+    if (fl && fl.compactUnions) compactTypeUnion(s);
+    return { schema: s, exact, optional };
+  }
+  function withIntBounds(s, fl) {
     if (fl && fl.intBounds && s.type === 'integer') { // zod 4 gives an integer the safe-integer range unless the schema narrows it
       if (s.minimum === undefined && s.exclusiveMinimum === undefined) s.minimum = -SAFE_INT;
       if (s.maximum === undefined && s.exclusiveMaximum === undefined) s.maximum = SAFE_INT;
     }
-    return { schema: s, exact, optional };
+    return s;
+  }
+  // How the SDK's converters write unions and .nullable() (checked against SDK 1.29 and 1.32 with zod 3.25.76,
+  // 4.3.6 and 4.6.7):
+  //   zod 3 (zod-to-json-schema): a union whose options are all bare string/number/boolean/null schemas (no checks;
+  //     a description of an option is dropped) is a type, or a type array; .nullable() of such a bare schema is a
+  //     type array with "null", and of anything else anyOf [schema, {type: null}], the description repeated outside.
+  //   zod 4: .nullable() is always anyOf [schema, {type: null}]; from 4.5.0 an anyOf of bare types becomes a type array.
+  const ZOD3_PRIMITIVE = new Set(['string', 'number', 'boolean', 'null']);
+  const bareZod3 = (o, withDescription) => !!o && typeof o === 'object' && typeof o.type === 'string' && ZOD3_PRIMITIVE.has(o.type) && Object.keys(o).every((k) => k === 'type' || (withDescription && k === 'description'));
+  function zod3Union(options) {
+    if (!options.length || !options.every((o) => bareZod3(o, true))) return { anyOf: options };
+    const types = []; options.forEach((o) => { if (!types.includes(o.type)) types.push(o.type); });
+    return { type: types.length === 1 ? types[0] : types };
+  }
+  function nullableOf(s, zod3) {
+    if (zod3 && bareZod3(s, true)) return Object.assign({}, s, { type: [s.type, 'null'] });
+    const out = { anyOf: [s, { type: 'null' }] };
+    if (zod3 && typeof s.description === 'string') out.description = s.description;
+    return out;
+  }
+  // zod 4.5+'s compactTypeUnion: anyOf of options that are only { type } (nested ones first) -> type (array).
+  function compactTypeUnion(schema) {
+    const options = schema.anyOf;
+    if (!Array.isArray(options) || !options.length || schema.type !== undefined) return;
+    const types = [];
+    for (const o of options) {
+      if (!o || typeof o !== 'object') return;
+      compactTypeUnion(o);
+      const keys = Object.keys(o); if (keys.length !== 1 || keys[0] !== 'type') return;
+      for (const m of [].concat(o.type)) { if (typeof m !== 'string') return; if (!types.includes(m)) types.push(m); }
+    }
+    delete schema.anyOf;
+    schema.type = types.length === 1 ? types[0] : types;
   }
   // The source of a regular expression literal (/^[a-z]+$/i -> ^[a-z]+$), as RegExp.prototype.source gives it; null when
   // the literal is not one the engine accepts.
@@ -952,8 +990,13 @@
     const v = semver(sdk.version);
     const sameKind = !sdk.kind || sdk.kind === kind;
     const execution = kind === 'v1' && sameKind && !!v && v[0] === 1 && (v[1] >= 24);
-    if (sdk.customList) return { kind, zod, dialect: null, closed: zod < 4, intBounds: zod >= 4, execution: sdk.customList === 'wrap' && execution, customList: sdk.customList };
-    return { kind, zod, dialect: kind === 'v2' ? '2020-12' : 'draft-07', closed: zod < 4, intBounds: zod >= 4, execution };
+    // zod 4.5.0 and later rewrite an anyOf of bare types as a type array (compactTypeUnion in its to-json-schema), for
+    // the zod package itself only (zod/v4 inside zod 3.25 has no such pass); the lowest version the dependency allows
+    // must have it.
+    const zv = semver(sdk.zodVersion);
+    const compactUnions = zod >= 4 && !!zv && zv[0] === 4 && zv[1] >= 5;
+    if (sdk.customList) return { kind, zod, dialect: null, closed: zod < 4, intBounds: zod >= 4, compactUnions, execution: sdk.customList === 'wrap' && execution, customList: sdk.customList };
+    return { kind, zod, dialect: kind === 'v2' ? '2020-12' : 'draft-07', closed: zod < 4, intBounds: zod >= 4, compactUnions, execution };
   }
   // A TypeScript or JavaScript file that builds an McpServer and sets its own tools/list handler on it
   // (mcpServer.server.setRequestHandler(ListToolsRequestSchema, …) under SDK 1.x, (…, 'tools/list', …) under 2.x): the
@@ -2676,7 +2719,7 @@
     });
     const sv = pick('server', server, lock['@modelcontextprotocol/server']); const kv = pick('sdk', sdk, lock['@modelcontextprotocol/sdk']); const zv = pick('zod', zod, lock.zod);
     if (sv) { out.kind = 'v2'; out.version = semver(sv) ? semver(sv).join('.') : null; } else if (kv) { const v = semver(kv); out.kind = v && v[0] >= 2 ? 'v2' : 'v1'; out.version = v ? v.join('.') : null; }
-    const zm = semver(zv); if (zm) out.zod = zm[0];
+    const zm = semver(zv); if (zm) { out.zod = zm[0]; out.zodVersion = zm.join('.'); }
     // Python: the standalone fastmcp package, or the SDK's own FastMCP.
     let fast = false; let mcp = false;
     entries.forEach(([p, text]) => {
