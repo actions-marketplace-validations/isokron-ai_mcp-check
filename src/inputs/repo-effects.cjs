@@ -768,6 +768,38 @@ const idsOf = (code) => new Set((code.match(/(?<![.\w$])[A-Za-z_$][\w$]*/g) || [
     return /\b(if|and|or|for|lambda)\b/.test(pre);
   }
 
+  // Is there an early `return` before pos in this function, inside an `if` whose condition no argument of the tool
+  // reaches? Then pos runs only in one mode (`if not use_ssh: yield; return`), not on every call. A guard on the tool's
+  // own arguments (`if (!path) return error`) is validation: the path after it is still the tool's normal path.
+  function earlyExit(P, pos, a, b, taint) {
+    if (P.lang === 'js') {
+      const code = P.code; const re = /\bif\s*\(/g; re.lastIndex = a; let m;
+      const anon = P.funcs.filter((g) => g.anon && g.body && g.body[0] > a && g.body[1] < b);
+      while ((m = re.exec(code)) && m.index < pos) {
+        if (anon.some((g) => g.body[0] <= m.index && m.index < g.body[1])) continue;
+        const open = m.index + m[0].length - 1; const close = matchClose(code, open); if (close < open || close >= pos) continue;
+        const b0 = nextSig(code, close + 1); const end = code[b0] === '{' ? matchClose(code, b0) : exprEnd(code, b0);
+        if (end < b0 || end >= pos) continue;
+        if (!/\breturn\b/.test(code.slice(b0, end + 1))) continue;
+        if (taintedIn(code.slice(open + 1, close), taint)) continue;
+        return true;
+      }
+      return false;
+    }
+    // python: `if <cond>: return` or an `if <cond>:` block holding a return, ended before pos
+    const li = P.line(pos) - 1; const li0 = Math.max(0, P.line(a) - 1);
+    for (let k = li0; k < li; k++) {
+      const l = P.lines[k]; const m = /^\s*if\s+(.*?):\s*(.*)$/.exec(l); if (!m) continue;
+      const ind = P.indentOf(l); let body = m[2]; let j = k + 1;
+      if (!body.trim()) { while (j < P.lines.length && (!P.lines[j].trim() || P.indentOf(P.lines[j]) > ind)) { body += '\n' + P.lines[j]; j++; } }
+      if (j > li) continue; // pos is inside this if's body
+      if (!/(^|\n)\s*return\b/.test(body)) continue;
+      if (taintedIn(m[1], taint)) continue;
+      return true;
+    }
+    return false;
+  }
+
   // ------------------------------------------------------------ scanning a region
   function callsIn(P, a, b) {
     const out = []; const code = P.code;
@@ -1074,6 +1106,7 @@ const idsOf = (code) => new Set((code.match(/(?<![.\w$])[A-Za-z_$][\w$]*/g) || [
     const known = !!prog && (!RO_SUB[prog] || w.words.slice(1).some((x) => !x.startsWith('-')) || w.full === true);
     const label = w.words ? w.words.slice(0, 3).join(' ') : '';
     if (!known && !cmdTainted) { emit('exec', 'may', sink, (label ? label + '; ' : '') + (prog ? 'the sub-command is not a literal' : 'command is not a literal')); return; }
+    if (!taintedIn(P.code.slice(call.open, call.close), taint)) { emit('exec', 'may', sink, (label ? label + '; ' : '') + 'the command does not come from the tool\'s arguments'); return; }
     emit('exec', 'definite', sink, label || 'the command comes from the tool\'s arguments');
   }
   function roCommand(words) {
@@ -1131,10 +1164,12 @@ const idsOf = (code) => new Set((code.match(/(?<![.\w$])[A-Za-z_$][\w$]*/g) || [
     const rules = P.lang === 'js'
       ? [[/(?:\b(?:const|let|var)\s+)?(?<![\w$.])([A-Za-z_$][\w$]*)\s*(?::[^=\n]{0,60})?=(?![=>])\s*([^;\n]{0,300})/g, (m) => [[m[1]], m[2]]],
          [/\b(?:const|let|var)\s*[{[]([^}\]]*)[}\]]\s*=\s*([^;\n]{0,300})/g, (m) => [Array.from(destructNames(m[1])), m[2]]],
-         [/\bfor\s*\(\s*(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s+(?:of|in)\s+([^)]{0,200})\)/g, (m) => [[m[1]], m[2]]]]
+         [/\bfor\s*\(\s*(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s+(?:of|in)\s+([^)]{0,200})\)/g, (m) => [[m[1]], m[2]]],
+         [/(?<![\w$.])([A-Za-z_$][\w$]*)\s*\.\s*(?:push|unshift|splice)\s*\(([^;\n]{0,300})/g, (m) => [[m[1]], m[2]]]]
       : [[/^[ \t]*([A-Za-z_]\w*)\s*(?::[^=\n]+)?=(?!=)\s*(.*)$/gm, (m) => [[m[1]], m[2]]],
          [/^[ \t]*for\s+([A-Za-z_]\w*)\s+in\s+(.*):\s*$/gm, (m) => [[m[1]], m[2]]],
-         [/\bas\s+([A-Za-z_]\w*)\s*[:,]/g, (m) => [[m[1]], code.slice(Math.max(0, m.index - 200), m.index)]]];
+         [/\bas\s+([A-Za-z_]\w*)\s*[:,]/g, (m) => [[m[1]], code.slice(Math.max(0, m.index - 200), m.index)]],
+         [/^[ \t]*([A-Za-z_]\w*)\s*\.\s*(?:append|extend|insert)\s*\((.*)$/gm, (m) => [[m[1]], m[2]]]];
     for (let round = 0; round < 4; round++) {
       let grew = false;
       for (const [re, pick] of rules) { re.lastIndex = 0; let m; while ((m = re.exec(code))) { const [lhs, rhs] = pick(m); if (!lhs.some((x) => !t.has(x))) continue; if (Array.from(idsOf(rhs)).some((x) => t.has(x))) lhs.forEach((x) => { if (!t.has(x)) { t.add(x); grew = true; } }); } }
@@ -1201,6 +1236,7 @@ const idsOf = (code) => new Set((code.match(/(?<![.\w$])[A-Za-z_$][\w$]*/g) || [
       };
       const taint = propagate(P, f && f.body && f.body[0] <= a && f.body[1] >= b ? f.body[0] : a, f && f.body && f.body[0] <= a && f.body[1] >= b ? f.body[1] : b, taintIn || idsOfParams(P, f));
       const region = { P, a, b, via, f, params, taint, lits: litsIn || new Map() };
+      const condAt = (pos) => isCond(P, pos, a, b) || earlyExit(P, pos, a, b, taint);
       // the literal values this call passes to the callee's parameters (a program name, an argv array)
       const calleeLits = (call, t) => {
         const plist = paramList(t.P, t.f); const out = new Map();
@@ -1240,11 +1276,11 @@ const idsOf = (code) => new Set((code.match(/(?<![.\w$])[A-Za-z_$][\w$]*/g) || [
             if (sqlSeen.has(s.s)) continue; const k = sqlKind(s.v); if (!k) continue; sqlSeen.add(s.s); claimed.add(s.s); sqlHere = true;
             const se = { kind: k.kind, conf: 'definite', sink: 'sql.' + k.verb, note: s.v.replace(/\s+/g, ' ').slice(0, 60), at: s.s, P };
             const from = targetFromArgs(P, call, se, taint, state);
-            add(from === false ? Object.assign(se, { conf: 'may', note: se.note + '; no argument of the tool reaches the statement' }) : se, via, capMay, cond || isCond(P, s.s, a, b));
+            add(from === false ? Object.assign(se, { conf: 'may', note: se.note + '; no argument of the tool reaches the statement' }) : se, via, capMay, cond || condAt(s.s));
           }
         }
         if (sqlHere) effs = effs.filter((e) => e.kind !== 'unknown_call');
-        const condCall = cond || isCond(P, call.at, a, b);
+        const condCall = cond || condAt(call.at);
         effs.forEach((e) => { const from = targetFromArgs(P, call, e, taint, state); add(from === false ? Object.assign({}, e, { conf: 'may', note: (e.note ? e.note + '; ' : '') + 'the target does not come from the tool\'s arguments' }) : e, via, capMay, condCall); });
         // follow into the repository
         if (depth < state.depth && !call.chained) {
@@ -1262,8 +1298,8 @@ const idsOf = (code) => new Set((code.match(/(?<![.\w$])[A-Za-z_$][\w$]*/g) || [
       if (!state.disable.has('sql')) for (const s of strs) {
         if (claimed.has(s.s) || sqlSeen.has(s.s) || s.doc) continue;
         const k = sqlKind(s.v); if (!k || k.kind === 'read') continue;
-        if (s.tpl && /sql|execute|query/i.test(s.tag || '')) { sqlSeen.add(s.s); const from = taintedIn(P.code.slice(Math.max(a, s.s - 200), s.e + 100), taint); add({ kind: k.kind, conf: from ? 'definite' : 'may', sink: 'sql.' + k.verb, note: s.v.replace(/\s+/g, ' ').slice(0, 60) + (from ? '' : '; no argument of the tool reaches the statement'), at: s.s, P }, via, capMay, cond || isCond(P, s.s, a, b)); continue; }
-        sqlSeen.add(s.s); add({ kind: k.kind, conf: 'may', sink: 'sql.' + k.verb, note: 'a SQL string that no call in this function receives', at: s.s, P }, via, capMay, cond || isCond(P, s.s, a, b));
+        if (s.tpl && /sql|execute|query/i.test(s.tag || '')) { sqlSeen.add(s.s); const from = taintedIn(P.code.slice(Math.max(a, s.s - 200), s.e + 100), taint); add({ kind: k.kind, conf: from ? 'definite' : 'may', sink: 'sql.' + k.verb, note: s.v.replace(/\s+/g, ' ').slice(0, 60) + (from ? '' : '; no argument of the tool reaches the statement'), at: s.s, P }, via, capMay, cond || condAt(s.s)); continue; }
+        sqlSeen.add(s.s); add({ kind: k.kind, conf: 'may', sink: 'sql.' + k.verb, note: 'a SQL string that no call in this function receives', at: s.s, P }, via, capMay, cond || condAt(s.s));
       }
     };
     for (const r of regions) {

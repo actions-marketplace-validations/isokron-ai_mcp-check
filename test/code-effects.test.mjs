@@ -270,7 +270,7 @@ test('R-AE-16: the first score on the labelled servers: nothing the check calls 
   assert.ok(w.code_lenient.tp >= 19 && w.code_lenient.recall.p >= 0.5, 'recall ' + JSON.stringify(w.code_lenient.recall));
   assert.equal(res.summary['annot-code-deletes-marked-safe'].code_lenient.fp, 0);
   const missed = res.rows.filter((r) => r.checks['annot-code-writes-marked-readonly'].positive && !r.checks['annot-code-writes-marked-readonly'].attention && !r.label.ambiguous).map((r) => r.key).sort();
-  assert.deepEqual(missed, ['py-fastmcp/bill_user', 'py-sinks/aiohttp_patch', 'py-sinks/deep_write', 'py-sinks/httpx_put', 'py-sinks/open_append', 'py-sinks/requests_post', 'py-sinks/sdk_may', 'py-sinks/table_dispatch', 'ts-mixed/export_report', 'ts-sinks/axios_post', 'ts-sinks/callback_write', 'ts-sinks/deep_write', 'ts-sinks/fetch_put', 'ts-sinks/fs_append', 'ts-sinks/fs_mkdir', 'ts-sinks/table_dispatch'], 'POST/PUT/PATCH and housekeeping-shaped writes and opaque clients (advice only), callbacks, depth, and a table of functions');
+  assert.deepEqual(missed, ['py-fastmcp/bill_user', 'py-sinks/aiohttp_patch', 'py-sinks/deep_write', 'py-sinks/httpx_put', 'py-sinks/open_append', 'py-sinks/requests_post', 'py-sinks/sdk_may', 'py-sinks/table_dispatch', 'ts-mixed/export_report', 'ts-sinks/axios_post', 'ts-sinks/callback_write', 'ts-sinks/deep_write', 'ts-sinks/exec_rm', 'ts-sinks/fetch_put', 'ts-sinks/fs_append', 'ts-sinks/fs_mkdir', 'ts-sinks/table_dispatch'], 'POST/PUT/PATCH and housekeeping-shaped writes and opaque clients (advice only), callbacks, depth, a table of functions, and a constant command no argument reaches (R-AE-31)');
   assert.deepEqual(res.summary.not_analysed, []);
 });
 
@@ -442,4 +442,29 @@ test('R-AE-30: a process run through a guard wrapper takes its program and argum
   // a program nobody passes as a literal and the arguments do not name: may, worded as such
   const opaque = snippet({ 'index.ts': wrap + "server.registerTool('t', { description: 'd', inputSchema: {}, annotations: { readOnlyHint: true } }, async ({ resource }) => {\n  return runSafe(process.env.TOOL_BIN, ['x', resource]);\n});\n" }, 't');
   assert.deepEqual(opaque.effects.exec.map((e) => [e.confidence, e.note]), [['may', 'command is not a literal']]);
+});
+
+test('R-AE-31: an exec that no argument of the tool reaches is "may", and so is everything after an early return the arguments do not decide', () => {
+  // QA-40 repro r2 (mysql-designcomputer get_schema_info, get_table_sample): an SSH tunnel built from the environment,
+  // after `if not ssh: yield; return` in a context manager.
+  const r2 = { 'server.py': 'import os\nimport subprocess\nfrom contextlib import contextmanager\n\n@contextmanager\ndef maybe_tunnel():\n    if os.getenv("USE_SSH", "false") != "true":\n        yield "127.0.0.1"\n        return\n    proc = subprocess.Popen(["ssh", "-N", "-L", "3330:localhost:3306", os.getenv("SSH_HOST")])\n    try:\n        yield "127.0.0.1"\n    finally:\n        proc.terminate()\n\n@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))\ndef t(table: str) -> str:\n    with maybe_tunnel() as host:\n        return f"SELECT * FROM {table} LIMIT 5 on {host}"\n' };
+  const tun = snippet(r2, 't');
+  assert.deepEqual(tun.effects.exec.map((e) => [e.sink, e.confidence]), [['exec.subprocess.Popen', 'may']]);
+  assert.match(tun.effects.exec[0].note, /does not come from the tool's arguments/);
+  // a literal command with no argument in it, on the straight-line path: may (TS and Python)
+  assert.deepEqual(snippet(TS("execSync('git pull --rebase');"), 't').effects.exec.map((e) => e.confidence), ['may']);
+  assert.deepEqual(snippet(PY('subprocess.run(["make", "clean"])'), 't').effects.exec.map((e) => e.confidence), ['may']);
+  // positive controls: the tool's argument reaches the argv, directly or through a list built up with append/push
+  assert.deepEqual(snippet(PY('subprocess.run(["git", "checkout", p])'), 't').effects.exec.map((e) => e.confidence), ['definite']);
+  assert.deepEqual(snippet(PY('cmd = ["git", "branch", "-D"]\ncmd.append(p)\nsubprocess.run(cmd)'), 't').effects.exec.map((e) => e.confidence), ['definite']);
+  assert.deepEqual(snippet(TS("const argv = ['rm'];\nargv.push(a.path);\nexecFileSync('rm', argv);", "import { execFileSync } from 'node:child_process';"), 't').effects.exec.map((e) => e.confidence), ['definite']);
+  // early return: decided by the environment, the rest of the function is conditional; decided by an argument, it is not
+  const envGuard = snippet(PY('if not os.getenv("ALLOW"):\n    return "off"\nos.remove(p)'), 't');
+  assert.deepEqual(envGuard.effects.delete.map((e) => [e.confidence, e.note]), [['may', 'on a conditional path']]);
+  const argGuard = snippet(PY('if not p:\n    return "no path"\nos.remove(p)'), 't');
+  assert.deepEqual(argGuard.effects.delete.map((e) => e.confidence), ['definite']);
+  const jsEnv = snippet(TS("if (!process.env.ALLOW) return 'off';\nfs.rmSync(a.path);"), 't');
+  assert.deepEqual(jsEnv.effects.delete.map((e) => e.confidence), ['may']);
+  const jsArg = snippet(TS("if (!a.path) { return 'no path'; }\nfs.rmSync(a.path);"), 't');
+  assert.deepEqual(jsArg.effects.delete.map((e) => e.confidence), ['definite']);
 });
