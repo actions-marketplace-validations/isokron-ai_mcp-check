@@ -281,6 +281,17 @@
     }
     return j;
   }
+  // A TS type annotation after `const name:`, up to the "=" that starts the value (skipType does not stop at "=").
+  function skipAnnotation(t, j) {
+    let d = 0;
+    for (let n = 0; j < t.length && n < 400; j++, n++) {
+      const v = t[j].type === 'p' ? t[j].value : null;
+      if (v === '<' || v === '(' || v === '[' || v === '{') d++;
+      else if (v === '>' || v === ')' || v === ']' || v === '}') { if (d === 0) return j; d--; }
+      else if ((v === '=' || v === ',' || v === ';') && d === 0) return j;
+    }
+    return j;
+  }
   const HANDLER_KEYS = new Set(['handler', 'execute', 'callback', 'run', 'cb', 'fn', 'impl']);
   // An object literal. Besides the value: `unknownKeys` (keys whose value could not be read), `partialKeys` (strings read in part,
   // a template with an unresolved ${…}) and `spreadUnknown` (a ...spread that could not be read).
@@ -622,6 +633,33 @@
     [stem].concat(JS_EXT.map((e) => stem + e), JS_EXT.map((e) => stem + '/index' + e)).forEach((c) => (suffixIndex(c) || []).forEach((p) => hits.add(p)));
     return hits.size === 1 ? Array.from(hits)[0] : null;
   }
+  // A top-level constant of a file that nothing in that file changes: declared once, with const, and every other use a
+  // read (no assignment, ++/--, delete, push/splice/set/… on it or a member, and not handed to a call other than
+  // Object.entries / keys / values / freeze). Used for a registry another module imports (R-RD-33).
+  const FROZEN_MUTATORS = /^(push|pop|shift|unshift|splice|sort|reverse|fill|copyWithin|set|delete|clear|add)$/;
+  function constFrozenIn(t, name) {
+    let decls = 0;
+    for (let k = 0; k < t.length; k++) {
+      const x = t[k]; if (x.type !== 'id' || x.value !== name || isP(t[k - 1], '.') || isP(t[k - 1], '?.')) continue;
+      const pv = t[k - 1];
+      if (pv && pv.type === 'id' && /^(const|let|var|function|class)$/.test(pv.value)) { decls++; if (pv.value !== 'const') return false; continue; }
+      if (pv && ((pv.type === 'id' && pv.value === 'delete') || isP(pv, '++') || isP(pv, '--'))) return false;
+      if (isP(t[k + 1], ':') && (isP(pv, '{') || isP(pv, ','))) continue; // a key of an object literal
+      let m = k + 1;
+      for (let n = 0; n < 64; n++) {
+        if ((isP(t[m], '.') || isP(t[m], '?.')) && t[m + 1] && t[m + 1].type === 'id') { if (FROZEN_MUTATORS.test(t[m + 1].value) && isP(t[m + 2], '(')) return false; m += 2; }
+        else if (isP(t[m], '[')) m = matchClose(t, m) + 1;
+        else break;
+      }
+      if (isP(t[m], '=') || isP(t[m], '++') || isP(t[m], '--') || (t[m] && t[m].type === 'p' && /^([-+*/%|&^]|\?\?|\|\||&&|\*\*|<<|>>)$/.test(t[m].value) && isP(t[m + 1], '='))) return false;
+      if (m === k + 1 && (isP(pv, '(') || isP(pv, ',') || isP(pv, '...'))) {
+        // an argument: only Object.entries / keys / values / freeze(NAME) read it
+        let o = k - 1; let d = 0; for (; o >= 0; o--) { if (isP(t[o], ')') || isP(t[o], ']') || isP(t[o], '}')) d++; else if (isP(t[o], '(') || isP(t[o], '[') || isP(t[o], '{')) { if (!d) break; d--; } }
+        if (o >= 0 && isP(t[o], '(') && t[o - 1] && t[o - 1].type === 'id' && !(/^(entries|keys|values|freeze)$/.test(t[o - 1].value) && isP(t[o - 2], '.') && t[o - 3] && t[o - 3].value === 'Object') && !/^(if|while|switch|return|for)$/.test(t[o - 1].value)) return false;
+      }
+    }
+    return decls === 1;
+  }
   // Constants each file sees: its own, the ones it imports (followed through re-exports), and for imported names that
   // cannot be followed, a constant of that name defined once in the repository (globals).
   function moduleConsts(files, globals, sdk) {
@@ -695,7 +733,19 @@
       });
       return out;
     };
-    return { seedFor: (p) => seedFor(p, 0), tokens: toks, tableFor: (p) => tableFor(p, 0), module: mod, importedWrappers };
+    // Names a file imports (one relative import, from the file that declares them) that are constants nothing changes
+    // in the declaring file (R-RD-33): a registry there can be unrolled where it is iterated.
+    const frozenImports = (p) => {
+      const out = new Set();
+      mod(p).imports.forEach((imp) => {
+        if (!imp.spec.startsWith('.') || imp.imported === '*' || imp.imported === 'default') return;
+        const target = resolveSpec(p, imp.spec, paths, suffixIndex); if (!target || target === p) return;
+        const local = mod(target).exports.names.get(imp.imported);
+        if (typeof local === 'string' && constFrozenIn(toks(target), local)) out.add(imp.local);
+      });
+      return out;
+    };
+    return { seedFor: (p) => seedFor(p, 0), tokens: toks, tableFor: (p) => tableFor(p, 0), module: mod, importedWrappers, frozenImports };
   }
 
   // ------------------------------------------------------------ JS/TS extraction
@@ -732,7 +782,7 @@
       if (tk.type !== 'id') continue;
       if ((tk.value === 'const' || tk.value === 'let' || tk.value === 'var') && t[i + 1].type === 'id' && !isP(t[i - 1], '.')) {
         let j = i + 2;
-        if (isP(t[j], ':')) j = skipType(t, j + 1);
+        if (isP(t[j], ':')) j = skipAnnotation(t, j + 1); // const fooTool: ToolDefinition<typeof P> = { … } (R-RD-33)
         if (!isP(t[j], '=')) continue;
         let v; let lost = [];
         try { [v, lost] = collecting(() => parseValue(t, j + 1, Object.assign({}, ctx, { consts }))); } catch (e) { v = { value: SKIP }; }
@@ -955,7 +1005,9 @@
           }
         }
       }
-      const r = ok && decls === 1; frozenMemo.set(name, r); return r;
+      // declared here once, or imported from a module of the repository that declares it once with const and never
+      // changes it (opts.frozenImports, R-RD-33)
+      const r = ok && (decls === 1 || (decls === 0 && !!opts.frozenImports && opts.frozenImports.has(name))); frozenMemo.set(name, r); return r;
     };
     // Registrations inside a loop over a collection the reader knows (R-RD-15, R-RD-16):
     //   for (const x of LIST) / for (const [name, def] of Object.entries(TABLE)) / LIST.forEach((x) => …)
@@ -2938,7 +2990,7 @@
       let ts = [];
       const js = /\.(ts|mts|cts|js|mjs|cjs)$/.test(p);
       try {
-        ts = extractFromFile(p, t, js ? { sdk: sdkFor(p), consts: mods.seedFor(p), tokens: mods.tokens(p), wrappers: mods.importedWrappers(p), classTools: bases, workBudget: opts.workBudget } : { sdk, pyConsts, pyRegistrars: pyRegs, pyTemplates: pyTpl });
+        ts = extractFromFile(p, t, js ? { sdk: sdkFor(p), consts: mods.seedFor(p), tokens: mods.tokens(p), wrappers: mods.importedWrappers(p), frozenImports: mods.frozenImports(p), classTools: bases, workBudget: opts.workBudget } : { sdk, pyConsts, pyRegistrars: pyRegs, pyTemplates: pyTpl });
       } catch (e) { ts = []; ts.unresolved = [{ line: null }]; } // a file the reader fails on counts as one unread registration
       // another agent host's plugin: named, never listed (R-RD-05)
       const host = js ? hostPluginModule(t) : null;
