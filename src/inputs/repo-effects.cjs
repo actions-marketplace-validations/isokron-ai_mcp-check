@@ -941,6 +941,9 @@ const idsOf = (code) => new Set((code.match(/(?<![.\w$])[A-Za-z_$][\w$]*/g) || [
       if (chain.length >= 2 && (last === 'get') && state.httpClients(P).has(chain.slice(0, -1).join('.'))) { fam('http'); emit('read', 'definite', 'http.GET', chain.join('.')); return out; }
       if (chain.length >= 2 && last === 'request' && state.httpClients(P).has(chain.slice(0, -1).join('.'))) { fam('http'); const a0 = argTexts(P, call)[0]; const s = a0 && P.strs.find((x) => x.s === a0[0]); return out.concat(httpEffects(P, call, chain.join('.'), s ? { method: s.v.toUpperCase(), dynamic: false } : { method: null, dynamic: true }, '', state, region)); }
     }
+    // ---- a Redis client from a factory, an attribute or an annotation (before the name-based Redis rules below)
+    fam('sdk');
+    if (clientCall(R, P, call, region, emit, true)) return out;
     // ---- ORM and document stores (both languages)
     fam('orm');
     if (chain.length >= 2) {
@@ -975,8 +978,10 @@ const idsOf = (code) => new Set((code.match(/(?<![.\w$])[A-Za-z_$][\w$]*/g) || [
     }
     if (P.lang === 'py' && chain.length === 1 && P.imports.get(head) && /sqlalchemy|sqlmodel/.test(P.imports.get(head).spec) && /^(insert|update|delete)$/.test(P.imports.get(head).name)) { emit(P.imports.get(head).name === 'delete' ? 'delete' : 'write', 'definite', 'orm.sqlalchemy.core.' + P.imports.get(head).name); return out; }
     if (P.lang === 'py' && chain.length >= 2 && P.ormFile && (last === 'delete' || last === 'save') && call.close - call.open <= 2 && !/^(self|cls)$/.test(head)) { emit(last === 'delete' ? 'delete' : 'write', 'definite', 'orm.' + last); return out; }
-    // ---- client verbs: lower confidence
+    // ---- client objects whose library the reader can see (a factory, an attribute, an annotation)
     fam('sdk');
+    if (clientCall(R, P, call, region, emit)) return out;
+    // ---- client verbs: lower confidence
     if (chain.length >= 2) {
       const mid = chain.slice(0, -1);
       const upper = /^[A-Z]/.test(last);
@@ -995,6 +1000,100 @@ const idsOf = (code) => new Set((code.match(/(?<![.\w$])[A-Za-z_$][\w$]*/g) || [
       }
     }
     return out;
+  }
+
+  // ------------------------------------------------------------ client objects from factories and attributes
+  // The library a receiver comes from, when the reader can see it: a constructor or factory imported from a client
+  // library, a repository function whose return annotation or return value is one, an attribute (self.x, this.x) the
+  // class assigns one, a parameter annotated with one, or an object obtained from such a client (client.volumes.get(x)).
+  const CLIENT_LIBS = [[/^(redis|redis\.asyncio|redis\.client|redis\.cluster|ioredis|@redis\/client|@upstash\/redis)$/, 'redis'], [/^(docker|dockerode)$/, 'docker'], [/^(boto3|aioboto3|botocore(\..*)?|@aws-sdk\/.*)$/, 'aws'], [/^atlassian(\..*)?$/, 'atlassian']];
+  // a module of the repository itself (`from src.common.connection import X`), not a library
+  function repoSpec(R, P, spec) { try { return !!(P.lang === 'js' ? R.resolveJs(P.path, spec) : R.resolvePy(P.path, spec)); } catch (e) { return false; } }
+  function libOfSpec(spec, name) {
+    if (!spec || spec.startsWith('.') || stdlibJs(spec)) return null;
+    for (const [re, k] of CLIENT_LIBS) if (re.test(spec)) return k;
+    if (CLIENTISH.test(spec) || /(Client|Session|Connection|Api|API|Service|Manager)$/.test(name || '')) return 'sdk:' + spec;
+    return null;
+  }
+  // the library of the first imported identifier in a type or expression text
+  function libOfIds(R, P, text) {
+    for (const id of (text.match(/[A-Za-z_$][\w$]*/g) || [])) { const im = P.imports.get(id); if (im && !repoSpec(R, P, im.spec)) { const l = libOfSpec(im.spec, im.name === '*' || im.name === 'default' ? id : im.name); if (l) return l; } }
+    return null;
+  }
+  function clientOfExpr(R, P, f, text, depth, seen) {
+    const t = text.trim().replace(/^await\s+/, '').replace(/^new\s+/, '');
+    if (depth > 3 || !t) return null;
+    const m = /^([A-Za-z_$][\w$]*)((?:\s*\.\s*[A-Za-z_$][\w$]*)*)/.exec(t); if (!m) return null;
+    const head = m[1]; const chain = (head + m[2]).replace(/\s+/g, '').split('.');
+    if (/^(self|this|cls)$/.test(head) && chain.length >= 2) return clientOfAttr(R, P, chain[1], depth + 1, seen);
+    const im = P.imports.get(head);
+    if (im && !im.spec.startsWith('.') && !repoSpec(R, P, im.spec)) return libOfSpec(im.spec, chain[chain.length - 1]) || libOfSpec(im.spec, im.name === '*' || im.name === 'default' ? head : im.name);
+    const called = t.charAt(m[0].length) === '(' || /^\s*\(/.test(t.slice(m[0].length));
+    if (!called || chain.length > 1) { const v = clientOfVar(R, P, f, head, depth + 1, seen); if (v) return v; }
+    if (!called) return null;
+    // a factory in the repository: its return annotation, or what it returns
+    let targets = []; try { targets = resolveName(R, P, chain, { f }); } catch (e) { targets = []; }
+    for (const tg of targets.slice(0, 3)) {
+      const key = tg.P.path + ':' + tg.f.start; if (seen.has(key)) continue; seen.add(key);
+      const Q = tg.P; const after = tg.f.params ? Q.text.slice(tg.f.params[1] + 1, tg.f.body ? Math.min(tg.f.body[0] + 1, tg.f.params[1] + 200) : tg.f.params[1] + 200) : '';
+      const ann = Q.lang === 'py' ? /^\s*->\s*([^:]+):/.exec(after) : /^\s*:\s*([^={]+?)\s*(?:=>|\{)/.exec(after);
+      if (ann) { const l = libOfIds(R, Q, ann[1]); if (l) return l; }
+      if (!tg.f.body) continue;
+      const body = Q.code.slice(tg.f.body[0], tg.f.body[1]); const re = /\breturn\s+([^\n;]+)/g; let r;
+      while ((r = re.exec(body))) { const l = clientOfExpr(R, Q, tg.f, r[1], depth + 1, seen); if (l) return l; }
+    }
+    return null;
+  }
+  function clientOfVar(R, P, f, name, depth, seen) {
+    if (depth > 3 || !f) return null;
+    if (f.params) { const ptxt = P.text.slice(f.params[0], f.params[1] + 1); const a = new RegExp('(?<![\\w$])' + name.replace(/\$/g, '\\$') + '\\s*\\??\\s*:\\s*([^,=)]+)').exec(ptxt); if (a) { const l = libOfIds(R, P, a[1]); if (l) return l; } }
+    if (!f.body) return null;
+    const body = P.code.slice(f.body[0], f.body[1]);
+    const re = new RegExp('(?<![\\w$.])' + name.replace(/\$/g, '\\$') + '\\s*(?::\\s*([^=\\n]+))?=(?![=>])\\s*([^;\\n]+)', 'g'); let m;
+    while ((m = re.exec(body))) {
+      if (m[1]) { const l = libOfIds(R, P, m[1]); if (l) return l; }
+      const l = clientOfExpr(R, P, f, m[2], depth + 1, seen); if (l) return l;
+    }
+    return null;
+  }
+  function clientOfAttr(R, P, attr, depth, seen) {
+    if (depth > 3) return null;
+    const key = P.path + '#' + attr; if (seen.has(key)) return null; seen.add(key);
+    const esc = attr.replace(/\$/g, '\\$');
+    // a declared type: `attr: Optional[Redis]`, `private attr: S3Client`
+    const decl = new RegExp('^\\s*(?:(?:private|public|protected|readonly|static)\\s+)*' + esc + '\\s*\\??\\s*:\\s*([^=;\\n]+)', 'gm'); let m;
+    while ((m = decl.exec(P.text))) { const l = libOfIds(R, P, m[1]); if (l) return l; }
+    const re = new RegExp('\\b(?:self|this|cls)\\s*\\.\\s*' + esc + '\\s*(?::\\s*([^=\\n]+))?=(?![=>])\\s*([^;\\n]+)', 'g');
+    while ((m = re.exec(P.code))) {
+      if (m[1]) { const l = libOfIds(R, P, m[1]); if (l) return l; }
+      const at = m.index; const f = P.funcs.filter((g) => g.body && g.body[0] <= at && at < g.body[1]).sort((x, y) => (x.body[1] - x.body[0]) - (y.body[1] - y.body[0]))[0] || null;
+      const l = clientOfExpr(R, P, f, m[2], depth + 1, seen); if (l) return l;
+    }
+    return null;
+  }
+  const REDIS_W2 = new Set([...REDIS_W, 'lset', 'linsert', 'rpoplpush', 'lmove', 'hincrby', 'hincrbyfloat', 'zincrby', 'setrange', 'getset', 'rename', 'renamenx', 'persist', 'pexpire', 'expireat', 'xgroup_create', 'xack', 'smove', 'hsetnx', 'psetex', 'restore', 'copy']);
+  const REDIS_D2 = new Set([...REDIS_D, 'delete', 'xdel', 'lrem', 'getdel', 'xtrim', 'ltrim', 'xgroup_destroy', 'zremrangebyscore', 'zremrangebyrank', 'zremrangebylex', 'spop', 'zpopmin', 'zpopmax']);
+  const CLIENT_EXTRA_VERBS = new Set(['run', 'build', 'pull', 'put', 'add', 'edit', 'set', 'execute', 'exec', 'append', 'overwrite', 'prune']);
+  // A call on a client object of a known library: Redis writes and deletes by command name ("definite" only when an
+  // argument of the tool reaches the call), any other client's write- or delete-named method as "may".
+  function clientCall(R, P, call, region, emit, onlyRedis) {
+    const chain = call.chain; if (chain.length < 2 || chain[0] === '<expr>') return false;
+    const last = chain[chain.length - 1]; const head = chain[0];
+    const seen = new Set(); let lib = null;
+    if (/^(self|this|cls)$/.test(head)) { if (chain.length < 3) return false; lib = clientOfAttr(R, P, chain[1], 0, seen); }
+    else if (!P.imports.get(head)) lib = clientOfVar(R, P, region.f, head, 0, seen);
+    if (!lib || (onlyRedis && lib !== 'redis')) return false;
+    if (lib === 'redis') {
+      const del = REDIS_D2.has(last); if (!del && !REDIS_W2.has(last)) return false;
+      const from = taintedIn(P.code.slice(call.open, call.close), region.taint || new Set());
+      emit(del ? 'delete' : 'write', from ? 'definite' : 'may', 'client.redis.' + last, from ? 'a Redis command on a client from ' + (head === 'self' || head === 'this' ? 'an attribute' : 'a factory or constructor') : 'a Redis command whose key does not come from the tool\'s arguments');
+      return true;
+    }
+    const verb = last.replace(/[A-Z_].*$/, '').toLowerCase();
+    const del = SDK_DELETE_VERBS.has(verb);
+    if (!del && !SDK_VERBS.has(verb) && !CLIENT_EXTRA_VERBS.has(verb)) return false;
+    emit(del ? 'delete' : 'write', 'may', 'client.' + lib.replace(/^sdk:/, '') + '.' + chain.slice(1).join('.'), 'a client method (' + lib.replace(/^sdk:/, '') + ') named like a ' + (del ? 'delete' : 'write'));
+    return true;
   }
 
   // Why a file write or delete is only a "may": a bookkeeping file, a directory made on the way, an append to a file the
@@ -1208,6 +1307,15 @@ const idsOf = (code) => new Set((code.match(/(?<![.\w$])[A-Za-z_$][\w$]*/g) || [
     return null;
   }
 
+  // The parameters a call's positional arguments bind: a Python method called on an object (obj.m(a)) binds `self`
+  // (or `cls`) without an argument, so its first argument goes to the second parameter.
+  function boundParams(t, call) {
+    const plist = paramList(t.P, t.f);
+    if (t.P.lang !== 'py' || call.chain.length < 2 || !t.f || !t.f.params || !plist.length || plist[0].length) return plist;
+    const first = t.P.code.slice(t.f.params[0] + 1, t.f.params[1]).split(',')[0].trim();
+    return /^(self|cls)\b/.test(first) ? plist.slice(1) : plist;
+  }
+
   function scanTool(R, regions, how, state) {
     const idsOfParams = (Q, f) => new Set(paramList(Q, f).flat());
     const fx = { read: [], write: [], delete: [], unsafe_http: [], exec: [], unknown_call: [] };
@@ -1233,7 +1341,7 @@ const idsOf = (code) => new Set((code.match(/(?<![.\w$])[A-Za-z_$][\w$]*/g) || [
       if (state.deadline && Date.now() > state.deadline) { state.timedOut = true; return; }
       params = new Set([...(params || []), ...idsOfParams(P, f)]);
       const calleeTaint = (Q, call, t, tn) => {
-        const plist = paramList(t.P, t.f); const args = splitArgs(Q.code, call.open, call.close); const out = new Set();
+        const plist = boundParams(t, call); const args = splitArgs(Q.code, call.open, call.close); const out = new Set();
         args.forEach(([x, y], i) => {
           const txt = Q.code.slice(x, y); const kw = Q.lang === 'py' ? /^\s*([A-Za-z_]\w*)\s*=(?!=)\s*([\s\S]*)$/.exec(txt) : null;
           if (!taintedIn(kw ? kw[2] : txt, tn)) return;
@@ -1246,7 +1354,7 @@ const idsOf = (code) => new Set((code.match(/(?<![.\w$])[A-Za-z_$][\w$]*/g) || [
       const condAt = (pos) => isCond(P, pos, a, b) || earlyExit(P, pos, a, b, taint);
       // the literal values this call passes to the callee's parameters (a program name, an argv array)
       const calleeLits = (call, t) => {
-        const plist = paramList(t.P, t.f); const out = new Map();
+        const plist = boundParams(t, call); const out = new Map();
         splitArgs(P.code, call.open, call.close).forEach(([x, y], i) => {
           const txt = P.code.slice(x, y); const kw = P.lang === 'py' ? /^\s*([A-Za-z_]\w*)\s*=(?!=)\s*/.exec(txt) : null;
           const v = litValue(P, region, kw ? [x + kw[0].length, y] : [x, y]); if (!v) return;

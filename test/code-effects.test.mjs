@@ -491,3 +491,29 @@ test('R-AE-32: deleting a file the same function wrote, directly or through a ca
     assert.deepEqual(t.effects.delete.map((e) => e.confidence), ['may'], w);
   }
 });
+
+test('R-AE-33: a client returned by a factory, held in an attribute or annotated is recognised; a Redis command is definite only when an argument reaches it, any other client verb is "may"', () => {
+  // QA-40 repro r4 (redis-py delete): r = get_connection() from another module, which returns redis.Redis(...)
+  const r4 = { 'conn.py': 'import redis\n\n\ndef get_connection():\n    return redis.Redis(host="localhost")\n', 'server.py': 'from mcp.server.fastmcp import FastMCP\n\nfrom .conn import get_connection\n\nmcp = FastMCP("r4")\n\n\n@mcp.tool()\ndef t(key: str) -> str:\n    r = get_connection()\n    return str(r.delete(key))\n' };
+  const del = snippet(r4, 't');
+  assert.deepEqual(del.effects.delete.map((e) => [e.sink, e.confidence]), [['client.redis.delete', 'definite']]);
+  // a factory known only by its return annotation (a classmethod of a connection manager)
+  const ann = { 'conn.py': 'from redis import Redis\n\nclass Manager:\n    _instance = None\n\n    @classmethod\n    def get_connection(cls) -> Redis:\n        return cls._instance\n', 'server.py': 'from .conn import Manager\n\n@mcp.tool()\ndef t(name: str, value: str) -> str:\n    r = Manager.get_connection()\n    return str(r.lpush(name, value))\n' };
+  assert.deepEqual(snippet(ann, 't').effects.write.map((e) => [e.sink, e.confidence]), [['client.redis.lpush', 'definite']]);
+  // an attribute: self.client = redis.Redis(...) in __init__
+  const attr = { 'server.py': 'import redis\n\nclass Store:\n    def __init__(self):\n        self.client = redis.Redis()\n\n    def drop(self, key):\n        self.client.delete(key)\n\nstore = Store()\n\n@mcp.tool()\ndef t(key: str) -> str:\n    store.drop(key)\n    return "ok"\n' };
+  assert.deepEqual(snippet(attr, 't').effects.delete.map((e) => [e.sink, e.confidence]), [['client.redis.delete', 'definite']]);
+  // a key that does not come from the tool's arguments: may
+  const fixed = { ...r4, 'server.py': r4['server.py'].replace('r.delete(key)', 'r.delete("session:last")') };
+  assert.deepEqual(snippet(fixed, 't').effects.delete.map((e) => e.confidence), ['may']);
+  // another library's client, from a factory with a return annotation, and an object obtained from it: may
+  const dock = { 'server.py': 'import docker\n\ndef _client(ctx) -> docker.DockerClient:\n    return ctx.request_context.lifespan_context.docker\n\n@mcp.tool()\ndef t(ctx, volume_name: str) -> str:\n    volume = _client(ctx).volumes.get(volume_name)\n    volume.remove(force=True)\n    return "ok"\n' };
+  assert.deepEqual(snippet(dock, 't').effects.delete.map((e) => [e.sink, e.confidence]), [['client.docker.remove', 'may']]);
+  const aws = { 'utils.py': 'import boto3\nfrom botocore.client import BaseClient\n\ndef get_client(region) -> BaseClient:\n    return boto3.client("s3tables", region_name=region)\n', 'server.py': 'from .utils import get_client\n\n@mcp.tool()\ndef t(arn: str, ns: str) -> dict:\n    client = get_client(None)\n    return client.create_namespace(tableBucketARN=arn, namespace=[ns])\n' };
+  assert.deepEqual(snippet(aws, 't').effects.write.map((e) => [e.sink, e.confidence]), [['client.aws.create_namespace', 'may']]);
+  // not a client: a local dict, and a repository class imported by an absolute module path
+  assert.deepEqual(snippet(PY('d = {}\nd.update(x=p)\nd.pop("x")'), 't').effects.write, []);
+  const local = { 'pkg/store.py': 'class Store:\n    def delete(self, key):\n        return key\n', 'server.py': 'from pkg.store import Store\n\n@mcp.tool()\ndef t(key: str) -> str:\n    s = Store()\n    return s.delete(key)\n' };
+  const lt = snippet(local, 't');
+  assert.deepEqual(lt.effects.delete.filter((e) => /^client\./.test(e.sink)), [], 'a repository class is followed, not guessed');
+});
