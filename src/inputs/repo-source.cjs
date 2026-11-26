@@ -243,7 +243,9 @@
     } else if (tok.type === 'id' && ctx && ctx.consts && hasOwn(ctx.consts, tok.value) && isP(t[i + 1], '.') && t[i + 2] && t[i + 2].type === 'id' && t[i + 2].value === 'shape' && !isP(t[i + 3], '(') && !isP(t[i + 3], '.')) {
       // Schema.shape of a zod object constant: the raw shape, with the optional flags the object schema kept.
       const c = ctx.consts[tok.value]; const sch = c.value;
-      if (c.zod && sch && sch.type === 'object' && sch.properties) { const req = new Set(sch.required || []); r = { value: sch.properties, end: i + 3, exact: c.exact, rawShape: true, optionalKeys: new Set(Object.keys(sch.properties).filter((k) => !req.has(k))) }; }
+      // The optional keys also go with the shape object itself (OPTIONAL_OF), so they are kept when the shape is read
+      // back through a registry entry (tool.inputShape in a loop over tool objects, R-RD-35).
+      if (c.zod && sch && sch.type === 'object' && sch.properties) { const req = new Set(sch.required || []); const opt = new Set(Object.keys(sch.properties).filter((k) => !req.has(k))); if (opt.size && !OPTIONAL_OF.has(sch.properties)) OPTIONAL_OF.set(sch.properties, opt); r = { value: sch.properties, end: i + 3, exact: c.exact, rawShape: true, optionalKeys: opt }; }
     } else if (tok.type === 'id' && ctx && ctx.consts && hasOwn(ctx.consts, tok.value)) {
       const c = ctx.consts[tok.value]; if (c.lost) lose(c.lost);
       const ch = idChain(t, i);
