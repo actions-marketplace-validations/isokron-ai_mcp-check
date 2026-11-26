@@ -576,8 +576,16 @@
     if (plus > a) {
       const l = this.ev(f, a, plus, env, depth + 1); const r = this.ev(f, plus + 1, b, env, depth + 1);
       if (typeof l === 'string' && typeof r === 'string') return (l + r).slice(0, MAX_STR);
+      if (typeof l === 'number' && typeof r === 'number') return l + r;
       if (l && l.__param) return l; if (r && r.__param) return r;
       return UNK([].concat(typeof l === 'string' ? [l] : isUnk(l) ? l.lost : [], typeof r === 'string' ? [r] : isUnk(r) ? r.lost : []));
+    }
+    // binary - of two numbers (a constant minus a literal, as format! arguments use it)
+    const minus = (() => { let last = -1; for (let k = a + 1; k < b; k++) { const x = t[k]; if (x.y === 'p' && (x.v === '(' || x.v === '[' || x.v === '{')) { const c = f.close[k]; if (c > 0 && c < b) { k = c; continue; } return -1; } if (isP(x, '-') && (t[k - 1].y === 'id' || t[k - 1].y === 'num' || isP(t[k - 1], ')'))) last = k; } return last; })();
+    if (minus > a) {
+      const l = this.ev(f, a, minus, env, depth + 1); const r = this.ev(f, minus + 1, b, env, depth + 1);
+      if (typeof l === 'number' && typeof r === 'number') return l - r;
+      return UNK(literalsIn(f, a, b));
     }
     while (a < b && (isP(t[a], '&') || isP(t[a], '*') || isId(t[a], 'mut'))) a++;
     if (isP(t[a], '-') && t[a + 1] && t[a + 1].y === 'num' && a + 2 === b) return -t[a + 1].v;
@@ -960,7 +968,7 @@
     if (v === null || typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') return v;
     if (v === undefined || isUnk(v)) { c.unk = true; if (v && v.lost) c.lost.push(...v.lost); return undefined; }
     if (Array.isArray(v)) return v.map((x) => toJson(x, c, depth + 1)).filter((x) => x !== undefined);
-    if (v.__schema) return v.schema;
+    if (v.__schema) { if (v.transforms) c.unk = true; return v.schema; }
     if (v.__ann) { if (v.unk) c.unk = true; return v.v; }
     if (v.__struct || v.__type || v.__tool) { c.unk = true; return undefined; }
     const o = {};
@@ -977,7 +985,7 @@
     const ctx = { dialect: opts.dialect || 'schemars', defs: {}, seen: new Set(), unknownTypes: 0, output: !!opts.output };
     const s = this.rootSchema(ty, f, ctx);
     if (!s) return UNK();
-    return { __schema: true, schema: s, approx: ctx.unknownTypes > 0 };
+    return ctx.transforms ? { __schema: true, schema: s, approx: true, transforms: ctx.transforms } : { __schema: true, schema: s, approx: ctx.unknownTypes > 0 };
   };
   Repo.prototype.rootSchema = function (ty, f, ctx) {
     ty = unwrap(ty);
@@ -1070,6 +1078,7 @@
         else if (m.key === 'required') o.required = true;
         else if (m.key === 'with' && !m.nested) { const v = val(); if (typeof v === 'string') o.with = v; }
         else if (m.key === 'schema_with') o.schemaWith = true;
+        else if (m.key === 'transform' && !m.nested) { const ids = []; let ok = true; for (let k = m.a; k < m.b; k++) { const x = f.t[k]; if (isId(x)) ids.push(x.v); else if (!isP(x, '::')) ok = false; } (o.transforms = o.transforms || []).push(ok && ids.length ? ids.join('::') : null); } // the path as written (other_mod::f)
         else if ((m.key === 'length' || m.key === 'range') && m.nested) { m.nested.forEach((x) => { const v = this.ev(f, x.a, x.b, null, 0); if (typeof v === 'number') (o[m.key] = o[m.key] || {})[x.key] = v; else if (x.key === 'equal' && typeof v === 'number') (o[m.key] = o[m.key] || {}).equal = v; }); }
         else if ((m.key === 'regex' || m.key === 'pattern') && m.nested) { const p = meta(m.nested, 'pattern'); if (p) { const v = this.ev(f, p.a, p.b, null, 0); if (typeof v === 'string') o.pattern = v; } }
         else if (m.key === 'regex' && !m.nested) { /* a path to a regex: not readable */ }
@@ -1110,6 +1119,7 @@
     s = Object.assign({}, s);
     if (ctx.dialect === 'schemars') { if (isRoot) s = Object.assign({ title: cont.title || d.name }, s); if (doc && !cont.description) s.description = doc; }
     if (typeof cont.description === 'string') s.description = cont.description;
+    if (cont.transforms) s = this.applyTransforms(cont.transforms, s, f, ctx);
     return s;
   };
   Repo.prototype.fieldsSchema = function (fields, f, ctx, depth, cont) {
@@ -1138,6 +1148,7 @@
         if (a.range) { if (a.range.min !== undefined) sch.minimum = a.range.min; if (a.range.max !== undefined) sch.maximum = a.range.max; }
         if (a.pattern) sch.pattern = a.pattern;
       }
+      if (a.transforms) sch = this.applyTransforms(a.transforms, sch, ff, ctx);
       if (name in props) return;
       props[name] = sch;
       const req = ctx.output ? !a.skipSer : (a.required || (!isOpt && !a.default && !cc.default));
@@ -1166,8 +1177,209 @@
     return cont.untagged ? { anyOf: names.map(variant) } : { oneOf: names.map(variant) };
   };
 
+  // ------------------------------------------------------------ #[schemars(transform = f)]
+  // schemars runs f(&mut Schema) on the generated schema (of a field, or of the whole container). The reader follows f
+  // only when its effect is certain without running it: its body matches one of the known transforms below token for
+  // token (names of its own bindings aside), or it only inserts keys whose values are literals, constants or format! of
+  // them. Any other f is not guessed: the tool is kept and its input schema is marked not readable (reason
+  // schema-transform, with the function's name).
+  // Known transforms, as Rust source; identifiers starting with __ are the function's own names (bound consistently).
+  const TRANSFORM_TEMPLATES = [
+    // ["T","null"] -> "T", and no "default": null (docling-project/docling.rs)
+    { kind: 'drop-null', fns: [`fn __f(__s: &mut Schema) {
+      if let Some(Value::Array(__types)) = __s.get("type").cloned() {
+        let __kept: Vec<_> = __types.into_iter().filter(|__t| __t != "null").collect();
+        if let [__single] = __kept.as_slice() { __s.insert("type".into(), __single.clone()); }
+      }
+      if __s.get("default") == Some(&Value::Null) { __s.remove("default"); }
+    }`] },
+    { kind: 'drop-null-type', fns: [`fn __f(__s: &mut Schema) {
+      if let Some(Value::Array(__types)) = __s.get("type").cloned() {
+        let __kept: Vec<_> = __types.into_iter().filter(|__t| __t != "null").collect();
+        if let [__single] = __kept.as_slice() { __s.insert("type".into(), __single.clone()); }
+      }
+    }`] },
+    // each property typed ["T","null"] -> anyOf [{type: T, its other keys}, {type: null}], annotation keys kept on the
+    // property (szaffarano/org-mcp-server)
+    { kind: 'nullable-any-of', fns: [`fn __f(__s: &mut Schema) {
+      let Some(__props) = __s.get_mut("properties").and_then(Value::as_object_mut) else { return; };
+      for __p in __props.values_mut().filter_map(Value::as_object_mut) { __helper(__p); }
+    }`, `fn __helper(__p: &mut Map<String, Value>) {
+      let Some(Value::Array(__types)) = __p.get("type") else { return; };
+      let [Value::String(__a), Value::String(__b)] = __types.as_slice() else { return; };
+      let __typed = match (__a.as_str(), __b.as_str()) {
+        ("null", __o) | (__o, "null") if __o != "null" => __o.to_string(),
+        _ => return,
+      };
+      let mut __branch = Map::new();
+      __branch.insert("type".to_string(), Value::String(__typed));
+      __p.remove("type");
+      let __moved: Vec<String> = __p.keys().filter(|__k| !__KEYS.contains(&__k.as_str())).cloned().collect();
+      for __k in __moved { if let Some(__v) = __p.remove(&__k) { __branch.insert(__k, __v); } }
+      __p.insert("anyOf".to_string(), json!([Value::Object(__branch), {"type": "null"}]));
+    }`] },
+  ];
+  const QUALIFIERS = new Set(['serde_json', 'schemars', 'rmcp', 'std', 'core', 'alloc', 'crate', 'self', 'super', 'collections']);
+  // The tokens of a function, from `fn` to its closing brace, without docs, path qualifiers or trailing commas.
+  function fnTokens(t, a, b) {
+    const out = [];
+    for (let k = a; k < b; k++) {
+      const x = t[k];
+      if (x.y === 'doc') continue;
+      if (x.y === 'id' && QUALIFIERS.has(x.v) && isP(t[k + 1], '::')) { k++; continue; }
+      if (isP(x, ',') && t[k + 1] && t[k + 1].y === 'p' && (t[k + 1].v === ')' || t[k + 1].v === ']' || t[k + 1].v === '}')) continue;
+      out.push(x);
+    }
+    return out;
+  }
+  let templateCache = null;
+  function templates() {
+    if (templateCache) return templateCache;
+    templateCache = TRANSFORM_TEMPLATES.map((tp) => ({ kind: tp.kind, fns: tp.fns.map((src) => { const t = tokenize(src); return fnTokens(t, 0, t.length); }) }));
+    return templateCache;
+  }
+  // Token-for-token match of a function against a template; the bindings (template name -> source name), or null.
+  function matchTokens(tpl, code, bind) {
+    if (tpl.length !== code.length) return null;
+    const b = Object.assign({}, bind); const used = new Map(Object.keys(b).map((k) => [b[k], k]));
+    for (let k = 0; k < tpl.length; k++) {
+      const x = tpl[k]; const y = code[k];
+      if (x.y !== y.y) return null;
+      if (x.y === 'id' && x.v.startsWith('__')) {
+        if (b[x.v] !== undefined) { if (b[x.v] !== y.v) return null; continue; }
+        if (used.has(y.v)) return null;
+        b[x.v] = y.v; used.set(y.v, x.v); continue;
+      }
+      if (x.v !== y.v) return null;
+    }
+    return b;
+  }
+  Repo.prototype.fnByName = function (name, f) {
+    const ds = this.fns.filter((d) => d.name === name && d.body && !d.impl);
+    if (!ds.length) return null;
+    const same = ds.find((d) => d.f === f); if (same) return same;
+    const cr = this.crateOf(f.path); const inCrate = ds.filter((d) => this.crateOf(d.f.path) === cr);
+    return inCrate.length === 1 ? inCrate[0] : null;
+  };
+  // A free function named by a path (other_mod::f, crate::tools::f, self::f) from file f: the one definition whose file
+  // is that module of f's crate (src/other_mod.rs or src/other_mod/mod.rs; crate:: from the crate root), or null. A
+  // same-file function of the same name is not taken for it, and super:: and paths that match no file or several
+  // are declined.
+  Repo.prototype.fnByPath = function (name, f) {
+    const segs = name.split('::'); const last = segs.pop();
+    if (segs[0] === 'self') { segs.shift(); if (!segs.length) { const d = this.fns.find((x) => x.name === last && x.body && !x.impl && x.f === f); return d || null; } }
+    if (!segs.length) return this.fnByName(last, f);
+    if (segs.includes('super') || segs.includes('self')) return null;
+    const cr = this.crateOf(f.path);
+    const modOf = (p) => { // the module path of a file under its crate's src/: [] for main.rs / lib.rs
+      const m = /(?:^|\/)src\/(.+)\.rs$/.exec(p); if (!m) return null;
+      const parts = m[1].split('/');
+      if (parts.length === 1 && /^(main|lib)$/.test(parts[0])) return [];
+      if (parts[parts.length - 1] === 'mod') parts.pop();
+      return parts;
+    };
+    const want = segs[0] === 'crate' ? segs.slice(1) : segs;
+    const ds = this.fns.filter((d) => {
+      if (d.name !== last || !d.body || d.impl || this.crateOf(d.f.path) !== cr) return false;
+      const mp = modOf(d.f.path); if (!mp) return false;
+      if (segs[0] === 'crate') return mp.join('/') === want.join('/');
+      return mp.length >= want.length && mp.slice(mp.length - want.length).join('/') === want.join('/');
+    });
+    return ds.length === 1 ? ds[0] : null;
+  };
+  // The effect of transform function `name` (as named in the attribute, in file f): a function of a schema, or null.
+  Repo.prototype.transformOf = function (name, f) {
+    const fn = name.includes('::') ? this.fnByPath(name, f) : this.fnByName(name, f); if (!fn) return null;
+    if (fn.__transform !== undefined) return fn.__transform;
+    fn.__transform = null;
+    const toks = (d) => { const t = d.f.t; let a = d.s; while (a < d.body[0] && !isId(t[a], 'fn')) a++; return fnTokens(t, a, d.body[1] + 1); };
+    const code = toks(fn);
+    for (const tp of templates()) {
+      let bind = matchTokens(tp.fns[0], code, {}); if (!bind) continue;
+      if (tp.kind === 'drop-null' || tp.kind === 'drop-null-type') {
+        const dropDefault = tp.kind === 'drop-null';
+        fn.__transform = (s) => {
+          if (!s || typeof s !== 'object') return s;
+          const o = Object.assign({}, s);
+          if (Array.isArray(o.type)) { const kept = o.type.filter((x) => x !== 'null'); if (kept.length === 1) o.type = kept[0]; }
+          if (dropDefault && o.default === null) delete o.default;
+          return o;
+        };
+        return fn.__transform;
+      }
+      if (tp.kind === 'nullable-any-of') {
+        const helper = this.fnByName(bind.__helper, fn.f); if (!helper) continue;
+        bind = matchTokens(tp.fns[1], toks(helper), { __helper: bind.__helper }); if (!bind) continue;
+        const cd = this.constDef(bind.__KEYS, helper.f, null);
+        const keys = cd ? this.pathValue([bind.__KEYS], helper.f, null, 0) : null;
+        if (!Array.isArray(keys) || !keys.every((x) => typeof x === 'string')) continue;
+        fn.__transform = (s) => {
+          if (!s || typeof s !== 'object' || !s.properties || typeof s.properties !== 'object') return s;
+          const props = {};
+          Object.keys(s.properties).forEach((pn) => {
+            const p = s.properties[pn];
+            const ty = p && typeof p === 'object' && !Array.isArray(p) ? p.type : undefined;
+            if (!Array.isArray(ty) || ty.length !== 2 || typeof ty[0] !== 'string' || typeof ty[1] !== 'string') { props[pn] = p; return; }
+            const typed = ty[0] === 'null' && ty[1] !== 'null' ? ty[1] : ty[1] === 'null' && ty[0] !== 'null' ? ty[0] : null;
+            if (typed === null) { props[pn] = p; return; }
+            const branch = { type: typed }; const kept = {};
+            Object.keys(p).forEach((k) => { if (k === 'type') return; if (keys.includes(k)) kept[k] = p[k]; else branch[k] = p[k]; });
+            kept.anyOf = [branch, { type: 'null' }];
+            props[pn] = kept;
+          });
+          return Object.assign({}, s, { properties: props });
+        };
+        return fn.__transform;
+      }
+    }
+    fn.__transform = this.insertTransform(fn);
+    return fn.__transform;
+  };
+  // A transform whose body only binds constants and locals and inserts keys: `const X: T = v;`, `let x = v;`,
+  // `schema.insert(k.into(), v.into());`, each value a literal, a constant or format! of them. null otherwise.
+  Repo.prototype.insertTransform = function (fn) {
+    const f = fn.f; const t = f.t; const [o, c] = fn.body;
+    const p0 = fn.params.find((p) => !p.self); const sname = p0 && (p0.name || (p0.pat && p0.pat[0]));
+    if (!sname || fn.params.length !== 1) return null;
+    const vars = {}; const env = { vars, selfName: null };
+    const ops = [];
+    for (let k = o + 1; k < c;) {
+      this.step();
+      if (t[k].y === 'doc') { k++; continue; }
+      const e = semi(f, k, c); if (e >= c) return null;
+      if (isId(t[k], 'const') && isId(t[k + 1]) && isP(t[k + 2], ':')) {
+        const eq = findP(t, k + 2, e, '='); if (eq < 0) return null;
+        vars[t[k + 1].v] = this.ev(f, eq + 1, e, env, 0);
+      } else if (isId(t[k], 'let')) {
+        let j = k + 1; if (isId(t[j], 'mut')) j++;
+        if (!isId(t[j]) || !(isP(t[j + 1], '=') || isP(t[j + 1], ':'))) return null;
+        const eq = findP(t, j + 1, e, '='); if (eq < 0) return null;
+        vars[t[j].v] = this.ev(f, eq + 1, e, env, 0);
+      } else if (isId(t[k], sname) && isP(t[k + 1], '.') && isId(t[k + 2], 'insert') && isP(t[k + 3], '(') && f.close[k + 3] === e - 1) {
+        const args = splitTop(f, k + 4, e - 1, false); if (args.length !== 2) return null;
+        const key = this.ev(f, args[0][0], args[0][1], env, 0);
+        const cv = { unk: false, lost: [] }; const val = toJson(this.ev(f, args[1][0], args[1][1], env, 0), cv);
+        if (typeof key !== 'string' || cv.unk || val === undefined) return null;
+        ops.push([key, val]);
+      } else return null;
+      k = e + 1;
+    }
+    if (!ops.length) return null;
+    return (s) => { const out = s === true || !s || typeof s !== 'object' ? {} : Object.assign({}, s); ops.forEach(([k, v]) => { out[k] = v; }); return out; };
+  };
+  // Applies the transforms named on an item to its schema; one the reader does not follow is recorded in ctx.
+  Repo.prototype.applyTransforms = function (names, s, f, ctx) {
+    if (!names || !names.length || ctx.dialect !== 'schemars') return s;
+    for (const n of names) {
+      const fx = n ? this.transformOf(n, f) : null;
+      if (!fx) { (ctx.transforms = ctx.transforms || []).push(n || 'an expression'); continue; }
+      s = fx(s);
+    }
+    return s;
+  };
+
   // ------------------------------------------------------------ tools
-  function newTool() { return { name: undefined, title: undefined, description: undefined, input: undefined, output: undefined, annotations: undefined, unreadable: new Set(), lost: [] }; }
+  function newTool() { return { name: undefined, title: undefined, description: undefined, input: undefined, output: undefined, annotations: undefined, unreadable: new Set(), lost: [], transforms: [] }; }
   function finish(st) {
     const tool = { name: st.name };
     if (typeof st.title === 'string' && st.title) tool.title = st.title;
@@ -1181,6 +1393,12 @@
     const un = Array.from(st.unreadable); if (un.length) tool._unreadable = un;
     const lost = st.lost.filter((x) => typeof x === 'string' && x.trim()); if (lost.length) tool._lost = lost;
     return tool;
+  }
+  // An input schema read from a Rust type: kept, unless a #[schemars(transform)] on it was not followed; then the schema
+  // is marked not readable (never the untransformed one passed off as the SDK's), with the functions named.
+  function useSchema(st, sv) {
+    st.input = sv.schema;
+    if (sv.transforms && sv.transforms.length) { st.unreadable.add('inputSchema'); sv.transforms.forEach((n) => { if (!st.transforms.includes(n)) st.transforms.push(n); }); }
   }
   const strOf = (v, st, part) => {
     if (typeof v === 'string') return v;
@@ -1228,7 +1446,7 @@
       if (pr || aggr) {
         const ty = pr ? lastSeg(pr.type).args[0] : aggr.type;
         const s = ty ? this.schemaValue(ty, f, { dialect: 'schemars' }) : UNK();
-        if (s && s.__schema) st.input = s.schema; else st.unreadable.add('inputSchema');
+        if (s && s.__schema) useSchema(st, s); else st.unreadable.add('inputSchema');
       } else if (params.length || this.plainArgs(fn)) {
         // the older #[tool(param)] arguments (or plain arguments, in crates other than rmcp): one property each
         const ctx = { dialect: 'schemars', defs: {}, seen: new Set(), unknownTypes: 0 };
@@ -1242,6 +1460,7 @@
         });
         st.input = { type: 'object', properties: props }; if (required.length) st.input.required = required;
         if (Object.keys(ctx.defs).length) st.input.$defs = ctx.defs;
+        if (ctx.transforms) useSchema(st, { schema: st.input, transforms: ctx.transforms });
       } else st.input = { type: 'object', properties: {} };
     }
     // the output schema: Json<T> or Result<Json<T>, E>
@@ -1292,7 +1511,7 @@
     const alias = (n) => f.items.aliases.find((x) => x.owner === im && x.name === n);
     const is = val('input_schema');
     if (is !== undefined) { const c = { unk: false, lost: [] }; const j = toJson(is, c); if (j && typeof j === 'object' && !c.unk) st.input = j; else st.unreadable.add('inputSchema'); }
-    else { const p = alias('Parameter'); const sv = p ? this.schemaValue(p.type, f, { dialect: 'schemars' }) : UNK(); if (sv && sv.__schema) st.input = sv.schema; else st.unreadable.add('inputSchema'); }
+    else { const p = alias('Parameter'); const sv = p ? this.schemaValue(p.type, f, { dialect: 'schemars' }) : UNK(); if (sv && sv.__schema) useSchema(st, sv); else st.unreadable.add('inputSchema'); }
     const os = val('output_schema');
     if (os === undefined) { const o = alias('Output'); const sv = o ? this.schemaValue(o.type, f, { dialect: 'schemars', output: true }) : null; if (sv && sv.__schema && sv.schema.type === 'object') st.output = sv.schema; }
     else if (os !== null) { const c = { unk: false, lost: [] }; const j = toJson(os, c); if (j && typeof j === 'object' && !c.unk) st.output = j; }
@@ -1418,6 +1637,7 @@
         if (cs.excluded) marks.push({ reason: 'cfg-feature', detail: cs.conds.join(' && ').slice(0, 120), exclude: true });
         else if (cs.conds.length) marks.push({ reason: 'conditional-cfg', detail: cs.conds.join(' && ').slice(0, 120), exclude: false });
       }
+      if (st.transforms && st.transforms.length) marks.push({ reason: 'schema-transform (' + st.transforms.join(', ').slice(0, 120) + ')', detail: st.transforms.join(', ').slice(0, 120), exclude: false });
       found.push({ path: f.path, line, tool: finish(st), fidelity: 'derived', literal: kind === 'hand', marks, language: 'Rust' });
     };
     this.files.forEach((f) => {

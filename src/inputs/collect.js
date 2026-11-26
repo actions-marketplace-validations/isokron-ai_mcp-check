@@ -46,6 +46,8 @@ export function repoProvenance(c) {
   const left = Array.isArray(c.excluded) ? c.excluded : [];
   const cond = (Array.isArray(c.marked) ? c.marked : []).filter((m) => !m.excluded && m.reasons.some((x) => /^conditional-/.test(x)));
   const unseen = registrationNotSeen(c);
+  const transformed = (Array.isArray(c.marked) ? c.marked : []).filter((m) => !m.excluded && m.reasons.some((x) => /^schema-transform/.test(x)));
+  const tfns = [...new Set(transformed.flatMap((m) => m.reasons.filter((x) => /^schema-transform/.test(x)).map((x) => x.replace(/^schema-transform \((.*)\)$/, '$1'))))];
   const reasons = [...new Set(left.flatMap((x) => x.reasons.map((y) => y.replace(/ \(.*$/, ''))))];
   const u = c.unreadable || {};
   const parts = [['inputSchema', 'input schema'], ['description', 'description'], ['annotations', 'annotations']].filter(([k]) => Array.isArray(u[k]) && u[k].length).map(([k, w]) => u[k].length + ' ' + w + (u[k].length === 1 || k === 'annotations' ? '' : 's'));
@@ -54,6 +56,7 @@ export function repoProvenance(c) {
     + (u.text && Object.keys(u.text).length ? '; ' + Object.keys(u.text).length + ' tool' + (Object.keys(u.text).length === 1 ? '' : 's') + ' with source text not readable as part of the tool, scanned for hidden instructions' : '')
     + (c.unresolvedNames ? '; ' + c.unresolvedNames + ' registration' + (c.unresolvedNames === 1 ? '' : 's') + ' with a name the reader could not resolve, not listed' : '')
     + (Array.isArray(c.notes) && c.notes.length ? '; ' + c.notes.map((x) => line(x, 300)).join('; ') : '')
+    + (transformed.length ? '; ' + transformed.length + ' tool' + (transformed.length === 1 ? '' : 's') + ' with a schemars transform the reader does not follow (' + line(tfns.join(', '), 160) + '), input schema not read' : '')
     + (unseen.length ? '; ' + unseen.length + ' tool' + (unseen.length === 1 ? '' : 's') + ' listed whose registration the reader did not see (built only inside another type, or never visibly built)' : '');
   return { provenance: FIDELITY[c.fidelity](c) + extra, left, cond };
 }
