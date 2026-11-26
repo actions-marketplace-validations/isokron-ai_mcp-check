@@ -45,3 +45,56 @@ test('R-RD-25: .regex(/…/) is written as the JSON Schema pattern (in a chain, 
   assert.deepEqual(p.twice, { type: 'string' }, 'two patterns go to allOf in the SDK; the reader leaves them out rather than guess');
   assert.deepEqual(p.thrice, { type: 'string' });
 });
+
+// ---------------------------------------------------------------- R-RD-26: bounds and numbers from constants
+// Trimmed from isokron-ai/mcp-check d4a373a5f785db4631c18aad97df658836bbc2d1 src/server.js, src/tools.js and
+// src/limits.js (check_tools_list), with two section names masked. The `unknown` bound is added: a value only known
+// at run time.
+test('R-RD-26: .min/.max/.length take a literal constant, .length of a constant array and arithmetic of literals; a bound that cannot be read is left out', () => {
+  const an = read({ 'package.json': ZOD4,
+    'src/tools.js': [
+      "export const SECTIONS = ['spec', 'dir-a', 'dir-b', 'security', 'quality', 'surface'];",
+      'export const MAX_FINDINGS = 500;',
+      'export const DEFAULT_LIMIT = 100;',
+    ].join('\n'),
+    'src/limits.js': 'export const MAX_BYTES = 2 * 1024 * 1024; // 2 MiB of JSON per list\nexport const MAX_TOOLS = 2000;\n',
+    'src/server.js': [
+      "import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';",
+      "import * as z from 'zod/v4';",
+      "import { SECTIONS, DEFAULT_LIMIT, MAX_FINDINGS } from './tools.js';",
+      "import { MAX_BYTES, MAX_TOOLS } from './limits.js';",
+      "const server = new McpServer({ name: 'mcp-check', version: '1.0.0' });",
+      "server.registerTool('check_tools_list', {",
+      "  description: 'Grades a tools/list answer. Limit ' + MAX_BYTES / 1048576 + ' MiB of JSON and ' + MAX_TOOLS + ' tools.',",
+      '  inputSchema: z.strictObject({',
+      "    sections: z.array(z.enum(SECTIONS)).min(1).max(SECTIONS.length).optional().describe('Sections to report.'),",
+      "    limit: z.number().int().min(1).max(MAX_FINDINGS).default(DEFAULT_LIMIT).describe('Most findings to return.'),",
+      '    pair: z.array(z.string()).length(SECTIONS.length - 4),',
+      '    bytes: z.string().max(MAX_BYTES - 1),',
+      '    unknown: z.string().max(Number(process.env.MAX_LEN)),',
+      '  }),',
+      '}, async () => ({ content: [] }));',
+    ].join('\n') });
+  const t = tool(an, 'check_tools_list');
+  assert.equal(t.description, 'Grades a tools/list answer. Limit 2 MiB of JSON and 2000 tools.');
+  const p = t.inputSchema.properties;
+  assert.deepEqual(p.sections, { type: 'array', items: { type: 'string', enum: ['spec', 'dir-a', 'dir-b', 'security', 'quality', 'surface'] }, minItems: 1, maxItems: 6, description: 'Sections to report.' });
+  assert.deepEqual(p.limit, { type: 'integer', minimum: 1, maximum: 500, default: 100, description: 'Most findings to return.' });
+  assert.deepEqual(p.pair, { type: 'array', items: { type: 'string' }, minItems: 2, maxItems: 2 });
+  assert.deepEqual(p.bytes, { type: 'string', maxLength: 2097151 });
+  assert.deepEqual(p.unknown, { type: 'string' }, 'a bound known only at run time is left out, not guessed');
+});
+
+// A constant array with an element the reader could not read has no known length.
+// Trimmed from the same file; the spread element is added.
+test('R-RD-26: .length of a constant array with a spread or an unreadable element is not a bound', () => {
+  const an = read({ 'package.json': ZOD4, 'src/server.js': [
+    "import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';",
+    "import * as z from 'zod/v4';",
+    "import { EXTRA } from 'somewhere-else';",
+    "const SECTIONS = ['spec', 'quality', ...EXTRA];",
+    "const server = new McpServer({ name: 'mcp-check', version: '1.0.0' });",
+    "server.registerTool('check_tools_list', { description: 'Grades a list.', inputSchema: { sections: z.array(z.string()).max(SECTIONS.length) } }, async () => ({ content: [] }));",
+  ].join('\n') });
+  assert.deepEqual(tool(an, 'check_tools_list').inputSchema.properties.sections, { type: 'array', items: { type: 'string' } });
+});
