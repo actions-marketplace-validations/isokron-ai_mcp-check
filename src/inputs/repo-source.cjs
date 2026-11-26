@@ -679,7 +679,23 @@
       busy.delete(p); memo.set(p, consts);
       return consts;
     }
-    return { seedFor: (p) => seedFor(p, 0), tokens: toks, tableFor: (p) => tableFor(p, 0), module: mod };
+    // Register helpers a file imports from a module of the repository (R-RD-32): one relative import, to the file that
+    // defines the helper (a re-export from a further module is not followed). Map(local name -> spec).
+    const wrapMemo = new Map();
+    const wrappersOf = (p) => { if (!wrapMemo.has(p)) { let w; try { w = registerWrappers(toks(p)); } catch (e) { w = new Map(); } wrapMemo.set(p, w); } return wrapMemo.get(p); };
+    const importedWrappers = (p) => {
+      const out = new Map();
+      mod(p).imports.forEach((imp) => {
+        if (!imp.spec.startsWith('.') || imp.imported === '*') return;
+        const target = resolveSpec(p, imp.spec, paths, suffixIndex); if (!target || target === p) return;
+        const ex = mod(target).exports;
+        const local = imp.imported === 'default' ? ex.defaultLocal : ex.names.get(imp.imported);
+        if (typeof local !== 'string') return;
+        const w = wrappersOf(target).get(local); if (w) out.set(imp.local, w);
+      });
+      return out;
+    };
+    return { seedFor: (p) => seedFor(p, 0), tokens: toks, tableFor: (p) => tableFor(p, 0), module: mod, importedWrappers };
   }
 
   // ------------------------------------------------------------ JS/TS extraction
@@ -1060,6 +1076,77 @@
       made.forEach((tool) => add(tool, 'derived', at, { unrolled: true }));
       return true;
     };
+    // A call of a register helper (see registerWrappers), read with the constants of c: the tool, PARAM when its name
+    // is a parameter of the function around the call, or null when it cannot be read.
+    const PARAM = { param: true };
+    const viaWrapper = (w, args, c, ps) => {
+      const slots = w.kind === 'registerTool' ? [w.name, w.cfg] : [w.name, w.desc, w.shape];
+      if (slots.some((x) => args[x.p] === undefined) && w.kind === 'registerTool') return null;
+      if (slots[0].key !== undefined) {
+        // tool.name, tool.description, …: properties of one argument, read from its value
+        const v = parseValue(t, args[slots[0].p], c);
+        if (v.value === SKIP || !v.value || typeof v.value !== 'object' || Array.isArray(v.value)) return null;
+        const o = v.value; const get = (x) => (hasOwn(o, x.key) ? o[x.key] : undefined);
+        const unknown = (x) => !hasOwn(o, x.key) && v.exact === false; // left out because it could not be read
+        const name = get(slots[0]); if (typeof name !== 'string' || !name) return null;
+        if (w.kind === 'registerTool') {
+          const cv = get(slots[1]); if (!cv || typeof cv !== 'object' || Array.isArray(cv)) return null;
+          return toolFromConfig(name, { value: cv, exact: v.exact, unknownKeys: new Set(), partialKeys: new Set() });
+        }
+        const tool = { name }; const un = [];
+        const d = get(slots[1]); if (typeof d === 'string') tool.description = d; else if (unknown(slots[1])) un.push('description');
+        const sh = get(slots[2]);
+        if (sh && typeof sh === 'object' && !Array.isArray(sh) && isRawShape(sh)) tool.inputSchema = rootSchema(sh, undefined, c.fl);
+        else if (sh && typeof sh === 'object' && isSchemaObj(sh) && sh.type === 'object') tool.inputSchema = sh;
+        else if (sh === undefined && !unknown(slots[2])) tool.inputSchema = { type: 'object', properties: {} };
+        else { tool.inputSchema = { type: 'object' }; un.push('inputSchema'); }
+        if (c.fl.execution) tool.execution = { taskSupport: 'forbidden' };
+        tool._unreadable = un;
+        return tool;
+      }
+      const nm = resolveName(t, args[slots[0].p], c, ps);
+      if (nm && nm.param) return PARAM;
+      if (!nm || !nm.name) return null;
+      if (w.kind === 'registerTool') { const cfg = configAt(args[slots[1].p], c); return cfg ? toolFromConfig(nm.name, cfg) : null; }
+      // tool(name, [description], [shape], cb): a description is a string; otherwise that argument is the shape
+      const tool = { name: nm.name }; const un = [];
+      let j = args[slots[1].p];
+      const strAt = (k) => t[k] && (t[k].type === 'str' || t[k].type === 'tpl' || (t[k].type === 'id' && (() => { const r = chainValue(c, idChain(t, k).ids); return r && typeof r.value === 'string'; })()));
+      if (j !== undefined && strAt(j)) { const d = parseValue(t, j, c); if (typeof d.value === 'string') tool.description = d.value; if (d.partial || typeof d.value !== 'string') un.push('description'); j = args[slots[2].p]; }
+      if (j === undefined) tool.inputSchema = { type: 'object', properties: {} };
+      else if (isP(t[j], '{') || (t[j] && t[j].type === 'id' && c.zodNames.has(t[j].value))) {
+        const shape = zodShapeAt(t, j, c);
+        if (shape.schema && isZodShapeLike(shape.schema)) tool.inputSchema = shape.schema; else { tool.inputSchema = { type: 'object' }; un.push('inputSchema'); }
+      } else {
+        const v = parseValue(t, j, c);
+        if (v.value !== SKIP && v.value && typeof v.value === 'object' && !Array.isArray(v.value)) tool.inputSchema = v.rawShape || (!isSchemaObj(v.value) && !v.zod) ? rootSchema(v.value, v.optionalKeys, c.fl) : v.value;
+        else { tool.inputSchema = { type: 'object' }; un.push('inputSchema'); }
+      }
+      if (c.fl.execution) tool.execution = { taskSupport: 'forbidden' };
+      tool._unreadable = un;
+      return tool;
+    };
+    // A register helper's call in a loop over a known collection: read once per element (as unrollAt does for the SDK's
+    // own calls). false when there is no such loop or some element does not give a tool.
+    const unrollWrapper = (i, at, w, args, params) => {
+      const loops = loopsAround(i); if (!loops.length || !loops[0].envs) return false;
+      const loop = loops[0];
+      if (loop.body) for (let m = loop.body[0] + 1; m < i; m++) if (t[m].type === 'id' && EXITS.test(t[m].value)) return false;
+      const hide = new Set(params); loops.slice(1).forEach((l) => l.vars.forEach((x) => hide.add(x)));
+      loop.vars.forEach((x) => hide.delete(x));
+      const ps = new Set(Array.from(hide));
+      const span = Math.max(1, matchClose(t, i + 1) - i);
+      const made = [];
+      for (const env of loop.envs) {
+        budget -= span; if (budget < 0) { overBudget.push({ line: lineOf(at) }); return true; }
+        const set = {}; Object.keys(env).forEach((k) => { set[k] = { value: env[k], exact: true, holes: 0 }; });
+        const lctx = Object.assign({}, ctx, { consts: overlay(set, hide) });
+        const tool = viaWrapper(w, args, lctx, ps); if (!tool || tool === PARAM) return false;
+        made.push(tool);
+      }
+      made.forEach((tool) => add(tool, 'derived', at, { unrolled: true }));
+      return true;
+    };
     // What could not be read in a config object: its keys with unknown or partial values, and keys that a spread
     // it could not read may have set.
     const unreadableOf = (o, keys) => {
@@ -1171,6 +1258,7 @@
     const prepass = (c) => { LOST.cur = null; for (let k = t.length - 1; k >= 0; k--) { try { if (isP(t[k], '{')) parseObject(t, k, c); else if (isP(t[k], '[')) parseArray(t, k, c); } catch (e) { /* read again in the loop */ } } };
     prepass(ctx); if (/\baddTool\b/.test(src)) prepass(fastCtx);
     const wrappers = registerWrappers(t);
+    if (opts.wrappers) opts.wrappers.forEach((w, k) => { if (!wrappers.has(k)) wrappers.set(k, w); }); // imported helpers (R-RD-32)
     // Functions of this file that build a tool object from their parameters (R-RD-12): a call is read with the
     // parameters bound to its arguments, so the literal parts (a schema, annotations) are kept and the parts built from
     // something unknown are marked unreadable.
@@ -1235,12 +1323,21 @@
       const tok = t[i];
       const iterLost = []; LOST.cur = iterLost; const toolsBefore = tools.length; const unresBefore = unresolved.length;
       try { // one registration that cannot be read never drops the others: it is counted instead
-      // 0. A function of this file that forwards two of its parameters to X.registerTool(name, config, ...):
-      //    register(server, 'name', { description, inputSchema }, handler) is read as registerTool('name', {...}).
-      if (tok.type === 'id' && wrappers.has(tok.value) && isP(t[i + 1], '(') && !(t[i - 1] && (isP(t[i - 1], '.') || isDecl(i)))) {
-        const w = wrappers.get(tok.value); const args = argStarts(t, i + 1);
-        const nm = args[w.nameIdx] !== undefined ? resolveName(t, args[w.nameIdx], ctx, paramsAround(t, blocks, i)) : null; const ct = args[w.cfgIdx];
-        if (nm && nm.name && ct !== undefined) { const cfg = configAt(ct); if (cfg) add(toolFromConfig(nm.name, cfg), 'derived', tok.start); }
+      // 0. A function that forwards its parameters to X.registerTool(name, config, …) or X.tool(name, description,
+      //    shape, …), defined in this file or imported from a module of the repository (one relative import, R-RD-32):
+      //    register(server, 'name', { description, inputSchema }, handler) is read as registerTool('name', {...}), and
+      //    registerTool(server, tool) as tool(tool.name, tool.description, tool.params). Inside a loop over a collection
+      //    the reader knows, it is read once per element; anything else is counted as unresolved, never guessed.
+      if (tok.type === 'id' && wrappers.has(tok.value) && isP(t[i + 1], '(') && !(t[i - 1] && (isP(t[i - 1], '.') || isP(t[i - 1], '?.') || isDecl(i)))) {
+        if (isMethodDef(i + 1)) continue;
+        const w = wrappers.get(tok.value); const args = argStarts(t, i + 1); const ps = paramsAround(t, blocks, i);
+        const r = viaWrapper(w, args, ctx, ps);
+        if (r === PARAM) continue; // inside another helper: its callers name the tools
+        if (r) { add(r, 'derived', tok.start); continue; }
+        if (unrollWrapper(i, tok.start, w, args, ps)) continue;
+        const txt = {}; const ds = w.kind === 'tool' ? w.desc : null;
+        if (ds && ds.key === undefined && args[ds.p] !== undefined) { try { const d = parseValue(t, args[ds.p], ctx); if (typeof d.value === 'string') txt.description = d.value; } catch (e) { /* no text */ } }
+        unresolved.push(Object.assign({ line: lineOf(tok.start) }, txt));
         continue;
       }
       const member = isP(tok, '.') && t[i + 1] && t[i + 1].type === 'id' && isP(t[i + 2], '(');
@@ -1413,10 +1510,25 @@
     while (k < close) { out.push(k); k = skipExpr(t, k); if (isP(t[k], ',')) k++; else break; }
     return out;
   }
-  // Functions of one file that pass two of their own parameters on as the name and config of X.registerTool(...):
+  // Functions of one file that pass their own parameters on to X.registerTool(...) or X.tool(...):
   //   function register(server, name, config, fn) { server.registerTool(name, config, wrap(fn)); }
   //   const reg = (name, config, cb) => server.registerTool(name, config, cb);
-  // Returns Map(function name -> { nameIdx, cfgIdx }), the parameter positions.
+  //   export function registerTool<T>(server, name, config, cb) { return server.registerTool(name, config as never, …); }
+  //   function registerTool(server, name, description, params, cb) { server.tool(name, description, params, …); }
+  //   const registerTool = (server, tool) => { server.tool(tool.name, tool.description, tool.params, tool.handler); };
+  // Returns Map(function name -> spec): spec.kind is 'registerTool' (slots name, cfg) or 'tool' (slots name, desc,
+  // shape); each slot is { p: the parameter's position, key: a property of that parameter or undefined }. A helper may
+  // be named like the SDK method it wraps (registerTool): only its declaration makes it a helper.
+  function skipTypeParams(t, k) { // the token after a TS type parameter list <…> at k (k itself when there is none)
+    if (!isP(t[k], '<')) return k;
+    let d = 0;
+    for (let m = k; m < t.length && m < k + 400; m++) {
+      if (isP(t[m], '<')) d++;
+      else if (isP(t[m], '>')) { d--; if (!d) return m + 1; }
+      else if (isP(t[m], '{') || isP(t[m], '(') || isP(t[m], '[')) m = matchClose(t, m);
+    }
+    return k;
+  }
   function registerWrappers(t) {
     const out = new Map();
     const params = (open) => { // simple identifiers, with optional TS types and defaults; null if anything else
@@ -1426,12 +1538,13 @@
     const fns = [];
     for (let i = 0; i < t.length - 3; i++) {
       let name = null; let open = -1;
-      if (t[i].type === 'id' && t[i].value === 'function' && t[i + 1] && t[i + 1].type === 'id' && isP(t[i + 2], '(')) { name = t[i + 1].value; open = i + 2; }
+      if (t[i].type === 'id' && t[i].value === 'function' && t[i + 1] && t[i + 1].type === 'id') { const k = skipTypeParams(t, i + 2); if (isP(t[k], '(')) { name = t[i + 1].value; open = k; } }
       else if (t[i].type === 'id' && /^(const|let|var)$/.test(t[i].value) && t[i + 1] && t[i + 1].type === 'id' && isP(t[i + 2], '=')) {
         let k = i + 3; if (t[k] && t[k].type === 'id' && t[k].value === 'async') k++;
+        k = skipTypeParams(t, k);
         if (isP(t[k], '(') && isP(t[matchClose(t, k) + 1], '=>')) { name = t[i + 1].value; open = k; }
       }
-      if (!name || SDK_CALLS.has(name)) continue;
+      if (!name) continue;
       const ps = params(open); if (!ps || ps.length < 2) continue;
       // the body: from the closing ")" to the end of the block or the arrow's expression
       let b = matchClose(t, open) + 1; if (isP(t[b], '=>')) b++;
@@ -1443,18 +1556,36 @@
     // nested ranges: each function's parent, so a call finds the functions around it by a search and a short walk up
     fns.sort((x, y) => x.b - y.b); const stack = [];
     fns.forEach((f) => { while (stack.length && stack[stack.length - 1].end < f.b) stack.pop(); f.parent = stack.length ? stack[stack.length - 1] : null; stack.push(f); });
+    // an argument that is a parameter, or a property of one (tool.name), with an optional `as T` cast after it: the
+    // parameter's name and the property, or null
+    const fwd = (a) => {
+      const x = t[a]; if (!x || x.type !== 'id') return null;
+      let k = a + 1; let key;
+      if (isP(t[k], '.') && t[k + 1] && t[k + 1].type === 'id') { key = t[k + 1].value; k += 2; }
+      while (t[k] && t[k].type === 'id' && (t[k].value === 'as' || t[k].value === 'satisfies')) k = skipType(t, k + 1);
+      if (!(isP(t[k], ',') || isP(t[k], ')'))) return null;
+      return { id: x.value, key };
+    };
     for (let k = 0; k < t.length - 2; k++) {
-      if (!(isP(t[k], '.') && t[k + 1].type === 'id' && t[k + 1].value === 'registerTool' && isP(t[k + 2], '('))) continue;
+      if (!(isP(t[k], '.') && t[k + 1].type === 'id' && (t[k + 1].value === 'registerTool' || t[k + 1].value === 'tool') && isP(t[k + 2], '('))) continue;
+      const kind = t[k + 1].value;
       const as = argStarts(t, k + 2);
-      const a0 = t[as[0]]; const a1 = t[as[1]];
-      if (!a0 || !a1 || a0.type !== 'id' || a1.type !== 'id' || !isP(t[as[0] + 1], ',') || !(isP(t[as[1] + 1], ',') || isP(t[as[1] + 1], ')'))) continue;
+      const want = kind === 'registerTool' ? 2 : 3;
+      if (as.length < want + (kind === 'tool' ? 1 : 0)) continue; // server.tool(name, description, shape, cb)
+      const slots = as.slice(0, want).map(fwd);
+      if (slots.some((x) => !x)) continue;
+      // one parameter's properties (tool.name, tool.description, …) or the parameters themselves, not a mix
+      const keyed = slots.filter((x) => x.key !== undefined).length;
+      if (keyed && (keyed !== slots.length || slots.some((x) => x.id !== slots[0].id))) continue;
       let lo = 0; let hi = fns.length; while (lo < hi) { const mid = (lo + hi) >> 1; if (fns[mid].b <= k) lo = mid + 1; else hi = mid; }
       for (let f = lo > 0 ? fns[lo - 1] : null, n = 0; f && n < 64; f = f.parent) {
         if (f.end < k) continue;
         n++;
         if (out.has(f.name)) continue;
-        const ni = f.ps.indexOf(a0.value); const ci = f.ps.indexOf(a1.value);
-        if (ni >= 0 && ci >= 0) out.set(f.name, { nameIdx: ni, cfgIdx: ci });
+        const pos = slots.map((x) => f.ps.indexOf(x.id));
+        if (pos.some((x) => x < 0)) continue;
+        const sl = slots.map((x, m) => ({ p: pos[m], key: x.key }));
+        out.set(f.name, kind === 'registerTool' ? { kind, name: sl[0], cfg: sl[1], nameIdx: sl[0].p, cfgIdx: sl[1].p } : { kind, name: sl[0], desc: sl[1], shape: sl[2] });
       }
     }
     return out;
@@ -2807,7 +2938,7 @@
       let ts = [];
       const js = /\.(ts|mts|cts|js|mjs|cjs)$/.test(p);
       try {
-        ts = extractFromFile(p, t, js ? { sdk: sdkFor(p), consts: mods.seedFor(p), tokens: mods.tokens(p), classTools: bases, workBudget: opts.workBudget } : { sdk, pyConsts, pyRegistrars: pyRegs, pyTemplates: pyTpl });
+        ts = extractFromFile(p, t, js ? { sdk: sdkFor(p), consts: mods.seedFor(p), tokens: mods.tokens(p), wrappers: mods.importedWrappers(p), classTools: bases, workBudget: opts.workBudget } : { sdk, pyConsts, pyRegistrars: pyRegs, pyTemplates: pyTpl });
       } catch (e) { ts = []; ts.unresolved = [{ line: null }]; } // a file the reader fails on counts as one unread registration
       // another agent host's plugin: named, never listed (R-RD-05)
       const host = js ? hostPluginModule(t) : null;
