@@ -167,7 +167,7 @@ export const FIELDS = Object.freeze({
   static_vs_live_agreement: 'object', commit_sha: 'string', commit_date: 'timestamp',
 });
 /**
- * PyPI launches name the extras that hold the server (`pkg[mcp]`, R-LP-61): on only once SURFACE_CORPUS_REF pins a
+ * PyPI launches name the extras that hold the server (`pkg[mcp]`, R-LP-66): on only once SURFACE_CORPUS_REF pins a
  * sandbox whose target format takes `launch.extras` (mcp-surface-corpus R-SBX-49); an older one refuses the field.
  */
 export const EMIT_PYPI_EXTRAS = false;
@@ -850,7 +850,7 @@ export async function resolveSubject(item, { seed = new Map(), fetch: fetchImpl 
         out.choice.entry = (fits && e.entry) || null;
         // What the release declares and ships: failureDetail tells the server's own modules from its dependencies (R-LP-61).
         if (e.deps) out.choice.pydeps = e.deps;
-        // The extra that holds the MCP server (or its CLI's dependencies) installs with the package (R-LP-61).
+        // The extra that holds the MCP server (or its CLI's dependencies) installs with the package (R-LP-66).
         const extras = EMIT_PYPI_EXTRAS ? serverExtras(e.deps) : [];
         if (extras.length) { out.launch = { ...out.launch, extras }; out.choice.extras = extras; }
       }
@@ -1342,7 +1342,7 @@ export function serverNetworkAttempt(records) {
 /**
  * How the server's process ended, from the probe: { exit, signal }, read from the transport, else from the error text,
  * else (an HTTP-mode server, which has no stdio transport) from the sandbox's records of the server's containers, when
- * every one says it had exited by itself with the same code and the server's output was read back (R-LP-62).
+ * every one says it had exited by itself with the same code and the server's output was read back (R-LP-67).
  */
 export function exitOf(p, records = []) {
   const t = isObj(p.transport) ? p.transport : {};
