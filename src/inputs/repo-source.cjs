@@ -197,6 +197,45 @@
     });
     return capStr({ value: out, exact, partial: !exact });
   }
+  // A numeric expression of literals and literal constants: 2 * 1024 * 1024, MAX_BYTES / 1048576, SECTIONS.length,
+  // (A + 1) * B. Operands are number literals, constants holding a number, and .length of a constant array or string
+  // read whole (no element left out). With `mulOnly`, a "+" or "-" ends it (in a string chain "+" joins strings).
+  // Returns { value, end, ops } (ops: operators and .length read) or null when an operand is anything else.
+  function numExpr(t, i, ctx, mulOnly, depth) {
+    depth = depth || 0; if (depth > 16) return null;
+    let ops = 0;
+    const primary = (k) => {
+      const tok = t[k]; if (!tok) return null;
+      if (tok.type === 'num') return { value: tok.value, end: k + 1 };
+      if (isP(tok, '-') && t[k + 1] && (t[k + 1].type === 'num' || t[k + 1].type === 'id')) { const r = primary(k + 1); return r ? { value: -r.value, end: r.end } : null; }
+      if (isP(tok, '(')) { const r = numExpr(t, k + 1, ctx, false, depth + 1); if (!r || !isP(t[r.end], ')')) return null; ops += r.ops; return { value: r.value, end: r.end + 1 }; }
+      if (tok.type !== 'id' || !ctx || !ctx.consts || !hasOwn(ctx.consts, tok.value)) return null;
+      const ch = idChain(t, k); if (isP(t[ch.end], '(')) return null;
+      if (ch.ids.length > 1 && ch.ids[ch.ids.length - 1] === 'length') {
+        const r = chainValue(ctx, ch.ids.slice(0, -1)); const c = r && r.c;
+        if (!r || c.exact === false || c.partial || c.holes) return null;
+        if (Array.isArray(r.value) || typeof r.value === 'string') { ops++; return { value: r.value.length, end: ch.end }; }
+        return null;
+      }
+      const r = chainValue(ctx, ch.ids);
+      return r && typeof r.value === 'number' && r.c.exact !== false ? { value: r.value, end: ch.end } : null;
+    };
+    const opAt = (k, set) => t[k] && t[k].type === 'p' && set.includes(t[k].value) && !isP(t[k + 1], '=');
+    const term = (k) => {
+      let a = primary(k); if (!a) return null;
+      while (opAt(a.end, ['*', '/', '%'])) {
+        const op = t[a.end].value; const b = primary(a.end + 1); if (!b) return null;
+        a = { value: op === '*' ? a.value * b.value : op === '/' ? a.value / b.value : a.value % b.value, end: b.end }; ops++;
+      }
+      return a;
+    };
+    let a = term(i); if (!a) return null;
+    while (!mulOnly && opAt(a.end, ['+', '-'])) {
+      const op = t[a.end].value; const b = term(a.end + 1); if (!b) return null;
+      a = { value: op === '+' ? a.value + b.value : a.value - b.value, end: b.end }; ops++;
+    }
+    return Number.isFinite(a.value) ? { value: a.value, end: a.end, ops } : null;
+  }
   // A string expression: string and template literals and string constants joined by "+" ('a' + NAME + `b${X}`).
   // Returns null unless at least one operand is a string; an operand that cannot be read makes the value partial.
   function stringExpr(t, i, ctx) {
@@ -204,7 +243,9 @@
     for (;;) {
       const tok = t[j]; let v = null; let end = j + 1;
       if (!tok) return null;
-      if (tok.type === 'str') { v = tok.value; any = true; }
+      const ne = tok.type === 'num' || tok.type === 'id' ? numExpr(t, j, ctx, true) : null; // 'Limit ' + MAX_BYTES / 1048576 + ' MiB'
+      if (ne && ne.ops) { v = String(ne.value); end = ne.end; }
+      else if (tok.type === 'str') { v = tok.value; any = true; }
       else if (tok.type === 'tpl') { const r = tplValue(tok, ctx); v = r.value; if (!r.exact) exact = false; any = true; }
       else if (tok.type === 'num') v = String(tok.value);
       else if (tok.type === 'id') {
@@ -225,7 +266,10 @@
     const tok = t[i];
     if (!tok) return { value: SKIP, end: i, exact: false };
     let r = null;
-    if (tok.type === 'str' || tok.type === 'tpl') {
+    // a numeric expression of literals and literal constants (2 * 1024 * 1024, SECTIONS.length)
+    const ne = tok.type === 'num' || isP(tok, '-') || (tok.type === 'id' && ctx && ctx.consts && hasOwn(ctx.consts, tok.value)) ? numExpr(t, i, ctx, false) : null;
+    if (ne && (ne.ops || ne.end > i + 1)) r = { value: ne.value, end: ne.end, exact: true };
+    else if (tok.type === 'str' || tok.type === 'tpl') {
       r = stringExpr(t, i, ctx);
     } else if (tok.type === 'num') r = { value: tok.value, end: i + 1, exact: true };
     else if (isP(tok, '-') && t[i + 1] && t[i + 1].type === 'num') r = { value: -t[i + 1].value, end: i + 2, exact: true };
@@ -491,9 +535,9 @@
         case 'nullable': s = s.type ? Object.assign({}, s, { type: [].concat(s.type, 'null') }) : s; break;
         case 'default': optional = true; if (a0 !== SKIP && a0 !== undefined) s.default = a0; break;
         case 'int': s.type = 'integer'; break;
-        case 'min': if (typeof a0 === 'number') s[s.type === 'string' ? 'minLength' : s.type === 'array' ? 'minItems' : 'minimum'] = a0; break;
-        case 'max': if (typeof a0 === 'number') s[s.type === 'string' ? 'maxLength' : s.type === 'array' ? 'maxItems' : 'maximum'] = a0; break;
-        case 'length': if (typeof a0 === 'number') { s.minLength = a0; s.maxLength = a0; } break;
+        case 'min': if (typeof a0 === 'number') s[s.type === 'string' ? 'minLength' : s.type === 'array' ? 'minItems' : 'minimum'] = a0; else exact = false; break;
+        case 'max': if (typeof a0 === 'number') s[s.type === 'string' ? 'maxLength' : s.type === 'array' ? 'maxItems' : 'maximum'] = a0; else exact = false; break;
+        case 'length': if (typeof a0 === 'number') { s[s.type === 'array' ? 'minItems' : 'minLength'] = a0; s[s.type === 'array' ? 'maxItems' : 'maxLength'] = a0; } else exact = false; break;
         case 'positive': s.exclusiveMinimum = 0; break;
         case 'nonnegative': s.minimum = 0; break;
         case 'url': s.format = 'uri'; break;
