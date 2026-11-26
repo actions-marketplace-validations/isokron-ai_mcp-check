@@ -306,7 +306,11 @@ export function bundleLaunch({ manifest, names, members }, { url, sha256, buf, t
     launch = { ...base, runtime: 'binary', entry: rel, args: argv };
   }
   if (!launch.args.length) delete launch.args;
-  return { launch, info: { server_type: type, runtime: launch.runtime, platform_unlisted: !linuxListed, manifest_version: typeof manifest.manifest_version === 'string' ? manifest.manifest_version.slice(0, 16) : typeof manifest.dxt_version === 'string' ? manifest.dxt_version.slice(0, 16) : null } };
+  // A crash is evidence against the bundle only where it runs as shipped: a node bundle (its node_modules) or a binary, on
+  // a platform its manifest lists. A python or uv bundle runs on an environment we rebuilt (our Python, our pip install of
+  // what we read from its pyproject; uv would also read a script's inline metadata), so its crash may be ours (R-LP-61).
+  const crashNotEvidence = !linuxListed || launch.runtime === 'python' || launch.runtime === 'uv';
+  return { launch, info: { server_type: type, runtime: launch.runtime, platform_unlisted: !linuxListed, crash_not_evidence: crashNotEvidence, manifest_version: typeof manifest.manifest_version === 'string' ? manifest.manifest_version.slice(0, 16) : typeof manifest.dxt_version === 'string' ? manifest.dxt_version.slice(0, 16) : null } };
 }
 
 /** The whole resolution of a registry or seed package of type mcpb: { launch, info } or throws { detail }. */

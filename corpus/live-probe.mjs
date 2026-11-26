@@ -1268,7 +1268,7 @@ function listDetail(p) {
  * records beside the driver's record: records (this target's telemetry), stepsLog (the install's log text), launch and
  * argsUnfilled (the plan's resolution of it).
  */
-export function failureDetail(rec, bare, envp, { deadlineHit = false, records = [], stepsLog = null, launch = null, argsUnfilled = null, platformUnlisted = false } = {}) {
+export function failureDetail(rec, bare, envp, { deadlineHit = false, records = [], stepsLog = null, launch = null, argsUnfilled = null, crashNotEvidence = false } = {}) {
   if (!rec) return deadlineHit ? 'shard_deadline' : 'harness_error';
   if (rec.excluded) return 'sandbox_evidence_missing';
   const inst = rec.install;
@@ -1327,8 +1327,9 @@ export function failureDetail(rec, bare, envp, { deadlineHit = false, records = 
   const err = typeof p.stderr === 'string' ? p.stderr : '';
   if (own && (CONFIG_TEXT.test(err) || ENV_NAME_TEXT.test(err))) return 'start_needs_config';
   // A crash signature is the evidence; an early exit with no telling stderr is not (R-LP-45).
-  // R-LP-61: a bundle whose manifest does not list linux ran here anyway: its crash on our platform is no evidence against it.
-  return sound && !platformUnlisted && ms !== null && ms < START_QUICK_MS && CRASH_TEXT.test(err) ? 'start_failed' : 'start_env_limited';
+  // R-LP-61: a bundle that does not run here as shipped (its manifest does not list linux, or it is python or uv on an
+  // environment we rebuilt): its crash is no evidence against it.
+  return sound && !crashNotEvidence && ms !== null && ms < START_QUICK_MS && CRASH_TEXT.test(err) ? 'start_failed' : 'start_env_limited';
 }
 
 // ------------------------------------------------------------------ observations
@@ -1565,7 +1566,7 @@ export function buildItem(item, ctx) {
     let reader = { listed: false };
     const tel = telemetryFor(telemetryFile, item.target_id);
     if (!primary) {
-      detail = ociRun && ociRun.outcome === 'disk_low' ? 'disk_low' : failureDetail(rec, bare, envp, { deadlineHit, records: tel.records, stepsLog: readText(join(dir, 'steps.log')), launch: r.launch, argsUnfilled: r.choice ? r.choice.args_unfilled : null, platformUnlisted: !!(r.choice && isObj(r.choice.mcpb) && r.choice.mcpb.platform_unlisted) });
+      detail = ociRun && ociRun.outcome === 'disk_low' ? 'disk_low' : failureDetail(rec, bare, envp, { deadlineHit, records: tel.records, stepsLog: readText(join(dir, 'steps.log')), launch: r.launch, argsUnfilled: r.choice ? r.choice.args_unfilled : null, crashNotEvidence: !!(r.choice && isObj(r.choice.mcpb) && r.choice.mcpb.crash_not_evidence) });
     } else {
       const text = listText(primary.lists['tools/list'].raw_pages);
       let g = null;

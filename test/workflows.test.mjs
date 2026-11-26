@@ -9,12 +9,11 @@ const dir = fileURLToPath(new URL('../.github/workflows/', import.meta.url));
 const wf = Object.fromEntries(readdirSync(dir).filter((f) => f.endsWith('.yml')).map((f) => [f, readFileSync(join(dir, f), 'utf8')]));
 
 test('workflows: every third-party action pinned by full SHA; read-only default token; no pull_request_target', () => {
-  // TEMPORARY: measure-packages.yml, the package-type measurement of this pull request; removed before it is final.
-  assert.deepEqual(Object.keys(wf).filter((f) => f !== 'measure-packages.yml').sort(), ['bench-mutants.yml', 'ci.yml', 'corpus.yml', 'live-probe-selftest.yml', 'live-probe.yml', 'release.yml', 'scan-static.yml']);
+  assert.deepEqual(Object.keys(wf).sort(), ['bench-mutants.yml', 'ci.yml', 'corpus.yml', 'live-probe-selftest.yml', 'live-probe.yml', 'release.yml', 'scan-static.yml']);
   for (const [f, y] of Object.entries(wf)) {
     for (const m of y.replace(/^\s*#.*$/gm, '').matchAll(/uses:\s*(\S+)/g)) if (m[1] !== './') assert.match(m[1], /^[\w.-]+\/[\w./-]+@[0-9a-f]{40}$/, f + ': ' + m[1]);
     // The loop workers grant nothing at the top; each of their jobs asks for contents: read.
-    if (f === 'scan-static.yml' || /^live-probe|^measure-packages/.test(f)) assert.match(y, /\npermissions: \{\}\n/, f + ': top-level permissions are {}');
+    if (f === 'scan-static.yml' || /^live-probe/.test(f)) assert.match(y, /\npermissions: \{\}\n/, f + ': top-level permissions are {}');
     else assert.match(y, /\npermissions:\n  contents: read\n/, f + ': top-level permissions are contents: read');
     assert.ok(!/pull_request_target|workflow_run/.test(y.replace(/^#.*$/gm, '')), f);
     for (const m of y.matchAll(/persist-credentials:\s*(\S+)/g)) assert.equal(m[1], 'false', f);

@@ -114,7 +114,9 @@ The run is named `shard <shard_id>`.
      its own path, link, size, count and CRC guards, and starts the server from the read-only folder: node in the node
      image, python in the Python image with the manifest's PYTHONPATH, uv's requirements installed with pip into a venv
      (PyPI only), a binary in the full Debian node image. A bundle whose manifest does not list linux still runs (many
-     list only the platform their author tried), but its crash here is never its fault (`start_env_limited`). What goes
+     list only the platform their author tried), but its crash here is never its fault (`start_env_limited`); nor is the
+     crash of a python or uv bundle, which runs on an environment we rebuilt (our Python, our pip install of what we
+     read from its pyproject; uv would also read a script's inline metadata). What goes
      wrong in the sandbox is ours: the planner already judged those very bytes. After npm, PyPI and an image, before a
      .NET tool or a crate; `PACKAGE_ALLOWANCE_S.mcpb` (120 s) on top of its share.
    - **npm install scripts run**, inside the sandbox's install container: gVisor with syscall tracing, egress only

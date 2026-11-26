@@ -358,16 +358,20 @@ test('R-LP-60: what goes wrong with a bundle in the sandbox is ours: the planner
   assert.equal(fd2(mcpbRec([{ name: 'fetch', exit: 0 }, { name: 'venv', exit: 0 }, { name: 'requirements', exit: 0 }, { name: 'install', exit: 1 }]), 'ERROR: No matching distribution found for acme\n'), 'install_build_failed');
 });
 
-test('R-LP-61: a bundle whose manifest does not list linux runs here anyway, and its crash on our platform is never its fault', () => {
+test('R-LP-61: a bundle that does not run here as shipped (no linux in its manifest, or python or uv on an environment we rebuilt) runs anyway, and its crash is never its fault', async () => {
+  const m = manifest({ type: 'python', entry_point: 'server/main.py', mcp_config: { command: 'python', args: ['${__dirname}/server/main.py'] } });
+  assert.equal((await launchOf(zip({ 'manifest.json': m, 'server/main.py': 'x' }))).info.crash_not_evidence, true);
+  assert.equal((await launchOf(nodeBundle())).info.crash_not_evidence, false, 'a node bundle runs as shipped');
+  assert.equal((await launchOf(nodeBundle(manifest({ type: 'node', entry_point: 'server/index.js', mcp_config: { command: 'node', args: ['${__dirname}/server/index.js'] } }, { compatibility: { platforms: ['darwin'] } })))).info.crash_not_evidence, true);
   const rec = { install: { kind: 'mcpb', ok: true, steps: [{ name: 'fetch', exit: 0 }] }, env: { names: { registry: [] }, secret_named: [] }, timing: { total_ms: 60000 }, timed_out: false };
   const crash = { initialize: null, era: null, error: null, initialize_error: 'the server exited (exit 1, signal null)', lists: {}, transport: { exit: 1, signal: null }, timing: { total_ms: 3000 }, stderr: 'Traceback (most recent call last):\n  File "x", line 1\nModuleNotFoundError: No module named \'AppKit\'\n' };
   assert.equal(LP.failureDetail(rec, crash, null, { launch: MLAUNCH, argsUnfilled: 0 }), 'start_failed');
-  assert.equal(LP.failureDetail(rec, crash, null, { launch: MLAUNCH, argsUnfilled: 0, platformUnlisted: true }), 'start_env_limited');
+  assert.equal(LP.failureDetail(rec, crash, null, { launch: MLAUNCH, argsUnfilled: 0, crashNotEvidence: true }), 'start_env_limited');
 });
 
 test('R-LP-61 mutation check: without the platform guard a darwin-only bundle\'s crash would be its fault', async () => {
   const rec = { install: { kind: 'mcpb', ok: true, steps: [] }, env: { names: { registry: [] }, secret_named: [] }, timing: { total_ms: 60000 }, timed_out: false };
   const crash = { initialize_error: 'the server exited (exit 1, signal null)', lists: {}, transport: { exit: 1, signal: null }, timing: { total_ms: 3000 }, stderr: 'Traceback (most recent call last):\nModuleNotFoundError: x\n' };
-  const M = await mutant('  return sound && !platformUnlisted && ms !== null', '  return sound && ms !== null');
-  assert.equal(M.failureDetail(rec, crash, null, { launch: MLAUNCH, argsUnfilled: 0, platformUnlisted: true }), 'start_failed');
+  const M = await mutant('  return sound && !crashNotEvidence && ms !== null', '  return sound && ms !== null');
+  assert.equal(M.failureDetail(rec, crash, null, { launch: MLAUNCH, argsUnfilled: 0, crashNotEvidence: true }), 'start_failed');
 });
