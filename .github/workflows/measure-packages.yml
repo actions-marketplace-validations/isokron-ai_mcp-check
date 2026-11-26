@@ -23,7 +23,7 @@ env:
   WORKER_KIT_REF: '2ffcea16117ec679398f83eefe8c6fa66d38bac6'
   SURFACE_CORPUS_REF: 'f1d0d24bd6ad724842728bc7f34f4d27236b5eab'
   # The package types measured, and how many subjects a job takes.
-  MEASURE_TYPES: 'nuget'
+  MEASURE_TYPES: 'mcpb'
   PER_JOB: '6'
 
 jobs:

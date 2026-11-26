@@ -39,6 +39,7 @@ import { VERSION } from '../src/version.js';
 import { ranCommit } from './tool-commit.mjs';
 import { baselineProblems, judgeOracles } from './oracles/judge.mjs';
 import { pypiEntry } from './pypi-entry.mjs';
+import { mcpbLaunch } from './mcpb.mjs';
 
 export const LANE = 'live-probe';
 export const FORMAT = 'isokron-mcp-check-live-probe/1';
@@ -97,7 +98,7 @@ export const SUBJECT_BUDGET_S = 26 * 60;
 export const BUILD_ALLOWANCE_S = 17 * 60;
 export const BUILD_RESERVE_S = 12 * 60;
 /** R-LP-57: more time for a kind whose install image is large and pulled at its first subject (the .NET SDK image). */
-export const PACKAGE_ALLOWANCE_S = Object.freeze({ nuget: 180 });
+export const PACKAGE_ALLOWANCE_S = Object.freeze({ nuget: 180, mcpb: 120 });
 /** The launch kinds that build in the sandbox. */
 export const isBuild = (launch) => !!(launch && launch.kind === 'cargo');
 export const SUBJECT_TIMEOUT_MIN_S = 90;
@@ -121,7 +122,7 @@ const REGISTRY_CAP = 4 * 1024 * 1024;
 export const DETAILS = Object.freeze({
   bad_subject: ['no_runnable_artifact', false, 'resolve', 'tool'], // not a GitHub owner/name: this lane reads GitHub only
   no_package: ['no_runnable_artifact', false, 'resolve', 'tool'], // no registry package is no defect: Go and Rust binaries, other npm names and own-registry images exist (R-LP-43)
-  unsupported_package: ['no_runnable_artifact', false, 'resolve', 'tool'], // a package type we cannot run yet (MCPB)
+  unsupported_package: ['no_runnable_artifact', false, 'resolve', 'tool'], // a package type we cannot run
   private_registry: ['no_runnable_artifact', false, 'resolve', 'tool'],
   unverified_registry_entry: ['no_runnable_artifact', false, 'resolve', 'tool'], // our provenance checks stop short of it
   // Our allowlist of OCI hosts (it guards the planner's own fetches and what the runner's Docker daemon pulls, outside the
@@ -150,6 +151,18 @@ export const DETAILS = Object.freeze({
   entry_ambiguous: ['install_failed_registry', false, 'install', 'tool'],
   // R-LP-57: the package has a build for other platforms only (a .NET tool for Windows runtimes): our platform, not a defect.
   platform_unsupported: ['no_runnable_artifact', false, 'install', 'tool'],
+  // R-LP-59..61: MCP bundles (corpus/mcpb.mjs). Ours: a host we do not fetch from, a runtime or launcher we do not start
+  // (a shell script, a uv project in a subfolder, a server type the spec does not name), an archive or manifest we do not
+  // read (zip64, over 1 MiB), our size cap. The bundle's own: the release page's 404, bytes that are not the ones its
+  // registry entry names (fileSha256), a file that is no zip archive or names a path outside itself, and (as
+  // package_not_runnable) a manifest that names nothing to run or a file the bundle does not hold.
+  bundle_host_not_allowed: ['no_runnable_artifact', false, 'resolve', 'tool'],
+  bundle_runtime_unsupported: ['no_runnable_artifact', false, 'resolve', 'tool'],
+  bundle_unreadable: ['install_failed_registry', false, 'resolve', 'tool'],
+  bundle_too_large: ['too_large', false, 'resolve', 'tool'],
+  bundle_unavailable: ['install_failed_registry', false, 'resolve', 'subject'],
+  bundle_hash_mismatch: ['install_failed_registry', false, 'resolve', 'subject'],
+  bundle_invalid: ['install_failed_registry', false, 'resolve', 'subject'],
   needs_credentials: ['start_requires_credentials', false, 'start', 'subject'], // a declared required env var, and the server exited non-zero by itself with no network attempt
   start_needs_network: ['timeout_start', false, 'start', 'tool'], // the server tried the network, which the run does not have
   start_failed: ['timeout_start', false, 'start', 'subject'], // a crash signature on stderr (R-LP-45), and exited with its own non-zero code, early, with every argument filled
@@ -350,7 +363,7 @@ export function repoOfMetadataUrl(url) {
 }
 
 // Installed packages first, then an image, then a package we build: a crate's build can take BUILD_CAP_S.
-const TYPE_RANK = { npm: 0, pypi: 1, oci: 2, nuget: 4, cargo: 5 };
+const TYPE_RANK = { npm: 0, pypi: 1, oci: 2, mcpb: 3, nuget: 4, cargo: 5 };
 const TRANSPORT_RANK = { stdio: 0, 'streamable-http': 1 };
 const DEFAULT_BASE = { npm: ['https://registry.npmjs.org', 'https://registry.npmjs.org/'], pypi: ['https://pypi.org', 'https://pypi.org/', 'https://pypi.org/simple', 'https://pypi.org/simple/'], cargo: ['https://crates.io', 'https://crates.io/', 'https://index.crates.io', 'https://index.crates.io/'], nuget: ['https://api.nuget.org/v3/index.json', 'https://api.nuget.org', 'https://api.nuget.org/', 'https://www.nuget.org', 'https://www.nuget.org/'] };
 /** A NuGet package id and an exact NuGet version, as the sandbox checks them (mcp-surface-corpus src/targets.mjs). */
@@ -747,9 +760,9 @@ export function purlOf(type, id, version) {
 export async function launchFor(pkg, { fetch: fetchImpl = globalThis.fetch } = {}) {
   const type = String(pkg.registryType || pkg.registry || '').toLowerCase();
   const id = typeof pkg.identifier === 'string' ? pkg.identifier.trim() : '';
-  if (!['npm', 'pypi', 'oci', 'cargo', 'nuget'].includes(type)) return { detail: 'unsupported_package' };
+  if (!['npm', 'pypi', 'oci', 'cargo', 'nuget', 'mcpb'].includes(type)) return { detail: 'unsupported_package' };
   const base = typeof pkg.registryBaseUrl === 'string' ? pkg.registryBaseUrl : null;
-  if (base && type !== 'oci' && !DEFAULT_BASE[type].includes(base)) return { detail: 'private_registry' };
+  if (base && type !== 'oci' && type !== 'mcpb' && !DEFAULT_BASE[type].includes(base)) return { detail: 'private_registry' };
   const tr = transportOf(pkg.transport);
   if (tr.detail) return tr;
   const { args, unfilled } = packageArgs(pkg.packageArguments);
@@ -776,6 +789,15 @@ export async function launchFor(pkg, { fetch: fetchImpl = globalThis.fetch } = {
     const v = version === 'latest' || CRATE_VERSION.test(version) ? version : 'latest';
     choice.version = v; choice.purl = purlOf('cargo', id, v);
     return { launch: { kind: 'cargo', crate: id, version: v, ...common }, choice };
+  }
+  if (type === 'mcpb') {
+    // R-LP-59: the bundle is read here as data (corpus/mcpb.mjs) and unpacked in the sandbox (mcp-surface-corpus launchPlan,
+    // kind mcpb) from exactly the bytes read, its sha256 pinned; it runs in the image its runtime needs.
+    if (tr.transport !== 'stdio') return { detail: 'unsupported_transport' };
+    const { launch, info } = await mcpbLaunch(pkg, { fetch: fetchImpl, transportArgs: args, env });
+    choice.version = typeof pkg.version === 'string' && SAFE_VERSION.test(pkg.version) ? pkg.version : 'latest';
+    choice.mcpb = info;
+    return { launch, choice };
   }
   if (type === 'nuget') {
     // R-LP-57: a .NET tool package, installed in the sandbox (mcp-surface-corpus launchPlan, kind nuget: `dotnet tool
@@ -824,7 +846,8 @@ export async function registryEntries(subject, seedPkgs, { fetch: fetchImpl = gl
   return [...found.values()].sort((a, b) => (b.seed - a.seed) || (b.namespace - a.namespace) || (a.server.name < b.server.name ? -1 : 1));
 }
 
-const DETAIL_ORDER = ['unverified_registry_entry', 'image_too_large', 'oci_host_not_allowed', 'unsupported_transport', 'image_registry_unreadable', 'image_unavailable', 'launch_invalid', 'private_registry', 'unsupported_package'];
+// Our limits before a package's own failure: a subject is not shown at fault while any of its packages failed on our side.
+const DETAIL_ORDER = ['unverified_registry_entry', 'image_too_large', 'oci_host_not_allowed', 'unsupported_transport', 'image_registry_unreadable', 'start_needs_config', 'platform_unsupported', 'bundle_runtime_unsupported', 'bundle_unreadable', 'bundle_too_large', 'bundle_host_not_allowed', 'image_unavailable', 'bundle_unavailable', 'bundle_hash_mismatch', 'bundle_invalid', 'package_not_runnable', 'launch_invalid', 'private_registry', 'unsupported_package'];
 
 /**
  * How to run one subject: { status: 'runnable', launch, choice, registry, subdir } or { status: 'skipped', detail }.
@@ -1244,7 +1267,7 @@ function listDetail(p) {
  * records beside the driver's record: records (this target's telemetry), stepsLog (the install's log text), launch and
  * argsUnfilled (the plan's resolution of it).
  */
-export function failureDetail(rec, bare, envp, { deadlineHit = false, records = [], stepsLog = null, launch = null, argsUnfilled = null } = {}) {
+export function failureDetail(rec, bare, envp, { deadlineHit = false, records = [], stepsLog = null, launch = null, argsUnfilled = null, platformUnlisted = false } = {}) {
   if (!rec) return deadlineHit ? 'shard_deadline' : 'harness_error';
   if (rec.excluded) return 'sandbox_evidence_missing';
   const inst = rec.install;
@@ -1264,6 +1287,13 @@ export function failureDetail(rec, bare, envp, { deadlineHit = false, records = 
       const entry = failed.find((s) => s.name === 'entry');
       if (entry) return entryDetail(isObj(entry.result) ? entry.result.error : null);
       return (failed.some((s) => s.name === 'install') && cargoInstallEvidence(text, isObj(launch) ? launch.crate : null)) || 'install_build_failed';
+    }
+    if (inst.kind === 'mcpb') {
+      // R-LP-60: the planner already read these very bytes (their sha256 is pinned) and judged the bundle; what goes wrong
+      // in the sandbox (the download, our caps, a uv bundle's pip install, which runs its dependencies' builds) is ours.
+      const fetchStep = failed.find((s) => s.name === 'fetch');
+      const code = fetchStep && isObj(fetchStep.result) ? fetchStep.result.error : null;
+      return ['too_large', 'too_many_files', 'too_big_unpacked'].includes(code) ? 'install_resource_limit' : 'install_build_failed';
     }
     if (inst.kind === 'nuget') {
       const entry = failed.find((s) => s.name === 'entry');
@@ -1296,7 +1326,8 @@ export function failureDetail(rec, bare, envp, { deadlineHit = false, records = 
   const err = typeof p.stderr === 'string' ? p.stderr : '';
   if (own && (CONFIG_TEXT.test(err) || ENV_NAME_TEXT.test(err))) return 'start_needs_config';
   // A crash signature is the evidence; an early exit with no telling stderr is not (R-LP-45).
-  return sound && ms !== null && ms < START_QUICK_MS && CRASH_TEXT.test(err) ? 'start_failed' : 'start_env_limited';
+  // R-LP-61: a bundle whose manifest does not list linux ran here anyway: its crash on our platform is no evidence against it.
+  return sound && !platformUnlisted && ms !== null && ms < START_QUICK_MS && CRASH_TEXT.test(err) ? 'start_failed' : 'start_env_limited';
 }
 
 // ------------------------------------------------------------------ observations
@@ -1533,7 +1564,7 @@ export function buildItem(item, ctx) {
     let reader = { listed: false };
     const tel = telemetryFor(telemetryFile, item.target_id);
     if (!primary) {
-      detail = ociRun && ociRun.outcome === 'disk_low' ? 'disk_low' : failureDetail(rec, bare, envp, { deadlineHit, records: tel.records, stepsLog: readText(join(dir, 'steps.log')), launch: r.launch, argsUnfilled: r.choice ? r.choice.args_unfilled : null });
+      detail = ociRun && ociRun.outcome === 'disk_low' ? 'disk_low' : failureDetail(rec, bare, envp, { deadlineHit, records: tel.records, stepsLog: readText(join(dir, 'steps.log')), launch: r.launch, argsUnfilled: r.choice ? r.choice.args_unfilled : null, platformUnlisted: !!(r.choice && isObj(r.choice.mcpb) && r.choice.mcpb.platform_unlisted) });
     } else {
       const text = listText(primary.lists['tools/list'].raw_pages);
       let g = null;

@@ -97,6 +97,26 @@ The run is named `shard <shard_id>`.
      NU1102: `install_failed`; not a .NET tool, or no `DotnetToolSettings.xml`: `package_not_runnable`); a NuGet install
      runs no code of the package, so nothing it ships can print those words. A tool built for other platforms only is
      `platform_unsupported` (tool); several commands is `entry_ambiguous` (tool).
+   - **MCP bundles** (registry type `mcpb`, R-LP-59..61, `corpus/mcpb.mjs`). The planner downloads the bundle from the
+     GitHub release asset the registry or seed list names (github.com, then its release-asset hosts only; every
+     redirect checked; at most 200 MiB, read as a stream), checks its sha256 against the registry's `fileSha256` when
+     there is one, and reads it as data: the zip's central directory (every entry name checked as the sandbox checks
+     it), `manifest.json` (at most 1 MiB) and the first bytes of a binary; nothing of it runs on the planner. From the
+     manifest it builds the launch a client would: `server.type` node, python, binary or uv; `mcp_config` with the
+     `linux` platform override; `${__dirname}` (the bundle's folder), `${HOME}`, `${DESKTOP}`, `${DOCUMENTS}`,
+     `${DOWNLOADS}`, `${pathSeparator}` and `${user_config.*}` put in. A user_config value with a default uses it; an
+     optional one with none is left out with the flag before it; a required one with none is `start_needs_config`
+     (ours), never guessed. Names the sandbox owns are never set; a `PYTHONPATH` must stay inside the bundle. A binary
+     runs only when the manifest lists linux (or no platforms) and the file is a linux/amd64 ELF; a shell launcher is
+     not started. `uv run` is read as uv reads it (`--directory`/`--project` the bundle, `--extra`, then a script,
+     `python ...` or a console script). The sandbox (mcp-surface-corpus launchPlan, kind `mcpb`) downloads the same URL
+     through its proxy (GitHub's three hosts only, PyPI as well for uv), unpacks only bytes with the pinned sha256, with
+     its own path, link, size, count and CRC guards, and starts the server from the read-only folder: node in the node
+     image, python in the Python image with the manifest's PYTHONPATH, uv's requirements installed with pip into a venv
+     (PyPI only), a binary in the full Debian node image. A bundle whose manifest does not list linux still runs (many
+     list only the platform their author tried), but its crash here is never its fault (`start_env_limited`). What goes
+     wrong in the sandbox is ours: the planner already judged those very bytes. After npm, PyPI and an image, before a
+     .NET tool or a crate; `PACKAGE_ALLOWANCE_S.mcpb` (120 s) on top of its share.
    - **npm install scripts run**, inside the sandbox's install container: gVisor with syscall tracing, egress only
      through the allowlist proxy to the npm registry. What they did is in the bundle (the install container's trace
      summary and every proxy request in `raw/telemetry.jsonl`, the counts in `install_phase_behaviour`). A native
@@ -238,7 +258,7 @@ and the 4x free-disk rule. An image on another host is unassessed until the list
 
 | Detail | Skip reason | Fault | Retryable |
 |---|---|---|---|
-| `bad_subject` (not a GitHub owner/name), `unsupported_package` (a package type we do not run yet: MCPB), `unverified_registry_entry`, `launch_invalid` | `no_runnable_artifact` | tool | no |
+| `bad_subject` (not a GitHub owner/name), `unsupported_package` (a package type we do not run), `unverified_registry_entry`, `launch_invalid` | `no_runnable_artifact` | tool | no |
 | `oci_host_not_allowed` (the image is not on one of our six registries) | `no_runnable_artifact` | tool | no |
 | `no_package` (no registry search page came back full; having no registry package is no defect: Go and Rust binaries, other npm names and own-registry images exist) | `no_runnable_artifact` | tool | no |
 | `registry_lookup_truncated` (a registry search page came back full, 100 results with no paging: the entry may not have been fetched) | `no_runnable_artifact` | tool | no |
@@ -254,9 +274,16 @@ and the 4x free-disk rule. An image on another host is unassessed until the list
 | `install_resource_limit` (exit 137 or 124, or out of memory) | `install_failed_registry` | tool | no |
 | `install_build_failed` (a native build, a missing compiler or library, an engine mismatch, or any other install failure with no package error) | `install_failed_registry` | tool | no |
 | `install_timeout` (our install time limit) | `install_failed_registry` | tool | no |
-| `package_not_runnable` (the package declares nothing we could start, in the package manager's or our entry helper's own answer: a crate with no binary) | `install_failed_registry` | subject | no |
+| `package_not_runnable` (the package declares nothing we could start, in the package manager's, our entry helper's or its own manifest's words: a crate with no binary, a NuGet package that is no tool, a bundle with no manifest, no server or no command, or whose manifest names a file it does not hold) | `install_failed_registry` | subject | no |
 | `entry_ambiguous` (several binaries, or several tool commands, and none named for the package: we would have to guess) | `install_failed_registry` | tool | no |
-| `platform_unsupported` (the package builds for other platforms only: a .NET tool for Windows runtimes; our platform is linux/amd64) | `no_runnable_artifact` | tool | no |
+| `platform_unsupported` (the package builds for other platforms only: a .NET tool for Windows runtimes, a bundle's binary that is not linux/amd64 or whose manifest does not list linux; our platform is linux/amd64) | `no_runnable_artifact` | tool | no |
+| `bundle_host_not_allowed` (an MCP bundle that is not a GitHub release asset, or a redirect off GitHub's release-asset hosts) | `no_runnable_artifact` | tool | no |
+| `bundle_runtime_unsupported` (a bundle launched by something we do not start: a shell script, a server type the spec does not name, a uv project in a subfolder) | `no_runnable_artifact` | tool | no |
+| `bundle_unreadable` (a zip we do not read: zip64, a manifest over 1 MiB) | `install_failed_registry` | tool | no |
+| `bundle_too_large` (over our 200 MiB bundle cap) | `too_large` | tool | no |
+| `bundle_unavailable` (the release page's own 404 for the bundle's URL) | `install_failed_registry` | subject | no |
+| `bundle_hash_mismatch` (the bytes at the URL are not the ones the registry entry names in fileSha256) | `install_failed_registry` | subject | no |
+| `bundle_invalid` (the file is no zip archive at all, or names a path outside itself) | `install_failed_registry` | subject | no |
 | `needs_credentials` (the registry entry declares a required env var, the server exited non-zero by itself (not 125, 126, 127 or 137; no signal or time limit), with every argument filled and no guessed PyPI entry, and it made no network attempt) | `start_requires_credentials` | subject | no |
 | `start_needs_network` (the server tried the network, which the run does not have: a lookup or connection in its role, or a connect, looked-up name or network call in its trace) | `timeout_start` | tool (the contract allows only subject for `start_requires_credentials`) | no |
 | `start_needs_config` (the server exited with its own code (not 125, 126, 127 or 137; no signal) and its stderr asks for configuration: a config file not found or unreadable, a kubeconfig or current-context, `--config`, a `Usage:` block, a missing or required argument, option, flag or environment variable, or "please create/set/provide/specify") | `timeout_start` | tool | no |
