@@ -179,6 +179,9 @@
     return { text: parts.size ? Array.from(parts).join(' … ') : '', over };
   }
   // The value of a constant or a property path into one (TOOLS.SEARCH, config.name), or null.
+  // A number is taken from a constant only when it cannot change: a `let` or `var` can be assigned again (M = 10, in a
+  // function or another statement), so a number read from one is not a bound, an operand or text.
+  const fixedNum = (c) => !c || !c.decl || c.decl === 'const';
   function chainValue(ctx, ids) {
     if (!ctx || !ctx.consts || !hasOwn(ctx.consts, ids[0])) return null;
     const c = ctx.consts[ids[0]]; let v = c.value; if (c.lost) lose(c.lost);
@@ -196,7 +199,7 @@
     let out = tok.parts[0]; let exact = true;
     tok.exprs.forEach((e, k) => {
       const r = /^[A-Za-z_$][\w$]*(\s*\??\.\s*[A-Za-z_$][\w$]*)*$/.test(e) ? chainValue(ctx, e.split(/\s*\??\.\s*/)) : null;
-      if (r && (typeof r.value === 'string' || typeof r.value === 'number')) out += String(r.value); else { out += '…'; exact = false; }
+      if (r && (typeof r.value === 'string' || (typeof r.value === 'number' && fixedNum(r.c)))) out += String(r.value); else { out += '…'; exact = false; }
       out += tok.parts[k + 1];
       if (out.length > MAX_STR) { lose(out.slice(MAX_STR)); out = out.slice(0, MAX_STR); exact = false; }
     });
@@ -214,7 +217,7 @@
       if (tok.type === 'num') return { value: tok.value, end: k + 1 };
       if (isP(tok, '-') && t[k + 1] && (t[k + 1].type === 'num' || t[k + 1].type === 'id')) { const r = primary(k + 1); return r ? { value: -r.value, end: r.end } : null; }
       if (isP(tok, '(')) { const r = numExpr(t, k + 1, ctx, false, depth + 1); if (!r || !isP(t[r.end], ')')) return null; ops += r.ops; return { value: r.value, end: r.end + 1 }; }
-      if (tok.type !== 'id' || !ctx || !ctx.consts || !hasOwn(ctx.consts, tok.value)) return null;
+      if (tok.type !== 'id' || !ctx || !ctx.consts || !hasOwn(ctx.consts, tok.value) || !fixedNum(ctx.consts[tok.value])) return null;
       const ch = idChain(t, k); if (isP(t[ch.end], '(')) return null;
       if (ch.ids.length > 1 && ch.ids[ch.ids.length - 1] === 'length') {
         const r = chainValue(ctx, ch.ids.slice(0, -1)); const c = r && r.c;
@@ -257,7 +260,7 @@
         const ch = idChain(t, j); end = ch.end;
         if (isP(t[end], '(')) return null;
         const r = chainValue(ctx, ch.ids);
-        if (r && typeof r.value === 'string') { v = r.value; any = true; if (ch.ids.length === 1 && r.c.partial) exact = false; } else if (r && typeof r.value === 'number') v = String(r.value); else { v = '…'; exact = false; }
+        if (r && typeof r.value === 'string') { v = r.value; any = true; if (ch.ids.length === 1 && r.c.partial) exact = false; } else if (r && typeof r.value === 'number' && fixedNum(r.c)) v = String(r.value); else { v = '…'; exact = false; }
       } else return null;
       if (out.length >= MAX_STR) { lose(v); exact = false; } else { out += v; if (out.length > MAX_STR) { lose(out.slice(MAX_STR)); out = out.slice(0, MAX_STR); exact = false; } }
       j = end;
@@ -308,7 +311,7 @@
         // a zod constant with more calls: Param.optional().describe('…')
         const z = parseZod(t, i, ctx, c);
         if (z) r = z;
-      } else if (!isP(t[ch.end], '(')) {
+      } else if (!isP(t[ch.end], '(') && !(typeof c.value === 'number' && !fixedNum(c))) {
         if (ch.ids.length === 1) {
           const s = typeof c.value === 'string' ? stringExpr(t, i, ctx) : null;
           r = s && (s.end > i + 1 || s.partial) ? s : { value: c.value, end: i + 1, exact: c.exact, optional: c.optional, zod: c.zod, optionalKeys: c.optionalKeys };
@@ -667,12 +670,14 @@
   function zodToSchema(calls, ctx) {
     let s = {}; let exact = true; let optional = false;
     const fl = ctx && ctx.fl; const zod3 = !fl || !(fl.zod >= 4);
+    // What wraps the schema the chain builds (see WRAPPED_OF): null, 'wrapped' or 'optional'.
+    let wrap = null; const wrapAs = (w) => { if (wrap !== 'optional') wrap = w; };
     const base = calls[0]; const argv = (k) => (base.args[k] ? base.args[k].value : undefined);
     switch (base.name) {
-      case '__const': s = JSON.parse(JSON.stringify(base.base.value || {})); exact = base.base.exact !== false; optional = !!base.base.optional; break;
+      case '__const': s = JSON.parse(JSON.stringify(base.base.value || {})); exact = base.base.exact !== false; optional = !!base.base.optional; wrap = (base.base.value && typeof base.base.value === 'object' && WRAPPED_OF.get(base.base.value)) || null; break;
       case 'toJSONSchema': { const a = argv(0); if (a && a !== SKIP && typeof a === 'object') s = a; else exact = false; break; }
       case 'preprocess': { const a = argv(1); if (a && a !== SKIP && typeof a === 'object') { s = a; optional = !!(base.args[1] && base.args[1].optional); } else exact = false; break; }
-      case 'optional': case 'nullish': { const a = argv(0); if (a && a !== SKIP && typeof a === 'object') s = a; else exact = false; optional = true; break; }
+      case 'optional': case 'nullish': { const a = argv(0); if (a && a !== SKIP && typeof a === 'object') s = JSON.parse(JSON.stringify(a)); else exact = false; optional = true; wrap = 'optional'; break; }
       case 'discriminatedUnion': { const a = argv(1); s = Array.isArray(a) ? { anyOf: a } : {}; if (!Array.isArray(a)) exact = false; break; }
       case 'string': s = { type: 'string' }; break;
       case 'number': s = { type: 'number' }; break;
@@ -686,7 +691,12 @@
       case 'array': { const it = argv(0); s = { type: 'array', items: it && it !== SKIP ? it : {} }; if (!it || it === SKIP || base.args[0].exact === false) exact = false; break; }
       case 'object': case 'strictObject': case 'looseObject': { const sh = argv(0); const r = shapeToSchema(sh && sh !== SKIP ? sh : {}, base.args[0] ? base.args[0].optionalKeys : null, ctx && ctx.fl); if (base.name === 'strictObject') r.schema.additionalProperties = false; s = r.schema; if (!sh || sh === SKIP || base.args[0].exact === false) exact = false; break; }
       case 'record': { const v = base.args.length > 1 ? argv(1) : argv(0); s = { type: 'object', additionalProperties: v && v !== SKIP ? v : {} }; if (ctx && ctx.fl && ctx.fl.zod >= 4) { const kk = base.args.length > 1 ? argv(0) : { type: 'string' }; s = { type: 'object', propertyNames: kk && kk !== SKIP ? kk : { type: 'string' }, additionalProperties: s.additionalProperties }; } break; }
-      case 'union': { const a = argv(0); s = Array.isArray(a) ? zod3 ? zod3Union(a) : { anyOf: a } : {}; if (!Array.isArray(a)) exact = false; break; }
+      case 'union': {
+        const a = argv(0);
+        if (!Array.isArray(a)) { s = {}; exact = false; } else if (!zod3) s = { anyOf: a };
+        else { const u = zod3Union(a); s = u.schema; if (!u.exact) exact = false; }
+        break;
+      }
       case 'url': s = { type: 'string', format: 'uri' }; break;
       case 'email': s = { type: 'string', format: 'email' }; break;
       case 'uuid': s = { type: 'string', format: 'uuid' }; break;
@@ -696,9 +706,9 @@
       const a0 = c.args[0] ? c.args[0].value : undefined;
       switch (c.name) {
         case 'describe': if (typeof a0 === 'string') s.description = a0; else exact = false; break;
-        case 'optional': case 'nullish': optional = true; break;
-        case 'nullable': s = nullableOf(withIntBounds(s, fl), zod3); break;
-        case 'default': optional = true; if (a0 !== SKIP && a0 !== undefined) s.default = a0; break;
+        case 'optional': case 'nullish': optional = true; wrapAs('optional'); break;
+        case 'nullable': { const n = nullableOf(withIntBounds(s, fl), zod3, wrap); s = n.schema; if (!n.exact) exact = false; wrap = null; break; }
+        case 'default': optional = true; wrapAs('wrapped'); if (a0 !== SKIP && a0 !== undefined) s.default = a0; break;
         case 'int': s.type = 'integer'; break;
         case 'min': if (typeof a0 === 'number') s[s.type === 'string' ? 'minLength' : s.type === 'array' ? 'minItems' : 'minimum'] = a0; else exact = false; break;
         case 'max': if (typeof a0 === 'number') s[s.type === 'string' ? 'maxLength' : s.type === 'array' ? 'maxItems' : 'maximum'] = a0; else exact = false; break;
@@ -715,17 +725,21 @@
           if (src === null || s.pattern !== undefined || calls.filter((d) => d.name === 'regex').length > 1) { delete s.pattern; exact = false; } else s.pattern = src;
           break;
         }
-        case 'refine': case 'superRefine': case 'transform': case 'brand': case 'readonly': case 'catch': case 'pipe': break;
-        case 'array': s = { type: 'array', items: s }; break;
+        case 'refine': case 'superRefine': case 'transform': case 'brand': case 'readonly': case 'catch': case 'pipe': wrapAs('wrapped'); break;
+        case 'array': s = { type: 'array', items: s }; wrap = null; break;
         case 'strict': s.additionalProperties = false; break;
         case 'passthrough': case 'catchall': delete s.additionalProperties; break;
         case 'meta': if (a0 && typeof a0 === 'object' && typeof a0.description === 'string') s.description = a0.description; break;
-        case 'trim': case 'toLowerCase': case 'toUpperCase': case 'finite': case 'safe': case 'nonempty': if (c.name === 'nonempty') s[s.type === 'array' ? 'minItems' : 'minLength'] = 1; break;
+        case 'trim': case 'toLowerCase': case 'toUpperCase': case 'finite': case 'safe': case 'nonempty':
+          if (c.name === 'nonempty') s[s.type === 'array' ? 'minItems' : 'minLength'] = 1;
+          wrapAs('wrapped'); // a check the JSON Schema does not show: the option is no longer a bare primitive to zod-to-json-schema
+          break;
         default: exact = false;
       }
     }
     s = withIntBounds(s, fl);
     if (fl && fl.compactUnions) compactTypeUnion(s);
+    if (wrap && s && typeof s === 'object') WRAPPED_OF.set(s, wrap);
     return { schema: s, exact, optional };
   }
   function withIntBounds(s, fl) {
@@ -741,18 +755,26 @@
   //     a description of an option is dropped) is a type, or a type array; .nullable() of such a bare schema is a
   //     type array with "null", and of anything else anyOf [schema, {type: null}], the description repeated outside.
   //   zod 4: .nullable() is always anyOf [schema, {type: null}]; from 4.5.0 an anyOf of bare types becomes a type array.
+  //   A schema whose JSON Schema looks bare but that zod wraps (.optional(), .refine(), .transform(), .default(), …) or
+  //   that carries a check the JSON Schema does not show (.trim()) is not a primitive to zod-to-json-schema: a union
+  //   with such an option, and .nullable() of it, are anyOf. An .optional()/.nullish() option is written there as
+  //   anyOf [{not: {}}, schema] by zod-to-json-schema, a form the reader does not build, so that union is inexact.
   const ZOD3_PRIMITIVE = new Set(['string', 'number', 'boolean', 'null']);
-  const bareZod3 = (o, withDescription) => !!o && typeof o === 'object' && typeof o.type === 'string' && ZOD3_PRIMITIVE.has(o.type) && Object.keys(o).every((k) => k === 'type' || (withDescription && k === 'description'));
+  // schema object -> 'wrapped' | 'optional': set by zodToSchema for a chain with a wrapper or a hidden check.
+  const WRAPPED_OF = new WeakMap();
+  const wrappedOf = (o) => (o && typeof o === 'object' ? WRAPPED_OF.get(o) || null : null);
+  const bareZod3 = (o, withDescription) => !!o && typeof o === 'object' && !WRAPPED_OF.has(o) && typeof o.type === 'string' && ZOD3_PRIMITIVE.has(o.type) && Object.keys(o).every((k) => k === 'type' || (withDescription && k === 'description'));
   function zod3Union(options) {
-    if (!options.length || !options.every((o) => bareZod3(o, true))) return { anyOf: options };
+    const exact = !options.some((o) => wrappedOf(o) === 'optional');
+    if (!options.length || !options.every((o) => bareZod3(o, true))) return { schema: { anyOf: options }, exact };
     const types = []; options.forEach((o) => { if (!types.includes(o.type)) types.push(o.type); });
-    return { type: types.length === 1 ? types[0] : types };
+    return { schema: { type: types.length === 1 ? types[0] : types }, exact };
   }
-  function nullableOf(s, zod3) {
-    if (zod3 && bareZod3(s, true)) return Object.assign({}, s, { type: [s.type, 'null'] });
+  function nullableOf(s, zod3, wrap) {
+    if (zod3 && !wrap && bareZod3(s, true)) return { schema: Object.assign({}, s, { type: [s.type, 'null'] }), exact: true };
     const out = { anyOf: [s, { type: 'null' }] };
     if (zod3 && typeof s.description === 'string') out.description = s.description;
-    return out;
+    return { schema: out, exact: !(zod3 && wrap === 'optional') };
   }
   // zod 4.5+'s compactTypeUnion: anyOf of options that are only { type } (nested ones first) -> type (array).
   function compactTypeUnion(schema) {
@@ -991,7 +1013,7 @@
           if ((isP(t[ch.end], '||') || isP(t[ch.end], '??')) && t[ch.end + 1] && t[ch.end + 1].type === 'str' && (isP(t[ch.end + 2], ';') || isP(t[ch.end + 2], ',') || (t[ch.end + 2] && t[ch.end + 2].nl) || !t[ch.end + 2])) v = { value: t[ch.end + 1].value, exact: false, fallback: true };
         }
         if (v.value === SKIP && d === 0) { const f = fnAt(t, j + 1, ctx, consts, false); if (f) { consts[FN + t[i + 1].value] = f; continue; } }
-        if (v.value !== SKIP) consts[t[i + 1].value] = { value: v.value, exact: v.exact, optional: !!v.optional, zod: !!v.zod, optionalKeys: v.optionalKeys || null, top: d === 0 && !v.fallback, partial: !!v.partial, lost: lost.length ? lost : null, holes: (v.holes || 0) + (v.unknownKeys ? v.unknownKeys.size : 0) + (v.spreadUnknown ? 1 : 0) };
+        if (v.value !== SKIP) consts[t[i + 1].value] = { value: v.value, exact: v.exact, optional: !!v.optional, zod: !!v.zod, optionalKeys: v.optionalKeys || null, top: d === 0 && !v.fallback, partial: !!v.partial, lost: lost.length ? lost : null, holes: (v.holes || 0) + (v.unknownKeys ? v.unknownKeys.size : 0) + (v.spreadUnknown ? 1 : 0), decl: tk.value };
       } else if (tk.value === 'function' && d === 0 && t[i + 1].type === 'id' && isP(t[i + 2], '(') && !isP(t[i - 1], '.') && !(t[i - 1] && t[i - 1].value === 'async')) {
         const f = fnAt(t, i + 2, ctx, consts, true); if (f) consts[FN + t[i + 1].value] = f;
       } else if (tk.value === 'enum' && t[i + 1].type === 'id' && isP(t[i + 2], '{')) {

@@ -99,6 +99,34 @@ test('R-RD-26: .length of a constant array with a spread or an unreadable elemen
   assert.deepEqual(tool(an, 'check_tools_list').inputSchema.properties.sections, { type: 'array', items: { type: 'string' } });
 });
 
+// A number read from a `let` or `var` can be assigned again before the schema is built, so it is not a bound, an
+// operand or text. Synthetic, in the shape of the check_tools_list fixture above.
+test('R-RD-26: a number from a let or var is not a bound, an operand or text; only a const is', () => {
+  const an = read({ 'package.json': ZOD3, 'src/server.ts': [
+    "import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';",
+    "import { z } from 'zod';",
+    'let MAX_LEN = 5;',
+    'MAX_LEN = 10;',
+    'var LIMIT = 50;',
+    'function grow() { LIMIT = 90; }',
+    'const FIXED = 7;',
+    "const server = new McpServer({ name: 'x', version: '1.0.0' });",
+    "server.registerTool('t', { description: 'Up to ' + LIMIT + ' items, ' + FIXED + ' fixed.', inputSchema: {",
+    '  a: z.string().max(MAX_LEN),',
+    '  b: z.array(z.string()).max(LIMIT * 2),',
+    '  c: z.string().max(FIXED),',
+    '  d: z.string().describe(`Limit ${LIMIT}.`),',
+    '} }, async () => ({ content: [] }));',
+  ].join('\n') });
+  const t = tool(an, 't');
+  assert.equal(t.description, 'Up to … items, 7 fixed.', 'a let/var number is not written into text');
+  const p = t.inputSchema.properties;
+  assert.deepEqual(p.a, { type: 'string' }, 'let MAX_LEN = 5; MAX_LEN = 10 is not a maxLength of 5');
+  assert.deepEqual(p.b, { type: 'array', items: { type: 'string' } }, 'a var in arithmetic is not an operand');
+  assert.deepEqual(p.c, { type: 'string', maxLength: 7 }, 'a const still is');
+  assert.equal(p.d.description, 'Limit ….');
+});
+
 // ---------------------------------------------------------------- R-RD-27: schema factory functions
 // Trimmed from CruGlobal/flightdeck-mcp-server 3a4f362dbf0b4723cd67cccb40704adf4d1c2259 src/tools.ts (id, pagination,
 // get_project, update_work_item). The `description` constant and the get_me registration using it are added.
@@ -275,6 +303,53 @@ test('R-RD-28: zod 3 writes a union of bare primitives as a type array, and .nul
   assert.deepEqual(p.start_date, { type: ['string', 'null'], description: 'ISO 8601 date (YYYY-MM-DD), or null to clear' });
   assert.deepEqual(p.estimate_point, { anyOf: [{ type: 'integer' }, { type: 'null' }] }, 'z.number().int() has a check, so it is not a bare type');
   assert.deepEqual(p.slug, { anyOf: [{ type: 'string', minLength: 1, description: 'Short name' }, { type: 'null' }], description: 'Short name' });
+});
+
+// zod-to-json-schema takes the type-array path only when every option is a bare ZodString/ZodNumber/ZodBoolean/ZodNull
+// with no checks: an option zod wraps (ZodOptional, ZodEffects, ZodDefault, ZodBranded, ZodReadonly, ZodCatch,
+// ZodPipeline) or one with a check the JSON Schema does not show (.trim()) makes the union anyOf, and .nullable() of a
+// wrapped schema is anyOf with null. Expected values are what zod-to-json-schema 3.25.2 writes for these expressions
+// with the SDK's options (strictUnions, pipeStrategy 'input'); an .optional() option, which it writes as
+// anyOf [{not: {}}, schema], is not built by the reader (the union is marked inexact) and is not a type array.
+// Synthetic negative controls for the R-RD-28 fixture above.
+test('R-RD-28: zod 3 writes a union with a wrapped or checked option as anyOf, never a type array', () => {
+  const an = read({ 'package.json': ZOD3, 'src/server.ts': [
+    "import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';",
+    "import { z } from 'zod';",
+    'const Opt = z.string().optional();',
+    'const wrapped = () => z.string().refine((x) => x.length > 0);',
+    "const server = new McpServer({ name: 'x', version: '1.0.0' });",
+    "server.registerTool('t', { description: 'd', inputSchema: {",
+    '  opt: z.union([z.string().optional(), z.number()]),',
+    '  nullish: z.union([z.string().nullish(), z.number()]),',
+    '  refine: z.union([z.string().refine((x) => !!x), z.number()]),',
+    '  superRefine: z.union([z.string().superRefine(() => {}), z.number()]),',
+    '  transform: z.union([z.string().transform(Number), z.number()]),',
+    "  dflt: z.union([z.string().default('x'), z.number()]),",
+    '  brand: z.union([z.string().brand(), z.number()]),',
+    '  readonly: z.union([z.string().readonly(), z.number()]),',
+    "  caught: z.union([z.string().catch('x'), z.number()]),",
+    '  piped: z.union([z.string().pipe(z.string()), z.number()]),',
+    '  trimmed: z.union([z.string().trim(), z.number()]),',
+    '  viaConst: z.union([Opt, z.boolean()]),',
+    "  viaConstDescribed: z.union([Opt.describe('o'), z.boolean()]),",
+    '  viaFactory: z.union([wrapped(), z.number()]),',
+    '  refineNullable: z.string().refine((x) => !!x).nullable(),',
+    '  optNullable: z.string().optional().nullable(),',
+    "  described: z.union([z.string().describe('s'), z.number()]),",
+    '  bare: z.union([z.string(), z.number()]),',
+    '} }, async () => ({ content: [] }));',
+  ].join('\n') });
+  const p = tool(an, 't').inputSchema.properties;
+  const SN = { anyOf: [{ type: 'string' }, { type: 'number' }] };
+  for (const k of ['opt', 'nullish', 'refine', 'superRefine', 'transform', 'brand', 'readonly', 'caught', 'piped', 'trimmed', 'viaFactory']) assert.deepEqual(p[k], SN, k);
+  assert.deepEqual(p.dflt, { anyOf: [{ type: 'string', default: 'x' }, { type: 'number' }] });
+  assert.deepEqual(p.viaConst, { anyOf: [{ type: 'string' }, { type: 'boolean' }] }, 'a constant keeps its wrapper');
+  assert.deepEqual(p.viaConstDescribed, { anyOf: [{ type: 'string', description: 'o' }, { type: 'boolean' }] });
+  assert.deepEqual(p.refineNullable, { anyOf: [{ type: 'string' }, { type: 'null' }] });
+  assert.deepEqual(p.optNullable, { anyOf: [{ type: 'string' }, { type: 'null' }] });
+  assert.deepEqual(p.described, { type: ['string', 'number'] }, 'a description alone keeps the option bare');
+  assert.deepEqual(p.bare, { type: ['string', 'number'] });
 });
 
 // Trimmed from barzoj/somtoday-mcp 51b0d5f334d6971a9c800fdf14dde84508fdb8ef src/server.ts (textOrNumber, numericId,
