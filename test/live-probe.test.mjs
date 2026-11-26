@@ -1064,7 +1064,7 @@ test('live-probe workflow: dispatch only, the pump\'s inputs, kill switch first,
   const code = y.replace(/^\s*#.*$/gm, '');
   assert.match(y, /\non:\n  workflow_dispatch:\n    inputs:\n/);
   assert.ok(!/\n  (push|schedule|pull_request|workflow_call|pull_request_target|workflow_run):/.test(y));
-  assert.deepEqual([...y.matchAll(/^      ([a-z_]+):\n        description:/gm)].map((m) => m[1]), ['shard_id', 'attempt_id', 'items']);
+  assert.deepEqual([...y.matchAll(/^      ([a-z_]+):\n        description:/gm)].map((m) => m[1]), ['shard_id', 'attempt_id', 'items', 'tool_sha']);
   assert.match(y, /\nrun-name: shard \$\{\{ inputs\.shard_id \}\}\n/);
   assert.match(y, /\npermissions: \{\}\n/);
   assert.ok(!/secrets\./.test(code));
@@ -1112,7 +1112,7 @@ test('live-probe self test workflow: runs on pull requests the same steps as the
   assert.ok(!/pull_request_target|secrets\./.test(y.replace(/^\s*#.*$/gm, '')));
   for (const k of ['WORKER_KIT_REF', 'SURFACE_CORPUS_REF']) assert.equal(new RegExp('\\n  ' + k + ": '([0-9a-f]{40})'\\n").exec(y)[1], new RegExp('\\n  ' + k + ": '([0-9a-f]{40})'\\n").exec(w)[1], k);
   const between = (s) => s.slice(s.indexOf('      - id: deadline'), s.indexOf('      - id: bundle'));
-  const norm = (s) => between(s).replace(/inputs\.shard_id/g, 'env.SHARD_ID').replace(/inputs\.attempt_id/g, 'env.ATTEMPT_ID').replace(/inputs\.items/g, 'env.ITEMS').replace(/LIVE_PROBE_FUZZ: .*\n/, 'LIVE_PROBE_FUZZ: X\n').replace(/      - name: The fixture items\n        run: .*\n/, '');
+  const norm = (s) => between(s).replace(/inputs\.shard_id/g, 'env.SHARD_ID').replace(/inputs\.attempt_id/g, 'env.ATTEMPT_ID').replace(/inputs\.items/g, 'env.ITEMS').replace(/inputs\.tool_sha/g, 'env.TOOL_SHA').replace(/LIVE_PROBE_FUZZ: .*\n/, 'LIVE_PROBE_FUZZ: X\n').replace(/      - name: The fixture items\n        run: .*\n/, '');
   assert.equal(norm(y), norm(w), 'the self test runs exactly the worker\'s steps');
   assert.equal((y.match(/dry-run: 'true'/g) || []).length, 4);
   assert.match(y, /node corpus\/live-probe\.mjs verify --ingest tool-qa-ingest tool-qa corpus\/fixtures\/live-probe\/selftest-shard\.json/);
@@ -1263,4 +1263,29 @@ test('R-LP-45: start_failed needs a crash signature on stderr; an early exit wit
   assert.equal(LP.failureDetail(lpRec(), { ...probeExit(1), stderr: both }, null, OK), 'start_needs_config');
   // The other guards still apply to a crash.
   assert.equal(LP.failureDetail(lpRec(), crashExit(1, null, LP.START_QUICK_MS), null, OK), 'start_env_limited');
+});
+
+test('R-PIN-07: the bundles report this repository at the commit that ran, the corpus commit used, and fuzz only when the stage ran', () => {
+  const COMMIT = 'd4a373a0123456789abcdef0123456789abcdef0'.slice(0, 40);
+  const toolsOf = (w, i) => JSON.parse(readFileSync(join(w, 'out', String(i), 'meta.json'), 'utf8')).tools;
+  const w = workFolder();
+  LP.bundleShard({ work: w, env: { MCP_CHECK_COMMIT: COMMIT } });
+  for (const i of [0, 1, 2, 3]) {
+    const t = toolsOf(w, i);
+    assert.equal(t[0].name, '@isokron/mcp-check');
+    assert.equal(t[0].version, COMMIT);
+    assert.deepEqual(t.map((c) => c.name), ['@isokron/mcp-check', 'isokron-ai/mcp-surface-corpus'], 'no fuzz entry while the stage is off');
+    assert.match(t[1].version, /^[0-9a-f]{40}$/);
+  }
+  // Outside the workflow (no commit handed in): the package version, which tool-qa counts as unproven, never as wrong.
+  const w2 = workFolder();
+  LP.bundleShard({ work: w2, env: {} });
+  assert.equal(toolsOf(w2, 0)[0].version, JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version);
+  // The fuzz stage on: its pin is proven by the same commit.
+  const w3 = workFolder();
+  const plan = JSON.parse(readFileSync(join(w3, 'plan.json'), 'utf8'));
+  writeFileSync(join(w3, 'plan.json'), JSON.stringify({ ...plan, fuzz: true }));
+  LP.bundleShard({ work: w3, env: { MCP_CHECK_COMMIT: COMMIT } });
+  assert.deepEqual(toolsOf(w3, 0).map((c) => c.name), ['@isokron/mcp-check', 'isokron-ai/mcp-surface-corpus', 'fuzz']);
+  assert.equal(toolsOf(w3, 0)[2].version, COMMIT);
 });
