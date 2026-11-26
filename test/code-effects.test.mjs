@@ -532,3 +532,15 @@ test('R-AE-34: opening a file for append and writing nothing through it is a wri
   assert.deepEqual(w('with open(p, encoding="utf-8") as h:\n    return h.read()'), []);
   assert.deepEqual(w('with open(p, encoding="utf-8", mode="w") as h:\n    h.write("x")'), [['definite', 'mode w']]);
 });
+
+test('R-AE-35: from pkg import mod, then mod.fn(), is followed into pkg/mod.py when pkg/__init__.py does not define fn', () => {
+  // QA-40 misses in aws-s3tables: server.py imports the submodule `namespaces` from its package and calls
+  // namespaces.create_namespace(...); the call stopped at the package's __init__.py.
+  const files = { 'pkg/__init__.py': '__version__ = "1"\n', 'pkg/ops.py': 'import os\n\ndef remove(path):\n    os.remove(path)\n', 'pkg/server.py': 'from pkg import ops\n\n@mcp.tool()\ndef t(path: str) -> str:\n    ops.remove(path)\n    return "ok"\n' };
+  const t = Fx.analyse(new Map(Object.entries(files)), [{ path: 'pkg/server.py', line: 1, tool: { name: 't' } }]).tools.t;
+  assert.deepEqual(t.effects.delete.map((e) => [e.sink, e.file, e.confidence]), [['fs.os.remove', 'pkg/ops.py', 'definite']]);
+  // a function the package's __init__.py defines is still taken from there
+  const init = { ...files, 'pkg/__init__.py': 'import shutil\n\ndef ops_remove(path):\n    shutil.rmtree(path)\n' };
+  const t2 = Fx.analyse(new Map(Object.entries({ ...init, 'pkg/server.py': 'import pkg\n\n@mcp.tool()\ndef t(path: str) -> str:\n    pkg.ops_remove(path)\n    return "ok"\n' })), [{ path: 'pkg/server.py', line: 1, tool: { name: 't' } }]).tools.t;
+  assert.deepEqual(t2.effects.delete.map((e) => e.sink), ['fs.shutil.rmtree']);
+});

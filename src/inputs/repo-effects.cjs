@@ -464,7 +464,8 @@
           if (chain.length === 2) {
             let r = inFile(Q, second).map((f) => ({ P: Q, f })); if (r.length) return r;
             if (t.im.name !== '*' && t.im.name !== 'default') { const nm = t.im.name; r = methodsOf(Q, nm, second); if (r.length) return r; }
-            // from pkg import mod  ->  pkg/mod.py
+            // from pkg import mod  ->  pkg/mod.py, when pkg/__init__.py does not define the function
+            if (P.lang === 'py' && t.im.name !== '*') { const sub = R.resolvePy(P.path, t.im.spec + '.' + t.im.name); const Q2 = sub && sub !== t.file ? R.get(sub) : null; if (Q2) { r = inFile(Q2, second).map((f) => ({ P: Q2, f })); if (r.length) return r; } }
             return [];
           }
           if (Q.classes.some((c) => c.name === second)) return methodsOf(Q, second, chain[2]);
