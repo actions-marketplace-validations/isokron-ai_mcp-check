@@ -29,7 +29,7 @@ test('fromDirectory: TypeScript with zod 4 under SDK 1.32 reads as that SDK list
   assert.equal(r.via, 'directory');
   assert.equal(r.best.kind, 'source');
   assert.equal(r.best.fidelity, 'derived');
-  assert.deepEqual(r.best.sdk, { kind: 'v1', version: '1.32.2', zod: 4, py: null });
+  assert.deepEqual(r.best.sdk, { kind: 'v1', version: '1.32.2', zod: 4, zodVersion: '4.1.0', py: null });
   const t = byName(r.best.tools);
   assert.deepEqual(Object.keys(t), ['search_notes', 'delete_note']);
   assert.deepEqual(t.search_notes.inputSchema, {

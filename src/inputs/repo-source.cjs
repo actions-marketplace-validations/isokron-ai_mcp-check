@@ -146,6 +146,11 @@
   // what they collected and hand it on whenever they are used again. publicTools turns it into unreadable.text.
   const LOST = { cur: null };
   function lose(x) { if (LOST.cur && x && (typeof x === 'string' ? x.trim() : x.length)) LOST.cur.push(x); }
+  // Like collecting, but what fn leaves is not handed on: the caller passes it on (lose) only if it uses the result.
+  function quietly(fn) {
+    const prev = LOST.cur; const mine = []; LOST.cur = mine;
+    try { return [fn(), mine]; } finally { LOST.cur = prev; }
+  }
   function collecting(fn) {
     const prev = LOST.cur; const mine = []; LOST.cur = mine;
     try { return [fn(), mine]; } finally { LOST.cur = prev; if (prev && mine.length) prev.push(mine); }
@@ -174,6 +179,9 @@
     return { text: parts.size ? Array.from(parts).join(' … ') : '', over };
   }
   // The value of a constant or a property path into one (TOOLS.SEARCH, config.name), or null.
+  // A number is taken from a constant only when it cannot change: a `let` or `var` can be assigned again (M = 10, in a
+  // function or another statement), so a number read from one is not a bound, an operand or text.
+  const fixedNum = (c) => !c || !c.decl || c.decl === 'const';
   function chainValue(ctx, ids) {
     if (!ctx || !ctx.consts || !hasOwn(ctx.consts, ids[0])) return null;
     const c = ctx.consts[ids[0]]; let v = c.value; if (c.lost) lose(c.lost);
@@ -191,11 +199,50 @@
     let out = tok.parts[0]; let exact = true;
     tok.exprs.forEach((e, k) => {
       const r = /^[A-Za-z_$][\w$]*(\s*\??\.\s*[A-Za-z_$][\w$]*)*$/.test(e) ? chainValue(ctx, e.split(/\s*\??\.\s*/)) : null;
-      if (r && (typeof r.value === 'string' || typeof r.value === 'number')) out += String(r.value); else { out += '…'; exact = false; }
+      if (r && (typeof r.value === 'string' || (typeof r.value === 'number' && fixedNum(r.c)))) out += String(r.value); else { out += '…'; exact = false; }
       out += tok.parts[k + 1];
       if (out.length > MAX_STR) { lose(out.slice(MAX_STR)); out = out.slice(0, MAX_STR); exact = false; }
     });
     return capStr({ value: out, exact, partial: !exact });
+  }
+  // A numeric expression of literals and literal constants: 2 * 1024 * 1024, MAX_BYTES / 1048576, SECTIONS.length,
+  // (A + 1) * B. Operands are number literals, constants holding a number, and .length of a constant array or string
+  // read whole (no element left out). With `mulOnly`, a "+" or "-" ends it (in a string chain "+" joins strings).
+  // Returns { value, end, ops } (ops: operators and .length read) or null when an operand is anything else.
+  function numExpr(t, i, ctx, mulOnly, depth) {
+    depth = depth || 0; if (depth > 16) return null;
+    let ops = 0;
+    const primary = (k) => {
+      const tok = t[k]; if (!tok) return null;
+      if (tok.type === 'num') return { value: tok.value, end: k + 1 };
+      if (isP(tok, '-') && t[k + 1] && (t[k + 1].type === 'num' || t[k + 1].type === 'id')) { const r = primary(k + 1); return r ? { value: -r.value, end: r.end } : null; }
+      if (isP(tok, '(')) { const r = numExpr(t, k + 1, ctx, false, depth + 1); if (!r || !isP(t[r.end], ')')) return null; ops += r.ops; return { value: r.value, end: r.end + 1 }; }
+      if (tok.type !== 'id' || !ctx || !ctx.consts || !hasOwn(ctx.consts, tok.value) || !fixedNum(ctx.consts[tok.value])) return null;
+      const ch = idChain(t, k); if (isP(t[ch.end], '(')) return null;
+      if (ch.ids.length > 1 && ch.ids[ch.ids.length - 1] === 'length') {
+        const r = chainValue(ctx, ch.ids.slice(0, -1)); const c = r && r.c;
+        if (!r || c.exact === false || c.partial || c.holes) return null;
+        if (Array.isArray(r.value) || typeof r.value === 'string') { ops++; return { value: r.value.length, end: ch.end }; }
+        return null;
+      }
+      const r = chainValue(ctx, ch.ids);
+      return r && typeof r.value === 'number' && r.c.exact !== false ? { value: r.value, end: ch.end } : null;
+    };
+    const opAt = (k, set) => t[k] && t[k].type === 'p' && set.includes(t[k].value) && !isP(t[k + 1], '=');
+    const term = (k) => {
+      let a = primary(k); if (!a) return null;
+      while (opAt(a.end, ['*', '/', '%'])) {
+        const op = t[a.end].value; const b = primary(a.end + 1); if (!b) return null;
+        a = { value: op === '*' ? a.value * b.value : op === '/' ? a.value / b.value : a.value % b.value, end: b.end }; ops++;
+      }
+      return a;
+    };
+    let a = term(i); if (!a) return null;
+    while (!mulOnly && opAt(a.end, ['+', '-'])) {
+      const op = t[a.end].value; const b = term(a.end + 1); if (!b) return null;
+      a = { value: op === '+' ? a.value + b.value : a.value - b.value, end: b.end }; ops++;
+    }
+    return Number.isFinite(a.value) ? { value: a.value, end: a.end, ops } : null;
   }
   // A string expression: string and template literals and string constants joined by "+" ('a' + NAME + `b${X}`).
   // Returns null unless at least one operand is a string; an operand that cannot be read makes the value partial.
@@ -204,14 +251,16 @@
     for (;;) {
       const tok = t[j]; let v = null; let end = j + 1;
       if (!tok) return null;
-      if (tok.type === 'str') { v = tok.value; any = true; }
+      const ne = tok.type === 'num' || tok.type === 'id' ? numExpr(t, j, ctx, true) : null; // 'Limit ' + MAX_BYTES / 1048576 + ' MiB'
+      if (ne && ne.ops) { v = String(ne.value); end = ne.end; }
+      else if (tok.type === 'str') { v = tok.value; any = true; }
       else if (tok.type === 'tpl') { const r = tplValue(tok, ctx); v = r.value; if (!r.exact) exact = false; any = true; }
       else if (tok.type === 'num') v = String(tok.value);
       else if (tok.type === 'id') {
         const ch = idChain(t, j); end = ch.end;
         if (isP(t[end], '(')) return null;
         const r = chainValue(ctx, ch.ids);
-        if (r && typeof r.value === 'string') { v = r.value; any = true; if (ch.ids.length === 1 && r.c.partial) exact = false; } else if (r && typeof r.value === 'number') v = String(r.value); else { v = '…'; exact = false; }
+        if (r && typeof r.value === 'string') { v = r.value; any = true; if (ch.ids.length === 1 && r.c.partial) exact = false; } else if (r && typeof r.value === 'number' && fixedNum(r.c)) v = String(r.value); else { v = '…'; exact = false; }
       } else return null;
       if (out.length >= MAX_STR) { lose(v); exact = false; } else { out += v; if (out.length > MAX_STR) { lose(out.slice(MAX_STR)); out = out.slice(0, MAX_STR); exact = false; } }
       j = end;
@@ -225,7 +274,10 @@
     const tok = t[i];
     if (!tok) return { value: SKIP, end: i, exact: false };
     let r = null;
-    if (tok.type === 'str' || tok.type === 'tpl') {
+    // a numeric expression of literals and literal constants (2 * 1024 * 1024, SECTIONS.length)
+    const ne = tok.type === 'num' || isP(tok, '-') || (tok.type === 'id' && ctx && ctx.consts && hasOwn(ctx.consts, tok.value)) ? numExpr(t, i, ctx, false) : null;
+    if (ne && (ne.ops || ne.end > i + 1)) r = { value: ne.value, end: ne.end, exact: true };
+    else if (tok.type === 'str' || tok.type === 'tpl') {
       r = stringExpr(t, i, ctx);
     } else if (tok.type === 'num') r = { value: tok.value, end: i + 1, exact: true };
     else if (isP(tok, '-') && t[i + 1] && t[i + 1].type === 'num') r = { value: -t[i + 1].value, end: i + 2, exact: true };
@@ -240,6 +292,14 @@
       // Object.freeze({...}): the object itself
       const v = parseValue(t, i + 4, ctx);
       if (v.value !== SKIP && isP(t[v.end], ')')) r = Object.assign({}, v, { end: v.end + 1 });
+    } else if (tok.type === 'id' && isP(t[i + 1], '(') && ctx && ctx.consts && hasOwn(ctx.consts, FN + tok.value)) {
+      // id('Project id'), ymd().optional(): a schema factory of this file or a direct import, read with its arguments
+      const call = callFactory(t, i, ctx);
+      if (call && call.r.zod) {
+        lose(call.lost); const nx = call.end;
+        if (isP(t[nx], '.') && t[nx + 1] && t[nx + 1].type === 'id' && isP(t[nx + 2], '(')) { const z = parseZod(t, i, ctx, { value: call.r.value, exact: call.r.exact, optional: call.r.optional }, nx); if (z) r = z; }
+        else r = { value: call.r.value, end: nx, exact: call.r.exact, zod: true, optional: call.r.optional };
+      }
     } else if (tok.type === 'id' && ctx && ctx.consts && hasOwn(ctx.consts, tok.value) && isP(t[i + 1], '.') && t[i + 2] && t[i + 2].type === 'id' && t[i + 2].value === 'shape' && !isP(t[i + 3], '(') && !isP(t[i + 3], '.')) {
       // Schema.shape of a zod object constant: the raw shape, with the optional flags the object schema kept.
       const c = ctx.consts[tok.value]; const sch = c.value;
@@ -253,7 +313,7 @@
         // a zod constant with more calls: Param.optional().describe('…')
         const z = parseZod(t, i, ctx, c);
         if (z) r = z;
-      } else if (!isP(t[ch.end], '(')) {
+      } else if (!isP(t[ch.end], '(') && !(typeof c.value === 'number' && !fixedNum(c))) {
         if (ch.ids.length === 1) {
           const s = typeof c.value === 'string' ? stringExpr(t, i, ctx) : null;
           r = s && (s.end > i + 1 || s.partial) ? s : { value: c.value, end: i + 1, exact: c.exact, optional: c.optional, zod: c.zod, optionalKeys: c.optionalKeys };
@@ -344,7 +404,7 @@
       if (isP(k, '...')) {
         // {...NAME} / {...NAME.member}: a constant holding a plain object (this file's, an imported one, or another file's) is merged in.
         const nx = t[i + 1]; let c = null; let end = i + 2;
-        if (nx && nx.type === 'id' && ctx && ctx.consts) { const ch = idChain(t, i + 1); const v = chainValue(ctx, ch.ids); if (v) { c = ch.ids.length === 1 ? v.c : { value: v.value, exact: v.c.exact, zod: false }; end = ch.end; } }
+        if (nx && nx.type === 'id' && ctx && ctx.consts) { const ch = idChain(t, i + 1); const v = chainValue(ctx, ch.ids); if (v) { c = ch.ids.length === 1 ? v.c : { value: v.value, exact: v.c.exact, zod: false }; end = ch.end; } else { const sp = spreadExpr(t, i + 1, ctx); if (sp) { c = sp; end = sp.end; } } }
         if (c && !c.zod && c.value && typeof c.value === 'object' && !Array.isArray(c.value) && (isP(t[end], ',') || isP(t[end], '}'))) {
           Object.assign(o, c.value); exact = exact && c.exact !== false; if (c.optionalKeys) c.optionalKeys.forEach((x) => optionalKeys.add(x));
           i = isP(t[end], ',') ? end + 1 : end; continue;
@@ -443,11 +503,162 @@
     return c < 0 ? t.length - 1 : c;
   }
 
+  // ------------------------------------------------------------ schema factories
+  // A top-level function of a file that returns a value the reader can read, and a direct import of one:
+  //   const id = (description: string) => z.union([z.string(), z.number()]).describe(description);
+  //   const rangeArgs = (defaultText) => ({ from: ymd().optional().describe(`First date. ${defaultText}`) });
+  //   function ymd() { return z.string().regex(/^\d{4}-\d{2}-\d{2}$/); }
+  // It is kept in the constants under FN + name (so no lookup of a plain constant sees it) as { t, params, at, ctx,
+  // consts }: the parameters (names, and the token of each default), the token where the returned expression starts,
+  // and the definition's own file context. A call is read with the parameters bound to the arguments read at the call
+  // site; an argument that cannot be read leaves its parameter unknown (so text built from it is partial, never
+  // guessed). Only a zod result is a value (callFactory in parseValue), and a plain object only when spread into a
+  // shape (spreadCall). Factories may call factories, FN_DEPTH deep.
+  const FN = '\u0000fn:';
+  const FN_DEPTH = 4;
+  // The parameters of a function from the "(" at k: [{ name, def }] (def: token of a default value, or -1), or null
+  // when one is a pattern or a rest parameter.
+  function fnParams(t, k) {
+    const close = matchClose(t, k); const out = []; let m = k + 1;
+    while (m < close) {
+      const nm = t[m]; if (!nm || nm.type !== 'id' || nm.value === 'this') return null;
+      let n = m + 1; if (isP(t[n], '?')) n++;
+      if (isP(t[n], ':')) n = skipType(t, n + 1);
+      let def = -1; if (isP(t[n], '=')) { def = n + 1; n = skipExpr(t, n + 1); }
+      out.push({ name: nm.value, def });
+      if (isP(t[n], ',')) m = n + 1; else if (n === close) m = close; else return null;
+    }
+    return { params: out, close };
+  }
+  // The start of the returned expression of a function body at k: an expression body, `({ … })`, or a block whose only
+  // statement is `return …`. { at, paren } or null.
+  function fnReturn(t, k) {
+    if (isP(t[k], '{')) {
+      const close = matchClose(t, k);
+      if (!(t[k + 1] && t[k + 1].type === 'id' && t[k + 1].value === 'return')) return null;
+      const e = skipExpr(t, k + 2); const after = isP(t[e], ';') ? e + 1 : e;
+      return after === close ? { at: k + 2, stop: e } : null;
+    }
+    return { at: k, stop: -1 };
+  }
+  // A function definition at a `const NAME =` (value at j) or `function NAME(` (name at j - 1): the record, or null.
+  function fnAt(t, j, ctx, consts, isDecl) {
+    let k = j; let ps;
+    if (isDecl) { if (!isP(t[k], '(')) return null; ps = fnParams(t, k); if (!ps) return null; k = ps.close + 1; if (isP(t[k], ':')) k = skipType(t, k + 1); }
+    else if (t[k] && t[k].type === 'id' && isP(t[k + 1], '=>')) { ps = { params: [{ name: t[k].value, def: -1 }] }; k += 2; }
+    else if (isP(t[k], '(')) { ps = fnParams(t, k); if (!ps) return null; k = ps.close + 1; if (isP(t[k], ':')) k = skipType(t, k + 1); if (!isP(t[k], '=>')) return null; k++; }
+    else if (t[k] && t[k].type === 'id' && t[k].value === 'function' && isP(t[k + 1], '(')) return fnAt(t, k + 1, ctx, consts, true);
+    else return null;
+    if (isDecl && !isP(t[k], '{')) return null;
+    const ret = fnReturn(t, k); if (!ret) return null;
+    return { t, params: ps.params, at: ret.at, stop: ret.stop, ctx, consts };
+  }
+  // A call of a factory at token i (the name; "(" at i + 1): { r, end } with r the value read from its returned
+  // expression, or null.
+  // The text the call left unread is returned as `lost`, for the caller to pass on if it uses the value.
+  function callFactory(t, i, ctx) {
+    const fn = ctx.consts[FN + t[i].value]; const depth = ctx.fnDepth || 0;
+    if (!fn || depth >= FN_DEPTH) return null;
+    const [res, lost] = quietly(() => readCall(fn, t, i, ctx, depth));
+    return res && Object.assign(res, { lost });
+  }
+  function readCall(fn, t, i, ctx, depth) {
+    const close = matchClose(t, i + 1); const args = []; let k = i + 2;
+    while (k < close) {
+      const v = parseValue(t, k, ctx); args.push(v);
+      if (v.value === SKIP) lose(literalsArr(t, k, v.end)); // an argument it cannot read: its text is still scanned
+      k = v.end; if (isP(t[k], ',')) k++; else break;
+    }
+    if (k !== close) return null;
+    // The parameters are bound in the definition's own table for the time of the read and restored after it (a copy
+    // of the table per call would cost its size on every call).
+    const consts = fn.consts; const saved = [];
+    const bind = (k, v) => { saved.push([k, hasOwn(consts, k), consts[k]]); if (v === undefined) delete consts[k]; else consts[k] = v; };
+    const fctx = Object.assign({}, fn.ctx, { consts, fnDepth: depth + 1 });
+    const ft = fn.t; let r;
+    try {
+      fn.params.forEach((p, n) => {
+        let v = args[n]; if (!v && p.def >= 0) v = parseValue(fn.t, p.def, fctx);
+        bind(p.name, v && v.value !== SKIP && v.value !== undefined ? { value: v.value, exact: v.exact !== false, optional: !!v.optional, zod: !!v.zod, optionalKeys: v.optionalKeys || null, top: false, partial: !!v.partial, lost: null, holes: (v.holes || 0) + (v.unknownKeys ? v.unknownKeys.size : 0) + (v.spreadUnknown ? 1 : 0) } : undefined);
+        bind(FN + p.name, undefined);
+      });
+      const endOk = (e) => (fn.stop >= 0 ? e === fn.stop : !ft[e] || isP(ft[e], ';') || isP(ft[e], ',') || isP(ft[e], ')') || isP(ft[e], '}') || !!ft[e].nl);
+      if (isP(ft[fn.at], '(')) { // => ({ … }), return (…)
+        const pc = matchClose(ft, fn.at); r = parseValue(ft, fn.at + 1, fctx);
+        if (r.value === SKIP || r.end !== pc || !endOk(pc + 1)) return null;
+      } else {
+        r = parseValue(ft, fn.at, fctx);
+        if (r.value === SKIP || (fn.stop >= 0 && r.end !== fn.stop)) return null;
+      }
+    } finally {
+      for (let n = saved.length - 1; n >= 0; n--) { const [k, had, old] = saved[n]; if (had) consts[k] = old; else delete consts[k]; }
+    }
+    return { r, end: close + 1 };
+  }
+  // A spread in a shape that is not a plain constant: a factory call, or a constant object filtered by key.
+  function spreadExpr(t, k, ctx) {
+    const sp = spreadCall(t, k, ctx); if (sp) return sp;
+    const [fe, lost] = quietly(() => filteredEntries(t, k, ctx)); if (fe) lose(lost);
+    return fe;
+  }
+  // Object.fromEntries(Object.entries(FIELDS).filter(([key]) => key !== 'title')): the constant object FIELDS (read
+  // whole) without the keys the test rejects. The test may compare the key with string literals (=== !== == !=), test
+  // it with [..].includes(key) or a constant array's .includes(key), negate with !, and join with && and ||; anything
+  // else, and a constant with a part the reader could not read, is not read.
+  function filteredEntries(t, k, ctx) {
+    const at = (n, ...vals) => vals.every((v, m) => { const x = t[n + m]; return x && (v === null ? x.type === 'id' : x.value === v && (x.type === 'p' || x.type === 'id')); });
+    if (!at(k, 'Object', '.', 'fromEntries', '(', 'Object', '.', 'entries', '(', null, ')', '.', 'filter', '(', '(', '[', null)) return null;
+    const outerClose = matchClose(t, k + 3); const filterClose = matchClose(t, k + 12);
+    const name = t[k + 8].value; const key = t[k + 15].value;
+    const c = ctx && ctx.consts && hasOwn(ctx.consts, name) ? ctx.consts[name] : null;
+    if (!c || c.zod || !c.value || typeof c.value !== 'object' || Array.isArray(c.value) || c.exact === false || c.holes) return null;
+    let j = k + 16; if (isP(t[j], ',') && t[j + 1] && t[j + 1].type === 'id') j += 2;
+    if (!isP(t[j], ']') || !isP(t[j + 1], ')') || !isP(t[j + 2], '=>')) return null;
+    if (filterClose + (isP(t[filterClose + 1], ',') ? 2 : 1) !== outerClose || !isP(t[outerClose], ')')) return null; // a trailing comma is allowed
+    const strs = (n) => { // a string array literal or constant: [values, end]
+      if (isP(t[n], '[')) { const v = parseValue(t, n, ctx); return Array.isArray(v.value) && v.value.every((x) => typeof x === 'string') && !v.holes ? [v.value, v.end] : null; }
+      if (t[n] && t[n].type === 'id' && hasOwn(ctx.consts, t[n].value)) { const v = ctx.consts[t[n].value]; return Array.isArray(v.value) && v.value.every((x) => typeof x === 'string') && !v.holes && v.exact !== false ? [v.value, n + 1] : null; }
+      return null;
+    };
+    // a recursive descent over the test: or := and (|| and)*, and := unary (&& unary)*, unary := !unary | (or) | atom
+    let n = j + 3;
+    const atom = () => {
+      if (t[n] && t[n].type === 'id' && t[n].value === key && t[n + 1] && /^(===|!==|==|!=)$/.test(t[n + 1].value) && t[n + 2] && t[n + 2].type === 'str') { const op = t[n + 1].value; const lit = t[n + 2].value; n += 3; return (x) => (op[0] === '=' ? x === lit : x !== lit); }
+      if (t[n] && t[n].type === 'str' && t[n + 1] && /^(===|!==|==|!=)$/.test(t[n + 1].value) && t[n + 2] && t[n + 2].type === 'id' && t[n + 2].value === key) { const op = t[n + 1].value; const lit = t[n].value; n += 3; return (x) => (op[0] === '=' ? x === lit : x !== lit); }
+      const a = strs(n);
+      if (a && at(a[1], '.', 'includes', '(', key, ')')) { n = a[1] + 5; const set = a[0]; return (x) => set.includes(x); }
+      return null;
+    };
+    const unary = () => {
+      if (isP(t[n], '!')) { n++; const f = unary(); return f && ((x) => !f(x)); }
+      if (isP(t[n], '(')) { n++; const f = or(); if (!f || !isP(t[n], ')')) return null; n++; return f; }
+      return atom();
+    };
+    const and = () => { let f = unary(); while (f && isP(t[n], '&&')) { n++; const g = unary(); if (!g) return null; const a = f; f = (x) => a(x) && g(x); } return f; };
+    const or = () => { let f = and(); while (f && isP(t[n], '||')) { n++; const g = and(); if (!g) return null; const a = f; f = (x) => a(x) || g(x); } return f; };
+    const test = or();
+    if (test && isP(t[n], ',') && n + 1 === filterClose) n++;
+    if (!test || n !== filterClose) return null;
+    const value = {}; Object.keys(c.value).forEach((x) => { if (test(x)) value[x] = c.value[x]; });
+    const optionalKeys = c.optionalKeys ? new Set(Array.from(c.optionalKeys).filter((x) => hasOwn(value, x))) : null;
+    if (c.lost) lose(c.lost);
+    return { value, exact: true, optionalKeys, zod: false, end: outerClose + 1 };
+  }
+  // ...factory(args) in a shape: the plain object it returns (its optional keys kept), with end past the call.
+  function spreadCall(t, k, ctx) {
+    if (!t[k] || t[k].type !== 'id' || !isP(t[k + 1], '(') || !ctx || !ctx.consts || !hasOwn(ctx.consts, FN + t[k].value)) return null;
+    const call = callFactory(t, k, ctx); const v = call && call.r.value;
+    if (!call || call.r.zod || !v || typeof v !== 'object' || Array.isArray(v)) return null;
+    lose(call.lost);
+    return { value: v, exact: call.r.exact, optionalKeys: call.r.optionalKeys || OPTIONAL_OF.get(v) || null, zod: false, end: call.end };
+  }
+
   // ------------------------------------------------------------ zod -> JSON Schema (the common subset)
   // z.string().min(1).describe('x').optional() and friends. Unknown parts make the result inexact, not wrong.
-  function parseZod(t, i, ctx, base) {
-    // collect chain: z . name ( args ) . name ( args ) ...  With `base` (a zod constant), every call modifies it.
-    let j = i + 1; const calls = base ? [{ name: '__const', args: [], base }] : [];
+  function parseZod(t, i, ctx, base, chainAt) {
+    // collect chain: z . name ( args ) . name ( args ) ...  With `base` (a zod constant, or what a schema factory
+    // returned when the chain starts at `chainAt`, after the factory call), every call modifies it.
+    let j = chainAt || i + 1; const calls = base ? [{ name: '__const', args: [], base }] : [];
     while (isP(t[j], '.') && t[j + 1] && t[j + 1].type === 'id') {
       const name = t[j + 1].value; j += 2;
       let args = [];
@@ -455,7 +666,11 @@
         const close = matchClose(t, j); let k = j + 1;
         // the properties of z.object({...}) that cannot be read keep their name (an empty schema) rather than vanish
         const actx = /^(object|strictObject|looseObject)$/.test(name) && !calls.length ? Object.assign({}, ctx, { placeholder: true }) : ctx;
-        while (k < close) { const v = parseValue(t, k, actx); args.push(v); k = v.end; if (isP(t[k], ',')) k++; else break; }
+        while (k < close) {
+          // .regex(/…/flags): the literal itself (a value the literal parser does not read)
+          const v = name === 'regex' && t[k].type === 'regex' && (isP(t[k + 1], ',') || isP(t[k + 1], ')')) ? { value: { regexLiteral: t[k].value }, end: k + 1, exact: true } : parseValue(t, k, actx);
+          args.push(v); k = v.end; if (isP(t[k], ',')) k++; else break;
+        }
         j = close + 1;
       }
       calls.push({ name, args });
@@ -467,12 +682,15 @@
   }
   function zodToSchema(calls, ctx) {
     let s = {}; let exact = true; let optional = false;
+    const fl = ctx && ctx.fl; const zod3 = !fl || !(fl.zod >= 4);
+    // What wraps the schema the chain builds (see WRAPPED_OF): null, 'wrapped' or 'optional'.
+    let wrap = null; const wrapAs = (w) => { if (wrap !== 'optional') wrap = w; };
     const base = calls[0]; const argv = (k) => (base.args[k] ? base.args[k].value : undefined);
     switch (base.name) {
-      case '__const': s = JSON.parse(JSON.stringify(base.base.value || {})); exact = base.base.exact !== false; optional = !!base.base.optional; break;
+      case '__const': s = JSON.parse(JSON.stringify(base.base.value || {})); exact = base.base.exact !== false; optional = !!base.base.optional; wrap = (base.base.value && typeof base.base.value === 'object' && WRAPPED_OF.get(base.base.value)) || null; break;
       case 'toJSONSchema': { const a = argv(0); if (a && a !== SKIP && typeof a === 'object') s = a; else exact = false; break; }
       case 'preprocess': { const a = argv(1); if (a && a !== SKIP && typeof a === 'object') { s = a; optional = !!(base.args[1] && base.args[1].optional); } else exact = false; break; }
-      case 'optional': case 'nullish': { const a = argv(0); if (a && a !== SKIP && typeof a === 'object') s = a; else exact = false; optional = true; break; }
+      case 'optional': case 'nullish': { const a = argv(0); if (a && a !== SKIP && typeof a === 'object') s = JSON.parse(JSON.stringify(a)); else exact = false; optional = true; wrap = 'optional'; break; }
       case 'discriminatedUnion': { const a = argv(1); s = Array.isArray(a) ? { anyOf: a } : {}; if (!Array.isArray(a)) exact = false; break; }
       case 'string': s = { type: 'string' }; break;
       case 'number': s = { type: 'number' }; break;
@@ -486,7 +704,12 @@
       case 'array': { const it = argv(0); s = { type: 'array', items: it && it !== SKIP ? it : {} }; if (!it || it === SKIP || base.args[0].exact === false) exact = false; break; }
       case 'object': case 'strictObject': case 'looseObject': { const sh = argv(0); const r = shapeToSchema(sh && sh !== SKIP ? sh : {}, base.args[0] ? base.args[0].optionalKeys : null, ctx && ctx.fl); if (base.name === 'strictObject') r.schema.additionalProperties = false; s = r.schema; if (!sh || sh === SKIP || base.args[0].exact === false) exact = false; break; }
       case 'record': { const v = base.args.length > 1 ? argv(1) : argv(0); s = { type: 'object', additionalProperties: v && v !== SKIP ? v : {} }; if (ctx && ctx.fl && ctx.fl.zod >= 4) { const kk = base.args.length > 1 ? argv(0) : { type: 'string' }; s = { type: 'object', propertyNames: kk && kk !== SKIP ? kk : { type: 'string' }, additionalProperties: s.additionalProperties }; } break; }
-      case 'union': { const a = argv(0); s = Array.isArray(a) ? { anyOf: a } : {}; if (!Array.isArray(a)) exact = false; break; }
+      case 'union': {
+        const a = argv(0);
+        if (!Array.isArray(a)) { s = {}; exact = false; } else if (!zod3) s = { anyOf: a };
+        else { const u = zod3Union(a); s = u.schema; if (!u.exact) exact = false; }
+        break;
+      }
       case 'url': s = { type: 'string', format: 'uri' }; break;
       case 'email': s = { type: 'string', format: 'email' }; break;
       case 'uuid': s = { type: 'string', format: 'uuid' }; break;
@@ -496,35 +719,95 @@
       const a0 = c.args[0] ? c.args[0].value : undefined;
       switch (c.name) {
         case 'describe': if (typeof a0 === 'string') s.description = a0; else exact = false; break;
-        case 'optional': case 'nullish': optional = true; break;
-        case 'nullable': s = s.type ? Object.assign({}, s, { type: [].concat(s.type, 'null') }) : s; break;
-        case 'default': optional = true; if (a0 !== SKIP && a0 !== undefined) s.default = a0; break;
+        case 'optional': case 'nullish': optional = true; wrapAs('optional'); break;
+        case 'nullable': { const n = nullableOf(withIntBounds(s, fl), zod3, wrap); s = n.schema; if (!n.exact) exact = false; wrap = null; break; }
+        case 'default': optional = true; wrapAs('wrapped'); if (a0 !== SKIP && a0 !== undefined) s.default = a0; break;
         case 'int': s.type = 'integer'; break;
-        case 'min': if (typeof a0 === 'number') s[s.type === 'string' ? 'minLength' : s.type === 'array' ? 'minItems' : 'minimum'] = a0; break;
-        case 'max': if (typeof a0 === 'number') s[s.type === 'string' ? 'maxLength' : s.type === 'array' ? 'maxItems' : 'maximum'] = a0; break;
-        case 'length': if (typeof a0 === 'number') { s.minLength = a0; s.maxLength = a0; } break;
+        case 'min': if (typeof a0 === 'number') s[s.type === 'string' ? 'minLength' : s.type === 'array' ? 'minItems' : 'minimum'] = a0; else exact = false; break;
+        case 'max': if (typeof a0 === 'number') s[s.type === 'string' ? 'maxLength' : s.type === 'array' ? 'maxItems' : 'maximum'] = a0; else exact = false; break;
+        case 'length': if (typeof a0 === 'number') { s[s.type === 'array' ? 'minItems' : 'minLength'] = a0; s[s.type === 'array' ? 'maxItems' : 'maxLength'] = a0; } else exact = false; break;
         case 'positive': s.exclusiveMinimum = 0; break;
         case 'nonnegative': s.minimum = 0; break;
         case 'url': s.format = 'uri'; break;
         case 'email': s.format = 'email'; break;
         case 'uuid': s.format = 'uuid'; break;
         case 'datetime': s.format = 'date-time'; break;
-        case 'regex': exact = false; break;
-        case 'refine': case 'superRefine': case 'transform': case 'brand': case 'readonly': case 'catch': case 'pipe': break;
-        case 'array': s = { type: 'array', items: s }; break;
+        case 'regex': { // JSON Schema pattern: the RegExp's source, as zod 4 and zod-to-json-schema write it (flags are not
+          // carried). A second .regex() moves both into allOf, and a pattern the reader cannot read is left out.
+          const src = a0 && typeof a0 === 'object' && typeof a0.regexLiteral === 'string' ? regexSource(a0.regexLiteral) : null;
+          if (src === null || s.pattern !== undefined || calls.filter((d) => d.name === 'regex').length > 1) { delete s.pattern; exact = false; } else s.pattern = src;
+          break;
+        }
+        case 'refine': case 'superRefine': case 'transform': case 'brand': case 'readonly': case 'catch': case 'pipe': wrapAs('wrapped'); break;
+        case 'array': s = { type: 'array', items: s }; wrap = null; break;
         case 'strict': s.additionalProperties = false; break;
         case 'passthrough': case 'catchall': delete s.additionalProperties; break;
         case 'meta': if (a0 && typeof a0 === 'object' && typeof a0.description === 'string') s.description = a0.description; break;
-        case 'trim': case 'toLowerCase': case 'toUpperCase': case 'finite': case 'safe': case 'nonempty': if (c.name === 'nonempty') s[s.type === 'array' ? 'minItems' : 'minLength'] = 1; break;
+        case 'trim': case 'toLowerCase': case 'toUpperCase': case 'finite': case 'safe': case 'nonempty':
+          if (c.name === 'nonempty') s[s.type === 'array' ? 'minItems' : 'minLength'] = 1;
+          wrapAs('wrapped'); // a check the JSON Schema does not show: the option is no longer a bare primitive to zod-to-json-schema
+          break;
         default: exact = false;
       }
     }
-    const fl = ctx && ctx.fl;
+    s = withIntBounds(s, fl);
+    if (fl && fl.compactUnions) compactTypeUnion(s);
+    if (wrap && s && typeof s === 'object') WRAPPED_OF.set(s, wrap);
+    return { schema: s, exact, optional };
+  }
+  function withIntBounds(s, fl) {
     if (fl && fl.intBounds && s.type === 'integer') { // zod 4 gives an integer the safe-integer range unless the schema narrows it
       if (s.minimum === undefined && s.exclusiveMinimum === undefined) s.minimum = -SAFE_INT;
       if (s.maximum === undefined && s.exclusiveMaximum === undefined) s.maximum = SAFE_INT;
     }
-    return { schema: s, exact, optional };
+    return s;
+  }
+  // How the SDK's converters write unions and .nullable() (checked against SDK 1.29 and 1.32 with zod 3.25.76,
+  // 4.3.6 and 4.6.7):
+  //   zod 3 (zod-to-json-schema): a union whose options are all bare string/number/boolean/null schemas (no checks;
+  //     a description of an option is dropped) is a type, or a type array; .nullable() of such a bare schema is a
+  //     type array with "null", and of anything else anyOf [schema, {type: null}], the description repeated outside.
+  //   zod 4: .nullable() is always anyOf [schema, {type: null}]; from 4.5.0 an anyOf of bare types becomes a type array.
+  //   A schema whose JSON Schema looks bare but that zod wraps (.optional(), .refine(), .transform(), .default(), …) or
+  //   that carries a check the JSON Schema does not show (.trim()) is not a primitive to zod-to-json-schema: a union
+  //   with such an option, and .nullable() of it, are anyOf. An .optional()/.nullish() option is written there as
+  //   anyOf [{not: {}}, schema] by zod-to-json-schema, a form the reader does not build, so that union is inexact.
+  const ZOD3_PRIMITIVE = new Set(['string', 'number', 'boolean', 'null']);
+  // schema object -> 'wrapped' | 'optional': set by zodToSchema for a chain with a wrapper or a hidden check.
+  const WRAPPED_OF = new WeakMap();
+  const wrappedOf = (o) => (o && typeof o === 'object' ? WRAPPED_OF.get(o) || null : null);
+  const bareZod3 = (o, withDescription) => !!o && typeof o === 'object' && !WRAPPED_OF.has(o) && typeof o.type === 'string' && ZOD3_PRIMITIVE.has(o.type) && Object.keys(o).every((k) => k === 'type' || (withDescription && k === 'description'));
+  function zod3Union(options) {
+    const exact = !options.some((o) => wrappedOf(o) === 'optional');
+    if (!options.length || !options.every((o) => bareZod3(o, true))) return { schema: { anyOf: options }, exact };
+    const types = []; options.forEach((o) => { if (!types.includes(o.type)) types.push(o.type); });
+    return { schema: { type: types.length === 1 ? types[0] : types }, exact };
+  }
+  function nullableOf(s, zod3, wrap) {
+    if (zod3 && !wrap && bareZod3(s, true)) return { schema: Object.assign({}, s, { type: [s.type, 'null'] }), exact: true };
+    const out = { anyOf: [s, { type: 'null' }] };
+    if (zod3 && typeof s.description === 'string') out.description = s.description;
+    return { schema: out, exact: !(zod3 && wrap === 'optional') };
+  }
+  // zod 4.5+'s compactTypeUnion: anyOf of options that are only { type } (nested ones first) -> type (array).
+  function compactTypeUnion(schema) {
+    const options = schema.anyOf;
+    if (!Array.isArray(options) || !options.length || schema.type !== undefined) return;
+    const types = [];
+    for (const o of options) {
+      if (!o || typeof o !== 'object') return;
+      compactTypeUnion(o);
+      const keys = Object.keys(o); if (keys.length !== 1 || keys[0] !== 'type') return;
+      for (const m of [].concat(o.type)) { if (typeof m !== 'string') return; if (!types.includes(m)) types.push(m); }
+    }
+    delete schema.anyOf;
+    schema.type = types.length === 1 ? types[0] : types;
+  }
+  // The source of a regular expression literal (/^[a-z]+$/i -> ^[a-z]+$), as RegExp.prototype.source gives it; null when
+  // the literal is not one the engine accepts.
+  function regexSource(lit) {
+    const m = /^\/([\s\S]*)\/([a-z]*)$/.exec(lit); if (!m) return null;
+    try { return new RegExp(m[1], m[2]).source; } catch (e) { return null; }
   }
   // A zod raw shape { a: z.string(), b: z.number().optional() } -> object schema the way the TS SDK emits it.
   // What the TS SDK lists for a zod schema depends on the SDK major and the zod major (see tsFlavour):
@@ -553,7 +836,7 @@
     const f = fl || FL_DEFAULT;
     const shaped = { type: 'object', properties: props };
     const req = Object.keys(props).filter((k) => !(optionalKeys && optionalKeys.has(k))); if (req.length) shaped.required = req;
-    if (f.closed) shaped.additionalProperties = false;
+    if (f.closed && !(f.emptyShapeOpen && !Object.keys(props).length)) shaped.additionalProperties = false;
     if (DIALECT[f.dialect]) shaped.$schema = DIALECT[f.dialect];
     return shaped;
   }
@@ -739,6 +1022,10 @@
         if (!v && globals && imp.imported !== '*' && imp.imported !== 'default' && hasOwn(globals, imp.imported)) v = globals[imp.imported];
         if (!v && globals && imp.imported === 'default' && hasOwn(globals, imp.local)) v = globals[imp.local];
         if (v) seed[imp.local] = v; else delete seed[imp.local];
+        // a schema factory exported by name from the imported file itself (no re-export followed)
+        const fx = target && imp.imported !== '*' ? mod(target).exports.names.get(imp.imported) : null;
+        const tb = typeof fx === 'string' ? tableFor(target, depth + 1) : null;
+        if (tb && hasOwn(tb, FN + fx)) seed[FN + imp.local] = tb[FN + fx]; else delete seed[FN + imp.local];
       });
       return seed;
     };
@@ -879,7 +1166,10 @@
           const ch = idChain(t, j + 1);
           if ((isP(t[ch.end], '||') || isP(t[ch.end], '??')) && t[ch.end + 1] && t[ch.end + 1].type === 'str' && (isP(t[ch.end + 2], ';') || isP(t[ch.end + 2], ',') || (t[ch.end + 2] && t[ch.end + 2].nl) || !t[ch.end + 2])) v = { value: t[ch.end + 1].value, exact: false, fallback: true };
         }
-        if (v.value !== SKIP) consts[t[i + 1].value] = { value: v.value, exact: v.exact, optional: !!v.optional, zod: !!v.zod, optionalKeys: v.optionalKeys || null, top: d === 0 && !v.fallback, partial: !!v.partial, lost: lost.length ? lost : null, holes: (v.holes || 0) + (v.unknownKeys ? v.unknownKeys.size : 0) + (v.spreadUnknown ? 1 : 0) };
+        if (v.value === SKIP && d === 0) { const f = fnAt(t, j + 1, ctx, consts, false); if (f) { consts[FN + t[i + 1].value] = f; continue; } }
+        if (v.value !== SKIP) consts[t[i + 1].value] = { value: v.value, exact: v.exact, optional: !!v.optional, zod: !!v.zod, optionalKeys: v.optionalKeys || null, top: d === 0 && !v.fallback, partial: !!v.partial, lost: lost.length ? lost : null, holes: (v.holes || 0) + (v.unknownKeys ? v.unknownKeys.size : 0) + (v.spreadUnknown ? 1 : 0), decl: tk.value };
+      } else if (tk.value === 'function' && d === 0 && t[i + 1].type === 'id' && isP(t[i + 2], '(') && !isP(t[i - 1], '.') && !(t[i - 1] && t[i - 1].value === 'async')) {
+        const f = fnAt(t, i + 2, ctx, consts, true); if (f) consts[FN + t[i + 1].value] = f;
       } else if (tk.value === 'enum' && t[i + 1].type === 'id' && isP(t[i + 2], '{')) {
         const close = matchClose(t, i + 2); const o = {}; let k = i + 3; let n = 0;
         while (k < close) {
@@ -899,7 +1189,9 @@
       const optionalKeys = new Set(); const props = {}; let exact = true; let j = i + 1;
       while (j < t.length && !isP(t[j], '}')) {
         if (isP(t[j], '...')) { // {...SHARED, a: z.string()}
-          const nx = t[j + 1]; const c = nx && nx.type === 'id' && ctx.consts && Object.prototype.hasOwnProperty.call(ctx.consts, nx.value) ? ctx.consts[nx.value] : null;
+          const nx = t[j + 1]; let c = nx && nx.type === 'id' && ctx.consts && Object.prototype.hasOwnProperty.call(ctx.consts, nx.value) ? ctx.consts[nx.value] : null;
+          const sp = c ? null : spreadExpr(t, j + 1, ctx); // ...rangeArgs('Defaults to today.'), ...Object.fromEntries(…)
+          if (sp && (isP(t[sp.end], ',') || isP(t[sp.end], '}'))) { Object.assign(props, sp.value); exact = exact && sp.exact !== false; if (sp.optionalKeys) sp.optionalKeys.forEach((x) => optionalKeys.add(x)); j = isP(t[sp.end], ',') ? sp.end + 1 : sp.end; continue; }
           if (c && !c.zod && c.value && typeof c.value === 'object' && !Array.isArray(c.value) && (isP(t[j + 2], ',') || isP(t[j + 2], '}'))) { Object.assign(props, c.value); exact = exact && c.exact !== false; if (c.optionalKeys) c.optionalKeys.forEach((x) => optionalKeys.add(x)); j += isP(t[j + 2], ',') ? 3 : 2; continue; }
           exact = false; j = skipExpr(t, j + 1); if (isP(t[j], ',')) j++; continue;
         }
@@ -938,8 +1230,16 @@
     const v = semver(sdk.version);
     const sameKind = !sdk.kind || sdk.kind === kind;
     const execution = kind === 'v1' && sameKind && !!v && v[0] === 1 && (v[1] >= 24);
-    if (sdk.customList) return { kind, zod, dialect: null, closed: zod < 4, intBounds: zod >= 4, execution: sdk.customList === 'wrap' && execution, customList: sdk.customList };
-    return { kind, zod, dialect: kind === 'v2' ? '2020-12' : 'draft-07', closed: zod < 4, intBounds: zod >= 4, execution };
+    // zod 4.5.0 and later rewrite an anyOf of bare types as a type array (compactTypeUnion in its to-json-schema), for
+    // the zod package itself only (zod/v4 inside zod 3.25 has no such pass); the lowest version the dependency allows
+    // must have it.
+    const zv = semver(sdk.zodVersion);
+    const compactUnions = zod >= 4 && !!zv && zv[0] === 4 && zv[1] >= 5;
+    // SDK 1.23.0 and later build an empty raw shape ({}) as a zod 4 mini object, which has no additionalProperties
+    // whatever zod the server uses (objectFromShape in its zod-compat).
+    const emptyShapeOpen = kind === 'v1' && sameKind && !!v && v[0] === 1 && v[1] >= 23;
+    if (sdk.customList) return { kind, zod, dialect: null, closed: zod < 4, intBounds: zod >= 4, compactUnions, emptyShapeOpen, execution: sdk.customList === 'wrap' && execution, customList: sdk.customList };
+    return { kind, zod, dialect: kind === 'v2' ? '2020-12' : 'draft-07', closed: zod < 4, intBounds: zod >= 4, compactUnions, emptyShapeOpen, execution };
   }
   // A TypeScript or JavaScript file that builds an McpServer and sets its own tools/list handler on it
   // (mcpServer.server.setRequestHandler(ListToolsRequestSchema, …) under SDK 1.x, (…, 'tools/list', …) under 2.x): the
@@ -2861,7 +3161,7 @@
     });
     const sv = pick('server', server, lock['@modelcontextprotocol/server']); const kv = pick('sdk', sdk, lock['@modelcontextprotocol/sdk']); const zv = pick('zod', zod, lock.zod);
     if (sv) { out.kind = 'v2'; out.version = semver(sv) ? semver(sv).join('.') : null; } else if (kv) { const v = semver(kv); out.kind = v && v[0] >= 2 ? 'v2' : 'v1'; out.version = v ? v.join('.') : null; }
-    const zm = semver(zv); if (zm) out.zod = zm[0];
+    const zm = semver(zv); if (zm) { out.zod = zm[0]; out.zodVersion = zm.join('.'); }
     // Python: the standalone fastmcp package, or the SDK's own FastMCP.
     let fast = false; let mcp = false;
     entries.forEach(([p, text]) => {
