@@ -544,3 +544,16 @@ test('R-AE-35: from pkg import mod, then mod.fn(), is followed into pkg/mod.py w
   const t2 = Fx.analyse(new Map(Object.entries({ ...init, 'pkg/server.py': 'import pkg\n\n@mcp.tool()\ndef t(path: str) -> str:\n    pkg.ops_remove(path)\n    return "ok"\n' })), [{ path: 'pkg/server.py', line: 1, tool: { name: 't' } }]).tools.t;
   assert.deepEqual(t2.effects.delete.map((e) => e.sink), ['fs.shutil.rmtree']);
 });
+
+test('R-AE-36: Python tuple unpacking carries an argument, so a guard on its result is validation, not a mode', () => {
+  // Found by checking what the early-return rule (R-AE-31) cost on the QA-40 repos: word-gongrzhe protect_document does
+  // `is_writeable, error_message = check_file_writeable(filename)`, `if not is_writeable: return ...`, then writes filename.
+  const head = 'def check(path):\n    return os.access(path, os.W_OK), ""\n';
+  const t = snippet(PY('ok, msg = check(p)\nif not ok:\n    return msg\nos.remove(p)', head), 't');
+  assert.deepEqual(t.effects.delete.map((e) => e.confidence), ['definite']);
+  const paren = snippet(PY('(ok, msg) = check(p)\nif not ok:\n    return msg\nos.remove(p)', head), 't');
+  assert.deepEqual(paren.effects.delete.map((e) => e.confidence), ['definite']);
+  // a tuple that no argument reaches still makes the guard a mode switch
+  const env = snippet(PY('on, why = os.getenv("A"), os.getenv("B")\nif not on:\n    return why\nos.remove(p)'), 't');
+  assert.deepEqual(env.effects.delete.map((e) => e.confidence), ['may']);
+});

@@ -1270,6 +1270,8 @@ const idsOf = (code) => new Set((code.match(/(?<![.\w$])[A-Za-z_$][\w$]*/g) || [
          [/\bfor\s*\(\s*(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s+(?:of|in)\s+([^)]{0,200})\)/g, (m) => [[m[1]], m[2]]],
          [/(?<![\w$.])([A-Za-z_$][\w$]*)\s*\.\s*(?:push|unshift|splice)\s*\(([^;\n]{0,300})/g, (m) => [[m[1]], m[2]]]]
       : [[/^[ \t]*([A-Za-z_]\w*)\s*(?::[^=\n]+)?=(?!=)\s*(.*)$/gm, (m) => [[m[1]], m[2]]],
+         // tuple unpacking: `ok, msg = check(path)`
+         [/^[ \t]*\(?\s*([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)+)\s*,?\s*\)?\s*=(?!=)\s*(.*)$/gm, (m) => [m[1].split(/\s*,\s*/), m[2]]],
          [/^[ \t]*for\s+([A-Za-z_]\w*)\s+in\s+(.*):\s*$/gm, (m) => [[m[1]], m[2]]],
          [/\bas\s+([A-Za-z_]\w*)\s*[:,]/g, (m) => [[m[1]], code.slice(Math.max(0, m.index - 200), m.index)]],
          [/^[ \t]*([A-Za-z_]\w*)\s*\.\s*(?:append|extend|insert)\s*\((.*)$/gm, (m) => [[m[1]], m[2]]]];
