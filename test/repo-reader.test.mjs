@@ -177,8 +177,8 @@ test('Python files of the SDK keep titles (the standalone fastmcp rules apply to
 test('detectSdk: manifests and lock files give the SDK kind, version and zod major; a lock file beats a range', () => {
   const pkg = JSON.stringify({ dependencies: { '@modelcontextprotocol/sdk': '^1.20.0', zod: '^3.25.0' } });
   const lock = JSON.stringify({ packages: { 'node_modules/@modelcontextprotocol/sdk': { version: '1.26.0' }, 'node_modules/zod': { version: '4.1.0' } } });
-  assert.deepEqual(R.detectSdk(new Map([['package.json', pkg]])), { kind: 'v1', version: '1.20.0', zod: 3, py: null });
-  assert.deepEqual(R.detectSdk(new Map([['package.json', pkg], ['package-lock.json', lock]])), { kind: 'v1', version: '1.26.0', zod: 4, py: null });
+  assert.deepEqual(R.detectSdk(new Map([['package.json', pkg]])), { kind: 'v1', version: '1.20.0', zod: 3, zodVersion: '3.25.0', py: null });
+  assert.deepEqual(R.detectSdk(new Map([['package.json', pkg], ['package-lock.json', lock]])), { kind: 'v1', version: '1.26.0', zod: 4, zodVersion: '4.1.0', py: null });
   assert.equal(R.detectSdk(new Map([['package.json', JSON.stringify({ dependencies: { '@modelcontextprotocol/server': '^2.1.0', zod: '^4.0.0' } })]])).kind, 'v2');
   assert.equal(R.detectSdk(new Map([['pyproject.toml', 'dependencies = [\n  "fastmcp>=3.0",\n]']])).py, 'fastmcp');
   assert.equal(R.detectSdk(new Map([['pyproject.toml', 'dependencies = [\n  "mcp[cli]>=1.2",\n]']])).py, 'sdk');
