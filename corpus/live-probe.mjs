@@ -136,9 +136,9 @@ export const DETAILS = Object.freeze({
   start_failed: ['timeout_start', false, 'start', 'subject'], // a crash signature on stderr (R-LP-45), and exited with its own non-zero code, early, with every argument filled
   start_needs_config: ['timeout_start', false, 'start', 'tool'], // the server exited with its own code and asked for configuration we did not give it (R-LP-44)
   start_env_limited: ['timeout_start', false, 'start', 'tool'], // a start failure our environment could have caused
-  start_needs_extra: ['timeout_start', false, 'start', 'tool'], // a module only an extra of the package brings, which we did not install (R-LP-56)
-  start_dependency_drift: ['timeout_start', false, 'start', 'tool'], // a dependency the release declares with no upper bound lacks what it imports: it changed after the release (R-LP-57)
-  unsupported_platform: ['timeout_start', false, 'start', 'tool'], // the server runs on macOS or Windows only; our sandbox is Linux (R-LP-57)
+  start_needs_extra: ['timeout_start', false, 'start', 'tool'], // a module only an extra of the package brings, which we did not install (R-LP-61)
+  start_dependency_drift: ['timeout_start', false, 'start', 'tool'], // a dependency the release declares with no upper bound lacks what it imports: it changed after the release (R-LP-62)
+  unsupported_platform: ['timeout_start', false, 'start', 'tool'], // the server runs on macOS or Windows only; our sandbox is Linux (R-LP-62)
   start_timeout: ['timeout_start', false, 'start', 'tool'],
   list_failed: ['timeout_start', false, 'list', 'subject'], // a JSON-RPC error the server sent, or a malformed result
   list_probe_limited: ['timeout_start', false, 'list', 'tool'], // our time limit, page cap or read cap, or an HTTP transport failure
@@ -835,7 +835,7 @@ export async function resolveSubject(item, { seed = new Map(), fetch: fetchImpl 
         out.choice.entry_source = e.entry && !fits ? 'too_many_args' : e.entry_source;
         out.choice.entry_wheel = e.wheel || null;
         out.choice.entry = (fits && e.entry) || null;
-        // What the release declares and ships: failureDetail tells the server's own modules from its dependencies (R-LP-56).
+        // What the release declares and ships: failureDetail tells the server's own modules from its dependencies (R-LP-61).
         if (e.deps) out.choice.pydeps = e.deps;
       }
       if (s) {
@@ -1045,7 +1045,7 @@ const CONFIG_BASE = [
   String.raw`\b(?:argument|option|flag|parameter|env(?:ironment)?\s+var(?:iable)?)s?\b[^\n]{0,60}?\b(?:is|are)\s+(?:required|missing|not set)`,
   String.raw`\bplease\s+(?:create|set|provide|specify)\b`,
 ];
-/** R-LP-58: configuration requests the 26 Nov start-failure review found the patterns above missed. */
+/** R-LP-63: configuration requests the 26 Nov start-failure review found the patterns above missed. */
 const CONFIG_MORE = [
   String.raw`\bmissing\s+required\s+(?:[a-z]+\s+){0,2}?(?:settings?|credentials?|parameters?|keys?|values?|fields?)\b`,
   String.raw`\bconfiguration[\s_-]*(?:path[\s_-]*)?(?:error|required)\b`, String.raw`\binvalid\s+config(?:uration)?\b`,
@@ -1086,14 +1086,14 @@ export const CRASH_TEXT = new RegExp([
 
 const OOM_TEXT = /\bENOMEM\b|out of memory|\bOOM\b/i;
 
-// The mutation check (R-LP-60): a test switches one start rule off and shows its regression fixture is then blamed on
+// The mutation check (R-LP-65): a test switches one start rule off and shows its regression fixture is then blamed on
 // the server, so no rule is dead code. Never set outside the tests.
 let MUTED = null;
 export function setStartMutation(id) { MUTED = id || null; }
 const on = (id) => MUTED !== id && MUTED !== 'all';
 
 /**
- * Stderr that shows our sandbox, not the server, stopped the start (R-LP-55): a write the read-only root or uid 65534
+ * Stderr that shows our sandbox, not the server, stopped the start (R-LP-60): a write the read-only root or uid 65534
  * refused, a shared library or loader our slim images lack, a binary for another CPU, an executable that is not in them, or a file under /tmp,
  * the working directory we force, that the image expected under its own WORKDIR.
  */
@@ -1113,7 +1113,7 @@ const MISSING_BIN = [
 ];
 /** Executables only macOS or Windows have: a server that needs one cannot start on Linux at all. */
 const PLATFORM_BIN = /^(?:xcrun|xcodebuild|xcode-select|osascript|sw_vers|pbcopy|pbpaste|launchctl|mdfind|powershell(?:\.exe)?|cmd\.exe|wmic(?:\.exe)?|reg\.exe)$/i;
-/** A server that says it runs on another operating system only (R-LP-57). */
+/** A server that says it runs on another operating system only (R-LP-62). */
 export const PLATFORM_TEXT = new RegExp([
   String.raw`\b(?:windows|macos|mac\s?os(?:\s?x)?|darwin|win32)[\s-]+only\b`,
   String.raw`\bonly\s+(?:be\s+)?(?:supported|available|works?|runs?|run)\s+(?:on|for|under)\s+(?:windows|macos|mac\s?os(?:\s?x)?|darwin)\b`,
@@ -1121,13 +1121,13 @@ export const PLATFORM_TEXT = new RegExp([
   String.raw`\bnot\s+supported\s+on\s+(?:linux|this\s+(?:platform|os|operating\s+system))\b`,
   String.raw`\bunsupported\s+(?:platform|operating\s+system)\b`,
 ].join('|'), 'i');
-/** Stderr that shows the server reaching for the network, when the telemetry did not record it (R-LP-59). */
+/** Stderr that shows the server reaching for the network, when the telemetry did not record it (R-LP-64). */
 export const NETWORK_TEXT = new RegExp([
   String.raw`\bgetaddrinfo\s+(?:ENOTFOUND|EAI_AGAIN)\b`, String.raw`Temporary failure in name resolution`, String.raw`Name or service not known`,
   String.raw`\b(?:ENETUNREACH|EHOSTUNREACH|ECONNREFUSED|ECONNRESET|ETIMEDOUT)\b`, String.raw`Network is unreachable`, String.raw`Failed to establish a new connection`,
   String.raw`Could not resolve host`, String.raw`(?:^|\n)(?:[\w.]+\.)?(?:ConnectError|ConnectionError|ConnectTimeout|NameResolutionError): `,
 ].join('|'));
-/** A server telling us to install one of its extras: `pip install 'pkg[extra]'` (R-LP-56). */
+/** A server telling us to install one of its extras: `pip install 'pkg[extra]'` (R-LP-61). */
 const EXTRA_HINT = /pip install\s+["']?[A-Za-z0-9._-]+\[[A-Za-z0-9_.,-]+\]/;
 /** Import names whose distribution is named otherwise (PEP 503), for the common ones. */
 const IMPORT_DIST = Object.freeze({ yaml: 'pyyaml', pil: 'pillow', cv2: 'opencv-python', sklearn: 'scikit-learn', bs4: 'beautifulsoup4', dotenv: 'python-dotenv', jwt: 'pyjwt', dateutil: 'python-dateutil', magic: 'python-magic', docx: 'python-docx', pptx: 'python-pptx', git: 'gitpython', attr: 'attrs', google: 'protobuf', fitz: 'pymupdf' });
@@ -1242,9 +1242,9 @@ function listDetail(p) {
  * Why an item that had a target got no live list: a detail code (DETAILS). The server is the one at fault (subject) only
  * with evidence our own environment cannot explain (R-LP-29..38); anything else is ours (tool). `ctx` carries what the lane
  * records beside the driver's record: records (this target's telemetry), stepsLog (the install's log text), launch and
- * argsUnfilled (the plan's resolution of it), and pydeps (a PyPI release's own modules and declared dependencies, R-LP-56).
+ * argsUnfilled (the plan's resolution of it), and pydeps (a PyPI release's own modules and declared dependencies, R-LP-61).
  * Our sandbox's limits, another platform, the network, extras and dependency drift are told apart before any crash
- * is blamed (R-LP-54..60).
+ * is blamed (R-LP-59..65).
  */
 export function failureDetail(rec, bare, envp, { deadlineHit = false, records = [], stepsLog = null, launch = null, argsUnfilled = null, pydeps = null } = {}) {
   if (!rec) return deadlineHit ? 'shard_deadline' : 'harness_error';
@@ -1280,14 +1280,14 @@ export function failureDetail(rec, bare, envp, { deadlineHit = false, records = 
   const guess = !isObj(launch) || !launch.kind || (launch.kind === 'pypi' && !launch.entry);
   const sound = own && argsUnfilled === 0 && !guess;
   const err = typeof p.stderr === 'string' ? p.stderr : '';
-  // What stopped the start before the server's own code could fail, in our words (R-LP-55..59), ahead of any
+  // What stopped the start before the server's own code could fail, in our words (R-LP-60..64), ahead of any
   // finding against the server: another operating system, the network, our sandbox's limits.
   const bin = MISSING_BIN.map((re) => re.exec(err)).find(Boolean);
   if (on('platform') && (PLATFORM_TEXT.test(err) || (bin && PLATFORM_BIN.test(bin[1])))) return 'unsupported_platform';
   if (net || (on('network') && NETWORK_TEXT.test(err))) return 'start_needs_network';
   if (on('env') && (ENV_TEXT.test(err) || bin)) return 'start_env_limited';
   // An import that failed: an extra we did not install, a dependency that changed under the release, or one we cannot
-  // tell; only the server's own module can be its crash (R-LP-56, R-LP-57).
+  // tell; only the server's own module can be its crash (R-LP-61, R-LP-62).
   const imp = importCause(failedImport(err), { pydeps, pkg: isObj(launch) ? launch.package : null });
   if (on('extra') && (EXTRA_HINT.test(err) || imp === 'extra')) return 'start_needs_extra';
   if (on('drift') && imp === 'drift') return 'start_dependency_drift';

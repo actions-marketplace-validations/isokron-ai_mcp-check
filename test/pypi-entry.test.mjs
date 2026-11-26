@@ -19,7 +19,7 @@ function zip(entries) {
   eocd.writeUInt32LE(0x06054b50, 0); eocd.writeUInt16LE(entries.length, 8); eocd.writeUInt16LE(entries.length, 10); eocd.writeUInt32LE(cd.length, 12); eocd.writeUInt32LE(off, 16);
   return Buffer.concat([...locals, cd, eocd]);
 }
-// pypiEntry's answer without its dependency facts (R-LP-56 reads those).
+// pypiEntry's answer without its dependency facts (R-LP-61 reads those).
 const nd = ({ deps, ...r }) => r;
 const EP = (lines) => '[console_scripts]\n' + lines.join('\n') + '\n\n[other]\nnot-a-script = x:y\n';
 const res = (status, body, headers = {}) => ({ ok: status >= 200 && status < 300, status, headers: { get: (k) => headers[k.toLowerCase()] ?? null }, arrayBuffer: async () => (Buffer.isBuffer(body) ? body : Buffer.from(typeof body === 'string' ? body : JSON.stringify(body))) });

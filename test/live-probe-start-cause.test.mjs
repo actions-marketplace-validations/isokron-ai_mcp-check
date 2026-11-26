@@ -1,4 +1,4 @@
-// Why a live-probe start failed (corpus/live-probe.mjs failureDetail), R-LP-54..60: a server is blamed (start_failed,
+// Why a live-probe start failed (corpus/live-probe.mjs failureDetail), R-LP-59..65: a server is blamed (start_failed,
 // fault subject) only for a crash in its own code. The stderr below is real, trimmed, from the 26 Nov 2026 review of
 // every recorded start failure (each credits the package and version it came from); in that review 37 of the 38
 // PyPI start_failed results were our environment, an extra we did not install, or a dependency that changed after
@@ -68,7 +68,7 @@ const NOT_THE_SERVER = [
   ['SNOWFLAKE', SNOWFLAKE, py('mcp-snowflake-server-nsp', '0.14.5', 'mcp_snowflake_server'), 'start_needs_config', 'config'],
 ];
 
-test('R-LP-54: of the 26 Nov PyPI start_failed results, only the crash in the server\'s own code is blamed on it', () => {
+test('R-LP-59: of the 26 Nov PyPI start_failed results, only the crash in the server\'s own code is blamed on it', () => {
   for (const [name, stderr, ctx, want] of NOT_THE_SERVER) {
     assert.match(stderr, LP.CRASH_TEXT, name + ': the old rule saw a crash here');
     const d = detail(stderr, ctx);
@@ -83,7 +83,7 @@ test('R-LP-54: of the 26 Nov PyPI start_failed results, only the crash in the se
   assert.equal(LP.failureDetail(rec(), exit1(STRATEVO, LP.START_QUICK_MS), null, py('stratevo', '6.0.3', 'stratevo', STRATEVO_DEPS)), 'start_env_limited', 'a late exit');
 });
 
-test('R-LP-55: a read-only root, a refused write, a missing shared library or executable, or our /tmp workdir is start_env_limited (tool)', () => {
+test('R-LP-60: a read-only root, a refused write, a missing shared library or executable, or our /tmp workdir is start_env_limited (tool)', () => {
   for (const s of [RO_FS, LIBGL, SQLITE, WORKDIR_NODE, "python: can't open file '/tmp/server.py': [Errno 2] No such file or directory",
     "Error: EACCES: permission denied, mkdir '/data/logs'", "PermissionError: [Errno 13] Permission denied: '/config'", "Error: EROFS: read-only file system, open '/app/cache.json'",
     'node: error while loading shared libraries: libatomic.so.1: cannot open shared object file',
@@ -100,7 +100,7 @@ test('R-LP-55: a read-only root, a refused write, a missing shared library or ex
   assert.doesNotMatch("FileNotFoundError: [Errno 2] No such file or directory: 'config.json'", LP.ENV_TEXT);
 });
 
-test('R-LP-56: a module only an extra brings, or a server naming the extra to install, is start_needs_extra (tool)', () => {
+test('R-LP-61: a module only an extra brings, or a server naming the extra to install, is start_needs_extra (tool)', () => {
   assert.deepEqual(LP.DETAILS.start_needs_extra, ['timeout_start', false, 'start', 'tool']);
   assert.equal(detail(NO_MCP, py('deadsimple-email', 'latest', 'deadsimple-mcp', DEADSIMPLE)), 'start_needs_extra');
   assert.equal(detail(NO_TYPER, py('dns-aid', '0.28.1', 'dns-aid', DNSAID)), 'start_needs_extra');
@@ -115,7 +115,7 @@ test('R-LP-56: a module only an extra brings, or a server naming the extra to in
   assert.equal(pypiDeps(null, null).top, null, 'no wheel read: own modules unknown');
 });
 
-test('R-LP-57: a dependency that changed after the release is start_dependency_drift, and a macOS- or Windows-only server is unsupported_platform (both tool)', () => {
+test('R-LP-62: a dependency that changed after the release is start_dependency_drift, and a macOS- or Windows-only server is unsupported_platform (both tool)', () => {
   assert.deepEqual(LP.DETAILS.start_dependency_drift, ['timeout_start', false, 'start', 'tool']);
   assert.deepEqual(LP.DETAILS.unsupported_platform, ['timeout_start', false, 'start', 'tool']);
   assert.equal(detail(FASTMCP_2X, py('blockchain-ai-mcp', '1.0.12', 'blockchain_ai_mcp', BLOCKCHAIN)), 'start_dependency_drift');
@@ -135,7 +135,7 @@ test('R-LP-57: a dependency that changed after the release is start_dependency_d
   for (const s of ['Running on Windows, macOS and Linux', 'windows path detected']) assert.doesNotMatch(s, LP.PLATFORM_TEXT, s);
 });
 
-test('R-LP-58: configuration requests the first patterns missed are start_needs_config (tool), traceback or not', () => {
+test('R-LP-63: configuration requests the first patterns missed are start_needs_config (tool), traceback or not', () => {
   const msgs = ['Missing required setting(s): OITC_APIKEY', 'Configuration error: AXE_API_KEY, AXE_URL', '{"error":{"code":"configuration_path_required"}}', 'Pass --project <path>', 'Error: Factory is not configured', 'No Telegram credentials configured', 'Run the pipeline first', 'Invalid configuration', SNOWFLAKE];
   for (const s of msgs) {
     assert.match(s, LP.CONFIG_TEXT, s);
@@ -144,7 +144,7 @@ test('R-LP-58: configuration requests the first patterns missed are start_needs_
   for (const s of ['missing field in response', 'run the server', 'Configured 3 tools']) assert.doesNotMatch(s, LP.CONFIG_TEXT, s);
 });
 
-test('R-LP-59: a server that went to the network is start_needs_network whether or not a variable is declared, from telemetry or its own stderr', () => {
+test('R-LP-64: a server that went to the network is start_needs_network whether or not a variable is declared, from telemetry or its own stderr', () => {
   const dns = { v: 1, type: 'dns_query', subject: 's001', source: 'netlog', role: 'server', qname: 'api.example.com', qtype: 'A', answer: 'sinkhole' };
   // Was start_env_limited with no variable declared (code at 1177): the cause is known, so it is named.
   assert.equal(LP.failureDetail(rec(), exit1('panic: x\n\ngoroutine 1 [running]:'), null, { launch: { kind: 'npm' }, argsUnfilled: 0, records: [dns] }), 'start_needs_network');
@@ -155,7 +155,7 @@ test('R-LP-59: a server that went to the network is start_needs_network whether 
   assert.equal(LP.DETAILS.start_needs_network[3], 'tool');
 });
 
-test('R-LP-60: mutation check: with a start rule switched off its fixture gets another detail, and with all of them off every fixture is blamed on the server again', () => {
+test('R-LP-65: mutation check: with a start rule switched off its fixture gets another detail, and with all of them off every fixture is blamed on the server again', () => {
   const cases = [...NOT_THE_SERVER,
     ['NETWORK', tb('httpx.ConnectError: [Errno -3] Temporary failure in name resolution'), py('x-mcp', '1', 'x-mcp'), 'start_needs_network', 'network'],
     ['FASTMCP_NO_FACTS', FASTMCP_2X, py('blockchain-ai-mcp', '1.0.12', 'blockchain_ai_mcp'), 'start_env_limited', 'import']];

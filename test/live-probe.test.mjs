@@ -729,7 +729,7 @@ test('R-LP-33: a server that went to the network (which the run does not have) i
   assert.deepEqual(LP.DETAILS.start_needs_network, ['timeout_start', false, 'start', 'tool']);
   for (const records of [[serverDns], [serverConn], [traceNet(3)]]) {
     assert.equal(LP.failureDetail(lpRec({ env: needEnv }), probeExit(1), null, { ...OK, records }), 'start_needs_network');
-    // With no variable declared it is named too, not left as start_env_limited (R-LP-59).
+    // With no variable declared it is named too, not left as start_env_limited (R-LP-64).
     assert.equal(LP.failureDetail(lpRec(), crashExit(1), null, { ...OK, records }), 'start_needs_network');
   }
   // The install's lookups, a quiet trace and another target's records are no attempt of the server.
@@ -944,7 +944,7 @@ test('live-probe fault evidence (telemetry, steps log, plan) reaches failureDeta
   };
   const addTelemetry = (w, ...recs) => writeFileSync(join(w, 'driver-subjects', '_shard', 'telemetry.jsonl'), readFileSync(join(w, 'driver-subjects', '_shard', 'telemetry.jsonl'), 'utf8') + recs.map((r) => JSON.stringify({ ...r, subject: 's002' })).join('\n') + '\n');
   assert.equal(run(() => {})[1], 'start_env_limited', 'the saved kronicle-lite capture: an early exit 1 with empty stderr, no crash signature, so no evidence against the server (R-LP-45)');
-  assert.equal(run((w) => addTelemetry(w, serverDns))[1], 'start_needs_network', 'its telemetry shows a server-role lookup (R-LP-59)');
+  assert.equal(run((w) => addTelemetry(w, serverDns))[1], 'start_needs_network', 'its telemetry shows a server-role lookup (R-LP-64)');
   const plan = (w, f) => { const p = JSON.parse(readFileSync(join(w, 'plan.json'), 'utf8')); f(p.items[1]); writeFileSync(join(w, 'plan.json'), JSON.stringify(p)); };
   assert.equal(run((w) => plan(w, (it) => { it.resolution.choice.args_unfilled = 1; }))[1], 'start_env_limited', 'the plan says an argument was left unfilled');
   assert.equal(run((w) => plan(w, (it) => { it.resolution.launch = { kind: 'pypi', package: 'x' }; }))[1], 'start_env_limited', 'the plan says the PyPI entry is a guess');

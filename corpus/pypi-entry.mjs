@@ -184,7 +184,7 @@ export function requirementOf(s) {
 }
 
 /**
- * What a release declares and ships, for telling a crash in the server's own code from our environment (R-LP-56):
+ * What a release declares and ships, for telling a crash in the server's own code from our environment (R-LP-61):
  * top (its top-level import names, from the wheel), base (dependencies every install gets), uncapped (base ones with
  * no upper bound), extra_only (dependencies only an extra brings), extras (Provides-Extra); PEP 503 names, capped.
  * top is null when the wheel was not read.
