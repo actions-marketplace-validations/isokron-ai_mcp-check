@@ -383,7 +383,7 @@
       if (isP(k, '...')) {
         // {...NAME} / {...NAME.member}: a constant holding a plain object (this file's, an imported one, or another file's) is merged in.
         const nx = t[i + 1]; let c = null; let end = i + 2;
-        if (nx && nx.type === 'id' && ctx && ctx.consts) { const ch = idChain(t, i + 1); const v = chainValue(ctx, ch.ids); if (v) { c = ch.ids.length === 1 ? v.c : { value: v.value, exact: v.c.exact, zod: false }; end = ch.end; } else { const sp = spreadCall(t, i + 1, ctx); if (sp) { c = sp; end = sp.end; } } }
+        if (nx && nx.type === 'id' && ctx && ctx.consts) { const ch = idChain(t, i + 1); const v = chainValue(ctx, ch.ids); if (v) { c = ch.ids.length === 1 ? v.c : { value: v.value, exact: v.c.exact, zod: false }; end = ch.end; } else { const sp = spreadExpr(t, i + 1, ctx); if (sp) { c = sp; end = sp.end; } } }
         if (c && !c.zod && c.value && typeof c.value === 'object' && !Array.isArray(c.value) && (isP(t[end], ',') || isP(t[end], '}'))) {
           Object.assign(o, c.value); exact = exact && c.exact !== false; if (c.optionalKeys) c.optionalKeys.forEach((x) => optionalKeys.add(x));
           i = isP(t[end], ',') ? end + 1 : end; continue;
@@ -564,6 +564,51 @@
       for (let n = saved.length - 1; n >= 0; n--) { const [k, had, old] = saved[n]; if (had) consts[k] = old; else delete consts[k]; }
     }
     return { r, end: close + 1 };
+  }
+  // A spread in a shape that is not a plain constant: a factory call, or a constant object filtered by key.
+  function spreadExpr(t, k, ctx) { return spreadCall(t, k, ctx) || filteredEntries(t, k, ctx); }
+  // Object.fromEntries(Object.entries(FIELDS).filter(([key]) => key !== 'title')): the constant object FIELDS (read
+  // whole) without the keys the test rejects. The test may compare the key with string literals (=== !== == !=), test
+  // it with [..].includes(key) or a constant array's .includes(key), negate with !, and join with && and ||; anything
+  // else, and a constant with a part the reader could not read, is not read.
+  function filteredEntries(t, k, ctx) {
+    const at = (n, ...vals) => vals.every((v, m) => { const x = t[n + m]; return x && (v === null ? x.type === 'id' : x.value === v && (x.type === 'p' || x.type === 'id')); });
+    if (!at(k, 'Object', '.', 'fromEntries', '(', 'Object', '.', 'entries', '(', null, ')', '.', 'filter', '(', '(', '[', null)) return null;
+    const outerClose = matchClose(t, k + 3); const filterClose = matchClose(t, k + 12);
+    const name = t[k + 8].value; const key = t[k + 15].value;
+    const c = ctx && ctx.consts && hasOwn(ctx.consts, name) ? ctx.consts[name] : null;
+    if (!c || c.zod || !c.value || typeof c.value !== 'object' || Array.isArray(c.value) || c.exact === false || c.holes) return null;
+    let j = k + 16; if (isP(t[j], ',') && t[j + 1] && t[j + 1].type === 'id') j += 2;
+    if (!isP(t[j], ']') || !isP(t[j + 1], ')') || !isP(t[j + 2], '=>')) return null;
+    if (filterClose + (isP(t[filterClose + 1], ',') ? 2 : 1) !== outerClose || !isP(t[outerClose], ')')) return null; // a trailing comma is allowed
+    const strs = (n) => { // a string array literal or constant: [values, end]
+      if (isP(t[n], '[')) { const v = parseValue(t, n, ctx); return Array.isArray(v.value) && v.value.every((x) => typeof x === 'string') && !v.holes ? [v.value, v.end] : null; }
+      if (t[n] && t[n].type === 'id' && hasOwn(ctx.consts, t[n].value)) { const v = ctx.consts[t[n].value]; return Array.isArray(v.value) && v.value.every((x) => typeof x === 'string') && !v.holes && v.exact !== false ? [v.value, n + 1] : null; }
+      return null;
+    };
+    // a recursive descent over the test: or := and (|| and)*, and := unary (&& unary)*, unary := !unary | (or) | atom
+    let n = j + 3;
+    const atom = () => {
+      if (t[n] && t[n].type === 'id' && t[n].value === key && t[n + 1] && /^(===|!==|==|!=)$/.test(t[n + 1].value) && t[n + 2] && t[n + 2].type === 'str') { const op = t[n + 1].value; const lit = t[n + 2].value; n += 3; return (x) => (op[0] === '=' ? x === lit : x !== lit); }
+      if (t[n] && t[n].type === 'str' && t[n + 1] && /^(===|!==|==|!=)$/.test(t[n + 1].value) && t[n + 2] && t[n + 2].type === 'id' && t[n + 2].value === key) { const op = t[n + 1].value; const lit = t[n].value; n += 3; return (x) => (op[0] === '=' ? x === lit : x !== lit); }
+      const a = strs(n);
+      if (a && at(a[1], '.', 'includes', '(', key, ')')) { n = a[1] + 5; const set = a[0]; return (x) => set.includes(x); }
+      return null;
+    };
+    const unary = () => {
+      if (isP(t[n], '!')) { n++; const f = unary(); return f && ((x) => !f(x)); }
+      if (isP(t[n], '(')) { n++; const f = or(); if (!f || !isP(t[n], ')')) return null; n++; return f; }
+      return atom();
+    };
+    const and = () => { let f = unary(); while (f && isP(t[n], '&&')) { n++; const g = unary(); if (!g) return null; const a = f; f = (x) => a(x) && g(x); } return f; };
+    const or = () => { let f = and(); while (f && isP(t[n], '||')) { n++; const g = and(); if (!g) return null; const a = f; f = (x) => a(x) || g(x); } return f; };
+    const test = or();
+    if (test && isP(t[n], ',') && n + 1 === filterClose) n++;
+    if (!test || n !== filterClose) return null;
+    const value = {}; Object.keys(c.value).forEach((x) => { if (test(x)) value[x] = c.value[x]; });
+    const optionalKeys = c.optionalKeys ? new Set(Array.from(c.optionalKeys).filter((x) => hasOwn(value, x))) : null;
+    if (c.lost) lose(c.lost);
+    return { value, exact: true, optionalKeys, zod: false, end: outerClose + 1 };
   }
   // ...factory(args) in a shape: the plain object it returns (its optional keys kept), with end past the call.
   function spreadCall(t, k, ctx) {
@@ -950,7 +995,7 @@
       while (j < t.length && !isP(t[j], '}')) {
         if (isP(t[j], '...')) { // {...SHARED, a: z.string()}
           const nx = t[j + 1]; let c = nx && nx.type === 'id' && ctx.consts && Object.prototype.hasOwnProperty.call(ctx.consts, nx.value) ? ctx.consts[nx.value] : null;
-          const sp = c ? null : spreadCall(t, j + 1, ctx); // ...rangeArgs('Defaults to today.')
+          const sp = c ? null : spreadExpr(t, j + 1, ctx); // ...rangeArgs('Defaults to today.'), ...Object.fromEntries(…)
           if (sp && (isP(t[sp.end], ',') || isP(t[sp.end], '}'))) { Object.assign(props, sp.value); exact = exact && sp.exact !== false; if (sp.optionalKeys) sp.optionalKeys.forEach((x) => optionalKeys.add(x)); j = isP(t[sp.end], ',') ? sp.end + 1 : sp.end; continue; }
           if (c && !c.zod && c.value && typeof c.value === 'object' && !Array.isArray(c.value) && (isP(t[j + 2], ',') || isP(t[j + 2], '}'))) { Object.assign(props, c.value); exact = exact && c.exact !== false; if (c.optionalKeys) c.optionalKeys.forEach((x) => optionalKeys.add(x)); j += isP(t[j + 2], ',') ? 3 : 2; continue; }
           exact = false; j = skipExpr(t, j + 1); if (isP(t[j], ',')) j++; continue;
