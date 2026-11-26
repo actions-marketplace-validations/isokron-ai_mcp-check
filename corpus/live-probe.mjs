@@ -138,6 +138,8 @@ export const DETAILS = Object.freeze({
   start_env_limited: ['timeout_start', false, 'start', 'tool'], // a start failure our environment could have caused
   start_needs_extra: ['timeout_start', false, 'start', 'tool'], // a module only an extra of the package brings, which we did not install (R-LP-61)
   start_dependency_drift: ['timeout_start', false, 'start', 'tool'], // a dependency the release declares with no upper bound lacks what it imports: it changed after the release (R-LP-62)
+  missing_own_module: ['timeout_start', false, 'start', 'subject'], // its wheel lacks a module of its own package (R-LP-68)
+  undeclared_dependency: ['timeout_start', false, 'start', 'subject'], // its own code imports a module the release neither ships nor declares, not installed (R-LP-68)
   unsupported_platform: ['timeout_start', false, 'start', 'tool'], // the server runs on macOS or Windows only; our sandbox is Linux (R-LP-62)
   start_timeout: ['timeout_start', false, 'start', 'tool'],
   list_failed: ['timeout_start', false, 'list', 'subject'], // a JSON-RPC error the server sent, or a malformed result
@@ -1052,7 +1054,16 @@ const CONFIG_MORE = [
   String.raw`\b(?:not|partially|incompletely)\s+configured\b`, String.raw`\bno\s+(?:[A-Za-z]+\s+){0,2}?(?:credentials?|api[\s_-]?keys?|tokens?)\s+(?:configured|found|supplied|provided|set)\b`,
   String.raw`\b(?:pass|provide|specify)\s+--[a-z][a-z0-9-]{1,40}\b`, String.raw`\b(?:run|initiali[sz]e|configure)\s+[^\n]{1,40}?\s+first\b`,
 ];
+/**
+ * Case-sensitive configuration requests (R-LP-69): a read of an unset environment variable (`os.environ['GITHUB_TOKEN']`
+ * raises `KeyError: 'GITHUB_TOKEN'`), and pydantic settings that failed validation for a required field.
+ */
+const CONFIG_CASE = [
+  String.raw`(?:^|\n)KeyError: '[A-Z][A-Z0-9_]{2,80}'`,
+  String.raw`\bvalidation errors? for \w{0,60}(?:Settings|Config|Env)\w{0,20}\b`, String.raw`(?:^|\n)\s{0,8}Field required\b`,
+];
 export const CONFIG_TEXT = new RegExp([...CONFIG_BASE, ...CONFIG_MORE].join('|'), 'i');
+const CONFIG_CASE_RE = new RegExp(CONFIG_CASE.join('|'));
 const CONFIG_BASE_RE = new RegExp(CONFIG_BASE.join('|'), 'i');
 const CONFIG_MORE_RE = new RegExp(CONFIG_MORE.join('|'), 'i');
 
@@ -1105,6 +1116,9 @@ export const ENV_TEXT = new RegExp([
   String.raw`Cannot find module '/tmp/`, String.raw`can't open file '/tmp/`,
   // A library that needs an executable or a native build our images lack (GitPython without git, a missing .node file).
   String.raw`Bad git executable`, String.raw`Could not locate the bindings file`,
+  // A file or folder at an absolute path the image or our mounts do not have, a full disk, our own stop (R-LP-69).
+  String.raw`FileNotFoundError: \[Errno 2\] No such file or directory: '/`, String.raw`\bENOENT: no such file or directory, (?:open|stat|scandir|lstat|access|mkdir) '/`,
+  String.raw`\[Errno 28\]`, String.raw`No space left on device`, String.raw`\bENOSPC\b`, String.raw`(?:^|\n)KeyboardInterrupt\b`,
 // Case-insensitive: Go and glibc print these in lower case (`open /data/x.db: read-only file system`).
 ].join('|'), 'i');
 /** An executable the server tried to run that is not in our image: [whole match, name]. */
@@ -1163,7 +1177,50 @@ export function failedImport(err) {
  * Whether a failed import is the server's own code (its own module), a dependency that changed under it, an extra we
  * did not install, or not ours to tell. own | drift | extra | env.
  */
-export function importCause(imp, { pydeps = null, pkg = null } = {}) {
+/** Top-level names Python ships (3.11's list, which still holds those 3.12 and 3.13 removed) and the venv's own tools. */
+const PY_STDLIB = new Set([
+  'abc aifc antigravity argparse array ast asynchat asyncio asyncore atexit audioop base64 bdb binascii bisect',
+  'builtins bz2 cProfile calendar cgi cgitb chunk cmath cmd code codecs codeop collections colorsys compileall',
+  'concurrent configparser contextlib contextvars copy copyreg crypt csv ctypes curses dataclasses datetime dbm',
+  'decimal difflib dis distutils doctest email encodings ensurepip enum errno faulthandler fcntl filecmp',
+  'fileinput fnmatch fractions ftplib functools gc genericpath getopt getpass gettext glob graphlib grp gzip',
+  'hashlib heapq hmac html http idlelib imaplib imghdr imp importlib inspect io ipaddress itertools json keyword',
+  'lib2to3 linecache locale logging lzma mailbox mailcap marshal math mimetypes mmap modulefinder msilib msvcrt',
+  'multiprocessing netrc nis nntplib nt ntpath nturl2path numbers opcode operator optparse os ossaudiodev pathlib',
+  'pdb pickle pickletools pipes pkgutil platform plistlib poplib posix posixpath pprint profile pstats pty pwd',
+  'py_compile pyclbr pydoc pydoc_data pyexpat queue quopri random re readline reprlib resource rlcompleter runpy',
+  'sched secrets select selectors shelve shlex shutil signal site smtpd smtplib sndhdr socket socketserver spwd',
+  'sqlite3 sre_compile sre_constants sre_parse ssl stat statistics string stringprep struct subprocess sunau',
+  'symtable sys sysconfig syslog tabnanny tarfile telnetlib tempfile termios textwrap this threading time timeit',
+  'tkinter token tokenize tomllib trace traceback tracemalloc tty turtle turtledemo types typing unicodedata',
+  'unittest urllib uu uuid venv warnings wave weakref webbrowser winreg winsound wsgiref xdrlib xml xmlrpc zipapp',
+  'zipfile zipimport zlib zoneinfo',
+].join(' ').split(' ').concat(['setuptools', 'pkg_resources', 'pip', 'wheel', '_distutils_hack']));
+
+/** The last frame of a Python traceback: { path, top } where top is the site-packages folder it is in (PEP 503), else null. */
+export function lastFrame(err) {
+  let last = null;
+  for (const m of String(err).matchAll(/(?:^|\n)\s{0,8}File "([^"\n]{1,400})", line \d+/g)) last = m[1];
+  if (!last) return null;
+  const sp = /\/site-packages\/([A-Za-z_][A-Za-z0-9_]*)(?:\.py|\/)/.exec(last);
+  return { path: last, top: sp ? normDist(sp[1]) : null, script: /\/(?:venv\/)?bin\/[^/]+$/.test(last) };
+}
+
+/** The release's own top-level modules, or (without its wheel) the one named like the package; null when neither is known. */
+function ownTopsOf(pydeps, pkg) {
+  if (isObj(pydeps) && Array.isArray(pydeps.top) && pydeps.top.length) return pydeps.top.map(normDist);
+  return pkg ? [normDist(pkg)] : null;
+}
+
+/** Whether a Python crash's last frame is inside an installed dependency: neither the server's own module nor its script. */
+export function frameInDependency(err, { pydeps = null, pkg = null } = {}) {
+  if (!/(?:^|\n)Traceback \(most recent call last\):|(?:^|\n)\s{0,8}File "[^"\n]{1,400}", line \d+\n[\s\S]{0,2000}?(?:^|\n)SyntaxError: /.test(err)) return false;
+  const f = lastFrame(err);
+  const own = ownTopsOf(pydeps, pkg);
+  return !!(f && f.top && own && !own.includes(f.top) && !PY_STDLIB.has(f.top));
+}
+
+export function importCause(imp, { pydeps = null, pkg = null, err = '' } = {}) {
   if (!imp) return null;
   if (imp.runtime === 'node') {
     const name = imp.module.startsWith('@') ? imp.module.split('/').slice(0, 2).join('/') : imp.module.split('/')[0];
@@ -1176,10 +1233,21 @@ export function importCause(imp, { pydeps = null, pkg = null } = {}) {
   const pkgName = pkg ? normDist(pkg) : null;
   // With the wheel read, only its own top-level modules are the server's; without it, only one named like the package.
   const own = ownTops && ownTops.length ? ownTops.includes(top) : !!pkgName && pkgName === top;
-  if (own) return 'own';
+  // A submodule of its own package that its wheel lacks (stratevo.cli.commands): its packaging (R-LP-68).
+  if (own) return imp.kind === 'api' && imp.module.includes('.') && ownTops && ownTops.length ? 'own_missing' : 'own';
   const dist = IMPORT_DIST[top] || top;
   const has = (k) => isObj(pydeps) && Array.isArray(pydeps[k]) && (pydeps[k].includes(dist) || pydeps[k].includes(top));
-  if (imp.kind === 'missing') return has('extra_only') ? 'extra' : 'env';
+  if (imp.kind === 'missing') {
+    if (has('extra_only')) return 'extra';
+    // Not installed and never declared, imported by the server's own code, not Python's own or the venv's: the release
+    // forgot to declare it (or to ship it, `utils`). Declared in base but missing is a failed install: ours. With no
+    // facts, or imported from inside a dependency, not ours to tell.
+    const f = lastFrame(err);
+    const fromOwn = !!f && (f.script || (!!f.top && !!ownTops && ownTops.includes(f.top)));
+    const declared = has('base');
+    if (ownTops && ownTops.length && isObj(pydeps) && Array.isArray(pydeps.base) && !declared && !PY_STDLIB.has(top.replace(/-/g, '_')) && fromOwn) return 'undeclared';
+    return 'env';
+  }
   // The dependency is there but lacks what the server imports: it changed under the release. Called drift only when
   // the release declares it with no upper bound; anything else is not ours to tell (env, still not the server's fault).
   return has('uncapped') ? 'drift' : 'env';
@@ -1298,17 +1366,24 @@ export function failureDetail(rec, bare, envp, { deadlineHit = false, records = 
   if (on('env') && (ENV_TEXT.test(err) || bin)) return 'start_env_limited';
   // An import that failed: an extra we did not install, a dependency that changed under the release, or one we cannot
   // tell; only the server's own module can be its crash (R-LP-61, R-LP-62).
-  const imp = importCause(failedImport(err), { pydeps, pkg: isObj(launch) ? launch.package : null });
+  const imp = importCause(failedImport(err), { pydeps, pkg: isObj(launch) ? launch.package : null, err });
   if (on('extra') && (EXTRA_HINT.test(err) || imp === 'extra')) return 'start_needs_extra';
   if (on('drift') && imp === 'drift') return 'start_dependency_drift';
   if (on('import') && imp === 'env') return 'start_env_limited';
+  // The server's own packaging (R-LP-68): its wheel lacks a module of its own package, or its own code imports a module
+  // the release neither ships nor declares, and that is not installed. Only with the release's facts in hand.
+  if (imp === 'own_missing' && sound) return 'missing_own_module';
+  if (imp === 'undeclared' && sound) return 'undeclared_dependency';
   // A declared variable makes a quiet own exit needs_credentials; a crash that asks for no configuration is a crash.
   if (needsEnv && !sound) return 'start_env_limited';
-  if (needsEnv && !(CRASH_TEXT.test(err) && !CONFIG_TEXT.test(err) && !ENV_NAME_TEXT.test(err))) return 'needs_credentials';
+  if (needsEnv && !(CRASH_TEXT.test(err) && !CONFIG_TEXT.test(err) && !CONFIG_CASE_RE.test(err) && !ENV_NAME_TEXT.test(err))) return 'needs_credentials';
   // The probe's own duration, not the record's total (which holds the install and the analysis too, R-LP-40).
   const ms = probeMs(rec, p, p === envp ? 'env' : 'bare');
   // The server's own exit and its stderr: it said it needs configuration we did not give it (R-LP-44), which is no defect.
-  if (own && (CONFIG_BASE_RE.test(err) || (on('config') && CONFIG_MORE_RE.test(err)) || ENV_NAME_TEXT.test(err))) return 'start_needs_config';
+  if (own && (CONFIG_BASE_RE.test(err) || (on('config') && (CONFIG_MORE_RE.test(err) || CONFIG_CASE_RE.test(err))) || ENV_NAME_TEXT.test(err))) return 'start_needs_config';
+  // A Python crash whose last frame is inside a dependency (a SyntaxError or `X | Y` TypeError of a Python version it
+  // does not support, a bug of its own) is not the server's code failing (R-LP-69).
+  if (on('frame') && frameInDependency(err, { pydeps, pkg: isObj(launch) ? launch.package : null })) return 'start_env_limited';
   // A crash signature is the evidence; an early exit with no telling stderr is not (R-LP-45).
   return sound && ms !== null && ms < START_QUICK_MS && CRASH_TEXT.test(err) ? 'start_failed' : 'start_env_limited';
 }

@@ -51,6 +51,17 @@ const SQLITE = tb('    conn = sqlite3.connect(self.db_path)', 'sqlite3.Operation
 // mcp-registry-mcp (npm): registers the same tool twice. A real crash: stays the server's.
 const DUP_TOOL = 'file:///work/pkg/node_modules/@modelcontextprotocol/sdk/dist/esm/server/mcp.js:713\n            throw new Error(`Tool ${name} is already registered`);\n                  ^\n\nError: Tool health_check is already registered\n    at McpServer._createRegisteredTool (file:///work/pkg/node_modules/@modelcontextprotocol/sdk/dist/esm/server/mcp.js:713:19)\n\nNode.js v24.22.3';
 
+// Shapes the second review of #49 raised (real-shaped; the server code is a stand-in).
+const GH_ISSUES = { top: ['gh-issues-mcp'], base: ['mcp', 'httpx'], uncapped: ['mcp', 'httpx'], extra_only: [], extras: [] };
+const ACME = { top: ['acme-crm-mcp'], base: ['mcp', 'pydantic-settings', 'legacy-tz'], uncapped: ['mcp', 'pydantic-settings', 'legacy-tz'], extra_only: [], extras: [] };
+const SP = '/work/venv/lib/python3.13/site-packages';
+const ENV_KEYERROR = tb(`  File "${SP}/gh_issues_mcp/server.py", line 12, in <module>`, "    TOKEN = os.environ['GITHUB_TOKEN']", `  File "<frozen os>", line 716, in __getitem__`, "KeyError: 'GITHUB_TOKEN'");
+const PYDANTIC = tb(`  File "${SP}/acme_crm_mcp/config.py", line 30, in load`, '    return Settings()', `  File "${SP}/pydantic_settings/main.py", line 188, in __init__`, 'pydantic_core._pydantic_core.ValidationError: 1 validation error for Settings\napi_key\n  Field required [type=missing, input_value={}, input_type=dict]');
+const DEP_SYNTAX = tb(`  File "${SP}/acme_crm_mcp/server.py", line 3, in <module>`, '    import legacy_tz', `  File "${SP}/legacy_tz/__init__.py", line 41`, '    print "tz"', '    ^^^^^^^^^^', 'SyntaxError: Missing parentheses in call to \'print\'. Did you mean print(...)?');
+const DEP_UNION = tb(`  File "${SP}/acme_crm_mcp/server.py", line 3, in <module>`, '    import legacy_tz', `  File "${SP}/legacy_tz/types.py", line 7, in <module>`, '    Zone = str | None', "TypeError: unsupported operand type(s) for |: 'type' and 'NoneType'");
+const ABS_FILE = tb(`  File "${SP}/acme_crm_mcp/index.py", line 9, in load`, "    with open('/data/index.json') as f:", "FileNotFoundError: [Errno 2] No such file or directory: '/data/index.json'");
+const NO_SPACE = tb(`  File "${SP}/acme_crm_mcp/cache.py", line 20, in warm`, '    f.write(blob)', 'OSError: [Errno 28] No space left on device');
+
 // The cases the rules must never blame, with the detail each gets. Every one was start_failed (subject) before.
 const NOT_THE_SERVER = [
   ['FASTMCP_2X', FASTMCP_2X, py('blockchain-ai-mcp', '1.0.12', 'blockchain_ai_mcp', BLOCKCHAIN), 'start_dependency_drift', 'drift'],
@@ -76,16 +87,16 @@ test('R-LP-59: of the 26 Nov PyPI start_failed results, only the crash in the se
     assert.equal(LP.DETAILS[d][3], 'tool', name + ': fault tool, never subject');
   }
   // stratevo: its own wheel lacks the subpackage its entry imports. Still the server's.
-  assert.equal(detail(STRATEVO, py('stratevo', '6.0.3', 'stratevo', STRATEVO_DEPS)), 'start_failed');
+  assert.equal(detail(STRATEVO, py('stratevo', '6.0.3', 'stratevo', STRATEVO_DEPS)), 'missing_own_module', 'its packaging, named (R-LP-68)');
   assert.equal(detail(STRATEVO, py('stratevo', '6.0.3', 'stratevo')), 'start_failed', 'without the wheel facts, a module named like the package is its own');
   assert.equal(detail(DUP_TOOL, { launch: { kind: 'npm', package: 'mcp-registry-mcp' }, argsUnfilled: 0 }), 'start_failed', 'a real crash in its own code');
   // A declared variable does not turn a crash of its own into needs_credentials, nor a quiet exit into a crash.
   const declared = rec({ env: { names: { registry: ['STRATEVO_KEY'] }, secret_named: ['STRATEVO_KEY'] } });
-  assert.equal(detail(STRATEVO, py('stratevo', '6.0.3', 'stratevo', STRATEVO_DEPS), declared), 'start_failed');
+  assert.equal(detail(STRATEVO, py('stratevo', '6.0.3', 'stratevo', STRATEVO_DEPS), declared), 'missing_own_module');
   assert.equal(detail('', py('stratevo', '6.0.3', 'stratevo', STRATEVO_DEPS), declared), 'needs_credentials');
   assert.equal(detail(tb('    raise RuntimeError(msg)', 'RuntimeError: STRATEVO_KEY is not set'), py('stratevo', '6.0.3', 'stratevo', STRATEVO_DEPS), declared), 'needs_credentials');
   // The other guards still hold for a crash of its own.
-  assert.equal(LP.failureDetail(rec(), exit1(STRATEVO, LP.START_QUICK_MS), null, py('stratevo', '6.0.3', 'stratevo', STRATEVO_DEPS)), 'start_env_limited', 'a late exit');
+  assert.equal(LP.failureDetail(rec(), exit1(STRATEVO, LP.START_QUICK_MS), null, py('stratevo', '6.0.3', 'stratevo')), 'start_env_limited', 'a late exit');
 });
 
 test('R-LP-60: a read-only root, a refused write, a missing shared library or executable, or our /tmp workdir is start_env_limited (tool)', () => {
@@ -192,7 +203,13 @@ test('R-LP-64: a server that went to the network is start_needs_network whether 
 test('R-LP-65: mutation check: with a start rule switched off its fixture gets another detail, and with all of them off every fixture is blamed on the server again', () => {
   const cases = [...NOT_THE_SERVER,
     ['NETWORK', tb('httpx.ConnectError: [Errno -3] Temporary failure in name resolution'), py('x-mcp', '1', 'x-mcp'), 'start_needs_network', 'network'],
-    ['FASTMCP_NO_FACTS', FASTMCP_2X, py('blockchain-ai-mcp', '1.0.12', 'blockchain_ai_mcp'), 'start_env_limited', 'import']];
+    ['FASTMCP_NO_FACTS', FASTMCP_2X, py('blockchain-ai-mcp', '1.0.12', 'blockchain_ai_mcp'), 'start_env_limited', 'import'],
+    ['ENV_KEYERROR', ENV_KEYERROR, py('gh-issues-mcp', '0.4.0', 'gh-issues-mcp', GH_ISSUES), 'start_needs_config', 'config'],
+    ['PYDANTIC', PYDANTIC, py('acme-crm-mcp', '1.2.0', 'acme-crm-mcp', ACME), 'start_needs_config', 'config'],
+    ['DEP_SYNTAX', DEP_SYNTAX, py('acme-crm-mcp', '1.2.0', 'acme-crm-mcp', ACME), 'start_env_limited', 'frame'],
+    ['DEP_UNION', DEP_UNION, py('acme-crm-mcp', '1.2.0', 'acme-crm-mcp', ACME), 'start_env_limited', 'frame'],
+    ['ABS_FILE', ABS_FILE, py('acme-crm-mcp', '1.2.0', 'acme-crm-mcp', ACME), 'start_env_limited', 'env'],
+    ['NO_SPACE', NO_SPACE, py('acme-crm-mcp', '1.2.0', 'acme-crm-mcp', ACME), 'start_env_limited', 'env']];
   const rules = new Set();
   try {
     for (const [name, stderr, ctx, want, rule] of cases) {
@@ -205,5 +222,52 @@ test('R-LP-65: mutation check: with a start rule switched off its fixture gets a
       assert.equal(detail(stderr, ctx), 'start_failed', name + ': without the start rules the server is blamed, which is what they prevent');
     }
   } finally { LP.setStartMutation(null); }
-  assert.deepEqual([...rules].sort(), ['config', 'drift', 'env', 'extra', 'import', 'network', 'platform']);
+  assert.deepEqual([...rules].sort(), ['config', 'drift', 'env', 'extra', 'frame', 'import', 'network', 'platform']);
+});
+
+test('R-LP-68: the server\'s own packaging defects stay the server\'s: a module of its own package its wheel lacks, a module its own code imports that it neither ships nor declares', () => {
+  assert.deepEqual(LP.DETAILS.missing_own_module, ['timeout_start', false, 'start', 'subject']);
+  assert.deepEqual(LP.DETAILS.undeclared_dependency, ['timeout_start', false, 'start', 'subject']);
+  const own = { top: ['acme-crm-mcp'], base: ['mcp'], uncapped: ['mcp'], extra_only: [], extras: [] };
+  const ctx = py('acme-crm-mcp', '1.2.0', 'acme-crm-mcp', own);
+  // Its own code imports httpx, which requires_dist never names and which is not installed.
+  const httpx = tb(`  File "${SP}/acme_crm_mcp/server.py", line 4, in <module>`, '    import httpx', "ModuleNotFoundError: No module named 'httpx'");
+  assert.equal(detail(httpx, ctx), 'undeclared_dependency');
+  // A sibling module the wheel left out (`from utils import x`, utils not shipped, not declared).
+  const utils = tb(`  File "${SP}/acme_crm_mcp/server.py", line 2, in <module>`, '    from utils import helpers', "ModuleNotFoundError: No module named 'utils'");
+  assert.equal(detail(utils, ctx), 'undeclared_dependency');
+  // From its console script too.
+  assert.equal(detail(tb('  File "/work/venv/bin/acme-crm-mcp", line 5, in <module>', '    import httpx', "ModuleNotFoundError: No module named 'httpx'"), ctx), 'undeclared_dependency');
+  // A submodule of its own package the wheel lacks.
+  assert.equal(detail(tb(`  File "${SP}/acme_crm_mcp/server.py", line 2, in <module>`, "ModuleNotFoundError: No module named 'acme_crm_mcp.tools'"), ctx), 'missing_own_module');
+  // Not the server's: declared in base (a failed install), only an extra's, Python's own or the venv's, imported from
+  // inside a dependency, or no facts read.
+  assert.equal(detail(httpx, py('acme-crm-mcp', '1.2.0', 'acme-crm-mcp', { ...own, base: ['mcp', 'httpx'] })), 'start_env_limited');
+  assert.equal(detail(httpx, py('acme-crm-mcp', '1.2.0', 'acme-crm-mcp', { ...own, extra_only: ['httpx'], extras: ['http'] })), 'start_needs_extra');
+  for (const m of ['distutils', 'imp', 'tkinter', 'pkg_resources', 'setuptools']) assert.equal(detail(tb(`  File "${SP}/acme_crm_mcp/server.py", line 2, in <module>`, `ModuleNotFoundError: No module named '${m}'`), ctx), 'start_env_limited', m);
+  assert.equal(detail(tb(`  File "${SP}/mcp/server/lowlevel.py", line 2, in <module>`, "ModuleNotFoundError: No module named 'anyio'"), ctx), 'start_env_limited', 'a dependency\'s own import');
+  assert.equal(detail(httpx, py('acme-crm-mcp', '1.2.0', 'acme-crm-mcp')), 'start_env_limited', 'no facts');
+  // A stdlib AttributeError (our Python version) stays ours.
+  assert.equal(detail(tb(`  File "${SP}/acme_crm_mcp/server.py", line 2, in <module>`, "AttributeError: module 'asyncio' has no attribute 'coroutine'"), ctx), 'start_env_limited');
+  // A late exit is still no evidence.
+  assert.equal(LP.failureDetail(rec(), exit1(httpx, LP.START_QUICK_MS), null, ctx), 'undeclared_dependency', 'packaging is evidence whatever the timing');
+});
+
+test('R-LP-69: an unset variable read, pydantic settings, a missing absolute path, a full disk, our stop, or a crash inside a dependency is never the server\'s', () => {
+  const ctx = py('acme-crm-mcp', '1.2.0', 'acme-crm-mcp', ACME);
+  assert.equal(detail(ENV_KEYERROR, py('gh-issues-mcp', '0.4.0', 'gh-issues-mcp', GH_ISSUES)), 'start_needs_config');
+  assert.equal(detail(PYDANTIC, ctx), 'start_needs_config');
+  for (const s of [ABS_FILE, NO_SPACE, "Error: ENOENT: no such file or directory, open '/config/settings.json'\n    at Object.openSync (node:fs:573:18)", 'Error: ENOSPC: no space left on device, write', tb(`  File "${SP}/acme_crm_mcp/server.py", line 40, in run`, '    time.sleep(1)', 'KeyboardInterrupt')]) {
+    assert.equal(detail(s, ctx), 'start_env_limited', s.slice(-60));
+  }
+  assert.equal(detail(DEP_SYNTAX, ctx), 'start_env_limited');
+  assert.equal(detail(DEP_UNION, ctx), 'start_env_limited');
+  // A crash whose last frame is the server's own code is still its own; so is one in Python's own library it called.
+  const ownCrash = tb(`  File "${SP}/acme_crm_mcp/server.py", line 7, in <module>`, '    TOOLS["x"]', "KeyError: 'x'");
+  assert.equal(detail(ownCrash, ctx), 'start_failed');
+  assert.equal(detail(tb(`  File "${SP}/acme_crm_mcp/server.py", line 7, in <module>`, '  File "/usr/local/lib/python3.13/json/decoder.py", line 355, in raw_decode', 'json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)'), ctx), 'start_failed');
+  // Lower-case or dict-style keys are no variable.
+  assert.doesNotMatch("KeyError: 'name'", /KeyError: '[A-Z]/);
+  assert.deepEqual(LP.lastFrame('no frames here'), null);
+  assert.equal(LP.frameInDependency(DEP_UNION, { pydeps: null, pkg: null }), false, 'no own modules known: not ours to say');
 });
