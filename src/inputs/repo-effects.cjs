@@ -895,10 +895,12 @@ const idsOf = (code) => new Set((code.match(/(?<![.\w$])[A-Za-z_$][\w$]*/g) || [
       // ---- python fs
       const impHead = imp ? imp.spec : null;
       if (head === 'open' && chain.length === 1) {
-        fam('fs'); const args = argTexts(P, call); const modeArg = args[1] ? origSlice(P, args[1][0], args[1][1]) : (args.find(([a, b]) => /^mode\s*=/.test(P.code.slice(a, b))) ? origSlice(P, ...args.find(([a, b]) => /^mode\s*=/.test(P.code.slice(a, b)))).replace(/^mode\s*=\s*/, '') : '');
+        fam('fs'); const args = argTexts(P, call); const modeArg = args[1] && !/^\s*[A-Za-z_]\w*\s*=(?!=)/.test(P.code.slice(args[1][0], args[1][1])) ? origSlice(P, args[1][0], args[1][1]) : (args.find(([a, b]) => /^mode\s*=/.test(P.code.slice(a, b))) ? origSlice(P, ...args.find(([a, b]) => /^mode\s*=/.test(P.code.slice(a, b)))).replace(/^mode\s*=\s*/, '') : '');
         const pathText = pathText0(P, region, args[0]);
         const lit = /^\s*[rbu]*(['"])([^'"]*)\1\s*$/.exec(modeArg);
         if (!modeArg) { emit('read', 'definite', 'fs.open'); return out; }
+        // `with open(p, 'a'): pass`: a probe that the file can be opened for writing, which writes nothing
+        if (lit && /^[bt]*a[bt]*$/.test(lit[2])) { const rest = P.code.slice(call.close + 1, call.close + 400); const w = /^\s*(?:as\s+([A-Za-z_]\w*)\s*)?:\s*(?:#[^\n]*)?\n?([\s\S]*)$/.exec(rest); if (w) { const body = w[2].split('\n').filter((l) => l.trim()).slice(0, 12); const first = body[0] || ''; const ind = P.indentOf(first); const block = body.filter((l, i) => i === 0 || P.indentOf(l) >= ind && P.indentOf(l) > 0).slice(0, 12); const blockTxt = block.join('\n'); const writes = w[1] ? new RegExp('\\b' + w[1] + '\\s*\\.\\s*(write|writelines|truncate)\\b|file\\s*=\\s*' + w[1] + '\\b').test(blockTxt) : false; if (/^\s*pass\b/.test(first) && block.length <= 1 || (w[1] && !writes) || (!w[1] && /^\s*pass\b/.test(first))) { emit('write', 'may', 'fs.open', 'opens for append and writes nothing (a writability check)'); return out; } } }
         if (lit) { if (/[wax+]/.test(lit[2])) { const why = softFs(P, region, 'open', args[0], pathText, /^[rb]*a[b]*$/.test(lit[2])); emit('write', why ? 'may' : 'definite', 'fs.open', why || 'mode ' + lit[2]); } else emit('read', 'definite', 'fs.open'); return out; }
         emit('write', 'may', 'fs.open', 'mode is not a literal'); return out;
       }

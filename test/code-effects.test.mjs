@@ -517,3 +517,18 @@ test('R-AE-33: a client returned by a factory, held in an attribute or annotated
   const lt = snippet(local, 't');
   assert.deepEqual(lt.effects.delete.filter((e) => /^client\./.test(e.sink)), [], 'a repository class is followed, not guessed');
 });
+
+test('R-AE-34: opening a file for append and writing nothing through it is a writability check, not a definite write; a keyword argument is not the mode', () => {
+  // Found by the QA-40 re-run of this patch: word-gongrzhe check_file_writeable() does `with open(filepath, 'a'): pass`.
+  const w = (body) => snippet(PY(body), 't').effects.write.map((e) => [e.confidence, e.note]);
+  assert.deepEqual(w("try:\n    with open(p, 'a'):\n        pass\n    return True\nexcept IOError:\n    return False"), [['may', 'opens for append and writes nothing (a writability check)']]);
+  assert.deepEqual(w("with open(p, 'a') as f:\n    n = 1\nreturn n"), [['may', 'opens for append and writes nothing (a writability check)']]);
+  // positive controls: a write through the handle, print(file=f), truncation by 'w', and a handle kept open
+  assert.deepEqual(w("with open(p, 'a') as f:\n    f.write('x')"), [['definite', 'mode a']]);
+  assert.deepEqual(w("with open(p, 'a') as f:\n    print('x', file=f)"), [['definite', 'mode a']]);
+  assert.deepEqual(w("with open(p, 'w'):\n    pass"), [['definite', 'mode w']]);
+  assert.deepEqual(w("f = open(p, 'a')\nf.write('x')"), [['definite', 'mode a']]);
+  // a keyword argument in second place is not the mode (jupyter-datalayer cell_ids.py: open(path, encoding="utf-8"))
+  assert.deepEqual(w('with open(p, encoding="utf-8") as h:\n    return h.read()'), []);
+  assert.deepEqual(w('with open(p, encoding="utf-8", mode="w") as h:\n    h.write("x")'), [['definite', 'mode w']]);
+});
