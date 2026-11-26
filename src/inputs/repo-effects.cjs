@@ -840,9 +840,7 @@ const idsOf = (code) => new Set((code.match(/(?<![.\w$])[A-Za-z_$][\w$]*/g) || [
       if (head === 'Bun' && last === 'write' && chain.length === 2) { fam('fs'); emit('write', 'definite', 'fs.Bun.write'); return out; }
       // ---- exec
       if ((imp && CP_MODS.test(impMod) && ((chain.length === 1 && (imp.name === '*' || imp.name === 'default' ? CP_FNS.has(head) : CP_FNS.has(imp.name))) || (chain.length === 2 && (imp.name === '*' || imp.name === 'default') && CP_FNS.has(last)))) || (head === 'Bun' && last === 'spawn') || (head === 'Deno' && last === 'Command')) {
-        fam('exec'); const w = cmdWords(P, call);
-        if (w.words && roCommand(w.words)) emit('read', 'definite', 'exec.readonly', w.words.slice(0, 3).join(' '));
-        else emit('exec', 'definite', 'exec.' + (chain.length === 1 ? (imp && imp.name !== '*' && imp.name !== 'default' ? imp.name : head) : last), w.words ? w.words.slice(0, 3).join(' ') : 'command is not a literal');
+        fam('exec'); execEffect(P, call, region, 'exec.' + (chain.length === 1 ? (imp && imp.name !== '*' && imp.name !== 'default' ? imp.name : head) : last), emit);
         return out;
       }
       // ---- http
@@ -874,7 +872,7 @@ const idsOf = (code) => new Set((code.match(/(?<![.\w$])[A-Za-z_$][\w$]*/g) || [
       if ((head === 'os' || (imp && /^os$/.test(impHead))) && chain.length === 2) {
         fam('fs'); if (/^(remove|unlink|rmdir|removedirs)$/.test(last)) { emit('delete', 'definite', 'fs.os.' + last); return out; }
         if (/^(rename|replace|mkdir|makedirs|truncate|symlink|link|chmod|chown|utime|renames)$/.test(last)) { const why = softFs(P, region, last, argTexts(P, call)[0], pathText0(P, region, argTexts(P, call)[0]), false); emit('write', why ? 'may' : 'definite', 'fs.os.' + last, why || ''); return out; }
-        if (/^(system|popen|execv|execve|execvp|execl|execlp|spawnl|spawnv|spawnlp|spawnvp|startfile)$/.test(last)) { fam('exec'); const w = cmdWords(P, call); if (w.words && roCommand(w.words)) emit('read', 'definite', 'exec.readonly', w.words.slice(0, 3).join(' ')); else emit('exec', 'definite', 'exec.os.' + last, w.words ? w.words.slice(0, 3).join(' ') : 'command is not a literal'); return out; }
+        if (/^(system|popen|execv|execve|execvp|execl|execlp|spawnl|spawnv|spawnlp|spawnvp|startfile)$/.test(last)) { fam('exec'); execEffect(P, call, region, 'exec.os.' + last, emit); return out; }
         if (/^(listdir|scandir|stat|walk|getcwd|getenv|readlink|access)$/.test(last)) { emit('read', 'definite', 'fs.os.' + last); return out; }
       }
       if ((head === 'shutil' || (imp && /^shutil$/.test(impHead))) && chain.length === 2) {
@@ -894,9 +892,9 @@ const idsOf = (code) => new Set((code.match(/(?<![.\w$])[A-Za-z_$][\w$]*/g) || [
       // ---- python exec
       if ((head === 'subprocess' || (imp && /^subprocess$/.test(impHead))) && (chain.length === 2 || (imp && imp.name !== '*' && chain.length === 1))) {
         const fn = chain.length === 2 ? last : imp.name;
-        if (/^(run|call|check_call|check_output|Popen|getoutput|getstatusoutput)$/.test(fn)) { fam('exec'); const w = cmdWords(P, call); if (w.words && roCommand(w.words)) emit('read', 'definite', 'exec.readonly', w.words.slice(0, 3).join(' ')); else emit('exec', 'definite', 'exec.subprocess.' + fn, w.words ? w.words.slice(0, 3).join(' ') : 'command is not a literal'); return out; }
+        if (/^(run|call|check_call|check_output|Popen|getoutput|getstatusoutput)$/.test(fn)) { fam('exec'); execEffect(P, call, region, 'exec.subprocess.' + fn, emit); return out; }
       }
-      if (head === 'asyncio' && /^create_subprocess_(exec|shell)$/.test(last)) { fam('exec'); emit('exec', 'definite', 'exec.asyncio.' + last); return out; }
+      if (head === 'asyncio' && /^create_subprocess_(exec|shell)$/.test(last)) { fam('exec'); execEffect(P, call, region, 'exec.asyncio.' + last, emit); return out; }
       if (chain.length === 1 && (head === 'exec' || head === 'eval') && !state.localDef(P, head)) { fam('exec'); emit('exec', 'may', 'exec.' + head, 'dynamic code'); return out; }
       // ---- python http
       const httpMod = (head === 'requests' || head === 'httpx' || head === 'aiohttp' || head === 'urllib3' || (imp && /^(requests|httpx|aiohttp)$/.test(impHead)));
@@ -1007,18 +1005,76 @@ const idsOf = (code) => new Set((code.match(/(?<![.\w$])[A-Za-z_$][\w$]*/g) || [
     return out;
   }
 
-  function cmdWords(P, call) {
+  // The literal value of an argument expression: a string ({ s }), or an array ({ arr, full }: its literal strings, and
+  // whether every element is one). An identifier is looked up in the literals its caller passed (region.lits, one value
+  // per parameter, forwarded through every level of wrappers) and then in its own assignment in this function, with the
+  // literal strings later pushed onto it. null when the value is not a literal.
+  function litValue(P, region, range) {
+    if (!range) return null;
+    const [a, b] = trimRange(P.code, range[0], range[1]); if (a >= b) return null;
+    const s = P.strs.find((x) => x.s === a);
+    if (s && s.e >= b) return s.tpl && /\$\{/.test(P.text.slice(s.s, s.e)) ? null : { s: s.v };
+    if (P.code[a] === '[' && matchClose(P.code, a) === b - 1) {
+      const parts = splitArgs(P.code, a, b - 1).map(([x, y]) => trimRange(P.code, x, y)).filter(([x, y]) => x < y);
+      const arr = []; let full = true;
+      for (const [x, y] of parts) { const q = P.strs.find((z) => z.s === x); if (q && q.e >= y && !(q.tpl && /\$\{/.test(P.text.slice(q.s, q.e)))) arr.push(q.v); else full = false; }
+      return { arr, full };
+    }
+    const id = P.code.slice(a, b);
+    if (!/^[A-Za-z_$][\w$]*$/.test(id)) return null;
+    if (region && region.lits && region.lits.has(id)) return region.lits.get(id);
+    if (!region) return null;
+    const fa = region.f && region.f.body ? region.f.body[0] : region.a; const fb = region.f && region.f.body ? region.f.body[1] : region.b;
+    const seg = P.code.slice(fa, fb); const esc = id.replace(/\$/g, '\\$');
+    const m = new RegExp('(?<![\\w$.])' + esc + '\\s*(?::[^=\\n]+)?=(?![=>])\\s*').exec(seg);
+    if (!m) return P.consts.has(id) ? { s: P.consts.get(id).v } : null;
+    const at = fa + m.index + m[0].length; const end = P.code[at] === '[' ? matchClose(P.code, at) + 1 : exprEnd(P.code, at);
+    if (end <= at) return null;
+    const v = litValue(P, null, [at, end]);
+    if (v && v.arr) {
+      // args.push("--recursive"), args.append("x"), args.extend([...]): later literal elements, in order
+      const re = new RegExp('(?<![\\w$.])' + esc + '\\s*\\.\\s*(push|append|extend|unshift|insert)\\s*\\(', 'g'); let mm; const arr = v.arr.slice(); let full = v.full;
+      while ((mm = re.exec(seg))) {
+        const o = fa + mm.index + mm[0].length - 1; const c = matchClose(P.code, o); if (c < o) { full = false; continue; }
+        if (mm[1] === 'unshift' || mm[1] === 'insert') { full = false; continue; }
+        for (const [x, y] of splitArgs(P.code, o, c)) { const w = litValue(P, null, [x, y]); if (w && w.s !== undefined) arr.push(w.s); else if (w && w.arr) { arr.push(...w.arr); full = full && w.full; } else full = false; }
+      }
+      return { arr, full };
+    }
+    return v;
+  }
+  // The words of a command line: the program and the arguments that are literals at the call or in what its callers
+  // passed. full: every word is known.
+  function cmdWords(P, call, region) {
     const args = argTexts(P, call); if (!args.length) return { words: null };
-    const [a, b] = args[0]; const s = P.strs.find((x) => x.s === nextSig(P.code, a));
-    // list form: ["git", "status"]  /  spawn("git", ["status"])
-    const lit = (x, y) => P.strs.filter((q) => q.s >= x && q.s < y).map((q) => q.v);
-    if (P.code[nextSig(P.code, a)] === '[') { const w = lit(a, b); return { words: w.length ? w : null }; }
-    if (s && s.s === nextSig(P.code, a) && trimRange(P.code, s.e, b)[0] >= b) {
-      let words = s.v.trim().split(/\s+/);
-      if (args[1] && P.code[nextSig(P.code, args[1][0])] === '[') words = words.concat(lit(args[1][0], args[1][1]));
-      return { words, whole: s.v };
+    const v0 = litValue(P, region, args[0]);
+    // list form: ["git", "status"]
+    if (v0 && v0.arr) return { words: v0.arr.length ? v0.arr : null, full: v0.full };
+    if (v0 && v0.s !== undefined) {
+      let words = v0.s.trim().split(/\s+/).filter(Boolean); let full = true;
+      // spawn("git", ["status"]), create_subprocess_exec("git", "status", ...)
+      const v1 = args[1] ? litValue(P, region, args[1]) : null;
+      if (v1 && v1.arr) { words = words.concat(v1.arr); full = v1.full; }
+      else if (v1 && v1.s !== undefined) { for (let i = 1; i < args.length; i++) { const w = litValue(P, region, args[i]); if (w && w.s !== undefined) words.push(w.s); else { if (!/^\s*(?:\{|[A-Za-z_]\w*\s*=)/.test(P.code.slice(args[i][0], args[i][1]))) full = false; break; } } }
+      else if (args[1] && !/^\s*(?:\{|[A-Za-z_]\w*\s*=)/.test(P.code.slice(args[1][0], args[1][1]))) full = false;
+      return { words: words.length ? words : null, whole: v0.s, full };
     }
     return { words: null };
+  }
+  // A process call. A known read-only command is a read. Otherwise it is "definite" only when the program is known (a
+  // literal at the call or passed as one by the callers that reach it) with its sub-command where the program has
+  // read-only sub-commands, or when the command itself comes from the tool's arguments. Anything else is "may".
+  function execEffect(P, call, region, sink, emit) {
+    const w = cmdWords(P, call, region);
+    if (w.words && roCommand(w.words)) { emit('read', 'definite', 'exec.readonly', w.words.slice(0, 3).join(' ')); return; }
+    const args = argTexts(P, call);
+    const taint = region.taint || new Set();
+    const cmdTainted = args.length > 0 && taintedIn(P.code.slice(args[0][0], args[0][1]), taint);
+    const prog = w.words ? w.words[0].split('/').pop() : null;
+    const known = !!prog && (!RO_SUB[prog] || w.words.slice(1).some((x) => !x.startsWith('-')) || w.full === true);
+    const label = w.words ? w.words.slice(0, 3).join(' ') : '';
+    if (!known && !cmdTainted) { emit('exec', 'may', sink, (label ? label + '; ' : '') + (prog ? 'the sub-command is not a literal' : 'command is not a literal')); return; }
+    emit('exec', 'definite', sink, label || 'the command comes from the tool\'s arguments');
   }
   function roCommand(words) {
     if (!words || !words.length) return false;
@@ -1130,7 +1186,7 @@ const idsOf = (code) => new Set((code.match(/(?<![.\w$])[A-Za-z_$][\w$]*/g) || [
     };
     const capMay = how === 'by-name';
     let calls = 0;
-    const walk = (P, a, b, depth, via, f, cond, params, taintIn) => {
+    const walk = (P, a, b, depth, via, f, cond, params, taintIn, litsIn) => {
       const key = P.path + ':' + a + ':' + b; if (visited.has(key)) return; visited.add(key);
       if (state.deadline && Date.now() > state.deadline) { state.timedOut = true; return; }
       params = new Set([...(params || []), ...idsOfParams(P, f)]);
@@ -1144,7 +1200,17 @@ const idsOf = (code) => new Set((code.match(/(?<![.\w$])[A-Za-z_$][\w$]*/g) || [
         return out;
       };
       const taint = propagate(P, f && f.body && f.body[0] <= a && f.body[1] >= b ? f.body[0] : a, f && f.body && f.body[0] <= a && f.body[1] >= b ? f.body[1] : b, taintIn || idsOfParams(P, f));
-      const region = { P, a, b, via, f, params };
+      const region = { P, a, b, via, f, params, taint, lits: litsIn || new Map() };
+      // the literal values this call passes to the callee's parameters (a program name, an argv array)
+      const calleeLits = (call, t) => {
+        const plist = paramList(t.P, t.f); const out = new Map();
+        splitArgs(P.code, call.open, call.close).forEach(([x, y], i) => {
+          const txt = P.code.slice(x, y); const kw = P.lang === 'py' ? /^\s*([A-Za-z_]\w*)\s*=(?!=)\s*/.exec(txt) : null;
+          const v = litValue(P, region, kw ? [x + kw[0].length, y] : [x, y]); if (!v) return;
+          const names = kw ? [kw[1]] : (plist[i] || []); if (names.length === 1) out.set(names[0], v);
+        });
+        return out;
+      };
       const cs = callsIn(P, a, b);
       const strs = strsIn(P, a, b);
       // SQL: strings that are arguments of a call (definite when it is not a log or error), others "may"
@@ -1182,7 +1248,7 @@ const idsOf = (code) => new Set((code.match(/(?<![.\w$])[A-Za-z_$][\w$]*/g) || [
         effs.forEach((e) => { const from = targetFromArgs(P, call, e, taint, state); add(from === false ? Object.assign({}, e, { conf: 'may', note: (e.note ? e.note + '; ' : '') + 'the target does not come from the tool\'s arguments' }) : e, via, capMay, condCall); });
         // follow into the repository
         if (depth < state.depth && !call.chained) {
-          for (const t of targets.slice(0, 3)) { const nm = t.f.name; walk(t.P, t.f.body[0], t.f.body[1], depth + 1, via.concat(nm + '@' + t.P.path + ':' + t.P.line(t.f.start)), t.f, condCall, params, calleeTaint(P, call, t, taint)); }
+          for (const t of targets.slice(0, 3)) { const nm = t.f.name; walk(t.P, t.f.body[0], t.f.body[1], depth + 1, via.concat(nm + '@' + t.P.path + ':' + t.P.line(t.f.start)), t.f, condCall, params, calleeTaint(P, call, t, taint), calleeLits(call, t)); }
           if (!targets.length && call.chain.length >= 1 && P.imports.get(call.chain[0])) {
             const imp = P.imports.get(call.chain[0]);
             if (imp.spec.startsWith('.') || (P.lang === 'py' && imp.spec.startsWith('.'))) {

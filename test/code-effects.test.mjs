@@ -422,3 +422,24 @@ test('R-AE-29: a SQL or ORM write is definite only when an argument reaches the 
   assert.equal(py('db.execute("INSERT INTO visits VALUES (1)")'), 'may');
   assert.equal(py('db.execute("INSERT INTO visits VALUES (?)", (p,))'), 'definite');
 });
+
+test('R-AE-30: a process run through a guard wrapper takes its program and arguments from the callers; a command that is still not a literal and not from the arguments is "may"', () => {
+  // QA-40 repro r1: runSafe(file, args) calls execFileSync(file, args); every caller passes "kubectl" and a literal sub-command.
+  const wrap = "import { execFileSync } from 'child_process';\nfunction runSafe(file: string, args: string[]): string {\n  return execFileSync(file, args, { encoding: 'utf8' });\n}\n";
+  const reg = (body) => ({ 'index.ts': wrap + "server.registerTool('t', { description: 'd', inputSchema: {}, annotations: { readOnlyHint: true } }, async ({ resource }) => {\n" + body + "\n});\n" });
+  const ro = snippet(reg("const out = runSafe('kubectl', ['explain', resource]);\nreturn out;"), 't');
+  assert.deepEqual(ro.effects.exec, [], 'kubectl explain through the wrapper is a read');
+  assert.deepEqual(ro.effects.read.filter((e) => e.sink === 'exec.readonly').map((e) => e.note), ['kubectl explain']);
+  // two wrappers deep, with the literals in local variables and flags pushed later (k8s-flux159 explain_resource)
+  const deep = snippet({ 'index.ts': wrap + "const run = (command: string, args: string[]) => runSafe(command, args);\nserver.registerTool('t', { description: 'd', inputSchema: {}, annotations: { readOnlyHint: true } }, async (params) => {\n  const command = 'kubectl';\n  const args = ['api-resources'];\n  if (params.output) { args.push('-o', params.output); }\n  return run(command, args);\n});\n" }, 't');
+  assert.deepEqual(deep.effects.exec, []);
+  // positive controls: a literal sub-command that writes, with an argument in the argv, stays definite
+  const w = snippet(reg("return runSafe('kubectl', ['delete', 'pod', resource]);"), 't');
+  assert.deepEqual(w.effects.exec.map((e) => [e.sink, e.confidence]), [['exec.execFileSync', 'definite']]);
+  // the command itself comes from the tool's arguments: definite
+  const shell = snippet(TS("execSync(a.command);"), 't');
+  assert.deepEqual(shell.effects.exec.map((e) => e.confidence), ['definite']);
+  // a program nobody passes as a literal and the arguments do not name: may, worded as such
+  const opaque = snippet({ 'index.ts': wrap + "server.registerTool('t', { description: 'd', inputSchema: {}, annotations: { readOnlyHint: true } }, async ({ resource }) => {\n  return runSafe(process.env.TOOL_BIN, ['x', resource]);\n});\n" }, 't');
+  assert.deepEqual(opaque.effects.exec.map((e) => [e.confidence, e.note]), [['may', 'command is not a literal']]);
+});
