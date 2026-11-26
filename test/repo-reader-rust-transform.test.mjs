@@ -99,6 +99,11 @@ test('R-RD-36: a known transform is matched with its own names renamed; a one-to
   assert.deepEqual(b.tool._unreadable, ['inputSchema']);
   assert.deepEqual(b.marks.map((m) => m.reason), ['schema-transform (single_type)']);
   assert.equal(b.tool.description, 'Lists files.');
+  // a different method in the template's place (get instead of remove), and a name used inconsistently
+  for (const v of [renamed.replace('s.remove("default")', 's.get("default")'), renamed.replace('filter(|x| x != "null")', 'filter(|x| ts != "null")')]) {
+    const c = byName(read(ARGS('#[schemars(transform = single_type)]', v))).list_files;
+    assert.deepEqual(c.tool._unreadable, ['inputSchema'], v);
+  }
   assert.deepEqual(b.tool.annotations, { readOnlyHint: true });
 });
 
