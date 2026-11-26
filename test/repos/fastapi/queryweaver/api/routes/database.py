@@ -21,3 +21,12 @@ async def connect_database(request: Request, db_request: DatabaseConnectionReque
     Streams progress.
     """
     return {}
+
+
+late_router = APIRouter()
+
+
+@late_router.get("/late", operation_id="late_tool", tags=["mcp_tool"])
+async def late():
+    """Included after the MCP server was built."""
+    return {}

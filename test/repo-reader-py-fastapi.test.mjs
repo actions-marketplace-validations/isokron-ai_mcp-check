@@ -31,6 +31,8 @@ test('R-RD-37: route_maps by tag (QueryWeaver shape): only routes the first matc
   // excluded by the last map (untagged), and a resource: not tools
   assert.equal(r.tools.delete_database, undefined);
   assert.equal(r.tools.get_rules, undefined);
+  // a router included into the app after from_fastapi is not part of the MCP server
+  assert.equal(r.tools.late_tool, undefined);
   const t = r.tools;
   assert.equal(t.list_databases.description, 'List the databases of the signed-in user.\nRequires authentication.');
   assert.deepEqual(t.list_databases.inputSchema, { type: 'object', properties: {}, required: [] });
@@ -96,7 +98,7 @@ function server(files) {
   return dir;
 }
 const ROUTES = `from fastapi import APIRouter
-router = APIRouter()
+router = APIRouter(prefix="/v1")
 
 @router.get("/a", operation_id="tool_a")
 async def a(x: int):
@@ -140,8 +142,8 @@ test('R-RD-37: a route map the reader cannot decide leaves the routes out and sa
 });
 
 test('R-RD-37: a route map by tag and method decides per route; a router the reader cannot find is named, its routes left out', () => {
-  const r = run(server({ 'app.py': APP('FastMCP.from_fastapi(app, route_maps=[RouteMap(methods=["GET"], tags={"mcp"}, mcp_type=MCPType.TOOL), RouteMap(pattern=r"^/a$", mcp_type=MCPType.EXCLUDE)])'), 'routes.py': ROUTES }));
-  assert.deepEqual(Object.keys(r.tools), ['tool_b']);
+  const r = run(server({ 'app.py': APP('FastMCP.from_fastapi(app, route_maps=[RouteMap(methods=["GET"], tags={"mcp"}, mcp_type=MCPType.TOOL), RouteMap(pattern=r"^/api/v1/a$", mcp_type=MCPType.EXCLUDE)])').replace('app.include_router(router)', 'app.include_router(router, prefix="/api")'), 'routes.py': ROUTES }));
+  assert.deepEqual(Object.keys(r.tools), ['tool_b']); // the pattern is matched against the full path, prefixes included
   const missing = APP('FastMCP.from_fastapi(app)').replace('app.include_router(router)', 'app.include_router(router)\napp.include_router(admin_router, prefix="/admin")').replace('from routes import router', 'from routes import router\nfrom admin.views import admin_router');
   const m = run(server({ 'app.py': missing, 'routes.py': ROUTES, 'pyproject.toml': '[project]\nname = "x"\n' }));
   assert.deepEqual(Object.keys(m.tools).sort(), ['tool_a', 'tool_b']);
