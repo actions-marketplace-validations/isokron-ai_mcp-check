@@ -6,6 +6,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as LP from '../corpus/live-probe.mjs';
+import { readFileSync } from 'node:fs';
 import { pypiDeps, requirementOf } from '../corpus/pypi-entry.mjs';
 
 const rec = (o = {}) => ({ install: { kind: 'pypi', ok: true, steps: [{ name: 'install', exit: 0 }] }, env: { names: { registry: [] }, secret_named: [] }, timing: { total_ms: 60000 }, timed_out: false, ...o });
@@ -300,4 +301,35 @@ test('R-LP-71: a declared dependency whose import name differs from its distribu
     for (const [mod, dist] of pairs.filter(([m]) => !['cv2'].includes(m))) assert.equal(detail(missing(mod), py('acme-crm-mcp', '1.2.0', 'acme-crm-mcp', own(dist))), 'undeclared_dependency', 'mapping off: ' + mod);
     assert.equal(detail(missing('vendorsdk_core'), py('acme-crm-mcp', '1.2.0', 'acme-crm-mcp', own('some-vendor-sdk'))), 'undeclared_dependency', 'mapping off: the unknown one');
   } finally { LP.setStartMutation(null); }
+});
+
+test('R-LP-66: a PyPI launch installs the extra that holds the server (mcp, server, cli), once the pinned sandbox takes it', () => {
+  assert.deepEqual(LP.serverExtras({ extras: ['dev', 'cli', 'mcp', 'test'] }), ['mcp', 'cli']);
+  assert.deepEqual(LP.serverExtras({ extras: ['server'] }), ['server']);
+  assert.deepEqual(LP.serverExtras({ extras: ['all', 'dev'] }), [], 'only an extra named for the server');
+  assert.deepEqual(LP.serverExtras(null), []);
+  // An older sandbox refuses launch.extras, so the switch stays off until SURFACE_CORPUS_REF moves past
+  // mcp-surface-corpus 4c16b58 (R-SBX-49 is after it).
+  const y = readFileSync(new URL('../.github/workflows/live-probe.yml', import.meta.url), 'utf8');
+  const pin = /\n  SURFACE_CORPUS_REF: '([0-9a-f]{40})'\n/.exec(y)[1];
+  if (pin === '4c16b586e8e5886acb098285b6ec405fd4db4ac7') assert.equal(LP.EMIT_PYPI_EXTRAS, false);
+});
+
+test('R-LP-67: an HTTP-mode server\'s own exit comes from the sandbox\'s container record, only with its output read back', () => {
+  const http = (o = {}) => ({ format: 'isokron-surface-probe/1', mode: 'http', error: null, initialize: null, lists: {}, transport: {}, stderr: '', stderr_bytes: 0, timing: { total_ms: 3500 }, ...o });
+  const box = (exit, o = {}) => ({ v: 1, type: 'container', subject: 's001', role: 'server', runtime: 'runsc', exit, signal: null, timed_out: false, oom_killed: false, ms: 3400, ...o });
+  // The real shape (an HTTP-mode image that exited 2 in 3.5 s), now with its stderr read back.
+  const err = 'Traceback (most recent call last):\n  File "/app/server.py", line 9, in <module>\n    main()\nKeyError: \'port\'';
+  assert.deepEqual(LP.exitOf(http({ stderr: err, stderr_bytes: err.length }), [box(2), box(2)]), { exit: 2, signal: null });
+  const ctx = { launch: { kind: 'docker', image: 'ghcr.io/acme/srv:1' }, argsUnfilled: 0 };
+  assert.equal(LP.failureDetail(rec(), http({ stderr: err, stderr_bytes: err.length }), null, { ...ctx, records: [box(2)] }), 'start_failed');
+  assert.equal(LP.failureDetail(rec(), http({ stderr: 'Error: Missing required setting(s): OITC_APIKEY', stderr_bytes: 46 }), null, { ...ctx, records: [box(1)] }), 'start_needs_config');
+  // No output read back (the sandbox before R-SBX-47), a killed, timed-out or still-running container, or records that disagree: not its own exit.
+  assert.deepEqual(LP.exitOf(http(), [box(1)]), { exit: null, signal: null });
+  for (const recs of [[box(null)], [box(1, { timed_out: true })], [box(137, { oom_killed: true })], [box(1), box(2)], [box(1, { signal: 'SIGKILL' })], []]) {
+    assert.deepEqual(LP.exitOf(http({ stderr: err, stderr_bytes: 10 }), recs), { exit: null, signal: null }, JSON.stringify(recs));
+  }
+  assert.equal(LP.failureDetail(rec(), http({ stderr: err, stderr_bytes: err.length }), null, { ...ctx, records: [box(null)] }), 'start_env_limited');
+  // stdio keeps its transport's exit.
+  assert.deepEqual(LP.exitOf({ transport: { exit: 3, signal: null } }, [box(1)]), { exit: 3, signal: null });
 });

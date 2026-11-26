@@ -167,6 +167,17 @@ export const FIELDS = Object.freeze({
   static_vs_live_agreement: 'object', commit_sha: 'string', commit_date: 'timestamp',
 });
 /**
+ * PyPI launches name the extras that hold the server (`pkg[mcp]`, R-LP-61): on only once SURFACE_CORPUS_REF pins a
+ * sandbox whose target format takes `launch.extras` (mcp-surface-corpus R-SBX-49); an older one refuses the field.
+ */
+export const EMIT_PYPI_EXTRAS = false;
+/** Extras a release declares that hold an MCP server or its command line: installed with it, in this order. */
+export const SERVER_EXTRAS = Object.freeze(['mcp', 'server', 'cli']);
+export function serverExtras(deps) {
+  const have = deps && Array.isArray(deps.extras) ? deps.extras : [];
+  return SERVER_EXTRAS.filter((x) => have.includes(x));
+}
+/**
  * The oracle stage's fields (mcp-results registry, layer protocol and tool_telemetry): written only while
  * EMIT_ORACLE_FIELDS is on, which needs tool-qa's ingest to pin a registry that has them (INGEST_REF in the workflows).
  */
@@ -839,6 +850,9 @@ export async function resolveSubject(item, { seed = new Map(), fetch: fetchImpl 
         out.choice.entry = (fits && e.entry) || null;
         // What the release declares and ships: failureDetail tells the server's own modules from its dependencies (R-LP-61).
         if (e.deps) out.choice.pydeps = e.deps;
+        // The extra that holds the MCP server (or its CLI's dependencies) installs with the package (R-LP-61).
+        const extras = EMIT_PYPI_EXTRAS ? serverExtras(e.deps) : [];
+        if (extras.length) { out.launch = { ...out.launch, extras }; out.choice.extras = extras; }
       }
       if (s) {
         out.registry = { name: s.name, version: typeof s.version === 'string' ? s.version.slice(0, 64) : null, entries: entries.length, transports: [...new Set((s.packages || []).map((p) => (p && p.transport && typeof p.transport.type === 'string' ? p.transport.type : 'stdio')))].slice(0, 5), remotes: Array.isArray(s.remotes) ? s.remotes.length : 0 };
@@ -1325,12 +1339,24 @@ export function serverNetworkAttempt(records) {
     || (r.type === 'trace_summary' && traceNetwork(r.summary))));
 }
 
-/** How the server's process ended, from the probe: { exit, signal }, read from the transport, else from the error text. */
-function exitOf(p) {
+/**
+ * How the server's process ended, from the probe: { exit, signal }, read from the transport, else from the error text,
+ * else (an HTTP-mode server, which has no stdio transport) from the sandbox's records of the server's containers, when
+ * every one says it had exited by itself with the same code and the server's output was read back (R-LP-62).
+ */
+export function exitOf(p, records = []) {
   const t = isObj(p.transport) ? p.transport : {};
   if (Number.isInteger(t.exit) || (typeof t.signal === 'string' && t.signal)) return { exit: Number.isInteger(t.exit) ? t.exit : null, signal: t.signal || null };
   const m = /\(exit (-?\d+|null), signal ([A-Za-z0-9]+|null)\)/.exec(String(p.initialize_error || p.error || ''));
-  return m ? { exit: m[1] === 'null' ? null : Number(m[1]), signal: m[2] === 'null' ? null : m[2] } : { exit: null, signal: null };
+  if (m) return { exit: m[1] === 'null' ? null : Number(m[1]), signal: m[2] === 'null' ? null : m[2] };
+  // Only with the server's output in hand: before mcp-surface-corpus R-SBX-47 its stderr was not read back, and a
+  // silent exit is no evidence against it.
+  if (p.mode === 'http' && Number(p.stderr_bytes) > 0) {
+    const c = (Array.isArray(records) ? records : []).filter((r) => isObj(r) && r.type === 'container' && r.role === 'server');
+    const ok = c.length > 0 && c.every((r) => Number.isInteger(r.exit) && !r.timed_out && r.oom_killed !== true && !r.signal && r.exit === c[0].exit);
+    if (ok) return { exit: c[0].exit, signal: null };
+  }
+  return { exit: null, signal: null };
 }
 
 /** How long the probe whose exit we read ran: its own total_ms (in the record's probe entry or the probe), else captured_at - started_at. */
@@ -1386,7 +1412,7 @@ export function failureDetail(rec, bare, envp, { deadlineHit = false, records = 
   // README or the source is no such evidence: optional keys are common, and the server failed with dummies too.
   const needsEnv = !!(rec.env && rec.env.names && Array.isArray(rec.env.names.registry) && rec.env.names.registry.length);
   const net = serverNetworkAttempt(records);
-  const { exit, signal } = exitOf(p);
+  const { exit, signal } = exitOf(p, records);
   // 125 is docker run's own failure, 126 and 127 are not-executable and command-not-found (what an unresolved PyPI
   // venv/bin/<package> guess gives), 137 a kill: none is the server's own exit (R-LP-39).
   const own = Number.isInteger(exit) && exit !== 0 && ![125, 126, 127, 137].includes(exit) && !signal;
