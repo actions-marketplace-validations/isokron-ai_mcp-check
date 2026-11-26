@@ -169,3 +169,106 @@ test('R-RD-32: an imported helper called with a name the reader cannot work out 
   assert.equal(an.unresolved, 1);
   assert.equal(an.unresolvedList[0].description, 'Search the index.');
 });
+
+// ---------------------------------------------------------------- R-RD-33: typed and imported registries
+// Trimmed from mauricio-cantu/brasil-api-mcp-server @ 433f4756342d5c5e5a459f179e47d212f35c4088 (src/tools/cep-v1.ts:12,
+// src/tools/banks.ts:6, src/index.ts:30-41, src/utils/index.ts:8).
+test('R-RD-33: typed tool objects exported by other files (const t: ToolDefinition<P> = {…}), listed and registered with forEach through an imported helper, are read', () => {
+  const an = read({
+    'package.json': PKG('1.7.0'),
+    'src/types/MCP.ts': "import { ZodRawShape } from 'zod';\nexport interface McpToolDefinition<Args extends ZodRawShape = any> { name: string; description: string; params: Args; handler: any; }\n",
+    'src/utils/index.ts': [
+      "import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';",
+      "import { McpToolDefinition } from '../types/MCP.js';",
+      'export const registerTool = (server: McpServer, tool: McpToolDefinition) => {',
+      '  server.tool(tool.name, tool.description, tool.params, tool.handler);',
+      '};',
+    ].join('\n'),
+    'src/tools/cep-v1.ts': [
+      "import { z } from 'zod';",
+      "import { McpToolDefinition } from '../types/MCP.js';",
+      'const getCepToolParams = {',
+      '  cep: z.string().describe("The CEP to query"),',
+      '};',
+      'type GetCepToolParams = typeof getCepToolParams;',
+      'export const getCepTool: McpToolDefinition<GetCepToolParams> = {',
+      '  name: "get_postal_code_v1",',
+      '  description: "Get a location data given a CEP (postal code).",',
+      '  params: getCepToolParams,',
+      '  handler: async ({ cep }) => {',
+      '    return { content: [{ type: "text", text: cep }] };',
+      '  },',
+      '};',
+    ].join('\n'),
+    'src/tools/banks.ts': [
+      "import { McpToolDefinition } from '../types/MCP.js';",
+      'export const getAllBanksTool: McpToolDefinition = {',
+      '  name: "get_all_banks",',
+      '  description: "Get information of all banks from Brazil.",',
+      '  params: {},',
+      '  handler: async () => ({ content: [] }),',
+      '};',
+    ].join('\n'),
+    'src/index.ts': [
+      SERVER,
+      "import { getCepTool } from './tools/cep-v1.js';",
+      "import { getAllBanksTool } from './tools/banks.js';",
+      "import { registerTool } from './utils/index.js';",
+      'const tools = [',
+      '  getCepTool,',
+      '  getAllBanksTool,',
+      '];',
+      'tools.forEach((tool) => {',
+      '  registerTool(server, tool);',
+      '});',
+    ].join('\n'),
+  });
+  assert.deepEqual(names(an), ['get_all_banks', 'get_postal_code_v1']);
+  assert.deepEqual(tool(an, 'get_postal_code_v1'), {
+    name: 'get_postal_code_v1',
+    description: 'Get a location data given a CEP (postal code).',
+    inputSchema: { type: 'object', properties: { cep: { type: 'string', description: 'The CEP to query' } }, required: ['cep'], additionalProperties: false, $schema: D7 },
+  });
+  assert.equal(an.unresolved, 0);
+});
+
+const REGISTRY = [
+  "import { z } from 'zod';",
+  'export const TOOLS = [',
+  "  { id: 'alpha', summary: 'First tool.', args: { q: z.string() } },",
+  "  { id: 'beta', summary: 'Second tool.', args: { n: z.number().optional() } },",
+  '];',
+].join('\n');
+const LOOP = [
+  SERVER,
+  "import { TOOLS } from './registry.js';",
+  'for (const def of TOOLS) {',
+  '  server.registerTool(def.id, { description: def.summary, inputSchema: def.args }, async () => ({ content: [] }));',
+  '}',
+].join('\n');
+
+test('R-RD-33: a registry array imported from another module and iterated with for…of to registerTool is read, its keys mapped as the call maps them', () => {
+  const an = read({ 'package.json': PKG(), 'src/registry.ts': REGISTRY, 'src/index.ts': LOOP });
+  assert.deepEqual(names(an), ['alpha', 'beta']);
+  assert.equal(tool(an, 'alpha').description, 'First tool.');
+  assert.deepEqual(tool(an, 'alpha').inputSchema.required, ['q']);
+  assert.equal(tool(an, 'beta').inputSchema.required, undefined);
+  assert.equal(an.unresolved, 0);
+});
+
+test('R-RD-33: an object map imported from another module and iterated with Object.entries is read, the key as the name', () => {
+  const an = read({
+    'package.json': PKG(),
+    'src/map.ts': "import { z } from 'zod';\nexport const TOOL_MAP = {\n  get_item: { summary: 'Get one item.', args: { id: z.string() } },\n  list_items: { summary: 'List items.', args: {} },\n};\n",
+    'src/index.ts': SERVER + "import { TOOL_MAP } from './map.js';\nObject.entries(TOOL_MAP).forEach(([name, def]) => {\n  server.registerTool(name, { description: def.summary, inputSchema: def.args }, async () => ({ content: [] }));\n});\n",
+  });
+  assert.deepEqual(names(an), ['get_item', 'list_items']);
+  assert.equal(tool(an, 'list_items').description, 'List items.');
+  assert.equal(an.unresolved, 0);
+});
+
+test('R-RD-33: an imported registry that its own module changes (push) is not unrolled: the registration is counted as unresolved', () => {
+  const an = read({ 'package.json': PKG(), 'src/registry.ts': REGISTRY + '\nexport function addTool(t: any) { TOOLS.push(t); }\n', 'src/index.ts': LOOP });
+  assert.deepEqual(names(an), []);
+  assert.equal(an.unresolved, 1);
+});
