@@ -342,3 +342,52 @@ test('R-RD-29: an empty raw shape is listed without additionalProperties from SD
   const unknown = read(src('{"dependencies": {"zod": "3.25.76"}}'));
   assert.equal(tool(unknown, 'get_me').inputSchema.additionalProperties, false, 'without a known SDK version the reading is unchanged');
 });
+
+// ---------------------------------------------------------------- R-RD-30: a constant shape filtered by key
+// Trimmed from CruGlobal/flightdeck-mcp-server 3a4f362dbf0b4723cd67cccb40704adf4d1c2259 src/tools.ts (workItemFields,
+// create_work_item). The tools other than create_work_item, and the constant arrays they use, are added.
+test('R-RD-30: ...Object.fromEntries(Object.entries(FIELDS).filter(([key]) => key !== "title")) spreads the constant shape without the rejected keys', () => {
+  const an = read({ 'package.json': ZOD3, 'src/tools.ts': [
+    'import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";',
+    'import { z } from "zod";',
+    'const id = (description: string) => z.union([z.string(), z.number()]).describe(description);',
+    'const workItemFields = {',
+    '  title: z.string().optional().describe("Work item title"),',
+    '  description: z.string().optional().describe("Plain-text description (empty string clears it)"),',
+    '  state_id: id("State id — must belong to the item\'s project").optional(),',
+    '  draft: z.boolean().optional().describe("Whether the item is a draft"),',
+    '};',
+    'const DATES = ["start_date", "target_date"];',
+    'const BROKEN = { title: z.string(), ...somethingElse };',
+    'export function registerTools(server: McpServer): void {',
+    '  server.registerTool(',
+    '    "create_work_item",',
+    '    {',
+    '      title: "Create a work item",',
+    '      description: "Create a work item in a project.",',
+    '      inputSchema: {',
+    '        project_id: id("Project id to create the item in"),',
+    '        title: z.string().describe("Work item title (required)"),',
+    '        ...Object.fromEntries(',
+    '          Object.entries(workItemFields).filter(([key]) => key !== "title"),',
+    '        ),',
+    '      },',
+    '    },',
+    '    async () => ({ content: [] }),',
+    '  );',
+    '  server.registerTool("only_flags", { description: "Flags.", inputSchema: { ...Object.fromEntries(Object.entries(workItemFields).filter(([k, v]) => !DATES.includes(k) && (k === "draft" || "title" === k))) } }, async () => ({ content: [] }));',
+    '  server.registerTool("by_prefix", { description: "Prefix.", inputSchema: { n: z.string(), ...Object.fromEntries(Object.entries(workItemFields).filter(([k]) => k.startsWith("d"))) } }, async () => ({ content: [] }));',
+    '  server.registerTool("by_ternary", { description: "Ternary.", inputSchema: { n: z.string(), ...Object.fromEntries(Object.entries(workItemFields).filter(([k]) => k === "draft" ? true : k === "title")) } }, async () => ({ content: [] }));',
+    '  server.registerTool("from_broken", { description: "Broken.", inputSchema: { n: z.string(), ...Object.fromEntries(Object.entries(BROKEN).filter(([k]) => k !== "x")) } }, async () => ({ content: [] }));',
+    '}',
+  ].join('\n') });
+  const c = tool(an, 'create_work_item').inputSchema;
+  assert.deepEqual(Object.keys(c.properties), ['project_id', 'title', 'description', 'state_id', 'draft']);
+  assert.deepEqual(c.required, ['project_id', 'title'], 'the filtered fields keep their optional flags; the tool\'s own title stays');
+  assert.equal(c.properties.title.description, 'Work item title (required)');
+  assert.equal(c.properties.state_id.description, "State id — must belong to the item's project");
+  assert.deepEqual(Object.keys(tool(an, 'only_flags').inputSchema.properties), ['title', 'draft']);
+  assert.deepEqual(Object.keys(tool(an, 'by_prefix').inputSchema.properties), ['n'], 'a test other than key comparisons is not read');
+  assert.deepEqual(Object.keys(tool(an, 'by_ternary').inputSchema.properties), ['n'], 'a test read only in part is not read');
+  assert.deepEqual(Object.keys(tool(an, 'from_broken').inputSchema.properties), ['n'], 'a constant with a part the reader could not read is not filtered');
+});
