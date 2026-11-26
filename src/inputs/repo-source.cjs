@@ -442,7 +442,11 @@
         const close = matchClose(t, j); let k = j + 1;
         // the properties of z.object({...}) that cannot be read keep their name (an empty schema) rather than vanish
         const actx = /^(object|strictObject|looseObject)$/.test(name) && !calls.length ? Object.assign({}, ctx, { placeholder: true }) : ctx;
-        while (k < close) { const v = parseValue(t, k, actx); args.push(v); k = v.end; if (isP(t[k], ',')) k++; else break; }
+        while (k < close) {
+          // .regex(/…/flags): the literal itself (a value the literal parser does not read)
+          const v = name === 'regex' && t[k].type === 'regex' && (isP(t[k + 1], ',') || isP(t[k + 1], ')')) ? { value: { regexLiteral: t[k].value }, end: k + 1, exact: true } : parseValue(t, k, actx);
+          args.push(v); k = v.end; if (isP(t[k], ',')) k++; else break;
+        }
         j = close + 1;
       }
       calls.push({ name, args });
@@ -496,7 +500,12 @@
         case 'email': s.format = 'email'; break;
         case 'uuid': s.format = 'uuid'; break;
         case 'datetime': s.format = 'date-time'; break;
-        case 'regex': exact = false; break;
+        case 'regex': { // JSON Schema pattern: the RegExp's source, as zod 4 and zod-to-json-schema write it (flags are not
+          // carried). A second .regex() moves both into allOf, and a pattern the reader cannot read is left out.
+          const src = a0 && typeof a0 === 'object' && typeof a0.regexLiteral === 'string' ? regexSource(a0.regexLiteral) : null;
+          if (src === null || s.pattern !== undefined || calls.filter((d) => d.name === 'regex').length > 1) { delete s.pattern; exact = false; } else s.pattern = src;
+          break;
+        }
         case 'refine': case 'superRefine': case 'transform': case 'brand': case 'readonly': case 'catch': case 'pipe': break;
         case 'array': s = { type: 'array', items: s }; break;
         case 'strict': s.additionalProperties = false; break;
@@ -512,6 +521,12 @@
       if (s.maximum === undefined && s.exclusiveMaximum === undefined) s.maximum = SAFE_INT;
     }
     return { schema: s, exact, optional };
+  }
+  // The source of a regular expression literal (/^[a-z]+$/i -> ^[a-z]+$), as RegExp.prototype.source gives it; null when
+  // the literal is not one the engine accepts.
+  function regexSource(lit) {
+    const m = /^\/([\s\S]*)\/([a-z]*)$/.exec(lit); if (!m) return null;
+    try { return new RegExp(m[1], m[2]).source; } catch (e) { return null; }
   }
   // A zod raw shape { a: z.string(), b: z.number().optional() } -> object schema the way the TS SDK emits it.
   // What the TS SDK lists for a zod schema depends on the SDK major and the zod major (see tsFlavour):
