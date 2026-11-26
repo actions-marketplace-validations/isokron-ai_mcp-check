@@ -821,7 +821,7 @@
           // a re-exported namespace (export * as reg from './registry') imported by name: ns.TOOLS through it
           else { const e = mod(f).exports.names.get(imp.imported); if (e && typeof e === 'object' && e.imported === '*') { const g = resolveSpec(f, e.spec, paths, suffixIndex); if (g && (nsOf.has(g) || holders.has(g))) namespaces.add(imp.local); } }
         });
-        // require('./registry') / import('./registry') of a file that holds it: not followed
+        // a CommonJS require or a dynamic import of a file that holds it: not followed
         const t = toks(q);
         for (let k = 0; k + 2 < t.length && !loads; k++) {
           if (t[k].type === 'id' && (t[k].value === 'require' || t[k].value === 'import') && isP(t[k + 1], '(') && t[k + 2].type === 'str' && !isP(t[k - 1], '.')) {
