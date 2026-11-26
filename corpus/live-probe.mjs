@@ -36,6 +36,7 @@ import { InputError } from '../src/limits.js';
 import { parseList } from '../src/tools.js';
 import { analyseList } from '../src/unreadable.js';
 import { VERSION } from '../src/version.js';
+import { ranCommit } from './tool-commit.mjs';
 import { baselineProblems, judgeOracles } from './oracles/judge.mjs';
 import { pypiEntry } from './pypi-entry.mjs';
 
@@ -1630,10 +1631,23 @@ export function settingsDigest(mscCommit) {
 }
 
 /**
+ * The components a bundle reports in manifest `tools`, as tool-qa's version pins (R-PIN-01) expect them: this
+ * repository at the commit that ran (the package, and the fuzz stage only when it ran), and the sandbox at the
+ * mcp-surface-corpus commit it used.
+ */
+export function toolsRan({ commit, mscCommit, fuzz }) {
+  return [
+    { name: '@isokron/mcp-check', version: commit },
+    ...(mscCommit ? [{ name: 'isokron-ai/mcp-surface-corpus', version: mscCommit }] : []),
+    ...(fuzz ? [{ name: 'fuzz', version: commit }] : []),
+  ];
+}
+
+/**
  * Builds every item's bundle from <work>. Throws ControlFailure when a control did not give its expected outcome: then
  * nothing is written and nothing may be uploaded.
  */
-export function bundleShard({ work, now = () => new Date(), log = () => {}, knownFile = KNOWN_ANSWER_FILE, pinsFile = ORACLE_PINS_FILE, baselineFile = ORACLE_BASELINE_FILE }) {
+export function bundleShard({ work, env = process.env, now = () => new Date(), log = () => {}, knownFile = KNOWN_ANSWER_FILE, pinsFile = ORACLE_PINS_FILE, baselineFile = ORACLE_BASELINE_FILE }) {
   const plan = readJson(join(work, 'plan.json'));
   if (!plan || plan.format !== PLAN_FORMAT) throw new ControlFailure('no plan in the work folder');
   const state = readJson(join(work, 'sandbox.json')) || {};
@@ -1673,7 +1687,7 @@ export function bundleShard({ work, now = () => new Date(), log = () => {}, know
     for (const [p, data] of Object.entries(files)) { mkdirSync(dirname(join(dir, 'bundle', p)), { recursive: true }); writeFileSync(join(dir, 'bundle', p), data); }
     const meta = {
       subject: { id: item.subject, repo: item.repo, sha: b.subjectSha },
-      tools: [{ name: '@isokron/mcp-check', version: VERSION }, ...(mscCommit ? [{ name: 'isokron-ai/mcp-surface-corpus', version: mscCommit }] : [])],
+      tools: toolsRan({ commit: ranCommit(env), mscCommit, fuzz: plan.fuzz === true }),
       oracles: [...new Map((b.components || []).map((c) => [c.name + '@' + c.version, c])).values()].filter((c) => /^[A-Za-z0-9@][A-Za-z0-9@/._-]{0,127}$/.test(c.name) && /^[A-Za-z0-9][A-Za-z0-9.+:_-]{0,127}$/.test(String(c.version))),
       settings_manifest_digest: digest,
       started_at: plan.planned_at,

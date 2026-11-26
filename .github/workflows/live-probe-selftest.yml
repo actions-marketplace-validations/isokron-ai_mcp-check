@@ -71,6 +71,7 @@ jobs:
           {
             echo "SHARD_ID=live-probe-selftest-$RUN_ID-$RUN_ATTEMPT"
             echo "ATTEMPT_ID=selftest-$RUN_ID-$RUN_ATTEMPT"
+            echo "TOOL_SHA="
           } >> "$GITHUB_ENV"
       - id: deadline
         name: Deadline for the subjects
@@ -78,6 +79,18 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ env.TOOL_SHA || github.sha }}
+      # The lane's code is the commit tool-qa pinned (tool_sha), else the commit this run was dispatched on (R-PIN-01).
+      # The job stops unless the checkout is exactly it; what ran is then reported in each bundle's manifest `tools`.
+      - id: tool
+        name: Check the checkout is the commit asked for
+        env:
+          TOOL_SHA: ${{ env.TOOL_SHA }}
+        run: |
+          head=$(git rev-parse HEAD)
+          want="${TOOL_SHA:-$GITHUB_SHA}"
+          if [[ "$head" != "$want" ]]; then echo "::error title=live-probe::the checkout is not the commit asked for"; exit 1; fi
+          echo "commit=$head" >> "$GITHUB_OUTPUT"
       - name: The fixture items
         run: echo "ITEMS=$(jq -c '[.items[] | {subject, run_key, fence}]' corpus/fixtures/live-probe/selftest-shard.json)" >> "$GITHUB_ENV"
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -144,6 +157,9 @@ jobs:
         run: corpus/live-probe-sandbox.sh "$RUNNER_TEMP/live-probe" surface-corpus "$DEADLINE"
       - id: bundle
         name: Check the controls and build the bundles
+        env:
+          # The commit that ran, proved by the checkout step; each bundle reports it in manifest `tools`.
+          MCP_CHECK_COMMIT: ${{ steps.tool.outputs.commit }}
         run: node corpus/live-probe.mjs bundle "$RUNNER_TEMP/live-probe"
       - name: Build and check bundle 0 (dry run)
         if: ${{ !cancelled() && steps.bundle.outcome == 'success' && steps.plan.outputs.has_0 == 'true' }}

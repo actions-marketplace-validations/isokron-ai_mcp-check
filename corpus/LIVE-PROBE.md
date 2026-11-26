@@ -266,6 +266,16 @@ package), builds each bundle with the worker-kit in dry-run mode, and judges it 
 `WORKER_KIT_REF`: the manifest schema, identity and file checks, identity claims outside `raw/`, the controls, the
 field registry and the secret scan, plus each item's expected outcome.
 
+## Version pins
+
+tool-qa files each result under the commits its lane pins (R-PIN-01). `live-probe.yml` and `scan-static.yml` take an
+optional `tool_sha` input (empty, or a full 40-character commit): the job checks out `tool_sha`, else the dispatched
+commit, and stops unless `git rev-parse HEAD` is exactly that. Each bundle's manifest `tools` then says what ran:
+`@isokron/mcp-check` at that commit, `isokron-ai/mcp-surface-corpus` at the sandbox commit used and, only when the
+fuzz stage ran, `fuzz` at that commit (scan-static: `mcp-check` at that commit). The workflow file itself always runs
+from `main`; a pinned commit older than the reporting code reports the package version, which tool-qa counts as
+unproven, so a pin is bumped to a commit that has it.
+
 ## Residual risk
 
 The upload steps run in the same job as the sandbox, after it. The checks before them see containers, volumes,
