@@ -284,6 +284,14 @@
       // Object.freeze({...}): the object itself
       const v = parseValue(t, i + 4, ctx);
       if (v.value !== SKIP && isP(t[v.end], ')')) r = Object.assign({}, v, { end: v.end + 1 });
+    } else if (tok.type === 'id' && isP(t[i + 1], '(') && ctx && ctx.consts && hasOwn(ctx.consts, FN + tok.value)) {
+      // id('Project id'), ymd().optional(): a schema factory of this file or a direct import, read with its arguments
+      const call = callFactory(t, i, ctx);
+      if (call && call.r.zod) {
+        const nx = call.end;
+        if (isP(t[nx], '.') && t[nx + 1] && t[nx + 1].type === 'id' && isP(t[nx + 2], '(')) { const z = parseZod(t, i, ctx, { value: call.r.value, exact: call.r.exact, optional: call.r.optional }, nx); if (z) r = z; }
+        else r = { value: call.r.value, end: nx, exact: call.r.exact, zod: true, optional: call.r.optional };
+      }
     } else if (tok.type === 'id' && ctx && ctx.consts && hasOwn(ctx.consts, tok.value) && isP(t[i + 1], '.') && t[i + 2] && t[i + 2].type === 'id' && t[i + 2].value === 'shape' && !isP(t[i + 3], '(') && !isP(t[i + 3], '.')) {
       // Schema.shape of a zod object constant: the raw shape, with the optional flags the object schema kept.
       const c = ctx.consts[tok.value]; const sch = c.value;
@@ -375,7 +383,7 @@
       if (isP(k, '...')) {
         // {...NAME} / {...NAME.member}: a constant holding a plain object (this file's, an imported one, or another file's) is merged in.
         const nx = t[i + 1]; let c = null; let end = i + 2;
-        if (nx && nx.type === 'id' && ctx && ctx.consts) { const ch = idChain(t, i + 1); const v = chainValue(ctx, ch.ids); if (v) { c = ch.ids.length === 1 ? v.c : { value: v.value, exact: v.c.exact, zod: false }; end = ch.end; } }
+        if (nx && nx.type === 'id' && ctx && ctx.consts) { const ch = idChain(t, i + 1); const v = chainValue(ctx, ch.ids); if (v) { c = ch.ids.length === 1 ? v.c : { value: v.value, exact: v.c.exact, zod: false }; end = ch.end; } else { const sp = spreadCall(t, i + 1, ctx); if (sp) { c = sp; end = sp.end; } } }
         if (c && !c.zod && c.value && typeof c.value === 'object' && !Array.isArray(c.value) && (isP(t[end], ',') || isP(t[end], '}'))) {
           Object.assign(o, c.value); exact = exact && c.exact !== false; if (c.optionalKeys) c.optionalKeys.forEach((x) => optionalKeys.add(x));
           i = isP(t[end], ',') ? end + 1 : end; continue;
@@ -474,11 +482,103 @@
     return c < 0 ? t.length - 1 : c;
   }
 
+  // ------------------------------------------------------------ schema factories
+  // A top-level function of a file that returns a value the reader can read, and a direct import of one:
+  //   const id = (description: string) => z.union([z.string(), z.number()]).describe(description);
+  //   const rangeArgs = (defaultText) => ({ from: ymd().optional().describe(`First date. ${defaultText}`) });
+  //   function ymd() { return z.string().regex(/^\d{4}-\d{2}-\d{2}$/); }
+  // It is kept in the constants under FN + name (so no lookup of a plain constant sees it) as { t, params, at, ctx,
+  // consts }: the parameters (names, and the token of each default), the token where the returned expression starts,
+  // and the definition's own file context. A call is read with the parameters bound to the arguments read at the call
+  // site; an argument that cannot be read leaves its parameter unknown (so text built from it is partial, never
+  // guessed). Only a zod result is a value (callFactory in parseValue), and a plain object only when spread into a
+  // shape (spreadCall). Factories may call factories, FN_DEPTH deep.
+  const FN = '\u0000fn:';
+  const FN_DEPTH = 4;
+  // The parameters of a function from the "(" at k: [{ name, def }] (def: token of a default value, or -1), or null
+  // when one is a pattern or a rest parameter.
+  function fnParams(t, k) {
+    const close = matchClose(t, k); const out = []; let m = k + 1;
+    while (m < close) {
+      const nm = t[m]; if (!nm || nm.type !== 'id' || nm.value === 'this') return null;
+      let n = m + 1; if (isP(t[n], '?')) n++;
+      if (isP(t[n], ':')) n = skipType(t, n + 1);
+      let def = -1; if (isP(t[n], '=')) { def = n + 1; n = skipExpr(t, n + 1); }
+      out.push({ name: nm.value, def });
+      if (isP(t[n], ',')) m = n + 1; else if (n === close) m = close; else return null;
+    }
+    return { params: out, close };
+  }
+  // The start of the returned expression of a function body at k: an expression body, `({ … })`, or a block whose only
+  // statement is `return …`. { at, paren } or null.
+  function fnReturn(t, k) {
+    if (isP(t[k], '{')) {
+      const close = matchClose(t, k);
+      if (!(t[k + 1] && t[k + 1].type === 'id' && t[k + 1].value === 'return')) return null;
+      const e = skipExpr(t, k + 2); const after = isP(t[e], ';') ? e + 1 : e;
+      return after === close ? { at: k + 2, stop: e } : null;
+    }
+    return { at: k, stop: -1 };
+  }
+  // A function definition at a `const NAME =` (value at j) or `function NAME(` (name at j - 1): the record, or null.
+  function fnAt(t, j, ctx, consts, isDecl) {
+    let k = j; let ps;
+    if (isDecl) { if (!isP(t[k], '(')) return null; ps = fnParams(t, k); if (!ps) return null; k = ps.close + 1; if (isP(t[k], ':')) k = skipType(t, k + 1); }
+    else if (t[k] && t[k].type === 'id' && isP(t[k + 1], '=>')) { ps = { params: [{ name: t[k].value, def: -1 }] }; k += 2; }
+    else if (isP(t[k], '(')) { ps = fnParams(t, k); if (!ps) return null; k = ps.close + 1; if (isP(t[k], ':')) k = skipType(t, k + 1); if (!isP(t[k], '=>')) return null; k++; }
+    else if (t[k] && t[k].type === 'id' && t[k].value === 'function' && isP(t[k + 1], '(')) return fnAt(t, k + 1, ctx, consts, true);
+    else return null;
+    if (isDecl && !isP(t[k], '{')) return null;
+    const ret = fnReturn(t, k); if (!ret) return null;
+    return { t, params: ps.params, at: ret.at, stop: ret.stop, ctx, consts };
+  }
+  // A call of a factory at token i (the name; "(" at i + 1): { r, end } with r the value read from its returned
+  // expression, or null.
+  function callFactory(t, i, ctx) {
+    const fn = ctx.consts[FN + t[i].value]; const depth = ctx.fnDepth || 0;
+    if (!fn || depth >= FN_DEPTH) return null;
+    const close = matchClose(t, i + 1); const args = []; let k = i + 2;
+    while (k < close) { const v = parseValue(t, k, ctx); args.push(v); k = v.end; if (isP(t[k], ',')) k++; else break; }
+    if (k !== close) return null;
+    // The parameters are bound in the definition's own table for the time of the read and restored after it (a copy
+    // of the table per call would cost its size on every call).
+    const consts = fn.consts; const saved = [];
+    const bind = (k, v) => { saved.push([k, hasOwn(consts, k), consts[k]]); if (v === undefined) delete consts[k]; else consts[k] = v; };
+    const fctx = Object.assign({}, fn.ctx, { consts, fnDepth: depth + 1 });
+    const ft = fn.t; let r;
+    try {
+      fn.params.forEach((p, n) => {
+        let v = args[n]; if (!v && p.def >= 0) v = parseValue(fn.t, p.def, fctx);
+        bind(p.name, v && v.value !== SKIP && v.value !== undefined ? { value: v.value, exact: v.exact !== false, optional: !!v.optional, zod: !!v.zod, optionalKeys: v.optionalKeys || null, top: false, partial: !!v.partial, lost: null, holes: (v.holes || 0) + (v.unknownKeys ? v.unknownKeys.size : 0) + (v.spreadUnknown ? 1 : 0) } : undefined);
+        bind(FN + p.name, undefined);
+      });
+      const endOk = (e) => (fn.stop >= 0 ? e === fn.stop : !ft[e] || isP(ft[e], ';') || isP(ft[e], ',') || isP(ft[e], ')') || isP(ft[e], '}') || !!ft[e].nl);
+      if (isP(ft[fn.at], '(')) { // => ({ … }), return (…)
+        const pc = matchClose(ft, fn.at); r = parseValue(ft, fn.at + 1, fctx);
+        if (r.value === SKIP || r.end !== pc || !endOk(pc + 1)) return null;
+      } else {
+        r = parseValue(ft, fn.at, fctx);
+        if (r.value === SKIP || (fn.stop >= 0 && r.end !== fn.stop)) return null;
+      }
+    } finally {
+      for (let n = saved.length - 1; n >= 0; n--) { const [k, had, old] = saved[n]; if (had) consts[k] = old; else delete consts[k]; }
+    }
+    return { r, end: close + 1 };
+  }
+  // ...factory(args) in a shape: the plain object it returns (its optional keys kept), with end past the call.
+  function spreadCall(t, k, ctx) {
+    if (!t[k] || t[k].type !== 'id' || !isP(t[k + 1], '(') || !ctx || !ctx.consts || !hasOwn(ctx.consts, FN + t[k].value)) return null;
+    const call = callFactory(t, k, ctx); const v = call && call.r.value;
+    if (!call || call.r.zod || !v || typeof v !== 'object' || Array.isArray(v)) return null;
+    return { value: v, exact: call.r.exact, optionalKeys: call.r.optionalKeys || OPTIONAL_OF.get(v) || null, zod: false, end: call.end };
+  }
+
   // ------------------------------------------------------------ zod -> JSON Schema (the common subset)
   // z.string().min(1).describe('x').optional() and friends. Unknown parts make the result inexact, not wrong.
-  function parseZod(t, i, ctx, base) {
-    // collect chain: z . name ( args ) . name ( args ) ...  With `base` (a zod constant), every call modifies it.
-    let j = i + 1; const calls = base ? [{ name: '__const', args: [], base }] : [];
+  function parseZod(t, i, ctx, base, chainAt) {
+    // collect chain: z . name ( args ) . name ( args ) ...  With `base` (a zod constant, or what a schema factory
+    // returned when the chain starts at `chainAt`, after the factory call), every call modifies it.
+    let j = chainAt || i + 1; const calls = base ? [{ name: '__const', args: [], base }] : [];
     while (isP(t[j], '.') && t[j + 1] && t[j + 1].type === 'id') {
       const name = t[j + 1].value; j += 2;
       let args = [];
@@ -726,6 +826,10 @@
         if (!v && globals && imp.imported !== '*' && imp.imported !== 'default' && hasOwn(globals, imp.imported)) v = globals[imp.imported];
         if (!v && globals && imp.imported === 'default' && hasOwn(globals, imp.local)) v = globals[imp.local];
         if (v) seed[imp.local] = v; else delete seed[imp.local];
+        // a schema factory exported by name from the imported file itself (no re-export followed)
+        const fx = target && imp.imported !== '*' ? mod(target).exports.names.get(imp.imported) : null;
+        const tb = typeof fx === 'string' ? tableFor(target, depth + 1) : null;
+        if (tb && hasOwn(tb, FN + fx)) seed[FN + imp.local] = tb[FN + fx]; else delete seed[FN + imp.local];
       });
       return seed;
     };
@@ -784,7 +888,10 @@
           const ch = idChain(t, j + 1);
           if ((isP(t[ch.end], '||') || isP(t[ch.end], '??')) && t[ch.end + 1] && t[ch.end + 1].type === 'str' && (isP(t[ch.end + 2], ';') || isP(t[ch.end + 2], ',') || (t[ch.end + 2] && t[ch.end + 2].nl) || !t[ch.end + 2])) v = { value: t[ch.end + 1].value, exact: false, fallback: true };
         }
+        if (v.value === SKIP && d === 0) { const f = fnAt(t, j + 1, ctx, consts, false); if (f) { consts[FN + t[i + 1].value] = f; continue; } }
         if (v.value !== SKIP) consts[t[i + 1].value] = { value: v.value, exact: v.exact, optional: !!v.optional, zod: !!v.zod, optionalKeys: v.optionalKeys || null, top: d === 0 && !v.fallback, partial: !!v.partial, lost: lost.length ? lost : null, holes: (v.holes || 0) + (v.unknownKeys ? v.unknownKeys.size : 0) + (v.spreadUnknown ? 1 : 0) };
+      } else if (tk.value === 'function' && d === 0 && t[i + 1].type === 'id' && isP(t[i + 2], '(') && !isP(t[i - 1], '.') && !(t[i - 1] && t[i - 1].value === 'async')) {
+        const f = fnAt(t, i + 2, ctx, consts, true); if (f) consts[FN + t[i + 1].value] = f;
       } else if (tk.value === 'enum' && t[i + 1].type === 'id' && isP(t[i + 2], '{')) {
         const close = matchClose(t, i + 2); const o = {}; let k = i + 3; let n = 0;
         while (k < close) {
@@ -804,7 +911,9 @@
       const optionalKeys = new Set(); const props = {}; let exact = true; let j = i + 1;
       while (j < t.length && !isP(t[j], '}')) {
         if (isP(t[j], '...')) { // {...SHARED, a: z.string()}
-          const nx = t[j + 1]; const c = nx && nx.type === 'id' && ctx.consts && Object.prototype.hasOwnProperty.call(ctx.consts, nx.value) ? ctx.consts[nx.value] : null;
+          const nx = t[j + 1]; let c = nx && nx.type === 'id' && ctx.consts && Object.prototype.hasOwnProperty.call(ctx.consts, nx.value) ? ctx.consts[nx.value] : null;
+          const sp = c ? null : spreadCall(t, j + 1, ctx); // ...rangeArgs('Defaults to today.')
+          if (sp && (isP(t[sp.end], ',') || isP(t[sp.end], '}'))) { Object.assign(props, sp.value); exact = exact && sp.exact !== false; if (sp.optionalKeys) sp.optionalKeys.forEach((x) => optionalKeys.add(x)); j = isP(t[sp.end], ',') ? sp.end + 1 : sp.end; continue; }
           if (c && !c.zod && c.value && typeof c.value === 'object' && !Array.isArray(c.value) && (isP(t[j + 2], ',') || isP(t[j + 2], '}'))) { Object.assign(props, c.value); exact = exact && c.exact !== false; if (c.optionalKeys) c.optionalKeys.forEach((x) => optionalKeys.add(x)); j += isP(t[j + 2], ',') ? 3 : 2; continue; }
           exact = false; j = skipExpr(t, j + 1); if (isP(t[j], ',')) j++; continue;
         }
