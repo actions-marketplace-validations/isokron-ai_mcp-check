@@ -277,3 +277,27 @@ test('R-LP-69: an unset variable read, pydantic settings, a missing absolute pat
   assert.deepEqual(LP.lastFrame('no frames here'), null);
   assert.equal(LP.frameInDependency(DEP_UNION, { pydeps: null, pkg: null }), false, 'no own modules known: not ours to say');
 });
+
+test('R-LP-71: a declared dependency whose import name differs from its distribution\'s is not undeclared when missing; an unknown mapping is ours', () => {
+  const own = (dist) => ({ top: ['acme-crm-mcp'], base: ['mcp', dist], uncapped: ['mcp', dist], extra_only: [], extras: [] });
+  const missing = (mod) => tb(`  File "${SP}/acme_crm_mcp/server.py", line 4, in <module>`, `    import ${mod}`, `ModuleNotFoundError: No module named '${mod}'`);
+  // Declared, not installed (a failed install): ours, whatever the import name.
+  const pairs = [['jose', 'python-jose'], ['Crypto', 'pycryptodome'], ['serial', 'pyserial'], ['cv2', 'opencv-python-headless'], ['OpenSSL', 'pyopenssl'], ['markdown_it', 'markdown-it-py']];
+  for (const [mod, dist] of pairs) {
+    assert.ok(LP.DIST_IMPORTS[dist].includes(mod.toLowerCase().replace(/_/g, '-')), dist + ' lists ' + mod);
+    assert.equal(detail(missing(mod), py('acme-crm-mcp', '1.2.0', 'acme-crm-mcp', own(dist))), 'start_env_limited', mod + ' from ' + dist);
+  }
+  // A declared distribution whose import names we do not know may be the one: ours, never the server's.
+  assert.equal(LP.DIST_IMPORTS['some-vendor-sdk'], undefined);
+  assert.equal(detail(missing('vendorsdk_core'), py('acme-crm-mcp', '1.2.0', 'acme-crm-mcp', own('some-vendor-sdk'))), 'start_env_limited');
+  // An extra's distribution counts as declared too.
+  assert.equal(detail(missing('jose'), py('acme-crm-mcp', '1.2.0', 'acme-crm-mcp', { top: ['acme-crm-mcp'], base: ['mcp'], uncapped: ['mcp'], extra_only: ['python-jose'], extras: ['auth'] })), 'start_needs_extra');
+  // Every declared distribution known and none providing it: undeclared, the server's.
+  assert.equal(detail(missing('jose'), py('acme-crm-mcp', '1.2.0', 'acme-crm-mcp', own('httpx'))), 'undeclared_dependency');
+  // Mutation check: with the mapping off, each pair is blamed again.
+  try {
+    LP.setStartMutation('importmap');
+    for (const [mod, dist] of pairs.filter(([m]) => !['cv2'].includes(m))) assert.equal(detail(missing(mod), py('acme-crm-mcp', '1.2.0', 'acme-crm-mcp', own(dist))), 'undeclared_dependency', 'mapping off: ' + mod);
+    assert.equal(detail(missing('vendorsdk_core'), py('acme-crm-mcp', '1.2.0', 'acme-crm-mcp', own('some-vendor-sdk'))), 'undeclared_dependency', 'mapping off: the unknown one');
+  } finally { LP.setStartMutation(null); }
+});

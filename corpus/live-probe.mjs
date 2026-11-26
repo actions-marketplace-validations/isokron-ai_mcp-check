@@ -1153,6 +1153,31 @@ const IMPORT_DIST = Object.freeze({ yaml: 'pyyaml', pil: 'pillow', cv2: 'opencv-
 const normDist = (s) => String(s).toLowerCase().replace(/[-_.]+/g, '-');
 
 /**
+ * The import names of common distributions (PEP 503 name -> top-level modules, as their wheels' top_level.txt lists
+ * them). A missing module is undeclared only when every distribution the release declares is listed here and none
+ * provides it (R-LP-71): an import name often differs from its distribution's (jose from python-jose, Crypto from
+ * pycryptodome), and we read no dependency's wheel, so a declared distribution not listed could be the one.
+ */
+export const DIST_IMPORTS = Object.freeze(Object.fromEntries(Object.entries({
+  // Named otherwise.
+  pyyaml: ['yaml', '_yaml'], pillow: ['PIL'], 'opencv-python': ['cv2'], 'opencv-python-headless': ['cv2'], 'opencv-contrib-python': ['cv2'], 'opencv-contrib-python-headless': ['cv2'],
+  'scikit-learn': ['sklearn'], beautifulsoup4: ['bs4'], 'python-dotenv': ['dotenv'], pyjwt: ['jwt'], 'python-dateutil': ['dateutil'], 'python-magic': ['magic'],
+  'python-docx': ['docx'], 'python-pptx': ['pptx'], gitpython: ['git'], attrs: ['attr', 'attrs'], protobuf: ['google'], pymupdf: ['fitz', 'pymupdf'], 'python-jose': ['jose'],
+  pycryptodome: ['Crypto'], pycryptodomex: ['Cryptodome'], pyserial: ['serial'], pyopenssl: ['OpenSSL'], 'markdown-it-py': ['markdown_it'], 'python-multipart': ['multipart', 'python_multipart'],
+  'google-auth': ['google'], 'google-api-python-client': ['googleapiclient', 'apiclient'], 'google-genai': ['google'], 'google-generativeai': ['google'], 'google-cloud-storage': ['google'],
+  'typing-extensions': ['typing_extensions'], 'pydantic-settings': ['pydantic_settings'], 'pydantic-core': ['pydantic_core'], 'mcp-server': ['mcp_server'], 'python-slugify': ['slugify'],
+  'beautifulsoup': ['BeautifulSoup'], pywin32: ['win32api', 'win32con'], 'msgpack-python': ['msgpack'], 'python-json-logger': ['pythonjsonlogger'], 'ruamel-yaml': ['ruamel'],
+  'sse-starlette': ['sse_starlette'], 'azure-identity': ['azure'], 'azure-core': ['azure'], 'aws-lambda-powertools': ['aws_lambda_powertools'], 'faiss-cpu': ['faiss'], 'llama-index': ['llama_index'],
+  // Named alike.
+  mcp: ['mcp'], fastmcp: ['fastmcp'], httpx: ['httpx'], requests: ['requests'], pydantic: ['pydantic'], anyio: ['anyio'], starlette: ['starlette'], uvicorn: ['uvicorn'], fastapi: ['fastapi'],
+  click: ['click'], typer: ['typer'], rich: ['rich'], numpy: ['numpy'], pandas: ['pandas'], scipy: ['scipy'], aiohttp: ['aiohttp'], websockets: ['websockets'], jinja2: ['jinja2'],
+  sqlalchemy: ['sqlalchemy'], psycopg2: ['psycopg2'], 'psycopg2-binary': ['psycopg2'], psycopg: ['psycopg'], redis: ['redis'], boto3: ['boto3'], botocore: ['botocore'], openai: ['openai'],
+  anthropic: ['anthropic'], tiktoken: ['tiktoken'], lxml: ['lxml'], markdown: ['markdown'], certifi: ['certifi'], urllib3: ['urllib3'], idna: ['idna'], tenacity: ['tenacity'], loguru: ['loguru'],
+  structlog: ['structlog'], cryptography: ['cryptography'], jsonschema: ['jsonschema'], orjson: ['orjson'], tomli: ['tomli'], toml: ['toml'], packaging: ['packaging'], psutil: ['psutil'],
+  docker: ['docker'], kubernetes: ['kubernetes'], paramiko: ['paramiko'], playwright: ['playwright'], selenium: ['selenium'], networkx: ['networkx'], matplotlib: ['matplotlib'],
+}).map(([k, v]) => [normDist(k), v.map(normDist)])));
+
+/**
  * The import that failed, from a Python traceback's last import error: { module, kind } where kind is `missing` (the
  * top-level module is not installed at all) or `api` (the module is there but lacks the submodule, name or attribute
  * imported from it); or a Node ESM import of a name or subpath a package does not export. Null when there is none.
@@ -1237,8 +1262,9 @@ export function importCause(imp, { pydeps = null, pkg = null, err = '', installe
   if (own) return imp.kind === 'api' && imp.module.includes('.') && ownTops && ownTops.length ? 'own_missing' : 'own';
   const dist = IMPORT_DIST[top] || top;
   const has = (k) => isObj(pydeps) && Array.isArray(pydeps[k]) && (pydeps[k].includes(dist) || pydeps[k].includes(top));
+  const viaImports = (k) => on('importmap') && isObj(pydeps) && Array.isArray(pydeps[k]) && pydeps[k].some((d) => (DIST_IMPORTS[normDist(d)] || []).includes(top));
   if (imp.kind === 'missing') {
-    if (has('extra_only')) return 'extra';
+    if (has('extra_only') || viaImports('extra_only')) return 'extra';
     // Python's own (one this Python lacks or removed) or the venv's tools: our environment.
     if (PY_STDLIB.has(top.replace(/-/g, '_'))) return 'env';
     // Not installed and never declared, imported by the server's own code, not Python's own or the venv's: the release
@@ -1246,7 +1272,11 @@ export function importCause(imp, { pydeps = null, pkg = null, err = '', installe
     // facts, or imported from inside a dependency, not ours to tell.
     const f = lastFrame(err);
     const fromOwn = !!f && (f.script || (!!f.top && !!ownTops && ownTops.includes(f.top)));
-    const declared = has('base');
+    // Declared when any declared distribution may provide it: by name, by IMPORT_DIST, by its listed import names, or
+    // because its import names are not known to us (R-LP-71). Only a release whose every declared distribution is
+    // known, none providing it, leaves it undeclared.
+    const declaredDists = isObj(pydeps) ? [...(Array.isArray(pydeps.base) ? pydeps.base : []), ...(Array.isArray(pydeps.extra_only) ? pydeps.extra_only : [])].map(normDist) : [];
+    const declared = has('base') || viaImports('base') || (on('importmap') && declaredDists.some((d) => !DIST_IMPORTS[d]));
     // A server extra (mcp, server, cli) we did not install may bring it transitively (FinanceToolkit's [mcp] brings
     // mcp, which brings anyio): not ours to tell which, so the extra's.
     const skipped = (isObj(pydeps) && Array.isArray(pydeps.extras) ? pydeps.extras : []).filter((x) => ['mcp', 'server', 'cli'].includes(x) && !installedExtras.includes(x));
