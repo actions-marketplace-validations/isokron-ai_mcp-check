@@ -87,7 +87,7 @@ test('scan-static: dispatch only, the pump\'s three inputs, kill switch first, i
   const code = y.replace(/^\s*#.*$/gm, '');
   assert.match(y, /\non:\n  workflow_dispatch:\n    inputs:\n/);
   assert.ok(!/\n  (push|schedule|pull_request|workflow_call):/.test(y));
-  assert.deepEqual([...y.matchAll(/^      ([a-z_]+):\n        description:/gm)].map((m) => m[1]), ['shard_id', 'attempt_id', 'items'], 'exactly the inputs tool-qa\'s pump sends');
+  assert.deepEqual([...y.matchAll(/^      ([a-z_]+):\n        description:/gm)].map((m) => m[1]), ['shard_id', 'attempt_id', 'items', 'tool_sha'], 'exactly the inputs tool-qa\'s pump sends (tool_sha only when it enforces a pin)');
   assert.match(y, /\nrun-name: shard \$\{\{ inputs\.shard_id \}\}\n/);
   assert.match(y, /\nconcurrency:\n  group: scan-static-/);
   assert.ok(!/secrets\./.test(code), 'no secrets');

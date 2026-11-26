@@ -37,6 +37,7 @@ import { analyseList } from '../src/unreadable.js';
 import { codeEffectsReport } from '../src/code-effects.js';
 import { isApproximate, readerNotes, registrationNotSeen, repoProvenance, usableList } from '../src/inputs/collect.js';
 import { VERSION } from '../src/version.js';
+import { ranCommit } from './tool-commit.mjs';
 
 const require = createRequire(import.meta.url);
 const Repo = require('../src/inputs/repo-source.cjs');
@@ -830,7 +831,7 @@ export class BundleTooLarge extends Error {
  * { files, meta } of one reported item. files: bundle path -> text. Throws BundleTooLarge when a file is over
  * fileCap or the files are over bundleCap together.
  */
-export function buildBundle({ item, scan, controls, startedAt, finishedAt, digest = settingsDigest(), rawCap = RAW_FILE_CAP, fileCap = BUNDLE_FILE_CAP, bundleCap = BUNDLE_CAP }) {
+export function buildBundle({ item, scan, controls, startedAt, finishedAt, digest = settingsDigest(), commit = ranCommit(), rawCap = RAW_FILE_CAP, fileCap = BUNDLE_FILE_CAP, bundleCap = BUNDLE_CAP }) {
   // A subject scanned in its own thread brings its raw/ texts built and capped already (R-SS-08).
   const raw = scan.rawFiles && typeof scan.rawFiles === 'object' ? scan.rawFiles : rawFiles(scan.raw || {}, rawCap);
   const files = {};
@@ -854,7 +855,8 @@ export function buildBundle({ item, scan, controls, startedAt, finishedAt, diges
   if (total > bundleCap) throw new BundleTooLarge('the bundle would be ' + total + ' bytes, over ' + bundleCap);
   const meta = {
     subject: { id: item.subject, repo: item.repo, sha: scan.commit ? scan.commit.sha : null },
-    tools: [{ name: 'mcp-check', version: VERSION }],
+    // The commit that ran, not the package version: tool-qa's version pins (R-PIN-01) are commits of this repository.
+    tools: [{ name: 'mcp-check', version: commit }],
     oracles: [],
     settings_manifest_digest: digest,
     started_at: startedAt,
