@@ -311,3 +311,34 @@ test('R-RD-28: zod 4 writes .nullable() as anyOf with null, and from zod 4.5.0 c
     either: { anyOf: [{ anyOf: [{ type: 'string' }, { type: 'number' }] }, { type: 'null' }], description: 'd' },
   });
 });
+
+// ---------------------------------------------------------------- R-RD-29: an empty raw shape under SDK 1.23+
+// Trimmed from CruGlobal/flightdeck-mcp-server 3a4f362dbf0b4723cd67cccb40704adf4d1c2259 src/tools.ts (get_me,
+// get_project; zod 3.25.76 under SDK 1.29.0). The z.object({}) tool and the run without a known SDK version are added.
+test('R-RD-29: an empty raw shape is listed without additionalProperties from SDK 1.23 on; other shapes and z.object({}) stay closed under zod 3', () => {
+  const src = (pkg) => ({ 'package.json': pkg, 'src/tools.ts': [
+    'import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";',
+    'import { z } from "zod";',
+    'export function registerTools(server: McpServer): void {',
+    '  server.registerTool(',
+    '    "get_me",',
+    '    {',
+    '      title: "Get current identity",',
+    '      description:',
+    '        "Return the user, workspace and token behind the configured Flightdeck API token. Useful as a connectivity/health check.",',
+    '      inputSchema: {},',
+    '    },',
+    '    async () => ({ content: [] }),',
+    '  );',
+    '  server.registerTool("get_project", { title: "Get a project", description: "Retrieve a single project by its id.", inputSchema: { project_id: z.string() } }, async () => ({ content: [] }));',
+    '  server.registerTool("ping", { description: "Ping.", inputSchema: z.object({}) }, async () => ({ content: [] }));',
+    '}',
+  ].join('\n') });
+  const D7 = 'http://json-schema.org/draft-07/schema#';
+  const an = read(src(ZOD3));
+  assert.deepEqual(tool(an, 'get_me').inputSchema, { type: 'object', properties: {}, $schema: D7 });
+  assert.deepEqual(tool(an, 'get_project').inputSchema, { type: 'object', properties: { project_id: { type: 'string' } }, required: ['project_id'], additionalProperties: false, $schema: D7 });
+  assert.deepEqual(tool(an, 'ping').inputSchema, { type: 'object', properties: {}, additionalProperties: false, $schema: D7 });
+  const unknown = read(src('{"dependencies": {"zod": "3.25.76"}}'));
+  assert.equal(tool(unknown, 'get_me').inputSchema.additionalProperties, false, 'without a known SDK version the reading is unchanged');
+});
