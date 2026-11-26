@@ -10,7 +10,8 @@
 #   2. the self test's telemetry check (scripts/check-selftest.mjs) once more, from the checkout, before any target.
 #      If it fails, nothing else runs.
 #   3. the controls (our own server from npm, and the forgery server) through the sandbox driver;
-#   4. the subjects through the sandbox driver, stopped at the deadline (the items left report a retryable skip);
+#   4. the subjects through the sandbox driver, stopped at the deadline (the items left report a retryable skip),
+#      then the subjects built in the sandbox (crates), then the OCI subjects one at a time;
 #      the driver is mcp-surface-corpus's bin/run-shard.mjs, run by corpus/live-probe-driver.mjs, which adds the
 #      oracle stage after each target's probe when ORACLE_CLIENTS names the clients corpus/oracles/install.mjs
 #      installed (corpus/LIVE-PROBE.md, "Oracles");
@@ -44,7 +45,7 @@ if [ "$oracles" != none ] && [ -f "$oracles" ] && node -e '
   const any = (r.conformance && r.conformance.ok) || Object.values(r.clients || {}).some((c) => c && c.ok);
   process.exit(any ? 0 : 1);
 ' "$oracles" 2>/dev/null; then oracles_installed=true; else oracles=none; fi
-install_rc=-1; guard_rc=-1; selftest_rc=-1; check_rc=-1; controls_rc=-1; subjects_rc=-1; swept=false
+install_rc=-1; guard_rc=-1; selftest_rc=-1; check_rc=-1; controls_rc=-1; subjects_rc=-1; builds_rc=-1; swept=false
 left_labelled=-1; left_containers=-1; left_volumes=-1; uid_procs=-1; runsc_procs=-1
 gvisor=$(node -e 'process.stdout.write(String(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).release || ""))' "$msc/gvisor.json" 2>/dev/null || true)
 msc_commit=$(git -C "$msc" rev-parse HEAD 2>/dev/null || true)
@@ -53,10 +54,10 @@ write_state() {
   node -e '
     const [file, ...v] = process.argv.slice(1);
     const n = (x) => (/^-?[0-9]{1,4}$/.test(x) ? Number(x) : null);
-    const s = { oracles_installed: v[15] === "true", install_rc: n(v[0]), guard_rc: n(v[1]), selftest_rc: n(v[2]), selftest_check_rc: n(v[3]), controls_rc: n(v[4]), subjects_rc: n(v[5]), swept: v[6] === "true", msc_commit: /^[0-9a-f]{40}$/.test(v[7]) ? v[7] : null, gvisor_release: v[8] || null, worker_kit_ref: /^[0-9a-f]{40}$/.test(v[9]) ? v[9] : null, left: { labelled: n(v[10]), containers: n(v[11]), volumes: n(v[12]), uid_65534_processes: n(v[13]), runsc_processes: n(v[14]) }, finished_at: new Date().toISOString() };
+    const s = { oracles_installed: v[15] === "true", install_rc: n(v[0]), guard_rc: n(v[1]), selftest_rc: n(v[2]), selftest_check_rc: n(v[3]), controls_rc: n(v[4]), subjects_rc: n(v[5]), builds_rc: n(v[16]), swept: v[6] === "true", msc_commit: /^[0-9a-f]{40}$/.test(v[7]) ? v[7] : null, gvisor_release: v[8] || null, worker_kit_ref: /^[0-9a-f]{40}$/.test(v[9]) ? v[9] : null, left: { labelled: n(v[10]), containers: n(v[11]), volumes: n(v[12]), uid_65534_processes: n(v[13]), runsc_processes: n(v[14]) }, finished_at: new Date().toISOString() };
     require("fs").writeFileSync(file, JSON.stringify(s, null, 2) + "\n");
   ' "$work/sandbox.json" "$install_rc" "$guard_rc" "$selftest_rc" "$check_rc" "$controls_rc" "$subjects_rc" "$swept" "$msc_commit" "$gvisor" "${WORKER_KIT_REF:-}" \
-    "$left_labelled" "$left_containers" "$left_volumes" "$uid_procs" "$runsc_procs" "$oracles_installed"
+    "$left_labelled" "$left_containers" "$left_volumes" "$uid_procs" "$runsc_procs" "$oracles_installed" "$builds_rc"
 }
 
 sweep() {
@@ -109,6 +110,22 @@ if [ "$runnable" -gt 0 ]; then
   fi
 else
   subjects_rc=0
+fi
+
+# 4a. Subjects built in the sandbox (crates: corpus/live-probe.mjs isBuild), after the others, one after another,
+#     each within its own longer limit, until the deadline (R-LP-55). Not run at all: builds_rc stays -1.
+builds=$(node -e 'try { process.stdout.write(String(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).targets.length)) } catch { process.stdout.write("0") }' "$work/targets-builds.json")
+if [ "$builds" -gt 0 ]; then
+  sweep >>"$work/sweep.log" 2>&1 || true
+  left=$(( deadline - $(date +%s) ))
+  if [ "$left" -gt 60 ]; then
+    echo "builds ($builds, at most ${left}s):"
+    drive "$work/targets-builds.json" "$work/driver-builds" "$left" </dev/null; builds_rc=$?
+  else
+    echo "::warning title=live-probe::no time left for the subjects built in the sandbox"
+  fi
+else
+  builds_rc=0
 fi
 
 # 4b. OCI subjects, one at a time. An image's 2 GB cap counts compressed bytes, so each runs only when the Docker

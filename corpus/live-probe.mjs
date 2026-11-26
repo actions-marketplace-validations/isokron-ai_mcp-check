@@ -88,6 +88,16 @@ export const targetId = (i) => 's' + String(i + 1).padStart(3, '0');
 
 /** Subjects: the sandbox's whole budget for them, and each one's limit within it. */
 export const SUBJECT_BUDGET_S = 26 * 60;
+/**
+ * R-LP-55: a subject built in the sandbox (a crate) runs after the others, in a list of its own
+ * (targets-builds.json), with this much more time than a subject: the sandbox's 15-minute build cap and its Rust
+ * image's first pull. When a shard has one, the other subjects share this much less of SUBJECT_BUDGET_S, so the builds
+ * still have time before the deadline.
+ */
+export const BUILD_ALLOWANCE_S = 17 * 60;
+export const BUILD_RESERVE_S = 12 * 60;
+/** The launch kinds that build in the sandbox. */
+export const isBuild = (launch) => !!(launch && launch.kind === 'cargo');
 export const SUBJECT_TIMEOUT_MIN_S = 90;
 export const SUBJECT_TIMEOUT_MAX_S = 300;
 export const PROBE_MS = 45_000;
@@ -109,7 +119,7 @@ const REGISTRY_CAP = 4 * 1024 * 1024;
 export const DETAILS = Object.freeze({
   bad_subject: ['no_runnable_artifact', false, 'resolve', 'tool'], // not a GitHub owner/name: this lane reads GitHub only
   no_package: ['no_runnable_artifact', false, 'resolve', 'tool'], // no registry package is no defect: Go and Rust binaries, other npm names and own-registry images exist (R-LP-43)
-  unsupported_package: ['no_runnable_artifact', false, 'resolve', 'tool'], // cargo, NuGet, MCPB: we cannot run them yet
+  unsupported_package: ['no_runnable_artifact', false, 'resolve', 'tool'], // a package type we cannot run yet (NuGet, MCPB)
   private_registry: ['no_runnable_artifact', false, 'resolve', 'tool'],
   unverified_registry_entry: ['no_runnable_artifact', false, 'resolve', 'tool'], // our provenance checks stop short of it
   // Our allowlist of OCI hosts (it guards the planner's own fetches and what the runner's Docker daemon pulls, outside the
@@ -131,6 +141,11 @@ export const DETAILS = Object.freeze({
   install_resource_limit: ['install_failed_registry', false, 'install', 'tool'], // killed (137, 124, out of memory) inside our limits
   install_build_failed: ['install_failed_registry', false, 'install', 'tool'], // a native build, a missing compiler or library, an engine mismatch, or an install failure with no package-level cause
   install_timeout: ['install_failed_registry', false, 'install', 'tool'], // our install time limit
+  // R-LP-54: the package installed (or was found) and declares nothing we could start: a crate with no binary. The
+  // package's own lack, read from the package manager's or our helper's answer, never from text the package printed.
+  package_not_runnable: ['install_failed_registry', false, 'install', 'subject'],
+  // R-LP-54: several binaries (or commands) and none named for the package: we would have to guess, so it is ours.
+  entry_ambiguous: ['install_failed_registry', false, 'install', 'tool'],
   needs_credentials: ['start_requires_credentials', false, 'start', 'subject'], // a declared required env var, and the server exited non-zero by itself with no network attempt
   start_needs_network: ['timeout_start', false, 'start', 'tool'], // the server tried the network, which the run does not have
   start_failed: ['timeout_start', false, 'start', 'subject'], // a crash signature on stderr (R-LP-45), and exited with its own non-zero code, early, with every argument filled
@@ -330,9 +345,13 @@ export function repoOfMetadataUrl(url) {
   return m ? (m[1] + '/' + m[2]).toLowerCase() : null;
 }
 
-const TYPE_RANK = { npm: 0, pypi: 1, oci: 2 };
+// Installed packages first, then an image, then a package we build: a crate's build can take BUILD_CAP_S.
+const TYPE_RANK = { npm: 0, pypi: 1, oci: 2, cargo: 5 };
 const TRANSPORT_RANK = { stdio: 0, 'streamable-http': 1 };
-const DEFAULT_BASE = { npm: ['https://registry.npmjs.org', 'https://registry.npmjs.org/'], pypi: ['https://pypi.org', 'https://pypi.org/', 'https://pypi.org/simple', 'https://pypi.org/simple/'] };
+const DEFAULT_BASE = { npm: ['https://registry.npmjs.org', 'https://registry.npmjs.org/'], pypi: ['https://pypi.org', 'https://pypi.org/', 'https://pypi.org/simple', 'https://pypi.org/simple/'], cargo: ['https://crates.io', 'https://crates.io/', 'https://index.crates.io', 'https://index.crates.io/'] };
+/** A crate name as crates.io takes it, and the sandbox's own check (mcp-surface-corpus src/targets.mjs CRATE). */
+const CRATE_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+const CRATE_VERSION = /^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.+-]{1,60})?$/;
 const NPM_NAME = /^(?:@[a-z0-9][a-z0-9._~-]{0,80}\/)?[a-z0-9][a-z0-9._~-]{0,120}$/;
 const PYPI_NAME = /^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,120}[A-Za-z0-9])?$/;
 const SEMVER = /^[0-9]+(?:\.[0-9A-Za-z-]+){0,3}(?:[-+.][0-9A-Za-z.+-]{1,60})?$/;
@@ -709,6 +728,7 @@ export function purlOf(type, id, version) {
   const v = typeof version === 'string' && version && version !== 'latest' ? '@' + encodeURIComponent(version) : '';
   if (type === 'npm') return 'pkg:npm/' + id.split('/').map(encodeURIComponent).join('/') + v;
   if (type === 'pypi') return 'pkg:pypi/' + encodeURIComponent(id.toLowerCase().replace(/[-_.]+/g, '-')) + v;
+  if (type === 'cargo') return 'pkg:cargo/' + encodeURIComponent(id) + v;
   return null;
 }
 
@@ -719,7 +739,7 @@ export function purlOf(type, id, version) {
 export async function launchFor(pkg, { fetch: fetchImpl = globalThis.fetch } = {}) {
   const type = String(pkg.registryType || pkg.registry || '').toLowerCase();
   const id = typeof pkg.identifier === 'string' ? pkg.identifier.trim() : '';
-  if (!['npm', 'pypi', 'oci'].includes(type)) return { detail: 'unsupported_package' };
+  if (!['npm', 'pypi', 'oci', 'cargo'].includes(type)) return { detail: 'unsupported_package' };
   const base = typeof pkg.registryBaseUrl === 'string' ? pkg.registryBaseUrl : null;
   if (base && type !== 'oci' && !DEFAULT_BASE[type].includes(base)) return { detail: 'private_registry' };
   const tr = transportOf(pkg.transport);
@@ -741,6 +761,14 @@ export async function launchFor(pkg, { fetch: fetchImpl = globalThis.fetch } = {
     choice.purl = purlOf('pypi', id, version);
     return { launch: { kind: 'pypi', package: id, version, ...common }, choice };
   }
+  if (type === 'cargo') {
+    // R-LP-54: built in the sandbox (mcp-surface-corpus launchPlan, kind cargo: `cargo install --locked` in its pinned
+    // Rust image, crates.io only, at most 15 minutes), so it runs after the other subjects with a time limit of its own.
+    if (!CRATE_NAME.test(id)) return { detail: 'launch_invalid' };
+    const v = version === 'latest' || CRATE_VERSION.test(version) ? version : 'latest';
+    choice.version = v; choice.purl = purlOf('cargo', id, v);
+    return { launch: { kind: 'cargo', crate: id, version: v, ...common }, choice };
+  }
   const ref = parseOciRef(id);
   if (!ref) return { detail: 'launch_invalid' };
   if (!OCI_HOSTS.includes(ref.host)) return { detail: 'oci_host_not_allowed' };
@@ -760,7 +788,7 @@ export const REGISTRY_PAGE = 100;
 export async function registryEntries(subject, seedPkgs, { fetch: fetchImpl = globalThis.fetch, base = REGISTRY_BASE, stats = null } = {}) {
   const [owner, name] = subject.split('/');
   const seedIds = new Set(seedPkgs.map((p) => String(p.registry).toLowerCase() + ':' + String(p.identifier).toLowerCase()));
-  const queries = [...new Set([name, owner + '/' + name, ...seedPkgs.filter((p) => ['npm', 'pypi'].includes(p.registry)).map((p) => p.identifier.split('/').pop())])].filter((q) => q && q.length <= 200).slice(0, 5);
+  const queries = [...new Set([name, owner + '/' + name, ...seedPkgs.filter((p) => ['npm', 'pypi', 'cargo'].includes(p.registry)).map((p) => p.identifier.split('/').pop())])].filter((q) => q && q.length <= 200).slice(0, 5);
   const found = new Map();
   for (const q of queries) {
     const d = await getJson(fetchImpl, base + '/v0.1/servers?search=' + encodeURIComponent(q) + '&version=latest&limit=100');
@@ -874,14 +902,17 @@ export function targetLists(plan, { node24Image, forgery = forgeryScript() }) {
     ],
   };
   const isOci = (x) => x.target && x.target.launch.kind === 'docker';
-  const subjects = { format: TARGETS_FORMAT, about: 'live-probe subjects', defaults: { timeout_s: plan.subject_timeout_s }, targets: plan.items.filter((x) => x.target && !isOci(x)).map((x) => x.target) };
+  const built = (x) => x.target && isBuild(x.target.launch);
+  const subjects = { format: TARGETS_FORMAT, about: 'live-probe subjects', defaults: { timeout_s: plan.subject_timeout_s }, targets: plan.items.filter((x) => x.target && !isOci(x) && !built(x)).map((x) => x.target) };
+  // Crates build after the other subjects, one after another, each within its own longer limit (R-LP-55).
+  const builds = { format: TARGETS_FORMAT, about: 'live-probe subjects built in the sandbox', defaults: { timeout_s: plan.subject_timeout_s }, targets: plan.items.filter(built).map((x) => x.target) };
   // OCI subjects run one at a time after the others, each only when the disk has room for its image (corpus/live-probe-sandbox.sh).
   const oci = plan.items.filter(isOci).map((x) => ({ id: x.target.id, image: x.target.launch.image, bytes: Number.isSafeInteger(x.resolution.choice && x.resolution.choice.oci_bytes) ? x.resolution.choice.oci_bytes : OCI_MAX_BYTES, list: { format: TARGETS_FORMAT, about: 'live-probe OCI subject', defaults: { timeout_s: plan.subject_timeout_s }, targets: [x.target] } }));
-  return { controls, subjects, oci };
+  return { controls, subjects, builds, oci };
 }
 
 /** Each subject's time limit: the subject budget shared out, within bounds. */
-export const subjectTimeout = (n) => Math.max(SUBJECT_TIMEOUT_MIN_S, Math.min(SUBJECT_TIMEOUT_MAX_S, Math.floor((SUBJECT_BUDGET_S - 90) / Math.max(1, n))));
+export const subjectTimeout = (n, reserveS = 0) => Math.max(SUBJECT_TIMEOUT_MIN_S, Math.min(SUBJECT_TIMEOUT_MAX_S, Math.floor((SUBJECT_BUDGET_S - 90 - reserveS) / Math.max(1, n))));
 
 /**
  * The shard plan. validateTarget is the sandbox's own check of one target (mcp-surface-corpus src/targets.mjs): a
@@ -902,11 +933,14 @@ export async function planShard({ inputs, seed = new Map(), fetch: fetchImpl = g
     items.push(x);
   }
   const runnable = items.filter((x) => x.target).length;
-  const timeout = subjectTimeout(runnable);
+  const builds = items.filter((x) => x.target && isBuild(x.target.launch)).length;
+  const timeout = subjectTimeout(runnable - builds, builds ? BUILD_RESERVE_S : 0);
   // The oracle stage runs only for stdio targets (corpus/live-probe-driver.mjs): only they get its allowance.
   // The fuzz stage (off unless switched on) runs for the same targets and has an allowance of its own.
   for (const x of items) if (x.target) x.target.timeout_s = timeout + ((x.target.launch.transport || 'stdio') === 'stdio' ? ORACLE_ALLOWANCE_S : 0);
   if (fuzz) for (const x of items) if (x.target && (x.target.launch.transport || 'stdio') === 'stdio') x.target.timeout_s += FUZZ_ALLOWANCE_S;
+  // The sandbox's own bound is 1800 s a target (mcp-surface-corpus MAX_TIMEOUT_S).
+  for (const x of items) if (x.target && isBuild(x.target.launch)) x.target.timeout_s = Math.min(1800, x.target.timeout_s + BUILD_ALLOWANCE_S);
   return { format: PLAN_FORMAT, shard_id: inputs.shardId, attempt_id: inputs.attemptId, marker, planned_at: now().toISOString(), subject_timeout_s: timeout, runnable, ...(fuzz ? { fuzz: true } : {}), items };
 }
 
@@ -1073,6 +1107,34 @@ const OOM_TEXT = /\bENOMEM\b|out of memory|\bOOM\b/i;
 /** A list error that is the server's own: a malformed result. (A JSON-RPC error is told by its numeric code.) */
 const MALFORMED_LIST = /^the .* result has no .* array$|^nextCursor is not a string$|^the server repeated the same cursor$|^the answer has no result object$/;
 
+/** Signs that crates.io could not be reached properly (our proxy, a name lookup, a time-out), not that the crate is missing. */
+const CARGO_NOT_THE_CRATE = /spurious network error|failed to download|failed to query|Couldn't resolve|timed out|Connection|failed to get|proxy|SSL|certificate/i;
+
+/**
+ * R-LP-54: a crate's install failed for the crate's own reason only when cargo says so before anything compiled (a build
+ * script prints what it likes once building starts) and nothing shows trouble reaching crates.io: "could not find
+ * `<the crate>` in registry `crates-io`" (no such crate, or no such version) gives install_failed, "there is nothing to
+ * install in `<the crate> ...`, because it has no binaries" gives package_not_runnable. The same evidence rule as
+ * isokron-ai/mcp-writecheck-action loop/skips.mjs (R-WC-26, R-WC-31). Returns a detail or null.
+ */
+export function cargoInstallEvidence(text, crate) {
+  const t = String(text || '');
+  if (/^\s*Compiling /m.test(t) || CARGO_NOT_THE_CRATE.test(t)) return null;
+  const same = (n) => String(n).toLowerCase().replace(/_/g, '-') === String(crate).toLowerCase().replace(/_/g, '-');
+  const missing = /^error: could not find `([A-Za-z0-9_-]{1,64})` in registry `crates-io`/m.exec(t);
+  if (missing && same(missing[1])) return 'install_failed';
+  const nothing = /^error: there is nothing to install in `([A-Za-z0-9_-]{1,64}) v[0-9][^`]{0,80}`, because it has no binaries/m.exec(t);
+  if (nothing && same(nothing[1])) return 'package_not_runnable';
+  return null;
+}
+
+/** The answer of the install's entry helper (mcp-surface-corpus sandbox/cargo-entry.mjs), as a detail (R-LP-54). */
+export function entryDetail(code) {
+  if (code === 'no_binary') return 'package_not_runnable';
+  if (code === 'several_binaries') return 'entry_ambiguous';
+  return 'install_build_failed';
+}
+
 /** Everything the install steps and the steps log say, as one text (step fields are only strings the driver wrote). */
 function installText(inst, stepsLog) {
   const parts = [];
@@ -1155,6 +1217,12 @@ export function failureDetail(rec, bare, envp, { deadlineHit = false, records = 
     const text = installText(inst, stepsLog);
     if (failed.some((s) => s.exit === 137 || s.exit === 124) || OOM_TEXT.test(text)) return 'install_resource_limit';
     if (refusedCount(inst) > 0) return 'install_blocked';
+    if (inst.kind === 'cargo') {
+      // Only cargo's own words before any build, or our entry helper's answer, can be the crate's (R-LP-54).
+      const entry = failed.find((s) => s.name === 'entry');
+      if (entry) return entryDetail(isObj(entry.result) ? entry.result.error : null);
+      return (failed.some((s) => s.name === 'install') && cargoInstallEvidence(text, isObj(launch) ? launch.crate : null)) || 'install_build_failed';
+    }
     if (PACKAGE_ERROR.test(text)) return 'install_failed';
     return 'install_build_failed';
   }
@@ -1388,10 +1456,13 @@ export function buildItem(item, ctx) {
     detail = (r && r.detail) || 'harness_error';
   } else {
     const oci = item.target && item.target.launch && item.target.launch.kind === 'docker' && ctx.ociOut;
-    const dir = oci ? join(ctx.ociOut, item.target_id, item.target_id) : join(ctx.subjectsOut, item.target_id);
-    const telemetryFile = oci ? join(ctx.ociOut, item.target_id, '_shard', 'telemetry.jsonl') : ctx.subjectsTelemetry;
+    const build = !oci && item.target && isBuild(item.target.launch) && ctx.buildsOut;
+    const dir = oci ? join(ctx.ociOut, item.target_id, item.target_id) : build ? join(ctx.buildsOut, item.target_id) : join(ctx.subjectsOut, item.target_id);
+    const telemetryFile = oci ? join(ctx.ociOut, item.target_id, '_shard', 'telemetry.jsonl') : build ? ctx.buildsTelemetry : ctx.subjectsTelemetry;
     const ociRun = oci ? (ctx.ociRuns || {})[item.target_id] : null;
     if (oci) deadlineHit = !ociRun || ociRun.outcome === 'deadline' || ociRun.rc === 124 || ociRun.rc === 137;
+    // The builds ran after the subjects (or did not, when the deadline came first: builds_rc stays -1).
+    if (build) deadlineHit = !Number.isInteger(ctx.state.builds_rc) || ctx.state.builds_rc < 0 || ctx.state.builds_rc === 124 || ctx.state.builds_rc === 137;
     const rec = readJson(join(dir, 'record.json'));
     const bare = readJson(join(dir, 'probe-bare.json'));
     const envp = readJson(join(dir, 'probe-env.json'));
@@ -1651,7 +1722,7 @@ export function bundleShard({ work, env = process.env, now = () => new Date(), l
   const plan = readJson(join(work, 'plan.json'));
   if (!plan || plan.format !== PLAN_FORMAT) throw new ControlFailure('no plan in the work folder');
   const state = readJson(join(work, 'sandbox.json')) || {};
-  const shardJson = readJson(join(work, 'driver-subjects', '_shard', 'shard.json')) || readJson(join(work, 'driver-controls', '_shard', 'shard.json'));
+  const shardJson = readJson(join(work, 'driver-subjects', '_shard', 'shard.json')) || readJson(join(work, 'driver-builds', '_shard', 'shard.json')) || readJson(join(work, 'driver-controls', '_shard', 'shard.json'));
   const runner = shardJson && isObj(shardJson.runner) ? shardJson.runner : null;
   const mscCommit = typeof state.msc_commit === 'string' && /^[0-9a-f]{40}$/.test(state.msc_commit) ? state.msc_commit : null;
   const ctx = {
@@ -1660,6 +1731,7 @@ export function bundleShard({ work, env = process.env, now = () => new Date(), l
     subjectsOut: join(work, 'driver-subjects'), subjectsTelemetry: join(work, 'driver-subjects', '_shard', 'telemetry.jsonl'),
     deadlineHit: state.subjects_rc === 124 || state.subjects_rc === 137,
     ociOut: join(work, 'driver-oci'), ociRuns: ociRuns(join(work, 'oci-runs.jsonl')),
+    buildsOut: join(work, 'driver-builds'), buildsTelemetry: join(work, 'driver-builds', '_shard', 'telemetry.jsonl'),
     runnerEnv: runner ? { os: safeText(runner.os, /^[a-z]{1,10}$/), arch: safeText(runner.arch, /^[a-z0-9_]{1,10}$/), kernel: safeText(runner.kernel, /^[A-Za-z0-9._+-]{1,60}$/), node: safeText(runner.node, /^v[0-9.]{1,20}$/), docker: safeText(runner.docker, /^[0-9][0-9A-Za-z.+-]{0,30}$/), container_platform: safeText(runner.container_platform, /^[a-z0-9/]{1,30}$/) } : null,
     toolVersions: { mcp_check: VERSION, rubric: M.RUBRIC_VERSION, spec: M.SPEC_VERSION, surface_corpus: mscCommit, worker_kit: safeText(state.worker_kit_ref, /^[0-9a-f]{40}$/), gvisor: safeText(state.gvisor_release, /^[0-9.a-z-]{1,40}$/) },
     sandboxSummary: { runtime: 'runsc', selftest: state.selftest_check_rc === 0 ? 'passed' : 'failed', controls_rc: int(state.controls_rc), subjects_rc: int(state.subjects_rc), swept: state.swept === true },
@@ -1820,6 +1892,7 @@ export async function main(argv, { env = process.env, stdout = process.stdout, s
     writeFileSync(join(work, 'plan.json'), json(plan));
     writeFileSync(join(work, 'targets-controls.json'), json(lists.controls));
     writeFileSync(join(work, 'targets-subjects.json'), json(lists.subjects));
+    writeFileSync(join(work, 'targets-builds.json'), json(lists.builds));
     mkdirSync(join(work, 'oci'), { recursive: true });
     for (const o of lists.oci) writeFileSync(join(work, 'oci', o.id + '.json'), json(o.list));
     writeFileSync(join(work, 'oci.json'), json(lists.oci.map((o) => ({ id: o.id, image: o.image, bytes: o.bytes }))));

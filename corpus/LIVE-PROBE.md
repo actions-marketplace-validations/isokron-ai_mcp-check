@@ -74,6 +74,18 @@ The run is named `shard <shard_id>`.
      OCI subjects run one at a time after the others, each only when the Docker disk has about four times its
      declared size free, and its image is removed after it; when there is not enough, that subject and every later
      one are a retryable skip (`disk_low`).
+   - **Crates** (registry type `cargo`, R-LP-54..56) are built in the sandbox (mcp-surface-corpus launchPlan, kind
+     `cargo`): `cargo install --locked` in its pinned Rust image, through index.crates.io and static.crates.io only, at
+     most 15 minutes, the binary cargo recorded (the only one, else the one named for the crate, else the only one named
+     for MCP; never a guess), the build's folders removed before the server starts in the same image. The same path and
+     rules as mcp-writecheck-action's crate path (its `cargoPlan` and `cargo-entry.mjs`, now in the sandbox itself). A
+     crate comes after npm, PyPI and an image of the same entry. Crates run after the other subjects, in a list of their
+     own (`targets-builds.json`), one after another, each with `BUILD_ALLOWANCE_S` (17 minutes: the build cap and the
+     image's first pull) on top of its share; a shard with a crate gives its other subjects `BUILD_RESERVE_S` less of
+     the budget. A crate the deadline stops is `shard_deadline` (retryable). Its failed install is the crate's own only on
+     cargo's word before anything compiled and with no sign of trouble reaching crates.io ("could not find `<crate>` in
+     registry `crates-io`": `install_failed`; "nothing to install ... because it has no binaries", or the entry helper's
+     `no_binary`: `package_not_runnable`); everything else, npm's and pip's error words included, is ours.
    - **npm install scripts run**, inside the sandbox's install container: gVisor with syscall tracing, egress only
      through the allowlist proxy to the npm registry. What they did is in the bundle (the install container's trace
      summary and every proxy request in `raw/telemetry.jsonl`, the counts in `install_phase_behaviour`). A native
@@ -215,7 +227,7 @@ and the 4x free-disk rule. An image on another host is unassessed until the list
 
 | Detail | Skip reason | Fault | Retryable |
 |---|---|---|---|
-| `bad_subject` (not a GitHub owner/name), `unsupported_package` (cargo, NuGet, MCPB only), `unverified_registry_entry`, `launch_invalid` | `no_runnable_artifact` | tool | no |
+| `bad_subject` (not a GitHub owner/name), `unsupported_package` (a package type we do not run yet: NuGet, MCPB), `unverified_registry_entry`, `launch_invalid` | `no_runnable_artifact` | tool | no |
 | `oci_host_not_allowed` (the image is not on one of our six registries) | `no_runnable_artifact` | tool | no |
 | `no_package` (no registry search page came back full; having no registry package is no defect: Go and Rust binaries, other npm names and own-registry images exist) | `no_runnable_artifact` | tool | no |
 | `registry_lookup_truncated` (a registry search page came back full, 100 results with no paging: the entry may not have been fetched) | `no_runnable_artifact` | tool | no |
@@ -231,6 +243,8 @@ and the 4x free-disk rule. An image on another host is unassessed until the list
 | `install_resource_limit` (exit 137 or 124, or out of memory) | `install_failed_registry` | tool | no |
 | `install_build_failed` (a native build, a missing compiler or library, an engine mismatch, or any other install failure with no package error) | `install_failed_registry` | tool | no |
 | `install_timeout` (our install time limit) | `install_failed_registry` | tool | no |
+| `package_not_runnable` (the package declares nothing we could start, in the package manager's or our entry helper's own answer: a crate with no binary) | `install_failed_registry` | subject | no |
+| `entry_ambiguous` (several binaries and none named for the package: we would have to guess) | `install_failed_registry` | tool | no |
 | `needs_credentials` (the registry entry declares a required env var, the server exited non-zero by itself (not 125, 126, 127 or 137; no signal or time limit), with every argument filled and no guessed PyPI entry, and it made no network attempt) | `start_requires_credentials` | subject | no |
 | `start_needs_network` (the server tried the network, which the run does not have: a lookup or connection in its role, or a connect, looked-up name or network call in its trace) | `timeout_start` | tool (the contract allows only subject for `start_requires_credentials`) | no |
 | `start_needs_config` (the server exited with its own code (not 125, 126, 127 or 137; no signal) and its stderr asks for configuration: a config file not found or unreadable, a kubeconfig or current-context, `--config`, a `Usage:` block, a missing or required argument, option, flag or environment variable, or "please create/set/provide/specify") | `timeout_start` | tool | no |
