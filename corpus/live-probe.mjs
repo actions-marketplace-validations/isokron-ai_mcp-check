@@ -1345,6 +1345,15 @@ export function serverNetworkAttempt(records) {
  * every one says it had exited by itself with the same code and the server's output was read back (R-LP-67).
  */
 export function exitOf(p, records = []) {
+  const e = exitRaw(p, records);
+  // 128+n is a process killed by signal n (130 our interrupt, 137 a kill, 139 a segfault under the runtime, 143 our
+  // docker stop): a signal, never the server's own exit code (R-LP-70).
+  if (Number.isInteger(e.exit) && e.exit > 128 && e.exit < 160) return { exit: null, signal: SIGNAL_NAMES[e.exit - 128] || 'SIG' + (e.exit - 128) };
+  return e;
+}
+const SIGNAL_NAMES = Object.freeze({ 1: 'SIGHUP', 2: 'SIGINT', 3: 'SIGQUIT', 6: 'SIGABRT', 9: 'SIGKILL', 11: 'SIGSEGV', 13: 'SIGPIPE', 15: 'SIGTERM' });
+
+function exitRaw(p, records) {
   const t = isObj(p.transport) ? p.transport : {};
   if (Number.isInteger(t.exit) || (typeof t.signal === 'string' && t.signal)) return { exit: Number.isInteger(t.exit) ? t.exit : null, signal: t.signal || null };
   const m = /\(exit (-?\d+|null), signal ([A-Za-z0-9]+|null)\)/.exec(String(p.initialize_error || p.error || ''));
@@ -1393,7 +1402,8 @@ export function failureDetail(rec, bare, envp, { deadlineHit = false, records = 
   if (!inst) return rec.timed_out ? 'shard_deadline' : 'harness_error';
   if (!inst.ok) {
     // The planner already read this image's digest, so a failed pull is not the image's absence (R-LP-37).
-    if (inst.kind === 'docker') return 'image_pull_failed';
+    // An image for another platform than linux/amd64 is no defect: we run that one only (mcp-surface-corpus R-SBX-46).
+    if (inst.kind === 'docker') return isObj(inst.oci) && inst.oci.platform_unsupported ? 'unsupported_platform' : 'image_pull_failed';
     const steps = Array.isArray(inst.steps) ? inst.steps : [];
     if (rec.timed_out || steps.some((s) => s && s.timed_out)) return 'install_timeout';
     const failed = steps.filter((s) => s && Number.isInteger(s.exit) && s.exit !== 0);
@@ -1408,6 +1418,8 @@ export function failureDetail(rec, bare, envp, { deadlineHit = false, records = 
   if (!p) return rec.timed_out ? 'start_timeout' : 'harness_error';
   if (p.initialize || p.era === 'modern') return listDetail(p);
   if (rec.timed_out || /^time limit/.test(String(p.error || ''))) return 'start_timeout';
+  // The sandbox refused the image's WORKDIR (under /proc, /sys or /dev) and ran it in /tmp: not where it expects to run.
+  if (isObj(inst.oci) && inst.oci.workdir_refused) return 'start_env_limited';
   // Credentials only when the publisher declares a required env var (the registry entry). A secret-looking name in the
   // README or the source is no such evidence: optional keys are common, and the server failed with dummies too.
   const needsEnv = !!(rec.env && rec.env.names && Array.isArray(rec.env.names.registry) && rec.env.names.registry.length);

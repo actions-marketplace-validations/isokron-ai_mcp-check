@@ -333,3 +333,26 @@ test('R-LP-67: an HTTP-mode server\'s own exit comes from the sandbox\'s contain
   // stdio keeps its transport's exit.
   assert.deepEqual(LP.exitOf({ transport: { exit: 3, signal: null } }, [box(1)]), { exit: 3, signal: null });
 });
+
+test('R-LP-70: an exit of 128+n is signal n (our stop 143, our interrupt 130, a segfault 139), never the server\'s own exit; an image the sandbox would not run as is stays ours', () => {
+  const http = (o = {}) => ({ format: 'isokron-surface-probe/1', mode: 'http', error: null, initialize: null, lists: {}, transport: {}, timing: { total_ms: 3500 }, ...o });
+  const box = (exit) => ({ v: 1, type: 'container', subject: 's001', role: 'server', runtime: 'runsc', exit, signal: null, timed_out: false, oom_killed: false, ms: 3400 });
+  const ki = tb('  File "/app/server.py", line 40, in main', '    time.sleep(1)', 'KeyboardInterrupt');
+  const crash = tb('  File "/app/server.py", line 9, in <module>', "KeyError: 'port'");
+  const ctx = { launch: { kind: 'docker', image: 'ghcr.io/acme/srv:1' }, argsUnfilled: 0 };
+  for (const [code, sig] of [[143, 'SIGTERM'], [130, 'SIGINT'], [139, 'SIGSEGV'], [137, 'SIGKILL'], [134, 'SIGABRT']]) {
+    assert.deepEqual(LP.exitOf(http({ stderr: crash, stderr_bytes: crash.length }), [box(code)]), { exit: null, signal: sig }, String(code));
+    assert.equal(LP.failureDetail(rec(), http({ stderr: crash, stderr_bytes: crash.length }), null, { ...ctx, records: [box(code)] }), 'start_env_limited', String(code));
+    // The same over stdio, where docker run reports it.
+    assert.equal(LP.failureDetail(rec(), { ...exit1(crash), transport: { exit: code, signal: null } }, null, ctx), 'start_env_limited', 'stdio ' + code);
+  }
+  assert.equal(LP.failureDetail(rec(), http({ stderr: ki, stderr_bytes: ki.length }), null, { ...ctx, records: [box(130)] }), 'start_env_limited', 'KeyboardInterrupt with 130');
+  assert.equal(LP.failureDetail(rec(), http({ stderr: crash, stderr_bytes: crash.length }), null, { ...ctx, records: [box(1)] }), 'start_failed', 'its own exit 1 still counts');
+  assert.deepEqual(LP.exitOf({ transport: { exit: 128, signal: null } }), { exit: 128, signal: null }, '128 itself is an exit code');
+  // An image only for another platform, and a WORKDIR the sandbox refused: ours.
+  const docker = (oci) => rec({ install: { kind: 'docker', ok: false, steps: [{ name: 'pull', exit: 0 }], oci } });
+  assert.equal(LP.failureDetail(docker({ platform: 'linux/arm64', platform_unsupported: true }), null, null, ctx), 'unsupported_platform');
+  assert.equal(LP.failureDetail(docker({ platform: null }), null, null, ctx), 'image_pull_failed');
+  const refused = rec({ install: { kind: 'docker', ok: true, steps: [{ name: 'pull', exit: 0 }], oci: { workdir: null, workdir_refused: '/proc/self/fd/7', volumes: [] } } });
+  assert.equal(LP.failureDetail(refused, { ...exit1(crash), transport: { exit: 1, signal: null } }, null, ctx), 'start_env_limited');
+});
