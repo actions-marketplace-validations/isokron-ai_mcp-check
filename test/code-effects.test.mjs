@@ -468,3 +468,26 @@ test('R-AE-31: an exec that no argument of the tool reaches is "may", and so is 
   const jsArg = snippet(TS("if (!a.path) { return 'no path'; }\nfs.rmSync(a.path);"), 't');
   assert.deepEqual(jsArg.effects.delete.map((e) => e.confidence), ['definite']);
 });
+
+test('R-AE-32: deleting a file the same function wrote, directly or through a callee given the same value, is housekeeping ("may"); so is a pending, spool, queue, outbox or staging path', () => {
+  // QA-40 repro r3 (reg-fabric-verify-mcp record_action, record_event): write a pending record, POST it, remove it.
+  const reg = (body, extra = '') => ({ 'index.ts': "import { writeFileSync, renameSync, rmSync } from 'fs';\nimport { join } from 'path';\nconst HOME = process.env.APP_HOME || '/var/lib/app';\n" + extra + "\nserver.registerTool('t', { description: 'd', inputSchema: {}, annotations: { readOnlyHint: false, destructiveHint: false } }, async ({ key, text }) => {\n" + body + "\n});\n" });
+  const r3 = snippet(reg("const pPath = join(HOME, 'pending', key + '.json');\nwriteFileSync(pPath, text);\nawait fetch('https://api.example.com/v1/log/append', { method: 'POST', body: text });\nrmSync(pPath, { force: true });"), 't');
+  assert.deepEqual(r3.effects.delete.map((e) => e.confidence), ['may']);
+  // the own-write rule alone, on a path with no housekeeping word, through a callee (writePrivate in fabric.js)
+  const helper = "function writePrivate(path: string, data: string) {\n  const tmp = path + '.part';\n  writeFileSync(tmp, data);\n  renameSync(tmp, path);\n}\n";
+  const own = snippet(reg("const out = join(HOME, key + '.json');\nwritePrivate(out, text);\nawait fetch('https://api.example.com/v1/append', { method: 'POST', body: text });\nrmSync(out, { force: true });", helper), 't');
+  assert.deepEqual(own.effects.delete.map((e) => [e.confidence, e.note]), [['may', 'removes a file this function wrote']]);
+  const direct = snippet(reg("const out = join(HOME, key + '.json');\nwriteFileSync(out, text);\nrmSync(out);"), 't');
+  assert.deepEqual(direct.effects.delete.map((e) => e.confidence), ['may']);
+  // positive controls: a file the function did not write stays definite, and so does a different path than the one written
+  const other = snippet(reg("const out = join(HOME, key + '.json');\nconst old = join(HOME, key + '.bak');\nwriteFileSync(out, text);\nrmSync(old);"), 't');
+  assert.deepEqual(other.effects.delete.map((e) => e.confidence), ['definite']);
+  const plain = snippet(reg("rmSync(join(HOME, key));"), 't');
+  assert.deepEqual(plain.effects.delete.map((e) => e.confidence), ['definite']);
+  // the housekeeping words
+  for (const w of ['pending', 'spool', 'queue', 'outbox', 'staging']) {
+    const t = snippet(reg("rmSync(join(HOME, '" + w + "', key));"), 't');
+    assert.deepEqual(t.effects.delete.map((e) => e.confidence), ['may'], w);
+  }
+});

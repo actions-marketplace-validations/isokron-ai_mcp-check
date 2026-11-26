@@ -694,9 +694,10 @@
   // Bookkeeping files: logs, audit trails, metrics, state, caches, locks, pid files, temporary files. A write to one of
 // these is "may": it is the server's own housekeeping, not the data the tool is about. Words in snake_case, dotted and
 // camelCase names.
-const BOOK_WORD = /(?:^|[^A-Za-z])(?:log|logs|logging|audit|metric|metrics|state|cache|caches|lock|locks|pid|tmp|temp|scratch|history|journal|telemetry|trace|traces)(?:[^a-z]|$)/;
-const BOOK_CAMEL = /[a-z0-9](?:Log|Audit|Metric|State|Cache|Lock|Pid|Tmp|Temp|Scratch|History|Journal|Telemetry|Trace)(?:[^a-z]|$)/;
+const BOOK_WORD = /(?:^|[^A-Za-z])(?:log|logs|logging|audit|metric|metrics|state|cache|caches|lock|locks|pid|tmp|temp|scratch|history|journal|telemetry|trace|traces|pending|spool|queue|outbox|staging)(?:[^a-z]|$)/;
+const BOOK_CAMEL = /[a-z0-9](?:Log|Audit|Metric|State|Cache|Lock|Pid|Tmp|Temp|Scratch|History|Journal|Telemetry|Trace|Pending|Spool|Queue|Outbox|Staging)(?:[^a-z]|$)/;
 const BOOK_OTHER = /\.log\b|tmpdir|mkdtemp|pidfile|lockfile|\.cache\b/i;
+// pending, spool, queue, outbox and staging: a server's own files waiting to be sent (QA-40, R-AE-32)
 const bookkeeping = (t) => BOOK_WORD.test(t) || BOOK_CAMEL.test(t) || BOOK_OTHER.test(t);
 const APPEND_ONLY = new Set(['appendFile', 'appendFileSync']);
 // the identifiers a path expression is built from, not counting members (os.path) or strings
@@ -1211,7 +1212,10 @@ const idsOf = (code) => new Set((code.match(/(?<![.\w$])[A-Za-z_$][\w$]*/g) || [
     const idsOfParams = (Q, f) => new Set(paramList(Q, f).flat());
     const fx = { read: [], write: [], delete: [], unsafe_http: [], exec: [], unknown_call: [] };
     const seenEv = new Set(); const visited = new Set(); const unresolved = [];
+    // the functions (by region key) whose walk reached a file write, for "a delete of a file this function wrote"
+    const fnWrites = new Map(); const active = [];
     const add = (e, via, capMay, cond) => {
+      if (e.kind === 'write' && /^fs\./.test(e.sink)) active.forEach((k) => fnWrites.set(k, true));
       let conf = capMay && e.conf === 'definite' ? 'may' : e.conf;
       if (cond && conf === 'definite') { conf = 'may'; e = Object.assign({}, e, { note: (e.note ? e.note + '; ' : '') + 'on a conditional path' }); }
       const key = e.P.path + ':' + e.P.line(e.at) + ':' + e.sink + ':' + e.kind;
@@ -1223,6 +1227,9 @@ const idsOf = (code) => new Set((code.match(/(?<![.\w$])[A-Za-z_$][\w$]*/g) || [
     let calls = 0;
     const walk = (P, a, b, depth, via, f, cond, params, taintIn, litsIn) => {
       const key = P.path + ':' + a + ':' + b; if (visited.has(key)) return; visited.add(key);
+      active.push(key); try { walkBody(P, a, b, depth, via, f, cond, params, taintIn, litsIn, key); } finally { active.pop(); }
+    };
+    const walkBody = (P, a, b, depth, via, f, cond, params, taintIn, litsIn, key) => {
       if (state.deadline && Date.now() > state.deadline) { state.timedOut = true; return; }
       params = new Set([...(params || []), ...idsOfParams(P, f)]);
       const calleeTaint = (Q, call, t, tn) => {
@@ -1259,6 +1266,9 @@ const idsOf = (code) => new Set((code.match(/(?<![.\w$])[A-Za-z_$][\w$]*/g) || [
       };
       // strings handed to a logger, print or an error constructor are messages, never queries
       for (const c of cs) { const l = c.chain[c.chain.length - 1]; if (DB_NOT_CALLS.test(c.chain[0]) || DB_NOT_CALLS.test(l)) regionStrs(c.open, c.close).forEach((q) => claimed.add(q.s)); }
+      // identifiers this function passed as the path of a file write, directly or to a callee that wrote a file
+      const wroteIds = new Set();
+      const firstId = (call) => { const r = argTexts(P, call)[0]; const t = r ? P.code.slice(r[0], r[1]).trim() : ''; return /^[A-Za-z_$][\w$]*$/.test(t) && !/^(self|this)$/.test(t) ? t : null; };
       for (const call of cs) {
         if (++calls > state.maxCalls) { state.truncated = true; return; }
         let effs = classify(R, P, call, region, state);
@@ -1281,10 +1291,18 @@ const idsOf = (code) => new Set((code.match(/(?<![.\w$])[A-Za-z_$][\w$]*/g) || [
         }
         if (sqlHere) effs = effs.filter((e) => e.kind !== 'unknown_call');
         const condCall = cond || condAt(call.at);
-        effs.forEach((e) => { const from = targetFromArgs(P, call, e, taint, state); add(from === false ? Object.assign({}, e, { conf: 'may', note: (e.note ? e.note + '; ' : '') + 'the target does not come from the tool\'s arguments' }) : e, via, capMay, condCall); });
+        const fid = firstId(call);
+        effs.forEach((e) => {
+          const from = targetFromArgs(P, call, e, taint, state);
+          let e2 = from === false ? Object.assign({}, e, { conf: 'may', note: (e.note ? e.note + '; ' : '') + 'the target does not come from the tool\'s arguments' }) : e;
+          // removing a file this function wrote earlier (a pending record, a temporary copy) undoes its own write
+          if (e2.kind === 'delete' && /^fs\./.test(e2.sink) && fid && wroteIds.has(fid) && e2.conf === 'definite') e2 = Object.assign({}, e2, { conf: 'may', note: (e2.note ? e2.note + '; ' : '') + 'removes a file this function wrote' });
+          add(e2, via, capMay, condCall);
+        });
+        if (fid && effs.some((e) => e.kind === 'write' && /^fs\./.test(e.sink))) wroteIds.add(fid);
         // follow into the repository
         if (depth < state.depth && !call.chained) {
-          for (const t of targets.slice(0, 3)) { const nm = t.f.name; walk(t.P, t.f.body[0], t.f.body[1], depth + 1, via.concat(nm + '@' + t.P.path + ':' + t.P.line(t.f.start)), t.f, condCall, params, calleeTaint(P, call, t, taint), calleeLits(call, t)); }
+          for (const t of targets.slice(0, 3)) { const nm = t.f.name; const tkey = t.P.path + ':' + t.f.body[0] + ':' + t.f.body[1]; walk(t.P, t.f.body[0], t.f.body[1], depth + 1, via.concat(nm + '@' + t.P.path + ':' + t.P.line(t.f.start)), t.f, condCall, params, calleeTaint(P, call, t, taint), calleeLits(call, t)); if (fnWrites.get(tkey)) argTexts(P, call).forEach(([x, y]) => { const id = P.code.slice(x, y).trim(); if (/^[A-Za-z_$][\w$]*$/.test(id)) wroteIds.add(id); }); }
           if (!targets.length && call.chain.length >= 1 && P.imports.get(call.chain[0])) {
             const imp = P.imports.get(call.chain[0]);
             if (imp.spec.startsWith('.') || (P.lang === 'py' && imp.spec.startsWith('.'))) {
