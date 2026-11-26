@@ -86,6 +86,17 @@ The run is named `shard <shard_id>`.
      cargo's word before anything compiled and with no sign of trouble reaching crates.io ("could not find `<crate>` in
      registry `crates-io`": `install_failed`; "nothing to install ... because it has no binaries", or the entry helper's
      `no_binary`: `package_not_runnable`); everything else, npm's and pip's error words included, is ours.
+   - **.NET tools** (registry type `nuget`, R-LP-57, R-LP-58) are installed in the sandbox (mcp-surface-corpus
+     launchPlan, kind `nuget`): `dotnet tool install --tool-path` in its pinned .NET 10 SDK image with a NuGet config
+     that names nuget.org alone, through api.nuget.org and globalcdn.nuget.org only; the command is the one the
+     package's `DotnetToolSettings.xml` declares and the install made a launcher for (the linux-x64 build of a
+     RID-specific tool), run as `dotnet <entry point>` on the image's runtime with `DOTNET_ROLL_FORWARD=Major` (a tool
+     built for .NET 8 or 9 runs on 10). After npm, PyPI and an image, before a crate; it runs among the subjects with
+     `PACKAGE_ALLOWANCE_S.nuget` (180 s, the SDK image's first pull) on top of its share. Its failed install is the
+     package's own only on the .NET CLI's word about this package id with no sign of trouble reaching NuGet (NU1101 or
+     NU1102: `install_failed`; not a .NET tool, or no `DotnetToolSettings.xml`: `package_not_runnable`); a NuGet install
+     runs no code of the package, so nothing it ships can print those words. A tool built for other platforms only is
+     `platform_unsupported` (tool); several commands is `entry_ambiguous` (tool).
    - **npm install scripts run**, inside the sandbox's install container: gVisor with syscall tracing, egress only
      through the allowlist proxy to the npm registry. What they did is in the bundle (the install container's trace
      summary and every proxy request in `raw/telemetry.jsonl`, the counts in `install_phase_behaviour`). A native
@@ -227,7 +238,7 @@ and the 4x free-disk rule. An image on another host is unassessed until the list
 
 | Detail | Skip reason | Fault | Retryable |
 |---|---|---|---|
-| `bad_subject` (not a GitHub owner/name), `unsupported_package` (a package type we do not run yet: NuGet, MCPB), `unverified_registry_entry`, `launch_invalid` | `no_runnable_artifact` | tool | no |
+| `bad_subject` (not a GitHub owner/name), `unsupported_package` (a package type we do not run yet: MCPB), `unverified_registry_entry`, `launch_invalid` | `no_runnable_artifact` | tool | no |
 | `oci_host_not_allowed` (the image is not on one of our six registries) | `no_runnable_artifact` | tool | no |
 | `no_package` (no registry search page came back full; having no registry package is no defect: Go and Rust binaries, other npm names and own-registry images exist) | `no_runnable_artifact` | tool | no |
 | `registry_lookup_truncated` (a registry search page came back full, 100 results with no paging: the entry may not have been fetched) | `no_runnable_artifact` | tool | no |
@@ -244,7 +255,8 @@ and the 4x free-disk rule. An image on another host is unassessed until the list
 | `install_build_failed` (a native build, a missing compiler or library, an engine mismatch, or any other install failure with no package error) | `install_failed_registry` | tool | no |
 | `install_timeout` (our install time limit) | `install_failed_registry` | tool | no |
 | `package_not_runnable` (the package declares nothing we could start, in the package manager's or our entry helper's own answer: a crate with no binary) | `install_failed_registry` | subject | no |
-| `entry_ambiguous` (several binaries and none named for the package: we would have to guess) | `install_failed_registry` | tool | no |
+| `entry_ambiguous` (several binaries, or several tool commands, and none named for the package: we would have to guess) | `install_failed_registry` | tool | no |
+| `platform_unsupported` (the package builds for other platforms only: a .NET tool for Windows runtimes; our platform is linux/amd64) | `no_runnable_artifact` | tool | no |
 | `needs_credentials` (the registry entry declares a required env var, the server exited non-zero by itself (not 125, 126, 127 or 137; no signal or time limit), with every argument filled and no guessed PyPI entry, and it made no network attempt) | `start_requires_credentials` | subject | no |
 | `start_needs_network` (the server tried the network, which the run does not have: a lookup or connection in its role, or a connect, looked-up name or network call in its trace) | `timeout_start` | tool (the contract allows only subject for `start_requires_credentials`) | no |
 | `start_needs_config` (the server exited with its own code (not 125, 126, 127 or 137; no signal) and its stderr asks for configuration: a config file not found or unreadable, a kubeconfig or current-context, `--config`, a `Usage:` block, a missing or required argument, option, flag or environment variable, or "please create/set/provide/specify") | `timeout_start` | tool | no |

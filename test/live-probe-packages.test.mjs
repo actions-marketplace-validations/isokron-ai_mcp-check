@@ -145,3 +145,74 @@ test('R-LP-56 mutation check: without the Compiling guard, the network guard or 
     assert.equal(M.failureDetail(cargoRec([{ name: 'install', exit: 101 }]), null, null, { stepsLog: log, launch: LAUNCH, argsUnfilled: 0 }), 'install_failed', 'without the guard: ' + from.slice(0, 50));
   }
 });
+
+// ------------------------------------------------------------------ NuGet (.NET tools)
+
+const nuget = (identifier, extra = {}) => ({ registryType: 'nuget', identifier, version: '1.2.0', runtimeHint: 'dnx', transport: { type: 'stdio' }, ...extra });
+
+test('R-LP-57: a .NET tool package resolves to a sandbox tool install of exactly that package (checked id, exact version or latest), after npm, PyPI and images, with time for the SDK image', async () => {
+  const f = registry([
+    server('io.github.acme/dotty', 'acme/dotty', [nuget('Acme.Dotty.Mcp')]),
+    server('io.github.acme/evil', 'acme/evil', [nuget('--add-source')]),
+    server('io.github.acme/pre', 'acme/pre', [nuget('Acme.Pre', { version: '0.10.0-beta.54' })]),
+    server('io.github.acme/float', 'acme/float', [nuget('Acme.Float', { version: '[1.0,2.0)' })]),
+    server('io.github.acme/private', 'acme/private', [nuget('Acme.Private', { registryBaseUrl: 'https://nuget.acme.example/v3/index.json' })]),
+    server('io.github.acme/official', 'acme/official', [nuget('Acme.Official', { registryBaseUrl: 'https://api.nuget.org/v3/index.json' })]),
+  ]);
+  const r = (s) => LP.resolveSubject({ subject: s, repo: s }, { fetch: f });
+  const dotty = await r('acme/dotty');
+  assert.deepEqual([dotty.status, dotty.launch, dotty.choice.purl], ['runnable', { kind: 'nuget', package: 'Acme.Dotty.Mcp', version: '1.2.0' }, 'pkg:nuget/Acme.Dotty.Mcp@1.2.0']);
+  assert.equal((await r('acme/evil')).detail, 'launch_invalid');
+  assert.equal((await r('acme/pre')).launch.version, '0.10.0-beta.54');
+  assert.equal((await r('acme/float')).launch.version, 'latest');
+  assert.equal((await r('acme/private')).detail, 'private_registry');
+  assert.equal((await r('acme/official')).status, 'runnable');
+  const seedOnly = await LP.resolveSubject({ subject: 'acme/seeded', repo: 'acme/seeded' }, { fetch: registry([]), seed: new Map([['acme/seeded', [{ registry: 'nuget', identifier: 'Seeded.Mcp' }]]]) });
+  assert.deepEqual(seedOnly.launch, { kind: 'nuget', package: 'Seeded.Mcp', version: 'latest' });
+  // Time: the subject's share plus the oracle stage's, plus PACKAGE_ALLOWANCE_S.nuget; it runs among the subjects.
+  const inputs = LP.parseInputs({ shardId: 's', attemptId: 'a1', items: items(['acme/dotty']) });
+  const plan = await LP.planShard({ inputs, fetch: f });
+  assert.equal(plan.items[0].target.timeout_s, plan.subject_timeout_s + LP.ORACLE_ALLOWANCE_S + LP.PACKAGE_ALLOWANCE_S.nuget);
+  assert.deepEqual(LP.targetLists(plan, { node24Image: NODE24 }).subjects.targets.map((t) => t.id), ['s001']);
+});
+
+test('R-LP-57 mutation check: without the package id check an option-like id reaches the sandbox', async () => {
+  const f = registry([server('io.github.acme/evil', 'acme/evil', [nuget('--add-source')])]);
+  const M = await mutant("    if (!NUGET_ID.test(id)) return { detail: 'launch_invalid' };\n", '');
+  assert.equal((await M.resolveSubject({ subject: 'acme/evil', repo: 'acme/evil' }, { fetch: f })).launch.package, '--add-source');
+});
+
+const nugetRec = (steps, o = {}) => ({ install: { kind: 'nuget', ok: false, steps, egress_refused: 0, ...o }, env: { names: { registry: [] }, secret_named: [] }, timing: { total_ms: 60000 }, timed_out: false });
+const NLAUNCH = { kind: 'nuget', package: 'Acme.Dotty.Mcp', version: 'latest' };
+const nfd = (rec, stepsLog) => LP.failureDetail(rec, null, null, { stepsLog, launch: NLAUNCH, argsUnfilled: 0 });
+
+test('R-LP-58: a .NET tool\'s failed install is the package\'s only on the CLI\'s word about this id with no trouble reaching NuGet, or the entry helper\'s no_tool_settings; other platforms only, several commands and everything else are ours', () => {
+  const install = (exit = 1) => [{ name: 'config', exit: 0 }, { name: 'install', exit, timed_out: false }];
+  assert.equal(nfd(nugetRec(install()), '/work/nuget.config : error NU1101: Unable to find package Acme.Dotty.Mcp. No packages exist with this id in source(s): nuget.org\nTool \'acme.dotty.mcp\' failed to install.\n'), 'install_failed');
+  assert.equal(nfd(nugetRec(install()), 'error NU1102: Unable to find package acme.dotty.mcp with version (= 9.9.9)\n'), 'install_failed', 'ids are case-insensitive');
+  assert.equal(nfd(nugetRec(install()), 'error NU1101: Unable to find package Other.Package. No packages exist with this id\n'), 'install_build_failed', 'another package: a dependency, not this one');
+  assert.equal(nfd(nugetRec(install()), 'error NU1301: Unable to load the service index for source https://api.nuget.org/v3/index.json.\nerror NU1101: Unable to find package Acme.Dotty.Mcp.\n'), 'install_build_failed', 'NuGet not reached: ours');
+  assert.equal(nfd(nugetRec(install()), 'Package Acme.Dotty.Mcp is not a .NET tool.\n'), 'package_not_runnable');
+  assert.equal(nfd(nugetRec(install()), "Settings file 'DotnetToolSettings.xml' was not found in the package.\n"), 'package_not_runnable');
+  assert.equal(nfd(nugetRec(install(), { egress_refused: 2 }), 'error NU1101: Unable to find package Acme.Dotty.Mcp.\n'), 'install_blocked');
+  assert.equal(nfd(nugetRec(install(137)), ''), 'install_resource_limit');
+  assert.equal(nfd(nugetRec(install()), 'npm ERR! code E404\n'), 'install_build_failed', 'npm\'s words are not NuGet\'s');
+  const entry = (error) => [...install(0), { name: 'entry', exit: 1, result: { error } }];
+  assert.equal(nfd(nugetRec(entry('no_tool_settings')), ''), 'package_not_runnable');
+  assert.equal(nfd(nugetRec(entry('no_linux_build')), ''), 'platform_unsupported');
+  assert.equal(nfd(nugetRec(entry('several_commands')), ''), 'entry_ambiguous');
+  assert.equal(nfd(nugetRec(entry('no_command')), ''), 'install_build_failed');
+  assert.deepEqual(LP.DETAILS.platform_unsupported, ['no_runnable_artifact', false, 'install', 'tool']);
+});
+
+test('R-LP-58 mutation check: without the network guard or the same-id check, a package is blamed for what NuGet did not say about it', async () => {
+  for (const [from, to, log] of [
+    ['  if (NUGET_NOT_THE_PACKAGE.test(t)) return null;\n  const same = (n) => String(n).toLowerCase() === String(id).toLowerCase();', '  const same = (n) => String(n).toLowerCase() === String(id).toLowerCase();', 'error NU1301: Unable to load the service index for source https://api.nuget.org/v3/index.json.\nerror NU1101: Unable to find package Acme.Dotty.Mcp.\n'],
+    ["  if (missing && same(missing[1])) return 'install_failed';\n  const notTool", "  if (missing) return 'install_failed';\n  const notTool", 'error NU1101: Unable to find package Other.Package. No packages exist with this id\n'],
+  ]) {
+    const rec = nugetRec([{ name: 'install', exit: 1 }]);
+    assert.equal(nfd(rec, log), 'install_build_failed');
+    const M = await mutant(from, to);
+    assert.equal(M.failureDetail(rec, null, null, { stepsLog: log, launch: NLAUNCH, argsUnfilled: 0 }), 'install_failed', 'without the guard: ' + from.slice(0, 50));
+  }
+});

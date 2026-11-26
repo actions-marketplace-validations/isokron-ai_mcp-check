@@ -96,6 +96,8 @@ export const SUBJECT_BUDGET_S = 26 * 60;
  */
 export const BUILD_ALLOWANCE_S = 17 * 60;
 export const BUILD_RESERVE_S = 12 * 60;
+/** R-LP-57: more time for a kind whose install image is large and pulled at its first subject (the .NET SDK image). */
+export const PACKAGE_ALLOWANCE_S = Object.freeze({ nuget: 180 });
 /** The launch kinds that build in the sandbox. */
 export const isBuild = (launch) => !!(launch && launch.kind === 'cargo');
 export const SUBJECT_TIMEOUT_MIN_S = 90;
@@ -119,7 +121,7 @@ const REGISTRY_CAP = 4 * 1024 * 1024;
 export const DETAILS = Object.freeze({
   bad_subject: ['no_runnable_artifact', false, 'resolve', 'tool'], // not a GitHub owner/name: this lane reads GitHub only
   no_package: ['no_runnable_artifact', false, 'resolve', 'tool'], // no registry package is no defect: Go and Rust binaries, other npm names and own-registry images exist (R-LP-43)
-  unsupported_package: ['no_runnable_artifact', false, 'resolve', 'tool'], // a package type we cannot run yet (NuGet, MCPB)
+  unsupported_package: ['no_runnable_artifact', false, 'resolve', 'tool'], // a package type we cannot run yet (MCPB)
   private_registry: ['no_runnable_artifact', false, 'resolve', 'tool'],
   unverified_registry_entry: ['no_runnable_artifact', false, 'resolve', 'tool'], // our provenance checks stop short of it
   // Our allowlist of OCI hosts (it guards the planner's own fetches and what the runner's Docker daemon pulls, outside the
@@ -146,6 +148,8 @@ export const DETAILS = Object.freeze({
   package_not_runnable: ['install_failed_registry', false, 'install', 'subject'],
   // R-LP-54: several binaries (or commands) and none named for the package: we would have to guess, so it is ours.
   entry_ambiguous: ['install_failed_registry', false, 'install', 'tool'],
+  // R-LP-57: the package has a build for other platforms only (a .NET tool for Windows runtimes): our platform, not a defect.
+  platform_unsupported: ['no_runnable_artifact', false, 'install', 'tool'],
   needs_credentials: ['start_requires_credentials', false, 'start', 'subject'], // a declared required env var, and the server exited non-zero by itself with no network attempt
   start_needs_network: ['timeout_start', false, 'start', 'tool'], // the server tried the network, which the run does not have
   start_failed: ['timeout_start', false, 'start', 'subject'], // a crash signature on stderr (R-LP-45), and exited with its own non-zero code, early, with every argument filled
@@ -346,9 +350,12 @@ export function repoOfMetadataUrl(url) {
 }
 
 // Installed packages first, then an image, then a package we build: a crate's build can take BUILD_CAP_S.
-const TYPE_RANK = { npm: 0, pypi: 1, oci: 2, cargo: 5 };
+const TYPE_RANK = { npm: 0, pypi: 1, oci: 2, nuget: 4, cargo: 5 };
 const TRANSPORT_RANK = { stdio: 0, 'streamable-http': 1 };
-const DEFAULT_BASE = { npm: ['https://registry.npmjs.org', 'https://registry.npmjs.org/'], pypi: ['https://pypi.org', 'https://pypi.org/', 'https://pypi.org/simple', 'https://pypi.org/simple/'], cargo: ['https://crates.io', 'https://crates.io/', 'https://index.crates.io', 'https://index.crates.io/'] };
+const DEFAULT_BASE = { npm: ['https://registry.npmjs.org', 'https://registry.npmjs.org/'], pypi: ['https://pypi.org', 'https://pypi.org/', 'https://pypi.org/simple', 'https://pypi.org/simple/'], cargo: ['https://crates.io', 'https://crates.io/', 'https://index.crates.io', 'https://index.crates.io/'], nuget: ['https://api.nuget.org/v3/index.json', 'https://api.nuget.org', 'https://api.nuget.org/', 'https://www.nuget.org', 'https://www.nuget.org/'] };
+/** A NuGet package id and an exact NuGet version, as the sandbox checks them (mcp-surface-corpus src/targets.mjs). */
+const NUGET_ID = /^[A-Za-z0-9_](?:[A-Za-z0-9_.-]{0,98}[A-Za-z0-9_])?$/;
+const NUGET_VERSION = /^[0-9]+\.[0-9]+(?:\.[0-9]+){0,2}(?:-[0-9A-Za-z.-]{1,60})?(?:\+[0-9A-Za-z.-]{1,60})?$/;
 /** A crate name as crates.io takes it, and the sandbox's own check (mcp-surface-corpus src/targets.mjs CRATE). */
 const CRATE_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const CRATE_VERSION = /^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.+-]{1,60})?$/;
@@ -729,6 +736,7 @@ export function purlOf(type, id, version) {
   if (type === 'npm') return 'pkg:npm/' + id.split('/').map(encodeURIComponent).join('/') + v;
   if (type === 'pypi') return 'pkg:pypi/' + encodeURIComponent(id.toLowerCase().replace(/[-_.]+/g, '-')) + v;
   if (type === 'cargo') return 'pkg:cargo/' + encodeURIComponent(id) + v;
+  if (type === 'nuget') return 'pkg:nuget/' + encodeURIComponent(id) + v;
   return null;
 }
 
@@ -739,7 +747,7 @@ export function purlOf(type, id, version) {
 export async function launchFor(pkg, { fetch: fetchImpl = globalThis.fetch } = {}) {
   const type = String(pkg.registryType || pkg.registry || '').toLowerCase();
   const id = typeof pkg.identifier === 'string' ? pkg.identifier.trim() : '';
-  if (!['npm', 'pypi', 'oci', 'cargo'].includes(type)) return { detail: 'unsupported_package' };
+  if (!['npm', 'pypi', 'oci', 'cargo', 'nuget'].includes(type)) return { detail: 'unsupported_package' };
   const base = typeof pkg.registryBaseUrl === 'string' ? pkg.registryBaseUrl : null;
   if (base && type !== 'oci' && !DEFAULT_BASE[type].includes(base)) return { detail: 'private_registry' };
   const tr = transportOf(pkg.transport);
@@ -769,6 +777,15 @@ export async function launchFor(pkg, { fetch: fetchImpl = globalThis.fetch } = {
     choice.version = v; choice.purl = purlOf('cargo', id, v);
     return { launch: { kind: 'cargo', crate: id, version: v, ...common }, choice };
   }
+  if (type === 'nuget') {
+    // R-LP-57: a .NET tool package, installed in the sandbox (mcp-surface-corpus launchPlan, kind nuget: `dotnet tool
+    // install --tool-path` in its pinned .NET SDK image, NuGet's two hosts only), its command the one its
+    // DotnetToolSettings.xml declares, run on the image's runtime.
+    if (!NUGET_ID.test(id)) return { detail: 'launch_invalid' };
+    const v = version === 'latest' || NUGET_VERSION.test(version) ? version : 'latest';
+    choice.version = v; choice.purl = purlOf('nuget', id, v);
+    return { launch: { kind: 'nuget', package: id, version: v, ...common }, choice };
+  }
   const ref = parseOciRef(id);
   if (!ref) return { detail: 'launch_invalid' };
   if (!OCI_HOSTS.includes(ref.host)) return { detail: 'oci_host_not_allowed' };
@@ -788,7 +805,7 @@ export const REGISTRY_PAGE = 100;
 export async function registryEntries(subject, seedPkgs, { fetch: fetchImpl = globalThis.fetch, base = REGISTRY_BASE, stats = null } = {}) {
   const [owner, name] = subject.split('/');
   const seedIds = new Set(seedPkgs.map((p) => String(p.registry).toLowerCase() + ':' + String(p.identifier).toLowerCase()));
-  const queries = [...new Set([name, owner + '/' + name, ...seedPkgs.filter((p) => ['npm', 'pypi', 'cargo'].includes(p.registry)).map((p) => p.identifier.split('/').pop())])].filter((q) => q && q.length <= 200).slice(0, 5);
+  const queries = [...new Set([name, owner + '/' + name, ...seedPkgs.filter((p) => ['npm', 'pypi', 'cargo', 'nuget'].includes(p.registry)).map((p) => p.identifier.split('/').pop())])].filter((q) => q && q.length <= 200).slice(0, 5);
   const found = new Map();
   for (const q of queries) {
     const d = await getJson(fetchImpl, base + '/v0.1/servers?search=' + encodeURIComponent(q) + '&version=latest&limit=100');
@@ -939,6 +956,7 @@ export async function planShard({ inputs, seed = new Map(), fetch: fetchImpl = g
   // The fuzz stage (off unless switched on) runs for the same targets and has an allowance of its own.
   for (const x of items) if (x.target) x.target.timeout_s = timeout + ((x.target.launch.transport || 'stdio') === 'stdio' ? ORACLE_ALLOWANCE_S : 0);
   if (fuzz) for (const x of items) if (x.target && (x.target.launch.transport || 'stdio') === 'stdio') x.target.timeout_s += FUZZ_ALLOWANCE_S;
+  for (const x of items) if (x.target && PACKAGE_ALLOWANCE_S[x.target.launch.kind]) x.target.timeout_s += PACKAGE_ALLOWANCE_S[x.target.launch.kind];
   // The sandbox's own bound is 1800 s a target (mcp-surface-corpus MAX_TIMEOUT_S).
   for (const x of items) if (x.target && isBuild(x.target.launch)) x.target.timeout_s = Math.min(1800, x.target.timeout_s + BUILD_ALLOWANCE_S);
   return { format: PLAN_FORMAT, shard_id: inputs.shardId, attempt_id: inputs.attemptId, marker, planned_at: now().toISOString(), subject_timeout_s: timeout, runnable, ...(fuzz ? { fuzz: true } : {}), items };
@@ -1128,10 +1146,34 @@ export function cargoInstallEvidence(text, crate) {
   return null;
 }
 
-/** The answer of the install's entry helper (mcp-surface-corpus sandbox/cargo-entry.mjs), as a detail (R-LP-54). */
+/** Signs that NuGet could not be reached properly (our proxy, a name lookup, TLS, a time-out), not that the package is missing. */
+const NUGET_NOT_THE_PACKAGE = /NU1301|NU1801|NU1302|Unable to load the service index|Failed to retrieve information|Failed to download|proxy|SSL|certificate|timed out|timeout|Connection refused|Name or service not known|No such host|Resource temporarily unavailable/i;
+
+/**
+ * R-LP-57: a .NET tool's failed install is the package's own only on the .NET CLI's word, about this package id, with no
+ * sign of trouble reaching NuGet (a NuGet install runs no code of the package, so nothing it ships can print): NU1101
+ * (no package with this id) or NU1102 (no such version) gives install_failed; "is not a .NET tool" or no
+ * DotnetToolSettings.xml in the package gives package_not_runnable. Returns a detail or null.
+ */
+export function nugetInstallEvidence(text, id) {
+  const t = String(text || '');
+  if (NUGET_NOT_THE_PACKAGE.test(t)) return null;
+  const same = (n) => String(n).toLowerCase() === String(id).toLowerCase();
+  const missing = /\berror NU110[12]: Unable to find package ([A-Za-z0-9_.-]{1,100})\b/.exec(t);
+  if (missing && same(missing[1])) return 'install_failed';
+  const notTool = /\b(?:Package|The package) '?([A-Za-z0-9_.-]{1,100})'? is not a \.NET tool|Settings file 'DotnetToolSettings\.xml' was not found in the package/.exec(t);
+  if (notTool && (!notTool[1] || same(notTool[1]))) return 'package_not_runnable';
+  return null;
+}
+
+/**
+ * The answer of the install's entry helper (mcp-surface-corpus sandbox/cargo-entry.mjs, nuget-entry.mjs), as a detail
+ * (R-LP-54, R-LP-57): only the package's own lack (no binary, no tool settings) is the package's.
+ */
 export function entryDetail(code) {
-  if (code === 'no_binary') return 'package_not_runnable';
-  if (code === 'several_binaries') return 'entry_ambiguous';
+  if (code === 'no_binary' || code === 'no_tool_settings') return 'package_not_runnable';
+  if (code === 'several_binaries' || code === 'several_commands') return 'entry_ambiguous';
+  if (code === 'no_linux_build') return 'platform_unsupported';
   return 'install_build_failed';
 }
 
@@ -1222,6 +1264,11 @@ export function failureDetail(rec, bare, envp, { deadlineHit = false, records = 
       const entry = failed.find((s) => s.name === 'entry');
       if (entry) return entryDetail(isObj(entry.result) ? entry.result.error : null);
       return (failed.some((s) => s.name === 'install') && cargoInstallEvidence(text, isObj(launch) ? launch.crate : null)) || 'install_build_failed';
+    }
+    if (inst.kind === 'nuget') {
+      const entry = failed.find((s) => s.name === 'entry');
+      if (entry) return entryDetail(isObj(entry.result) ? entry.result.error : null);
+      return (failed.some((s) => s.name === 'install') && nugetInstallEvidence(text, isObj(launch) ? launch.package : null)) || 'install_build_failed';
     }
     if (PACKAGE_ERROR.test(text)) return 'install_failed';
     return 'install_build_failed';
