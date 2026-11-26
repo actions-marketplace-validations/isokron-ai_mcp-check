@@ -391,3 +391,29 @@ test('R-RD-30: ...Object.fromEntries(Object.entries(FIELDS).filter(([key]) => ke
   assert.deepEqual(Object.keys(tool(an, 'by_ternary').inputSchema.properties), ['n'], 'a test read only in part is not read');
   assert.deepEqual(Object.keys(tool(an, 'from_broken').inputSchema.properties), ['n'], 'a constant with a part the reader could not read is not filtered');
 });
+
+// ---------------------------------------------------------------- R-RD-31: text of a factory call that is not used
+// Trimmed from black-swan-causal-labs/study-design-diagram-studio 16b760c (lib/study/webmcp.ts), a server with its own
+// JSON Schema helpers, found by the sample run of this series. The flightdeck-shaped tool at the end is added.
+test('R-RD-31: a factory call whose value is not used leaves no unread text behind; a used one keeps the text of what it could not read', () => {
+  const an = read({ 'package.json': ZOD3, 'lib/study/webmcp.ts': [
+    "import { z } from 'zod';",
+    "import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';",
+    "type Tool={name:string;description:string;inputSchema:Record<string,unknown>;execute:(input:unknown)=>Promise<unknown>};",
+    "const str={type:'string'};const num={type:['integer','null'],minimum:-36500,maximum:36500};",
+    "const elementProperties={id:str,label:{type:'string',maxLength:100},start:num,end:num,endpointLabel:{type:'string',maxLength:80}};",
+    "const object=(properties:Record<string,unknown>,required:string[]=[])=>({type:'object',properties,required,additionalProperties:false});",
+    "export function createTools(read:()=>unknown):Tool[]{",
+    "const tool=(name:string,description:string,inputSchema:Record<string,unknown>,run:(input:unknown)=>unknown):Tool=>({name,description,inputSchema,execute:async input=>({content:[{type:'text',text:JSON.stringify(run(input))}]})});",
+    'return [',
+    "tool('update_design_element','Update only supplied fields on one timeline element.',object({id:str,expected_revision:{type:'integer'},patch:object(Object.fromEntries(Object.entries(elementProperties).filter(([k])=>k!=='id')))},['id','expected_revision','patch']),input=>read()),",
+    '];}',
+    "const server = new McpServer({ name: 'x', version: '1.0.0' });",
+    'const id = (description: string) => z.union([z.string(), z.number()]).describe(description);',
+    "server.registerTool('get_project', { description: 'Get a project.', inputSchema: { project_id: id(PREFIX + 'Project id') } }, async () => ({ content: [] }));",
+  ].join('\n') });
+  assert.equal(tool(an, 'update_design_element')._lost, undefined, 'the helper call was not read as a value, so its text is not reported as unread');
+  const gp = tool(an, 'get_project');
+  assert.ok(JSON.stringify(gp._lost || []).includes('Project id'), 'text of an argument a used call could not read is kept for the scans');
+  assert.deepEqual(gp.inputSchema.properties.project_id, { type: ['string', 'number'] });
+});
