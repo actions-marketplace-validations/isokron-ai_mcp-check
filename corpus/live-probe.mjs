@@ -1196,7 +1196,8 @@ export function nugetInstallEvidence(text, id) {
 export function entryDetail(code) {
   if (code === 'no_binary' || code === 'no_tool_settings') return 'package_not_runnable';
   if (code === 'several_binaries' || code === 'several_commands') return 'entry_ambiguous';
-  if (code === 'no_linux_build') return 'platform_unsupported';
+  // A build for other platforms only, or for a newer .NET than the sandbox's runtime: ours to run, not the package's lack.
+  if (code === 'no_linux_build' || code === 'runtime_too_new') return 'platform_unsupported';
   return 'install_build_failed';
 }
 

@@ -21,17 +21,17 @@ concurrency:
 
 env:
   WORKER_KIT_REF: '2ffcea16117ec679398f83eefe8c6fa66d38bac6'
-  SURFACE_CORPUS_REF: 'f1d0d24bd6ad724842728bc7f34f4d27236b5eab'
+  SURFACE_CORPUS_REF: 'd18584310896323ade95a94e7f6e9dcd07ede0de'
   # The package types measured, and how many subjects a job takes.
   MEASURE_TYPES: 'mcpb'
   PER_JOB: '6'
-  MAX_SHARDS: '1'
+  MAX_SHARDS: '1000'
 
 jobs:
   sandbox:
     permissions:
       contents: read
-    uses: isokron-ai/mcp-surface-corpus/.github/workflows/sandbox-conformance.yml@f1d0d24bd6ad724842728bc7f34f4d27236b5eab # SURFACE_CORPUS_REF
+    uses: isokron-ai/mcp-surface-corpus/.github/workflows/sandbox-conformance.yml@d18584310896323ade95a94e7f6e9dcd07ede0de # SURFACE_CORPUS_REF
     with:
       mutations: false
       artifact-prefix: measure-sandbox
@@ -121,7 +121,7 @@ jobs:
           persist-credentials: false
       - id: guard
         name: Sandbox guard on this runner (mcp-surface-corpus sandbox-guard)
-        uses: isokron-ai/mcp-surface-corpus/sandbox-guard@f1d0d24bd6ad724842728bc7f34f4d27236b5eab # SURFACE_CORPUS_REF
+        uses: isokron-ai/mcp-surface-corpus/sandbox-guard@d18584310896323ade95a94e7f6e9dcd07ede0de # SURFACE_CORPUS_REF
         with:
           out: ${{ runner.temp }}/live-probe/selftest
       - id: plan
@@ -178,7 +178,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          pattern: measure-*
+          pattern: measure-[0-9]*
           path: m
           merge-multiple: true
       - name: Count
