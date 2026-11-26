@@ -21,7 +21,7 @@ const FX = join(root, 'test', 'fixtures', 'live-probe');
 const fx = (f) => readFileSync(join(FX, f), 'utf8');
 const MARKER = 'liveprobe-MARKERMARKERMARKER0000';
 /** The mcp-surface-corpus commit both workflows pin (SURFACE_CORPUS_REF, the conformance call and sandbox-guard). */
-const SANDBOX_PIN = '4b0f159036f5f320976c44cbd584d2bbfac75049';
+const SANDBOX_PIN = 'bab68217a58c3a2d74dc897b6231cb097567908a';
 const NODE24 = 'docker.io/library/node:24-bookworm-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23fceb061c54';
 const items = (n, f = (i) => 'owner' + i + '/repo' + i) => JSON.stringify(Array.from({ length: n }, (_, i) => ({ subject: f(i), run_key: String(i + 1).repeat(64).slice(0, 64).replace(/[^0-9a-f]/g, 'a'), fence: i + 1 })));
 
@@ -433,7 +433,7 @@ test('R-LP-22: the self test judges the bundles with the ingest tool-qa runs, wh
 });
 
 test('R-LP-23: the sandbox pin includes the install-network hostile cases and the proxy positive control (mcp-surface-corpus #9, #10)', () => {
-  assert.equal(SANDBOX_PIN, '4b0f159036f5f320976c44cbd584d2bbfac75049');
+  assert.equal(SANDBOX_PIN, 'bab68217a58c3a2d74dc897b6231cb097567908a');
   for (const f of ['live-probe.yml', 'live-probe-selftest.yml']) {
     const y = wf(f);
     assert.equal(/\n  SURFACE_CORPUS_REF: '([0-9a-f]{40})'\n/.exec(y)[1], SANDBOX_PIN, f);
@@ -729,7 +729,8 @@ test('R-LP-33: a server that went to the network (which the run does not have) i
   assert.deepEqual(LP.DETAILS.start_needs_network, ['timeout_start', false, 'start', 'tool']);
   for (const records of [[serverDns], [serverConn], [traceNet(3)]]) {
     assert.equal(LP.failureDetail(lpRec({ env: needEnv }), probeExit(1), null, { ...OK, records }), 'start_needs_network');
-    assert.equal(LP.failureDetail(lpRec(), crashExit(1), null, { ...OK, records }), 'start_env_limited');
+    // With no variable declared it is named too, not left as start_env_limited (R-LP-64).
+    assert.equal(LP.failureDetail(lpRec(), crashExit(1), null, { ...OK, records }), 'start_needs_network');
   }
   // The install's lookups, a quiet trace and another target's records are no attempt of the server.
   const quiet = [trec('dns_query', { source: 'netlog', role: 'install', qname: 'registry.npmjs.org' }), trec('connection', { source: 'netlog', role: 'install' }), traceNet(0), traceNet(5, 'install')];
@@ -943,7 +944,7 @@ test('live-probe fault evidence (telemetry, steps log, plan) reaches failureDeta
   };
   const addTelemetry = (w, ...recs) => writeFileSync(join(w, 'driver-subjects', '_shard', 'telemetry.jsonl'), readFileSync(join(w, 'driver-subjects', '_shard', 'telemetry.jsonl'), 'utf8') + recs.map((r) => JSON.stringify({ ...r, subject: 's002' })).join('\n') + '\n');
   assert.equal(run(() => {})[1], 'start_env_limited', 'the saved kronicle-lite capture: an early exit 1 with empty stderr, no crash signature, so no evidence against the server (R-LP-45)');
-  assert.equal(run((w) => addTelemetry(w, serverDns))[1], 'start_env_limited', 'its telemetry shows a server-role lookup');
+  assert.equal(run((w) => addTelemetry(w, serverDns))[1], 'start_needs_network', 'its telemetry shows a server-role lookup (R-LP-64)');
   const plan = (w, f) => { const p = JSON.parse(readFileSync(join(w, 'plan.json'), 'utf8')); f(p.items[1]); writeFileSync(join(w, 'plan.json'), JSON.stringify(p)); };
   assert.equal(run((w) => plan(w, (it) => { it.resolution.choice.args_unfilled = 1; }))[1], 'start_env_limited', 'the plan says an argument was left unfilled');
   assert.equal(run((w) => plan(w, (it) => { it.resolution.launch = { kind: 'pypi', package: 'x' }; }))[1], 'start_env_limited', 'the plan says the PyPI entry is a guess');
@@ -1247,7 +1248,7 @@ test('R-LP-45: start_failed needs a crash signature on stderr; an early exit wit
     traceback: 'Traceback (most recent call last):\n  File "server.py", line 3, in <module>\nKeyError: 1',
     uncaught: 'node:internal/process:1\n  throw err;\nUncaught Exception: boom',
     unhandled: 'Unhandled promise rejection: Error: x',
-    missing_module: "Error: Cannot find module 'zod'",
+    missing_module: "Error: Cannot find module '/work/pkg/node_modules/x/dist/server.js'",
     go_panic: 'panic: runtime error: invalid memory address',
     segv: 'Segmentation fault (core dumped)',
   };
@@ -1255,6 +1256,9 @@ test('R-LP-45: start_failed needs a crash signature on stderr; an early exit wit
     assert.match(stderr, LP.CRASH_TEXT, name);
     assert.equal(LP.failureDetail(lpRec(), { ...probeExit(1), stderr }, null, OK), 'start_failed', name);
   }
+  // A bare dependency npm did not install is not ours to tell (R-LP-60): an optional or native one, or an undeclared one.
+  assert.match("Error: Cannot find module 'zod'", LP.CRASH_TEXT);
+  assert.equal(LP.failureDetail(lpRec(), { ...probeExit(1), stderr: "Error: Cannot find module 'zod'" }, null, OK), 'start_env_limited');
   const frame = '\n    at Object.<anonymous> (/app/index.js:3:1)';
   for (const s of ['ModuleNotFoundError: No module named x', 'ImportError: cannot import name y', 'SyntaxError: invalid syntax', 'ReferenceError: z is not defined' + frame, 'TypeError: x is not a function' + frame, 'fatal error: all goroutines are asleep - deadlock!\n\ngoroutine 1 [chan receive]:', 'RangeError: Maximum call stack size exceeded' + frame]) assert.match(s, LP.CRASH_TEXT, s);
   // Config text wins over crash text.

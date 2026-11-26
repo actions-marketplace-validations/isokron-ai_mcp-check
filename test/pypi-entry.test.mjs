@@ -19,6 +19,8 @@ function zip(entries) {
   eocd.writeUInt32LE(0x06054b50, 0); eocd.writeUInt16LE(entries.length, 8); eocd.writeUInt16LE(entries.length, 10); eocd.writeUInt32LE(cd.length, 12); eocd.writeUInt32LE(off, 16);
   return Buffer.concat([...locals, cd, eocd]);
 }
+// pypiEntry's answer without its dependency facts (R-LP-61 reads those).
+const nd = ({ deps, ...r }) => r;
 const EP = (lines) => '[console_scripts]\n' + lines.join('\n') + '\n\n[other]\nnot-a-script = x:y\n';
 const res = (status, body, headers = {}) => ({ ok: status >= 200 && status < 300, status, headers: { get: (k) => headers[k.toLowerCase()] ?? null }, arrayBuffer: async () => (Buffer.isBuffer(body) ? body : Buffer.from(typeof body === 'string' ? body : JSON.stringify(body))) });
 function pypiFetch({ pkg = 'widget-mcp', version = '1.0.0', wheel, files, status = 200 } = {}) {
@@ -36,7 +38,7 @@ function pypiFetch({ pkg = 'widget-mcp', version = '1.0.0', wheel, files, status
 test('R-LP-48: the console script the wheel declares becomes the launch entry', async () => {
   const wheel = zip([{ name: 'widget_mcp/__init__.py', data: '' }, { name: 'widget_mcp-1.0.0.dist-info/entry_points.txt', data: EP(['widget-server = widget_mcp.server:main']), deflate: true }]);
   const e = await PE.pypiEntry('widget-mcp', '1.0.0', { fetch: pypiFetch({ wheel }) });
-  assert.deepEqual(e, { entry: 'widget-server', entry_source: 'console_script', script_count: 1, wheel: 'widget_mcp-1.0.0-py3-none-any.whl' });
+  assert.deepEqual(nd(e), { entry: 'widget-server', entry_source: 'console_script', script_count: 1, wheel: 'widget_mcp-1.0.0-py3-none-any.whl' });
   // Through resolveSubject: the launch carries the entry, so failureDetail no longer treats it as a guess.
   const server = { name: 'io.github.acme/widget', repository: { url: 'https://github.com/acme/widget' }, packages: [{ registryType: 'pypi', identifier: 'widget-mcp', version: '1.0.0', transport: { type: 'stdio' } }] };
   const pf = pypiFetch({ wheel });
@@ -66,17 +68,17 @@ test('R-LP-49: which script among several: named like the package, the only one,
 
 test('R-LP-50: an ambiguous or missing declaration leaves the run on the guess, which stays our limit', async () => {
   const amb = zip([{ name: 'w-1.0.dist-info/entry_points.txt', data: EP(['a-mcp = m:f', 'b-mcp = m:g']) }]);
-  assert.deepEqual(await PE.pypiEntry('widget-mcp', '1.0.0', { fetch: pypiFetch({ wheel: amb }) }), { entry_source: 'ambiguous', script_count: 2 });
+  assert.deepEqual(nd(await PE.pypiEntry('widget-mcp', '1.0.0', { fetch: pypiFetch({ wheel: amb }) })), { entry_source: 'ambiguous', script_count: 2 });
   const none = zip([{ name: 'widget_mcp/server.py', data: 'x' }]);
-  assert.deepEqual(await PE.pypiEntry('widget-mcp', '1.0.0', { fetch: pypiFetch({ wheel: none }) }), { entry_source: 'no_entry_point', script_count: 0 });
-  assert.deepEqual(await PE.pypiEntry('widget-mcp', '1.0.0', { fetch: pypiFetch({ files: [{ packagetype: 'sdist', url: 'https://files.pythonhosted.org/x.tar.gz' }] }) }), { entry_source: 'no_wheel' });
-  assert.deepEqual(await PE.pypiEntry('widget-mcp', '1.0.0', { fetch: pypiFetch({ status: 503 }) }), { entry_source: 'lookup_failed' });
+  assert.deepEqual(nd(await PE.pypiEntry('widget-mcp', '1.0.0', { fetch: pypiFetch({ wheel: none }) })), { entry_source: 'no_entry_point', script_count: 0 });
+  assert.deepEqual(nd(await PE.pypiEntry('widget-mcp', '1.0.0', { fetch: pypiFetch({ files: [{ packagetype: 'sdist', url: 'https://files.pythonhosted.org/x.tar.gz' }] }) })), { entry_source: 'no_wheel' });
+  assert.deepEqual(nd(await PE.pypiEntry('widget-mcp', '1.0.0', { fetch: pypiFetch({ status: 503 }) })), { entry_source: 'lookup_failed' });
   // With no entry the launch stays a guess, which failureDetail never blames on the server (R-LP-39).
 });
 
 test('R-LP-51: no console script but a top-level __main__.py runs as python -m <module>', async () => {
   const wheel = zip([{ name: 'widget_mcp/__init__.py', data: '' }, { name: 'widget_mcp/__main__.py', data: 'main()' }, { name: 'tests/__main__.py', data: '' }]);
-  assert.deepEqual(await PE.pypiEntry('widget-mcp', '1.0.0', { fetch: pypiFetch({ wheel }) }), { entry: 'python', args_prefix: ['-m', 'widget_mcp'], entry_source: 'module_main', script_count: 0, wheel: 'widget_mcp-1.0.0-py3-none-any.whl' });
+  assert.deepEqual(nd(await PE.pypiEntry('widget-mcp', '1.0.0', { fetch: pypiFetch({ wheel }) })), { entry: 'python', args_prefix: ['-m', 'widget_mcp'], entry_source: 'module_main', script_count: 0, wheel: 'widget_mcp-1.0.0-py3-none-any.whl' });
   assert.equal(PE.pickMainModule(['a/__main__.py', 'b/__main__.py'], 'widget'), null, 'two candidates, neither named like the package');
   assert.equal(PE.pickMainModule(['a/b/__main__.py'], 'widget'), null, 'only top-level modules');
   assert.equal(PE.pickMainModule(['tests/__main__.py'], 'widget'), null, 'tests are never the server');

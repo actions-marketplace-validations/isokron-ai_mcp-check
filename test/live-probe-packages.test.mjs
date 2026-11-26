@@ -104,9 +104,9 @@ test('R-LP-55 mutation check: without the build list a crate would run among the
 
 const cargoRec = (steps, o = {}) => ({ install: { kind: 'cargo', ok: false, steps, egress_refused: 0, ...o }, env: { names: { registry: [] }, secret_named: [] }, timing: { total_ms: 60000 }, timed_out: false });
 const LAUNCH = { kind: 'cargo', crate: 'rusty-mcp', version: 'latest' };
-const fd = (rec, stepsLog) => LP.failureDetail(rec, null, null, { stepsLog, launch: LAUNCH, argsUnfilled: 0 });
+const fd = (rec, stepsLog, owned = true) => LP.failureDetail(rec, null, null, { stepsLog, launch: LAUNCH, argsUnfilled: 0, owned });
 
-test('R-LP-56: a crate\'s failed install is the crate\'s only on cargo\'s own word before anything compiled, with no trouble reaching crates.io, or the entry helper\'s no_binary; everything else is ours', () => {
+test('R-LP-56: a crate\'s failed install is the crate\'s only on cargo\'s own word before anything compiled, with no trouble reaching crates.io, and only when its registry entry is the subject\'s own; what our entry helper cannot find and everything else is ours', () => {
   const install = (exit = 101) => [{ name: 'install', exit, timed_out: false }];
   assert.equal(fd(cargoRec(install()), '    Updating crates.io index\nerror: could not find `rusty-mcp` in registry `crates-io` with version `*`\n'), 'install_failed');
   assert.equal(fd(cargoRec(install()), 'error: could not find `rusty_mcp` in registry `crates-io`\n'), 'install_failed', 'cargo treats - and _ alike');
@@ -121,12 +121,19 @@ test('R-LP-56: a crate\'s failed install is the crate\'s only on cargo\'s own wo
   assert.equal(fd(cargoRec(install(137)), ''), 'install_resource_limit');
   assert.equal(fd(cargoRec([{ name: 'install', exit: null, timed_out: true }]), ''), 'install_timeout');
   assert.equal(fd(cargoRec(install()), 'error: linker `cc` not found\n'), 'install_build_failed');
-  // The entry helper (mcp-surface-corpus sandbox/cargo-entry.mjs): no binary is the crate's; several is ours (no guess).
+  // The entry helper (mcp-surface-corpus sandbox/cargo-entry.mjs) runs after a successful install: what it cannot find is a
+  // limit of its own checks (its name pattern, its regular-file test), never the crate's; several is ours too (no guess).
   const entry = (error) => [{ name: 'install', exit: 0 }, { name: 'entry', exit: 1, result: { error } }];
-  assert.equal(fd(cargoRec(entry('no_binary')), ''), 'package_not_runnable');
+  for (const e of ['no_binary', 'not_installed', null]) assert.equal(fd(cargoRec(entry(e)), ''), 'entry_unresolved', String(e));
   assert.equal(fd(cargoRec(entry('several_binaries')), ''), 'entry_ambiguous');
-  assert.equal(fd(cargoRec(entry('not_installed')), ''), 'install_build_failed');
-  assert.equal(fd(cargoRec([{ name: 'install', exit: 0 }, { name: 'entry', exit: 1 }]), ''), 'install_build_failed');
+  assert.equal(fd(cargoRec([{ name: 'install', exit: 0 }, { name: 'entry', exit: 1 }]), ''), 'entry_unresolved');
+  // cargo's own word about a crate whose registry entry is not the subject's own (seed-only, seed-matched, repository-only): ours.
+  assert.equal(fd(cargoRec(install()), 'error: could not find `rusty-mcp` in registry `crates-io`\n', false), 'package_error_unowned');
+  assert.equal(fd(cargoRec(install()), 'error: there is nothing to install in `rusty-mcp v0.4.1`, because it has no binaries\n', false), 'package_error_unowned');
+  assert.equal(LP.ownedEntry({ matched_by: 'repository+namespace+seed' }), true);
+  for (const m of ['seed', 'seed-only', 'repository', 'repository+seed', null]) assert.equal(LP.ownedEntry({ matched_by: m }), false, String(m));
+  assert.deepEqual(LP.DETAILS.entry_unresolved, ['install_failed_registry', false, 'install', 'tool']);
+  assert.deepEqual(LP.DETAILS.package_error_unowned, ['install_failed_registry', false, 'install', 'tool']);
   // npm's and pip's package-error words in a crate's log are not evidence about the crate.
   assert.equal(fd(cargoRec(install()), '   Compiling x\nnpm ERR! code E404\nNo matching distribution found for x\n'), 'install_build_failed');
   for (const d of ['package_not_runnable', 'entry_ambiguous']) assert.ok(LP.DETAILS[d], d);
@@ -134,7 +141,7 @@ test('R-LP-56: a crate\'s failed install is the crate\'s only on cargo\'s own wo
   assert.deepEqual(LP.DETAILS.entry_ambiguous, ['install_failed_registry', false, 'install', 'tool']);
 });
 
-test('R-LP-56 mutation check: without the Compiling guard, the network guard or the same-crate check, a crate is blamed for what it did not say', async () => {
+test('R-LP-56 mutation check: without the Compiling guard, the network guard, the same-crate check or the ownership gate, a crate is blamed for what it did not say', async () => {
   for (const [from, to, log] of [
     ["  if (/^\\s*Compiling /m.test(t) || CARGO_NOT_THE_CRATE.test(t)) return null;", '  if (CARGO_NOT_THE_CRATE.test(t)) return null;', '   Compiling evil-build v0.1.0\nerror: could not find `rusty-mcp` in registry `crates-io`\n'],
     ["  if (/^\\s*Compiling /m.test(t) || CARGO_NOT_THE_CRATE.test(t)) return null;", "  if (/^\\s*Compiling /m.test(t)) return null;", 'warning: spurious network error (2 tries remaining)\nerror: could not find `rusty-mcp` in registry `crates-io`\n'],
@@ -142,6 +149,11 @@ test('R-LP-56 mutation check: without the Compiling guard, the network guard or 
   ]) {
     assert.equal(fd(cargoRec([{ name: 'install', exit: 101 }]), log), 'install_build_failed');
     const M = await mutant(from, to);
-    assert.equal(M.failureDetail(cargoRec([{ name: 'install', exit: 101 }]), null, null, { stepsLog: log, launch: LAUNCH, argsUnfilled: 0 }), 'install_failed', 'without the guard: ' + from.slice(0, 50));
+    assert.equal(M.failureDetail(cargoRec([{ name: 'install', exit: 101 }]), null, null, { stepsLog: log, launch: LAUNCH, argsUnfilled: 0, owned: true }), 'install_failed', 'without the guard: ' + from.slice(0, 50));
   }
+  // Without the ownership gate a seed-only crate's absence would be the subject's.
+  const log = 'error: could not find `rusty-mcp` in registry `crates-io`\n';
+  assert.equal(fd(cargoRec([{ name: 'install', exit: 101 }]), log, false), 'package_error_unowned');
+  const M = await mutant("      return ev ? (owned ? ev : 'package_error_unowned') : 'install_build_failed';", "      return ev || 'install_build_failed';");
+  assert.equal(M.failureDetail(cargoRec([{ name: 'install', exit: 101 }]), null, null, { stepsLog: log, launch: LAUNCH, argsUnfilled: 0, owned: false }), 'install_failed');
 });
