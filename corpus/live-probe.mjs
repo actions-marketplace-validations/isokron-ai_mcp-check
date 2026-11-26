@@ -1220,7 +1220,7 @@ export function frameInDependency(err, { pydeps = null, pkg = null } = {}) {
   return !!(f && f.top && own && !own.includes(f.top) && !PY_STDLIB.has(f.top));
 }
 
-export function importCause(imp, { pydeps = null, pkg = null, err = '' } = {}) {
+export function importCause(imp, { pydeps = null, pkg = null, err = '', installedExtras = [] } = {}) {
   if (!imp) return null;
   if (imp.runtime === 'node') {
     const name = imp.module.startsWith('@') ? imp.module.split('/').slice(0, 2).join('/') : imp.module.split('/')[0];
@@ -1239,12 +1239,18 @@ export function importCause(imp, { pydeps = null, pkg = null, err = '' } = {}) {
   const has = (k) => isObj(pydeps) && Array.isArray(pydeps[k]) && (pydeps[k].includes(dist) || pydeps[k].includes(top));
   if (imp.kind === 'missing') {
     if (has('extra_only')) return 'extra';
+    // Python's own (one this Python lacks or removed) or the venv's tools: our environment.
+    if (PY_STDLIB.has(top.replace(/-/g, '_'))) return 'env';
     // Not installed and never declared, imported by the server's own code, not Python's own or the venv's: the release
     // forgot to declare it (or to ship it, `utils`). Declared in base but missing is a failed install: ours. With no
     // facts, or imported from inside a dependency, not ours to tell.
     const f = lastFrame(err);
     const fromOwn = !!f && (f.script || (!!f.top && !!ownTops && ownTops.includes(f.top)));
     const declared = has('base');
+    // A server extra (mcp, server, cli) we did not install may bring it transitively (FinanceToolkit's [mcp] brings
+    // mcp, which brings anyio): not ours to tell which, so the extra's.
+    const skipped = (isObj(pydeps) && Array.isArray(pydeps.extras) ? pydeps.extras : []).filter((x) => ['mcp', 'server', 'cli'].includes(x) && !installedExtras.includes(x));
+    if (!declared && skipped.length) return 'extra';
     if (ownTops && ownTops.length && isObj(pydeps) && Array.isArray(pydeps.base) && !declared && !PY_STDLIB.has(top.replace(/-/g, '_')) && fromOwn) return 'undeclared';
     return 'env';
   }
@@ -1366,7 +1372,7 @@ export function failureDetail(rec, bare, envp, { deadlineHit = false, records = 
   if (on('env') && (ENV_TEXT.test(err) || bin)) return 'start_env_limited';
   // An import that failed: an extra we did not install, a dependency that changed under the release, or one we cannot
   // tell; only the server's own module can be its crash (R-LP-61, R-LP-62).
-  const imp = importCause(failedImport(err), { pydeps, pkg: isObj(launch) ? launch.package : null, err });
+  const imp = importCause(failedImport(err), { pydeps, pkg: isObj(launch) ? launch.package : null, err, installedExtras: isObj(launch) && Array.isArray(launch.extras) ? launch.extras : [] });
   if (on('extra') && (EXTRA_HINT.test(err) || imp === 'extra')) return 'start_needs_extra';
   if (on('drift') && imp === 'drift') return 'start_dependency_drift';
   if (on('import') && imp === 'env') return 'start_env_limited';

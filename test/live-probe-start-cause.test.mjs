@@ -247,6 +247,12 @@ test('R-LP-68: the server\'s own packaging defects stay the server\'s: a module 
   for (const m of ['distutils', 'imp', 'tkinter', 'pkg_resources', 'setuptools']) assert.equal(detail(tb(`  File "${SP}/acme_crm_mcp/server.py", line 2, in <module>`, `ModuleNotFoundError: No module named '${m}'`), ctx), 'start_env_limited', m);
   assert.equal(detail(tb(`  File "${SP}/mcp/server/lowlevel.py", line 2, in <module>`, "ModuleNotFoundError: No module named 'anyio'"), ctx), 'start_env_limited', 'a dependency\'s own import');
   assert.equal(detail(httpx, py('acme-crm-mcp', '1.2.0', 'acme-crm-mcp')), 'start_env_limited', 'no facts');
+  // FinanceToolkit 2.3.5: its mcp_server imports anyio, which its [mcp] extra brings through mcp; we did not install the
+  // extra, so it is the extra's, not an undeclared dependency. With the extra installed, it would be.
+  const ft = { top: ['financetoolkit'], base: ['numpy', 'pandas', 'requests'], uncapped: ['numpy', 'pandas', 'requests'], extra_only: ['mcp', 'fastmcp'], extras: ['econometrics', 'mcp'] };
+  const anyio = tb(`  File "${SP}/financetoolkit/mcp_server/mcp_controller.py", line 15, in <module>`, '    import anyio', "ModuleNotFoundError: No module named 'anyio'");
+  assert.equal(detail(anyio, py('financetoolkit', '2.3.5', 'financetoolkit-mcp', ft)), 'start_needs_extra');
+  assert.equal(detail(anyio, { ...py('financetoolkit', '2.3.5', 'financetoolkit-mcp', ft), launch: { kind: 'pypi', package: 'financetoolkit', version: '2.3.5', entry: 'financetoolkit-mcp', extras: ['mcp'] } }), 'undeclared_dependency');
   // A stdlib AttributeError (our Python version) stays ours.
   assert.equal(detail(tb(`  File "${SP}/acme_crm_mcp/server.py", line 2, in <module>`, "AttributeError: module 'asyncio' has no attribute 'coroutine'"), ctx), 'start_env_limited');
   // A late exit is still no evidence.
