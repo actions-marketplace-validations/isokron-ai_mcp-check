@@ -104,9 +104,9 @@ test('R-LP-55 mutation check: without the build list a crate would run among the
 
 const cargoRec = (steps, o = {}) => ({ install: { kind: 'cargo', ok: false, steps, egress_refused: 0, ...o }, env: { names: { registry: [] }, secret_named: [] }, timing: { total_ms: 60000 }, timed_out: false });
 const LAUNCH = { kind: 'cargo', crate: 'rusty-mcp', version: 'latest' };
-const fd = (rec, stepsLog) => LP.failureDetail(rec, null, null, { stepsLog, launch: LAUNCH, argsUnfilled: 0 });
+const fd = (rec, stepsLog, owned = true) => LP.failureDetail(rec, null, null, { stepsLog, launch: LAUNCH, argsUnfilled: 0, owned });
 
-test('R-LP-56: a crate\'s failed install is the crate\'s only on cargo\'s own word before anything compiled, with no trouble reaching crates.io, or the entry helper\'s no_binary; everything else is ours', () => {
+test('R-LP-56: a crate\'s failed install is the crate\'s only on cargo\'s own word before anything compiled, with no trouble reaching crates.io, and only when its registry entry is the subject\'s own; what our entry helper cannot find and everything else is ours', () => {
   const install = (exit = 101) => [{ name: 'install', exit, timed_out: false }];
   assert.equal(fd(cargoRec(install()), '    Updating crates.io index\nerror: could not find `rusty-mcp` in registry `crates-io` with version `*`\n'), 'install_failed');
   assert.equal(fd(cargoRec(install()), 'error: could not find `rusty_mcp` in registry `crates-io`\n'), 'install_failed', 'cargo treats - and _ alike');
@@ -121,12 +121,19 @@ test('R-LP-56: a crate\'s failed install is the crate\'s only on cargo\'s own wo
   assert.equal(fd(cargoRec(install(137)), ''), 'install_resource_limit');
   assert.equal(fd(cargoRec([{ name: 'install', exit: null, timed_out: true }]), ''), 'install_timeout');
   assert.equal(fd(cargoRec(install()), 'error: linker `cc` not found\n'), 'install_build_failed');
-  // The entry helper (mcp-surface-corpus sandbox/cargo-entry.mjs): no binary is the crate's; several is ours (no guess).
+  // The entry helper (mcp-surface-corpus sandbox/cargo-entry.mjs) runs after a successful install: what it cannot find is a
+  // limit of its own checks (its name pattern, its regular-file test), never the crate's; several is ours too (no guess).
   const entry = (error) => [{ name: 'install', exit: 0 }, { name: 'entry', exit: 1, result: { error } }];
-  assert.equal(fd(cargoRec(entry('no_binary')), ''), 'package_not_runnable');
+  for (const e of ['no_binary', 'not_installed', null]) assert.equal(fd(cargoRec(entry(e)), ''), 'entry_unresolved', String(e));
   assert.equal(fd(cargoRec(entry('several_binaries')), ''), 'entry_ambiguous');
-  assert.equal(fd(cargoRec(entry('not_installed')), ''), 'install_build_failed');
-  assert.equal(fd(cargoRec([{ name: 'install', exit: 0 }, { name: 'entry', exit: 1 }]), ''), 'install_build_failed');
+  assert.equal(fd(cargoRec([{ name: 'install', exit: 0 }, { name: 'entry', exit: 1 }]), ''), 'entry_unresolved');
+  // cargo's own word about a crate whose registry entry is not the subject's own (seed-only, seed-matched, repository-only): ours.
+  assert.equal(fd(cargoRec(install()), 'error: could not find `rusty-mcp` in registry `crates-io`\n', false), 'package_error_unowned');
+  assert.equal(fd(cargoRec(install()), 'error: there is nothing to install in `rusty-mcp v0.4.1`, because it has no binaries\n', false), 'package_error_unowned');
+  assert.equal(LP.ownedEntry({ matched_by: 'repository+namespace+seed' }), true);
+  for (const m of ['seed', 'seed-only', 'repository', 'repository+seed', null]) assert.equal(LP.ownedEntry({ matched_by: m }), false, String(m));
+  assert.deepEqual(LP.DETAILS.entry_unresolved, ['install_failed_registry', false, 'install', 'tool']);
+  assert.deepEqual(LP.DETAILS.package_error_unowned, ['install_failed_registry', false, 'install', 'tool']);
   // npm's and pip's package-error words in a crate's log are not evidence about the crate.
   assert.equal(fd(cargoRec(install()), '   Compiling x\nnpm ERR! code E404\nNo matching distribution found for x\n'), 'install_build_failed');
   for (const d of ['package_not_runnable', 'entry_ambiguous']) assert.ok(LP.DETAILS[d], d);
@@ -134,7 +141,7 @@ test('R-LP-56: a crate\'s failed install is the crate\'s only on cargo\'s own wo
   assert.deepEqual(LP.DETAILS.entry_ambiguous, ['install_failed_registry', false, 'install', 'tool']);
 });
 
-test('R-LP-56 mutation check: without the Compiling guard, the network guard or the same-crate check, a crate is blamed for what it did not say', async () => {
+test('R-LP-56 mutation check: without the Compiling guard, the network guard, the same-crate check or the ownership gate, a crate is blamed for what it did not say', async () => {
   for (const [from, to, log] of [
     ["  if (/^\\s*Compiling /m.test(t) || CARGO_NOT_THE_CRATE.test(t)) return null;", '  if (CARGO_NOT_THE_CRATE.test(t)) return null;', '   Compiling evil-build v0.1.0\nerror: could not find `rusty-mcp` in registry `crates-io`\n'],
     ["  if (/^\\s*Compiling /m.test(t) || CARGO_NOT_THE_CRATE.test(t)) return null;", "  if (/^\\s*Compiling /m.test(t)) return null;", 'warning: spurious network error (2 tries remaining)\nerror: could not find `rusty-mcp` in registry `crates-io`\n'],
@@ -142,8 +149,13 @@ test('R-LP-56 mutation check: without the Compiling guard, the network guard or 
   ]) {
     assert.equal(fd(cargoRec([{ name: 'install', exit: 101 }]), log), 'install_build_failed');
     const M = await mutant(from, to);
-    assert.equal(M.failureDetail(cargoRec([{ name: 'install', exit: 101 }]), null, null, { stepsLog: log, launch: LAUNCH, argsUnfilled: 0 }), 'install_failed', 'without the guard: ' + from.slice(0, 50));
+    assert.equal(M.failureDetail(cargoRec([{ name: 'install', exit: 101 }]), null, null, { stepsLog: log, launch: LAUNCH, argsUnfilled: 0, owned: true }), 'install_failed', 'without the guard: ' + from.slice(0, 50));
   }
+  // Without the ownership gate a seed-only crate's absence would be the subject's.
+  const log = 'error: could not find `rusty-mcp` in registry `crates-io`\n';
+  assert.equal(fd(cargoRec([{ name: 'install', exit: 101 }]), log, false), 'package_error_unowned');
+  const M = await mutant("      return ev ? (owned ? ev : 'package_error_unowned') : 'install_build_failed';", "      return ev || 'install_build_failed';");
+  assert.equal(M.failureDetail(cargoRec([{ name: 'install', exit: 101 }]), null, null, { stepsLog: log, launch: LAUNCH, argsUnfilled: 0, owned: false }), 'install_failed');
 });
 
 // ------------------------------------------------------------------ NuGet (.NET tools)
@@ -184,9 +196,9 @@ test('R-LP-57 mutation check: without the package id check an option-like id rea
 
 const nugetRec = (steps, o = {}) => ({ install: { kind: 'nuget', ok: false, steps, egress_refused: 0, ...o }, env: { names: { registry: [] }, secret_named: [] }, timing: { total_ms: 60000 }, timed_out: false });
 const NLAUNCH = { kind: 'nuget', package: 'Acme.Dotty.Mcp', version: 'latest' };
-const nfd = (rec, stepsLog) => LP.failureDetail(rec, null, null, { stepsLog, launch: NLAUNCH, argsUnfilled: 0 });
+const nfd = (rec, stepsLog, owned = true) => LP.failureDetail(rec, null, null, { stepsLog, launch: NLAUNCH, argsUnfilled: 0, owned });
 
-test('R-LP-58: a .NET tool\'s failed install is the package\'s only on the CLI\'s word about this id with no trouble reaching NuGet, or the entry helper\'s no_tool_settings; other platforms only, several commands and everything else are ours', () => {
+test('R-LP-58: a .NET tool\'s failed install is the package\'s only on the CLI\'s word about this id with no trouble reaching NuGet, and only when its registry entry is the subject\'s own; what our entry helper cannot find, other platforms, several commands and everything else are ours', () => {
   const install = (exit = 1) => [{ name: 'config', exit: 0 }, { name: 'install', exit, timed_out: false }];
   assert.equal(nfd(nugetRec(install()), '/work/nuget.config : error NU1101: Unable to find package Acme.Dotty.Mcp. No packages exist with this id in source(s): nuget.org\nTool \'acme.dotty.mcp\' failed to install.\n'), 'install_failed');
   assert.equal(nfd(nugetRec(install()), 'error NU1102: Unable to find package acme.dotty.mcp with version (= 9.9.9)\n'), 'install_failed', 'ids are case-insensitive');
@@ -198,11 +210,12 @@ test('R-LP-58: a .NET tool\'s failed install is the package\'s only on the CLI\'
   assert.equal(nfd(nugetRec(install(137)), ''), 'install_resource_limit');
   assert.equal(nfd(nugetRec(install()), 'npm ERR! code E404\n'), 'install_build_failed', 'npm\'s words are not NuGet\'s');
   const entry = (error) => [...install(0), { name: 'entry', exit: 1, result: { error } }];
-  assert.equal(nfd(nugetRec(entry('no_tool_settings')), ''), 'package_not_runnable');
+  // After a successful install, no tool settings means our store walk (its caps, its name pattern) did not reach them: ours.
+  for (const e of ['no_tool_settings', 'no_command', 'not_installed']) assert.equal(nfd(nugetRec(entry(e)), ''), 'entry_unresolved', e);
+  assert.equal(nfd(nugetRec(install()), 'error NU1101: Unable to find package Acme.Dotty.Mcp.\n', false), 'package_error_unowned', 'not the subject\'s entry');
   assert.equal(nfd(nugetRec(entry('no_linux_build')), ''), 'platform_unsupported');
   assert.equal(nfd(nugetRec(entry('runtime_too_new')), ''), 'platform_unsupported', 'a tool for .NET 11 on our .NET 10');
   assert.equal(nfd(nugetRec(entry('several_commands')), ''), 'entry_ambiguous');
-  assert.equal(nfd(nugetRec(entry('no_command')), ''), 'install_build_failed');
   assert.deepEqual(LP.DETAILS.platform_unsupported, ['no_runnable_artifact', false, 'install', 'tool']);
 });
 
@@ -214,6 +227,18 @@ test('R-LP-58 mutation check: without the network guard or the same-id check, a 
     const rec = nugetRec([{ name: 'install', exit: 1 }]);
     assert.equal(nfd(rec, log), 'install_build_failed');
     const M = await mutant(from, to);
-    assert.equal(M.failureDetail(rec, null, null, { stepsLog: log, launch: NLAUNCH, argsUnfilled: 0 }), 'install_failed', 'without the guard: ' + from.slice(0, 50));
+    assert.equal(M.failureDetail(rec, null, null, { stepsLog: log, launch: NLAUNCH, argsUnfilled: 0, owned: true }), 'install_failed', 'without the guard: ' + from.slice(0, 50));
   }
+});
+
+test('R-LP-58: a .NET tool built for an older runtime runs rolled forward, so its crash is no evidence against it', async () => {
+  const rec = (tfm) => ({ install: { kind: 'nuget', ok: true, steps: [{ name: 'install', exit: 0 }, { name: 'entry', exit: 0, result: { script: '/work/pkg/x.dll', runner: 'dotnet', tfm } }] }, env: { names: { registry: [] }, secret_named: [] }, timing: { total_ms: 60000 }, timed_out: false });
+  const crash = { initialize_error: 'the server exited (exit 2, signal null)', lists: {}, transport: { exit: 2, signal: null }, timing: { total_ms: 2000 }, stderr: 'Unhandled exception. System.TypeLoadException: Could not load type\n   at Program.Main()\nSegmentation fault (core dumped)\n' };
+  assert.equal(LP.rolledForward(rec('net8.0').install), true);
+  assert.equal(LP.rolledForward(rec('net10.0').install), false);
+  assert.equal(LP.failureDetail(rec('net8.0'), crash, null, { launch: NLAUNCH, argsUnfilled: 0, owned: true }), 'start_env_limited');
+  // Mutation check: without the rule the same crash could be the server's.
+  const M = await mutant("  if (rolledForward(inst)) return 'start_env_limited';\n", '');
+  assert.equal(LP.failureDetail(rec('net10.0'), crash, null, { launch: NLAUNCH, argsUnfilled: 0, owned: true }), 'start_failed', 'on the runtime it was built for, a crash is a crash');
+  assert.equal(M.failureDetail(rec('net8.0'), crash, null, { launch: NLAUNCH, argsUnfilled: 0, owned: true }), 'start_failed', 'without the rule the rolled-forward crash is the server\'s');
 });
