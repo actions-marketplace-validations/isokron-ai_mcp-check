@@ -272,3 +272,60 @@ test('R-RD-33: an imported registry that its own module changes (push) is not un
   assert.deepEqual(names(an), []);
   assert.equal(an.unresolved, 1);
 });
+
+// ---------------------------------------------------------------- R-RD-34: Python lists of functions
+// Trimmed from stefanoamorelli/sec-edgar-mcp @ 86646eb0e23f84eb2b2d1a793c888ad63a8a82bc (sec_edgar_mcp/server.py:41-526).
+const PYPROJECT = '[project]\nname = "x"\ndependencies = ["mcp>=1.20"]\n';
+const SEC = (loop) => [
+  'from mcp.server.fastmcp import FastMCP',
+  'mcp = FastMCP("SEC EDGAR MCP")',
+  '',
+  'def get_cik_by_ticker(ticker: str):',
+  '    """Convert a stock ticker symbol to its SEC CIK (Central Index Key)."""',
+  '    return {"ticker": ticker}',
+  '',
+  'def get_company_info(identifier: str, include_former_names: bool = False):',
+  '    """Retrieve company information from SEC records."""',
+  '    return {"identifier": identifier}',
+  '',
+  'def register_tools():',
+  ...loop,
+  '',
+  'register_tools()',
+].join('\n');
+
+test('R-RD-34: for tool in tools: mcp.add_tool(tool) over a list of functions of the same file reads each function as a tool', () => {
+  const an = read({ 'pyproject.toml': PYPROJECT, 'server.py': SEC([
+    '    tools = [',
+    '        get_cik_by_ticker,',
+    '        get_company_info,',
+    '    ]',
+    '    for tool in tools:',
+    '        mcp.add_tool(tool)',
+  ]) });
+  assert.deepEqual(names(an), ['get_cik_by_ticker', 'get_company_info']);
+  const t = tool(an, 'get_company_info');
+  assert.equal(t.description, 'Retrieve company information from SEC records.');
+  assert.deepEqual(Object.keys(t.inputSchema.properties), ['identifier', 'include_former_names']);
+  assert.deepEqual(t.inputSchema.required, ['identifier']);
+  assert.equal(an.unresolved, 0);
+});
+
+test('R-RD-34: a tuple written in the loop itself is read the same way', () => {
+  const an = read({ 'pyproject.toml': PYPROJECT, 'server.py': SEC(['    for fn in (get_cik_by_ticker, get_company_info):', '        mcp.add_tool(fn)']) });
+  assert.deepEqual(names(an), ['get_cik_by_ticker', 'get_company_info']);
+});
+
+test('R-RD-34: a list with a function from elsewhere, a list changed after it is built, or a registration under an if is counted as unresolved, never guessed', () => {
+  const cases = [
+    ['    from .extra import other_tool', '    tools = [get_cik_by_ticker, other_tool]', '    for tool in tools:', '        mcp.add_tool(tool)'],
+    ['    tools = [get_cik_by_ticker]', '    tools.append(get_company_info)', '    for tool in tools:', '        mcp.add_tool(tool)'],
+    ['    tools = [get_cik_by_ticker, get_company_info]', '    for tool in tools:', '        if tool.__name__ != "get_company_info":', '            mcp.add_tool(tool)'],
+    ['    for tool in load_plugins():', '        mcp.add_tool(tool)'],
+  ];
+  cases.forEach((loop) => {
+    const an = read({ 'pyproject.toml': PYPROJECT, 'server.py': SEC(loop) });
+    assert.deepEqual(names(an), [], loop.join(' / '));
+    assert.equal(an.unresolved, 1, loop.join(' / '));
+  });
+});
