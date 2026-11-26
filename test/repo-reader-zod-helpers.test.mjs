@@ -98,3 +98,145 @@ test('R-RD-26: .length of a constant array with a spread or an unreadable elemen
   ].join('\n') });
   assert.deepEqual(tool(an, 'check_tools_list').inputSchema.properties.sections, { type: 'array', items: { type: 'string' } });
 });
+
+// ---------------------------------------------------------------- R-RD-27: schema factory functions
+// Trimmed from CruGlobal/flightdeck-mcp-server 3a4f362dbf0b4723cd67cccb40704adf4d1c2259 src/tools.ts (id, pagination,
+// get_project, update_work_item). The `description` constant and the get_me registration using it are added.
+test('R-RD-27: a schema factory of the file (id("Project id"), id("…").optional()) is read with its argument as the parameter', () => {
+  const an = read({ 'package.json': ZOD3, 'src/tools.ts': [
+    'import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";',
+    'import { z } from "zod";',
+    '// Flightdeck resource ids are integers, and the API returns them as numbers.',
+    'const id = (description: string) => z.union([z.string(), z.number()]).describe(description);',
+    'const description = "Return the user behind the configured token.";',
+    'const pagination = {',
+    '  page: z.number().int().positive().optional().describe("1-based page number (default 1)"),',
+    '};',
+    'const workItemFields = {',
+    '  title: z.string().optional().describe("Work item title"),',
+    '  state_id: id("State id — must belong to the item\'s project").optional(),',
+    '};',
+    'export function registerTools(server: McpServer, client: unknown): void {',
+    '  server.registerTool(',
+    '    "get_project",',
+    '    { title: "Get a project", description: "Retrieve a single project by its id.", inputSchema: { project_id: id("Project id") } },',
+    '    async (args) => ({ content: [] }),',
+    '  );',
+    '  server.registerTool(',
+    '    "update_work_item",',
+    '    { title: "Update a work item", description: "Update a work item by id.", inputSchema: { work_item_id: id("Work item id"), ...workItemFields, ...pagination } },',
+    '    async (args) => ({ content: [] }),',
+    '  );',
+    '  server.registerTool("get_me", { title: "Get current identity", description, inputSchema: {} }, async () => ({ content: [] }));',
+    '}',
+  ].join('\n') });
+  assert.equal(tool(an, 'get_me').description, 'Return the user behind the configured token.', 'a parameter is bound only while its call is read');
+  const gp = tool(an, 'get_project').inputSchema;
+  assert.deepEqual(Object.keys(gp.properties), ['project_id']);
+  assert.equal(gp.properties.project_id.description, 'Project id');
+  assert.deepEqual(gp.required, ['project_id']);
+  const up = tool(an, 'update_work_item').inputSchema;
+  assert.deepEqual(Object.keys(up.properties), ['work_item_id', 'title', 'state_id', 'page']);
+  assert.equal(up.properties.state_id.description, "State id — must belong to the item's project");
+  assert.deepEqual(up.required, ['work_item_id'], 'id("…").optional() is optional');
+});
+
+// Trimmed from barzoj/somtoday-mcp 51b0d5f334d6971a9c800fdf14dde84508fdb8ef src/server.ts (ymd, rangeArgs, numericId,
+// leerlingArg, schedule). The positional registration of homework is added.
+test('R-RD-27: factories calling factories, a factory returning a shape spread in (...rangeArgs("…")), and a template of a parameter', () => {
+  const an = read({ 'package.json': ZOD4, 'src/server.ts': [
+    'import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";',
+    'import { z } from "zod";',
+    'const ymd = () => z.string().regex(/^\\d{4}-\\d{2}-\\d{2}$/, "YYYY-MM-DD");',
+    'const rangeArgs = (defaultText: string) => ({',
+    '  date: ymd().optional().describe("One Amsterdam calendar date."),',
+    '  from: ymd().optional().describe(`First date of the range. ${defaultText}`),',
+    '  to: ymd().optional().describe("Last date of the range (inclusive)."),',
+    '});',
+    '// A factory, so every field gets its own schema (no shared `$ref` in the JSON schema).',
+    'const numericId = () =>',
+    '  z',
+    '    .union([z.number().int().nonnegative(), z.string().regex(/^\\d+$/)])',
+    '    .transform(String);',
+    'const leerlingArg = () =>',
+    '  numericId()',
+    '    .optional()',
+    '    .describe(',
+    '      "Numeric leerling id. Required when more than one child is linked.",',
+    '    );',
+    'export function createServer(): McpServer {',
+    '  const server = new McpServer({ name: "somtoday", version: "1.0.0" });',
+    '  server.registerTool(',
+    '    "schedule",',
+    '    { title: "Schedule", description: "Lessons per day.", inputSchema: { ...rangeArgs("Defaults to today."), leerlingId: leerlingArg() } },',
+    '    async () => ({ content: [] }),',
+    '  );',
+    '  server.tool("homework", "Homework per day.", { ...rangeArgs("Defaults to tomorrow."), leerlingId: leerlingArg() }, async () => ({ content: [] }));',
+    '  return server;',
+    '}',
+  ].join('\n') });
+  const DATE = { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$' };
+  const s = tool(an, 'schedule').inputSchema;
+  assert.deepEqual(s.properties, {
+    date: Object.assign({}, DATE, { description: 'One Amsterdam calendar date.' }),
+    from: Object.assign({}, DATE, { description: 'First date of the range. Defaults to today.' }),
+    to: Object.assign({}, DATE, { description: 'Last date of the range (inclusive).' }),
+    leerlingId: { anyOf: [{ type: 'integer', minimum: 0, maximum: SAFE }, { type: 'string', pattern: '^\\d+$' }], description: 'Numeric leerling id. Required when more than one child is linked.' },
+  });
+  assert.equal(s.required, undefined, 'every field is optional');
+  const h = tool(an, 'homework').inputSchema;
+  assert.deepEqual(Object.keys(h.properties), ['date', 'from', 'to', 'leerlingId'], 'the positional form (name, description, shape) reads the spread too');
+  assert.equal(h.properties.from.description, 'First date of the range. Defaults to tomorrow.');
+  assert.deepEqual(an.unreadable || [], []);
+});
+
+// Trimmed from isokron-ai/mcp-check d4a373a5f785db4631c18aad97df658836bbc2d1 src/server.js (toolsListArg,
+// compare_tools_lists). The factory is moved to its own module here to read it through a direct import; the
+// re-exporting module, the factory with a statement before its return, the constant named like the parameter and
+// the unknown argument are added.
+test('R-RD-27: a factory imported directly is read; a re-exported one, one with statements and an unknown argument are not guessed', () => {
+  const an = read({ 'package.json': ZOD4,
+    'src/limits.js': 'export const MAX_BYTES = 2 * 1024 * 1024;\nexport const MAX_TOOLS = 2000;\n',
+    'src/args.js': [
+      "import * as z from 'zod/v4';",
+      "import { MAX_BYTES, MAX_TOOLS } from './limits.js';",
+      "const what = 'A module constant of the same name';",
+      "export const toolsListArg = (what) => z.union([z.string(), z.array(z.unknown())])",
+      "  .describe(what + ': the answer to tools/list. Limit ' + MAX_BYTES / 1048576 + ' MiB of JSON and ' + MAX_TOOLS + ' tools.');",
+      "export function busy(what) { const d = what + '!'; return z.string().describe(d); }",
+    ].join('\n'),
+    'src/reexport.js': "export { toolsListArg as relisted } from './args.js';\n",
+    'src/server.js': [
+      "import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';",
+      "import * as z from 'zod/v4';",
+      "import { toolsListArg, busy } from './args.js';",
+      "import { relisted } from './reexport.js';",
+      "const server = new McpServer({ name: 'mcp-check', version: '1.0.0' });",
+      "server.registerTool('compare_tools_lists', {",
+      "  description: 'Compares two tools/list answers.',",
+      '  inputSchema: z.strictObject({',
+      "    before: toolsListArg('The earlier tool list'),",
+      "    after: toolsListArg(process.env.LABEL),",
+      "    third: relisted('A third list'),",
+      "    fourth: busy('x'),",
+      '  }),',
+      '}, async () => ({ content: [] }));',
+    ].join('\n') });
+  const p = tool(an, 'compare_tools_lists').inputSchema.properties;
+  assert.deepEqual(p.before, { anyOf: [{ type: 'string' }, { type: 'array', items: {} }], description: 'The earlier tool list: the answer to tools/list. Limit 2 MiB of JSON and 2000 tools.' });
+  assert.deepEqual(p.after, { anyOf: [{ type: 'string' }, { type: 'array', items: {} }] }, 'a description built from an argument the reader cannot read is left out');
+  assert.deepEqual(p.third, {}, 'a factory reached through a re-export is not followed');
+  assert.deepEqual(p.fourth, {}, 'a factory body with statements before its return is not read');
+});
+
+// Synthetic: the shape of R-RD-15's timing test, with a zod factory.
+test('R-RD-27: many factory calls next to many constants are read in linear time', () => {
+  const consts = Array.from({ length: 4000 }, (_, i) => 'const c' + i + ' = ' + i + ';').join('\n');
+  const regs = Array.from({ length: 3000 }, (_, i) => "server.registerTool('t" + i + "', { description: 'D.', inputSchema: { a: id('A " + i + "'), b: id('B').optional() } }, async () => ({ content: [] }));").join('\n');
+  const t0 = performance.now();
+  const an = read({ 'package.json': ZOD3, 'src/index.ts': "import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';\nimport { z } from 'zod';\nconst server = new McpServer({ name: 'x', version: '1.0.0' });\nconst id = (description: string) => z.string().describe(description);\n" + consts + '\n' + regs });
+  const ms = performance.now() - t0;
+  assert.equal(an.tools.length, 3000);
+  assert.equal(tool(an, 't2999').inputSchema.properties.a.description, 'A 2999');
+  assert.ok(ms < 3000, 'took ' + Math.round(ms) + ' ms');
+});
