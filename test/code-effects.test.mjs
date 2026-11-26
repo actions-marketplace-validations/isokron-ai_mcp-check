@@ -424,7 +424,7 @@ test('R-AE-29: a SQL or ORM write is definite only when an argument reaches the 
 });
 
 test('R-AE-30: a process run through a guard wrapper takes its program and arguments from the callers; a command that is still not a literal and not from the arguments is "may"', () => {
-  // QA-40 repro r1: runSafe(file, args) calls execFileSync(file, args); every caller passes "kubectl" and a literal sub-command.
+  // QA-40 repro r1 (k8s-flux159@f93604a20e388a08caac548c380cde8a5c532d5c): runSafe(file, args) calls execFileSync(file, args); every caller passes "kubectl" and a literal sub-command.
   const wrap = "import { execFileSync } from 'child_process';\nfunction runSafe(file: string, args: string[]): string {\n  return execFileSync(file, args, { encoding: 'utf8' });\n}\n";
   const reg = (body) => ({ 'index.ts': wrap + "server.registerTool('t', { description: 'd', inputSchema: {}, annotations: { readOnlyHint: true } }, async ({ resource }) => {\n" + body + "\n});\n" });
   const ro = snippet(reg("const out = runSafe('kubectl', ['explain', resource]);\nreturn out;"), 't');
@@ -445,7 +445,7 @@ test('R-AE-30: a process run through a guard wrapper takes its program and argum
 });
 
 test('R-AE-31: an exec that no argument of the tool reaches is "may", and so is everything after an early return the arguments do not decide', () => {
-  // QA-40 repro r2 (mysql-designcomputer get_schema_info, get_table_sample): an SSH tunnel built from the environment,
+  // QA-40 repro r2 (mysql-designcomputer@943ce83816372a03e5872be5424ebfcf252aa5ac get_schema_info, get_table_sample): an SSH tunnel built from the environment,
   // after `if not ssh: yield; return` in a context manager.
   const r2 = { 'server.py': 'import os\nimport subprocess\nfrom contextlib import contextmanager\n\n@contextmanager\ndef maybe_tunnel():\n    if os.getenv("USE_SSH", "false") != "true":\n        yield "127.0.0.1"\n        return\n    proc = subprocess.Popen(["ssh", "-N", "-L", "3330:localhost:3306", os.getenv("SSH_HOST")])\n    try:\n        yield "127.0.0.1"\n    finally:\n        proc.terminate()\n\n@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))\ndef t(table: str) -> str:\n    with maybe_tunnel() as host:\n        return f"SELECT * FROM {table} LIMIT 5 on {host}"\n' };
   const tun = snippet(r2, 't');
@@ -470,7 +470,7 @@ test('R-AE-31: an exec that no argument of the tool reaches is "may", and so is 
 });
 
 test('R-AE-32: deleting a file the same function wrote, directly or through a callee given the same value, is housekeeping ("may"); so is a pending, spool, queue, outbox or staging path', () => {
-  // QA-40 repro r3 (reg-fabric-verify-mcp record_action, record_event): write a pending record, POST it, remove it.
+  // QA-40 repro r3 (reg-fabric-verify-mcp@39ca1ba34fddd6a77187d81183d99e037c98d49c record_action, record_event): write a pending record, POST it, remove it.
   const reg = (body, extra = '') => ({ 'index.ts': "import { writeFileSync, renameSync, rmSync } from 'fs';\nimport { join } from 'path';\nconst HOME = process.env.APP_HOME || '/var/lib/app';\n" + extra + "\nserver.registerTool('t', { description: 'd', inputSchema: {}, annotations: { readOnlyHint: false, destructiveHint: false } }, async ({ key, text }) => {\n" + body + "\n});\n" });
   const r3 = snippet(reg("const pPath = join(HOME, 'pending', key + '.json');\nwriteFileSync(pPath, text);\nawait fetch('https://api.example.com/v1/log/append', { method: 'POST', body: text });\nrmSync(pPath, { force: true });"), 't');
   assert.deepEqual(r3.effects.delete.map((e) => e.confidence), ['may']);
@@ -492,8 +492,53 @@ test('R-AE-32: deleting a file the same function wrote, directly or through a ca
   }
 });
 
+test('R-AE-30b: a guard wrapper reached from a second caller with different literals is walked again, never dropped (a read first, then a delete)', () => {
+  // review of PR 48: the visited key ignored the literals, so runSafe('kubectl', ['get', ...]) hid runSafe('kubectl', ['delete', ...]).
+  const wrap = "import { execFileSync } from 'child_process';\nfunction runSafe(file: string, args: string[]): string {\n  return execFileSync(file, args, { encoding: 'utf8' });\n}\n";
+  const reg = (body) => ({ 'index.ts': wrap + "server.registerTool('t', { description: 'd', inputSchema: {}, annotations: { readOnlyHint: true } }, async ({ r }) => {\n" + body + "\n});\n" });
+  const arg = snippet(reg("runSafe('kubectl', ['get', 'pods']);\nreturn runSafe('kubectl', ['delete', 'pod', r]);"), 't');
+  assert.deepEqual(arg.effects.exec.map((e) => [e.sink, e.confidence]), [['exec.execFileSync', 'definite']]);
+  const lit = snippet(reg("runSafe('kubectl', ['get', 'pods']);\nreturn runSafe('kubectl', ['delete', 'pod', 'x']);"), 't');
+  assert.equal(lit.effects.exec.length, 1, 'the second caller is reported, not dropped');
+  assert.match(lit.effects.exec[0].note, /kubectl delete/);
+  // the same wrapper reached twice with the same literals is still walked once
+  const same = snippet(reg("runSafe('kubectl', ['get', 'pods']);\nreturn runSafe('kubectl', ['get', 'pods']);"), 't');
+  assert.deepEqual(same.effects.exec, []);
+  // more variants than the bound: still reported (may or definite), not silently lost
+  const many = snippet(reg(Array.from({ length: 12 }, (_, i) => "runSafe('kubectl', ['get', 'p" + i + "']);").join('\n') + "\nreturn runSafe('kubectl', ['delete', 'pod', r]);"), 't');
+  assert.ok(many.effects.exec.length >= 1);
+});
+
+test('R-AE-32b: a copy writes its destination, not its source, so deleting the source after the copy stays definite, directly or through a helper', () => {
+  // review of PR 48: shutil.copy(src, dst); os.remove(src) marked src as "written by this function".
+  const direct = snippet(PY('shutil.copy(p, "/tmp/x")\nos.remove(p)'), 't');
+  assert.deepEqual(direct.effects.delete.map((e) => e.confidence), ['definite']);
+  const mv = snippet(PY('os.rename(p, "/tmp/x")\nos.remove(p)'), 't');
+  assert.deepEqual(mv.effects.delete.map((e) => e.confidence), ['definite']);
+  const viaHelper = snippet({ 'server.py': "import os, shutil\n\ndef copy_it(a, b):\n    shutil.copy(a, b)\n\n@mcp.tool()\ndef t(src: str, dst: str) -> str:\n    copy_it(src, dst)\n    os.remove(src)\n    return 'ok'\n" }, 't');
+  assert.deepEqual(viaHelper.effects.delete.map((e) => e.confidence), ['definite']);
+  const viaOpen = snippet({ 'server.py': "import os\n\ndef copy_it(a, b):\n    with open(b, 'w') as f:\n        f.write(open(a).read())\n\n@mcp.tool()\ndef t(src: str, dst: str) -> str:\n    copy_it(src, dst)\n    os.remove(src)\n    return 'ok'\n" }, 't');
+  assert.deepEqual(viaOpen.effects.delete.map((e) => e.confidence), ['definite']);
+  // positive control: deleting the destination just written is still housekeeping
+  const dstDel = snippet(PY('dst = os.path.join("/tmp", "x")\nshutil.copy(p, dst)\nos.remove(dst)'), 't');
+  assert.deepEqual(dstDel.effects.delete.map((e) => e.confidence), ['may']);
+  // known recall loss (recorded, accepted): a housekeeping word in the path (pending, spool, queue, outbox, staging) turns a
+  // real delete such as delete_queue_item into "may"
+  const known = snippet(TS("fs.rmSync('/data/queue/' + a.id);"), 't');
+  assert.deepEqual(known.effects.delete.map((e) => e.confidence), ['may']);
+});
+
+test('R-AE-31b: an early return decided by a local flag or a lookup (not the environment or configuration) does not make the rest conditional', () => {
+  const flag = snippet(PY('ready = os.path.exists("/x")\nif not ready:\n    return "no"\nos.remove(p)'), 't');
+  assert.deepEqual(flag.effects.delete.map((e) => e.confidence), ['definite']);
+  const jsFlag = snippet(TS("const ok = fs.existsSync('/x');\nif (!ok) return 'no';\nfs.rmSync(a.path);"), 't');
+  assert.deepEqual(jsFlag.effects.delete.map((e) => e.confidence), ['definite']);
+  const cfg = snippet(PY('if not config.enabled:\n    return "off"\nos.remove(p)'), 't');
+  assert.deepEqual(cfg.effects.delete.map((e) => e.confidence), ['may']);
+});
+
 test('R-AE-33: a client returned by a factory, held in an attribute or annotated is recognised; a Redis command is definite only when an argument reaches it, any other client verb is "may"', () => {
-  // QA-40 repro r4 (redis-py delete): r = get_connection() from another module, which returns redis.Redis(...)
+  // QA-40 repro r4 (redis-py@69e0181d92cdc81acdb9fa7cc62b5597f5ec3850 delete): r = get_connection() from another module, which returns redis.Redis(...)
   const r4 = { 'conn.py': 'import redis\n\n\ndef get_connection():\n    return redis.Redis(host="localhost")\n', 'server.py': 'from mcp.server.fastmcp import FastMCP\n\nfrom .conn import get_connection\n\nmcp = FastMCP("r4")\n\n\n@mcp.tool()\ndef t(key: str) -> str:\n    r = get_connection()\n    return str(r.delete(key))\n' };
   const del = snippet(r4, 't');
   assert.deepEqual(del.effects.delete.map((e) => [e.sink, e.confidence]), [['client.redis.delete', 'definite']]);
@@ -519,7 +564,7 @@ test('R-AE-33: a client returned by a factory, held in an attribute or annotated
 });
 
 test('R-AE-34: opening a file for append and writing nothing through it is a writability check, not a definite write; a keyword argument is not the mode', () => {
-  // Found by the QA-40 re-run of this patch: word-gongrzhe check_file_writeable() does `with open(filepath, 'a'): pass`.
+  // Found by the QA-40 re-run of this patch: word-gongrzhe@a3bbbb6d6167e68cf855d73ef7dc6cd8cfbfedba check_file_writeable() does `with open(filepath, 'a'): pass`.
   const w = (body) => snippet(PY(body), 't').effects.write.map((e) => [e.confidence, e.note]);
   assert.deepEqual(w("try:\n    with open(p, 'a'):\n        pass\n    return True\nexcept IOError:\n    return False"), [['may', 'opens for append and writes nothing (a writability check)']]);
   assert.deepEqual(w("with open(p, 'a') as f:\n    n = 1\nreturn n"), [['may', 'opens for append and writes nothing (a writability check)']]);
@@ -534,7 +579,7 @@ test('R-AE-34: opening a file for append and writing nothing through it is a wri
 });
 
 test('R-AE-35: from pkg import mod, then mod.fn(), is followed into pkg/mod.py when pkg/__init__.py does not define fn', () => {
-  // QA-40 misses in aws-s3tables: server.py imports the submodule `namespaces` from its package and calls
+  // QA-40 misses in aws-s3tables@a760620171c17f7c5c08fcfefbc9b0747727cd6a: server.py imports the submodule `namespaces` from its package and calls
   // namespaces.create_namespace(...); the call stopped at the package's __init__.py.
   const files = { 'pkg/__init__.py': '__version__ = "1"\n', 'pkg/ops.py': 'import os\n\ndef remove(path):\n    os.remove(path)\n', 'pkg/server.py': 'from pkg import ops\n\n@mcp.tool()\ndef t(path: str) -> str:\n    ops.remove(path)\n    return "ok"\n' };
   const t = Fx.analyse(new Map(Object.entries(files)), [{ path: 'pkg/server.py', line: 1, tool: { name: 't' } }]).tools.t;
@@ -546,7 +591,7 @@ test('R-AE-35: from pkg import mod, then mod.fn(), is followed into pkg/mod.py w
 });
 
 test('R-AE-36: Python tuple unpacking carries an argument, so a guard on its result is validation, not a mode', () => {
-  // Found by checking what the early-return rule (R-AE-31) cost on the QA-40 repos: word-gongrzhe protect_document does
+  // Found by checking what the early-return rule (R-AE-31) cost on the QA-40 repos: word-gongrzhe@a3bbbb6d6167e68cf855d73ef7dc6cd8cfbfedba protect_document does
   // `is_writeable, error_message = check_file_writeable(filename)`, `if not is_writeable: return ...`, then writes filename.
   const head = 'def check(path):\n    return os.access(path, os.W_OK), ""\n';
   const t = snippet(PY('ok, msg = check(p)\nif not ok:\n    return msg\nos.remove(p)', head), 't');

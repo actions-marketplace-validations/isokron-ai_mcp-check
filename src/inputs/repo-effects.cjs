@@ -773,6 +773,16 @@ const idsOf = (code) => new Set((code.match(/(?<![.\w$])[A-Za-z_$][\w$]*/g) || [
   // Is there an early `return` before pos in this function, inside an `if` whose condition no argument of the tool
   // reaches? Then pos runs only in one mode (`if not use_ssh: yield; return`), not on every call. A guard on the tool's
   // own arguments (`if (!path) return error`) is validation: the path after it is still the tool's normal path.
+  // Only a condition that reads the environment or configuration counts: it is a mode the caller does not choose. Any other
+  // untainted condition (a local flag, a lookup result) is ordinary control flow and says nothing about the path.
+  const ENV_COND = /\b(?:os\s*\.\s*environ|os\s*\.\s*getenv|environ|getenv|process\s*\.\s*env|Deno\s*\.\s*env|env\s*\.\s*get|config|configs|settings|cfg|conf)\b|\bCONFIG\b|\bSETTINGS\b/i;
+  // the condition reads the environment or configuration, directly or through a local assigned from it
+  function envDecided(P, cond, a, pos) {
+    if (ENV_COND.test(cond)) return true;
+    const ids = new Set(cond.match(/[A-Za-z_$][\w$]*/g) || []); if (!ids.size) return false;
+    // `on, why = os.getenv("A"), os.getenv("B")` or `const on = process.env.X`: the local is the environment's value
+    return P.code.slice(a, pos).split('\n').some((l) => { const m = /^(.*?[^=!<>])=(?![=>])(.*)$/.exec(l); return m && ENV_COND.test(m[2]) && (m[1].match(/[A-Za-z_$][\w$]*/g) || []).some((x) => ids.has(x)); });
+  }
   function earlyExit(P, pos, a, b, taint) {
     if (P.lang === 'js') {
       const code = P.code; const re = /\bif\s*\(/g; re.lastIndex = a; let m;
@@ -784,6 +794,7 @@ const idsOf = (code) => new Set((code.match(/(?<![.\w$])[A-Za-z_$][\w$]*/g) || [
         if (end < b0 || end >= pos) continue;
         if (!/\breturn\b/.test(code.slice(b0, end + 1))) continue;
         if (taintedIn(code.slice(open + 1, close), taint)) continue;
+        if (!envDecided(P, code.slice(open + 1, close), a, m.index)) continue;
         return true;
       }
       return false;
@@ -797,6 +808,7 @@ const idsOf = (code) => new Set((code.match(/(?<![.\w$])[A-Za-z_$][\w$]*/g) || [
       if (j > li) continue; // pos is inside this if's body
       if (!/(^|\n)\s*return\b/.test(body)) continue;
       if (taintedIn(m[1], taint)) continue;
+      if (!envDecided(P, m[1], a, pos)) continue;
       return true;
     }
     return false;
@@ -1326,9 +1338,9 @@ const idsOf = (code) => new Set((code.match(/(?<![.\w$])[A-Za-z_$][\w$]*/g) || [
     const fx = { read: [], write: [], delete: [], unsafe_http: [], exec: [], unknown_call: [] };
     const seenEv = new Set(); const visited = new Set(); const unresolved = [];
     // the functions (by region key) whose walk reached a file write, for "a delete of a file this function wrote"
-    const fnWrites = new Map(); const active = [];
+    const fnWrites = new Map(); const active = []; const variants = new Map(); const wroteParams = new Map();
+    const litsKey = (m) => { if (!m || !m.size) return ''; return [...m.entries()].map(([k, v]) => k + '=' + JSON.stringify(v)).sort().join('&').slice(0, 2000); };
     const add = (e, via, capMay, cond) => {
-      if (e.kind === 'write' && /^fs\./.test(e.sink)) active.forEach((k) => fnWrites.set(k, true));
       let conf = capMay && e.conf === 'definite' ? 'may' : e.conf;
       if (cond && conf === 'definite') { conf = 'may'; e = Object.assign({}, e, { note: (e.note ? e.note + '; ' : '') + 'on a conditional path' }); }
       const key = e.P.path + ':' + e.P.line(e.at) + ':' + e.sink + ':' + e.kind;
@@ -1339,8 +1351,14 @@ const idsOf = (code) => new Set((code.match(/(?<![.\w$])[A-Za-z_$][\w$]*/g) || [
     const capMay = how === 'by-name';
     let calls = 0;
     const walk = (P, a, b, depth, via, f, cond, params, taintIn, litsIn) => {
-      const key = P.path + ':' + a + ':' + b; if (visited.has(key)) return; visited.add(key);
-      active.push(key); try { walkBody(P, a, b, depth, via, f, cond, params, taintIn, litsIn, key); } finally { active.pop(); }
+      // the same body reached with different literals (a guard wrapper called with 'get' and then with 'delete') is walked
+      // again, so the second caller is never dropped; the number of variants per body is bounded, and past the bound the
+      // body is walked once with no literals, which reports what it cannot resolve as "may"
+      const base = P.path + ':' + a + ':' + b;
+      let vk = litsKey(litsIn); const seen = (variants.get(base) || 0);
+      if (!visited.has(base + '|' + vk)) { if (seen >= 8) { vk = 'overflow'; litsIn = null; if (visited.has(base + '|' + vk)) return; } variants.set(base, seen + 1); } else return;
+      visited.add(base + '|' + vk);
+      active.push(base); try { walkBody(P, a, b, depth, via, f, cond, params, taintIn, litsIn, base); } finally { active.pop(); }
     };
     const walkBody = (P, a, b, depth, via, f, cond, params, taintIn, litsIn, key) => {
       if (state.deadline && Date.now() > state.deadline) { state.timedOut = true; return; }
@@ -1381,7 +1399,11 @@ const idsOf = (code) => new Set((code.match(/(?<![.\w$])[A-Za-z_$][\w$]*/g) || [
       for (const c of cs) { const l = c.chain[c.chain.length - 1]; if (DB_NOT_CALLS.test(c.chain[0]) || DB_NOT_CALLS.test(l)) regionStrs(c.open, c.close).forEach((q) => claimed.add(q.s)); }
       // identifiers this function passed as the path of a file write, directly or to a callee that wrote a file
       const wroteIds = new Set();
-      const firstId = (call) => { const r = argTexts(P, call)[0]; const t = r ? P.code.slice(r[0], r[1]).trim() : ''; return /^[A-Za-z_$][\w$]*$/.test(t) && !/^(self|this)$/.test(t) ? t : null; };
+      // the identifier a file operation writes to: the destination of a copy, move or rename, otherwise the first argument
+      const DEST_OPS = /^(?:copy|copy2|copyfile|copyfileobj|copytree|move|rename|renames|replace|copyFile|copyFileSync|cp|cpSync|renameSync)$/;
+      const idArg = (call, i) => { const r = argTexts(P, call)[i]; const t = r ? P.code.slice(r[0], r[1]).trim() : ''; return /^[A-Za-z_$][\w$]*$/.test(t) && !/^(self|this)$/.test(t) ? t : null; };
+      const firstId = (call) => idArg(call, 0);
+      const writtenId = (call) => DEST_OPS.test(call.chain[call.chain.length - 1]) ? idArg(call, 1) : idArg(call, 0);
       for (const call of cs) {
         if (++calls > state.maxCalls) { state.truncated = true; return; }
         let effs = classify(R, P, call, region, state);
@@ -1404,7 +1426,7 @@ const idsOf = (code) => new Set((code.match(/(?<![.\w$])[A-Za-z_$][\w$]*/g) || [
         }
         if (sqlHere) effs = effs.filter((e) => e.kind !== 'unknown_call');
         const condCall = cond || condAt(call.at);
-        const fid = firstId(call);
+        const fid = firstId(call); const wid = writtenId(call);
         effs.forEach((e) => {
           const from = targetFromArgs(P, call, e, taint, state);
           let e2 = from === false ? Object.assign({}, e, { conf: 'may', note: (e.note ? e.note + '; ' : '') + 'the target does not come from the tool\'s arguments' }) : e;
@@ -1412,10 +1434,10 @@ const idsOf = (code) => new Set((code.match(/(?<![.\w$])[A-Za-z_$][\w$]*/g) || [
           if (e2.kind === 'delete' && /^fs\./.test(e2.sink) && fid && wroteIds.has(fid) && e2.conf === 'definite') e2 = Object.assign({}, e2, { conf: 'may', note: (e2.note ? e2.note + '; ' : '') + 'removes a file this function wrote' });
           add(e2, via, capMay, condCall);
         });
-        if (fid && effs.some((e) => e.kind === 'write' && /^fs\./.test(e.sink))) wroteIds.add(fid);
+        if (wid && effs.some((e) => e.kind === 'write' && /^fs\./.test(e.sink))) wroteIds.add(wid);
         // follow into the repository
         if (depth < state.depth && !call.chained) {
-          for (const t of targets.slice(0, 3)) { const nm = t.f.name; const tkey = t.P.path + ':' + t.f.body[0] + ':' + t.f.body[1]; walk(t.P, t.f.body[0], t.f.body[1], depth + 1, via.concat(nm + '@' + t.P.path + ':' + t.P.line(t.f.start)), t.f, condCall, params, calleeTaint(P, call, t, taint), calleeLits(call, t)); if (fnWrites.get(tkey)) argTexts(P, call).forEach(([x, y]) => { const id = P.code.slice(x, y).trim(); if (/^[A-Za-z_$][\w$]*$/.test(id)) wroteIds.add(id); }); }
+          for (const t of targets.slice(0, 3)) { const nm = t.f.name; const tkey = t.P.path + ':' + t.f.body[0] + ':' + t.f.body[1]; walk(t.P, t.f.body[0], t.f.body[1], depth + 1, via.concat(nm + '@' + t.P.path + ':' + t.P.line(t.f.start)), t.f, condCall, params, calleeTaint(P, call, t, taint), calleeLits(call, t)); const wp = wroteParams.get(tkey); if (wp && wp.size) { const plist = boundParams(t, call); argTexts(P, call).forEach(([x, y], i) => { const id = P.code.slice(x, y).trim(); if (/^[A-Za-z_$][\w$]*$/.test(id) && (plist[i] || []).some((n) => wp.has(n))) wroteIds.add(id); }); } }
           if (!targets.length && call.chain.length >= 1 && P.imports.get(call.chain[0])) {
             const imp = P.imports.get(call.chain[0]);
             if (imp.spec.startsWith('.') || (P.lang === 'py' && imp.spec.startsWith('.'))) {
@@ -1425,6 +1447,7 @@ const idsOf = (code) => new Set((code.match(/(?<![.\w$])[A-Za-z_$][\w$]*/g) || [
           }
         }
       }
+      { const own = idsOfParams(P, f); const w = wroteParams.get(key) || new Set(); wroteIds.forEach((n) => { if (own.has(n)) w.add(n); }); wroteParams.set(key, w); }
       // SQL strings in the region that no call claimed: may (a query built here and run elsewhere)
       if (!state.disable.has('sql')) for (const s of strs) {
         if (claimed.has(s.s) || sqlSeen.has(s.s) || s.doc) continue;
