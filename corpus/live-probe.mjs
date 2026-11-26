@@ -36,7 +36,9 @@ import { InputError } from '../src/limits.js';
 import { parseList } from '../src/tools.js';
 import { analyseList } from '../src/unreadable.js';
 import { VERSION } from '../src/version.js';
+import { ranCommit } from './tool-commit.mjs';
 import { baselineProblems, judgeOracles } from './oracles/judge.mjs';
+import { pypiEntry } from './pypi-entry.mjs';
 
 export const LANE = 'live-probe';
 export const FORMAT = 'isokron-mcp-check-live-probe/1';
@@ -65,6 +67,10 @@ export const ORACLE_PINS_FILE = join(here, 'oracles', 'pins.json');
 export const ORACLE_BASELINE_FILE = join(FIXTURES, 'oracle-baseline.json');
 /** Each target's time limit grows by this much for the oracle stage (corpus/live-probe-driver.mjs ORACLE_BUDGET_MS). */
 export const ORACLE_ALLOWANCE_S = 150;
+/** The fuzz stage's allowance per stdio target, only while the stage is on (corpus/FUZZ.md). */
+export const FUZZ_ALLOWANCE_S = 60;
+/** The self test's ceiling for one target's fuzz stage: the stage's own budget (corpus/fuzz/run.mjs FUZZ_BUDGET_MS). */
+export const FUZZ_STAGE_MAX_MS = 60_000;
 
 /**
  * The known-answer control: our own published server, @isokron/mcp-check 1.3.1, installed from npm and started in the
@@ -85,6 +91,8 @@ export const SUBJECT_BUDGET_S = 26 * 60;
 export const SUBJECT_TIMEOUT_MIN_S = 90;
 export const SUBJECT_TIMEOUT_MAX_S = 300;
 export const PROBE_MS = 45_000;
+/** A start that failed on its own account fails well inside the probe window; a later exit may be our limits (R-LP-34, R-LP-40). */
+export const START_QUICK_MS = PROBE_MS / 2;
 /** One raw file at most (tool-qa's limit is 8 MiB a file, 64 MiB a bundle). */
 export const RAW_FILE_CAP = 6 * 1024 * 1024;
 export const RAW_TOTAL_CAP = 40 * 1024 * 1024;
@@ -92,33 +100,52 @@ const REGISTRY_CAP = 4 * 1024 * 1024;
 
 /**
  * Why an item has no live grade: our detail code, the tool-qa skip reason (worker-kit/contract.mjs SKIP_REASONS) it is
- * recorded with, whether it is retryable, and the stage. results/ keeps the detail.
+ * recorded with, whether it is retryable, the stage, and the fault side (SKIP_FAULTS: tool, subject, infra or policy).
+ * results/ keeps the detail. R-LP-24..27: our own limits and errors have reasons of their own and fault "tool", never
+ * policy_excluded (which reads as a deliberate exclusion, not a coverage gap) and never upstream_unavailable (which
+ * reads as somebody else's outage). Only what the subject itself did (a failing install, a server that
+ * will not start, one that needs credentials) is the subject's, and only a rate limit or an outage is infra.
  */
 export const DETAILS = Object.freeze({
-  bad_subject: ['no_runnable_artifact', false, 'resolve'],
-  no_package: ['no_runnable_artifact', false, 'resolve'],
-  unsupported_package: ['no_runnable_artifact', false, 'resolve'],
-  private_registry: ['no_runnable_artifact', false, 'resolve'],
-  unverified_registry_entry: ['no_runnable_artifact', false, 'resolve'],
-  oci_host_not_allowed: ['policy_excluded', false, 'resolve'],
-  image_too_large: ['policy_excluded', false, 'resolve'],
-  launch_invalid: ['no_runnable_artifact', false, 'resolve'],
-  remote_only: ['remote_only', false, 'resolve'],
-  unsupported_transport: ['unsupported_transport', false, 'resolve'],
-  image_unavailable: ['install_failed_registry', false, 'install'],
-  install_failed: ['install_failed_registry', false, 'install'],
-  install_timeout: ['install_failed_registry', false, 'install'],
-  needs_credentials: ['start_requires_credentials', false, 'start'],
-  start_failed: ['timeout_start', false, 'start'],
-  start_timeout: ['timeout_start', false, 'start'],
-  list_failed: ['timeout_start', false, 'list'],
-  list_rejected: ['no_runnable_artifact', false, 'grade'],
-  rate_limited: ['rate_limited', true, 'resolve'],
-  upstream_error: ['upstream_unavailable', true, 'resolve'],
-  harness_error: ['upstream_unavailable', true, 'start'],
-  shard_deadline: ['upstream_unavailable', true, 'start'],
-  sandbox_evidence_missing: ['trace_unavailable', true, 'start'],
-  disk_low: ['upstream_unavailable', true, 'install'],
+  bad_subject: ['no_runnable_artifact', false, 'resolve', 'tool'], // not a GitHub owner/name: this lane reads GitHub only
+  no_package: ['no_runnable_artifact', false, 'resolve', 'tool'], // no registry package is no defect: Go and Rust binaries, other npm names and own-registry images exist (R-LP-43)
+  unsupported_package: ['no_runnable_artifact', false, 'resolve', 'tool'], // cargo, NuGet, MCPB: we cannot run them yet
+  private_registry: ['no_runnable_artifact', false, 'resolve', 'tool'],
+  unverified_registry_entry: ['no_runnable_artifact', false, 'resolve', 'tool'], // our provenance checks stop short of it
+  // Our allowlist of OCI hosts (it guards the planner's own fetches and what the runner's Docker daemon pulls, outside the
+  // sandbox; it is not the sandbox's egress rule). A deliberate safety choice, but it is a limit of
+  // ours, not a statement about the server: recorded as a gap of ours (tool), so it counts as unassessed and is not
+  // hidden as an exclusion. no_runnable_artifact is the one reason that fits: there is no artifact we can run.
+  oci_host_not_allowed: ['no_runnable_artifact', false, 'resolve', 'tool'],
+  image_too_large: ['too_large', false, 'resolve', 'tool'], // over our 2 GB image cap
+  launch_invalid: ['no_runnable_artifact', false, 'resolve', 'tool'], // the entry's package id failed our own name check
+  remote_only: ['remote_only', false, 'resolve', 'subject'],
+  unsupported_transport: ['unsupported_transport', false, 'resolve', 'tool'],
+  // R-LP-29..38: a server is recorded as at fault (subject) only with evidence our own environment cannot explain.
+  registry_lookup_truncated: ['no_runnable_artifact', false, 'resolve', 'tool'], // a registry search page came back full: the entry may not have been fetched
+  image_unavailable: ['install_failed_registry', false, 'resolve', 'subject'], // the registry's own 404, 401 or 403 after a good token exchange, or a digest mismatch
+  image_registry_unreadable: ['install_failed_registry', false, 'resolve', 'tool'], // we could not read the registry's answer (no challenge, bad realm, no token, bad JSON, no linux/amd64, no layers, bad sizes)
+  image_pull_failed: ['install_failed_registry', false, 'install', 'tool'], // the run-stage pull failed on a digest the planner already read
+  install_failed: ['install_failed_registry', false, 'install', 'subject'], // a package-level error (E404, ETARGET, no matching distribution, no bin), no proxy denial
+  install_blocked: ['install_failed_registry', false, 'install', 'tool'], // our egress proxy refused something the install asked for
+  install_resource_limit: ['install_failed_registry', false, 'install', 'tool'], // killed (137, 124, out of memory) inside our limits
+  install_build_failed: ['install_failed_registry', false, 'install', 'tool'], // a native build, a missing compiler or library, an engine mismatch, or an install failure with no package-level cause
+  install_timeout: ['install_failed_registry', false, 'install', 'tool'], // our install time limit
+  needs_credentials: ['start_requires_credentials', false, 'start', 'subject'], // a declared required env var, and the server exited non-zero by itself with no network attempt
+  start_needs_network: ['timeout_start', false, 'start', 'tool'], // the server tried the network, which the run does not have
+  start_failed: ['timeout_start', false, 'start', 'subject'], // a crash signature on stderr (R-LP-45), and exited with its own non-zero code, early, with every argument filled
+  start_needs_config: ['timeout_start', false, 'start', 'tool'], // the server exited with its own code and asked for configuration we did not give it (R-LP-44)
+  start_env_limited: ['timeout_start', false, 'start', 'tool'], // a start failure our environment could have caused
+  start_timeout: ['timeout_start', false, 'start', 'tool'],
+  list_failed: ['timeout_start', false, 'list', 'subject'], // a JSON-RPC error the server sent, or a malformed result
+  list_probe_limited: ['timeout_start', false, 'list', 'tool'], // our time limit, page cap or read cap, or an HTTP transport failure
+  list_rejected: ['tool_error', false, 'grade', 'tool'], // our engine refused the list it was given
+  rate_limited: ['rate_limited', true, 'resolve', 'infra'],
+  upstream_error: ['upstream_unavailable', true, 'resolve', 'infra'],
+  harness_error: ['tool_error', true, 'start', 'tool'], // our driver or bundle step failed; tried again, then accepted as a gap
+  shard_deadline: ['upstream_unavailable', true, 'start', 'infra'],
+  sandbox_evidence_missing: ['trace_unavailable', true, 'start', 'tool'],
+  disk_low: ['upstream_unavailable', true, 'install', 'infra'], // the runner's disk
 });
 
 /** The fields this lane writes, with their types in mcp-results fields/registry.yaml (at tool-qa's pinned commit). */
@@ -149,6 +176,13 @@ export const ORACLE_FIELDS = Object.freeze({
  */
 export const EMIT_TOOL_LIST_FIELDS = true;
 export const TOOL_LIST_FIELDS = Object.freeze({ tool_count: 'integer', tool_list_sha256: 'hash' });
+/**
+ * The fuzz stage's fields (corpus/FUZZ.md): written only while EMIT_FUZZ_FIELDS is on, which needs the mcp-results
+ * registry to hold them and tool-qa's ingest to pin that registry. list_determinism is already a planned field there
+ * (boolean); fuzz_stage, invariant_results and unicode_identifier_findings are proposed.
+ */
+export const EMIT_FUZZ_FIELDS = false;
+export const FUZZ_FIELDS = Object.freeze({ fuzz_stage: 'object', invariant_results: 'array', unicode_identifier_findings: 'array', list_determinism: 'boolean' });
 const ENUM_RE = /^[A-Za-z0-9][A-Za-z0-9._:/+-]{0,127}$/;
 const DATE_TIME_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(\.\d{1,9})?(Z|[+-](\d{2}):(\d{2}))$/;
 
@@ -344,7 +378,9 @@ const MANIFEST_CAP = 4 * 1024 * 1024;
 /**
  * The digest an OCI reference points to and the size of its linux/amd64 image, from the registry's v2 API (anonymous:
  * the registry's own token service when it asks for one). Data only: no layer is fetched here. Only OCI_HOSTS, and token
- * services on OCI_TOKEN_HOSTS. Throws a detail code: oci_host_not_allowed, image_unavailable, image_too_large,
+ * services on OCI_TOKEN_HOSTS. Throws a detail code: oci_host_not_allowed, image_unavailable (the registry's own 404, a 401 or
+ * 403 after a good token exchange, or a digest mismatch: the image's), image_registry_unreadable (anything else we could
+ * not read: no Bearer challenge, a bad realm, no token, bad JSON, no linux/amd64 entry, no layers, bad sizes: ours), image_too_large,
  * rate_limited or upstream_error.
  */
 export async function resolveOciImage(ref, { fetch: fetchImpl = globalThis.fetch, timeoutMs = 20_000, maxBytes = OCI_MAX_BYTES } = {}) {
@@ -362,28 +398,30 @@ export async function resolveOciImage(ref, { fetch: fetchImpl = globalThis.fetch
     let res = await ask(urlFor(reference));
     if (res.status === 401 && !auth) {
       const m = /^Bearer\s+(.*)$/i.exec(String(header(res, 'www-authenticate') || ''));
-      if (!m) throw fail('image_unavailable');
+      if (!m) throw fail('image_registry_unreadable');
       const params = {};
       for (const p of m[1].matchAll(/([a-z]+)="([^"]{0,500})"/gi)) params[p[1].toLowerCase()] = p[2];
       let realm;
-      try { realm = new URL(params.realm); } catch { throw fail('image_unavailable'); }
+      try { realm = new URL(params.realm); } catch { throw fail('image_registry_unreadable'); }
       if (realm.protocol !== 'https:' || realm.port !== '' || !OCI_TOKEN_HOSTS.includes(realm.hostname)) throw fail('oci_host_not_allowed');
       if (params.service) realm.searchParams.set('service', params.service);
       realm.searchParams.set('scope', 'repository:' + ref.path + ':pull');
       const tok = await getJson(fetchImpl, realm.href, { timeoutMs, cap: 64 * 1024 });
       const token = tok && (typeof tok.token === 'string' ? tok.token : typeof tok.access_token === 'string' ? tok.access_token : null);
-      if (!token || token.length > 16384) throw fail('image_unavailable');
+      if (!token || token.length > 16384) throw fail('image_registry_unreadable');
       auth = 'Bearer ' + token;
       res = await ask(urlFor(reference));
     }
     if (res.status === 401 || res.status === 403 || res.status === 404) {
       if (res.status === 403 && httpDetail(403, (k) => header(res, k)) === 'rate_limited') throw fail('rate_limited');
-      throw fail('image_unavailable', { status: res.status });
+      // The registry's own refusal is the image's only when nothing of ours can explain it: a 404 is its answer for the
+      // name, and a 401 or 403 counts only after a good token exchange (R-LP-36). Without one, it may be our request.
+      throw fail(res.status === 404 || auth ? 'image_unavailable' : 'image_registry_unreadable', { status: res.status });
     }
     if (!res.ok) throw fail(httpDetail(res.status, (k) => header(res, k)), { status: res.status });
     const buf = await readCapped(res, MANIFEST_CAP);
     let doc;
-    try { doc = JSON.parse(buf.toString('utf8')); } catch { throw fail('image_unavailable'); }
+    try { doc = JSON.parse(buf.toString('utf8')); } catch { throw fail('image_registry_unreadable'); }
     const digest = 'sha256:' + sha256(buf);
     return { doc, digest };
   };
@@ -392,14 +430,14 @@ export async function resolveOciImage(ref, { fetch: fetchImpl = globalThis.fetch
   let image = top.doc;
   if (isObj(image) && Array.isArray(image.manifests)) {
     const pick = image.manifests.find((e) => isObj(e) && isObj(e.platform) && e.platform.os === 'linux' && e.platform.architecture === 'amd64' && typeof e.digest === 'string' && /^sha256:[0-9a-f]{64}$/.test(e.digest));
-    if (!pick) throw fail('image_unavailable');
+    if (!pick) throw fail('image_registry_unreadable');
     const sub = await manifest(pick.digest);
     if (sub.digest !== pick.digest) throw fail('image_unavailable');
     image = sub.doc;
   }
-  if (!isObj(image) || !Array.isArray(image.layers) || !image.layers.length) throw fail('image_unavailable');
+  if (!isObj(image) || !Array.isArray(image.layers) || !image.layers.length) throw fail('image_registry_unreadable');
   const sizes = [image.config && image.config.size, ...image.layers.map((l) => l && l.size)];
-  if (!sizes.every((n) => Number.isSafeInteger(n) && n >= 0)) throw fail('image_unavailable');
+  if (!sizes.every((n) => Number.isSafeInteger(n) && n >= 0)) throw fail('image_registry_unreadable');
   const bytes = sizes.reduce((a, b) => a + b, 0);
   if (bytes > maxBytes) throw fail('image_too_large', { bytes });
   return { digest: top.digest, bytes };
@@ -718,13 +756,16 @@ export async function launchFor(pkg, { fetch: fetchImpl = globalThis.fetch } = {
  * how it matched: seed (it carries a package of the seed list), namespace (its name is io.github.<subject owner>/...,
  * which the registry verifies), repository (only its repository URL, free text anyone can publish).
  */
-export async function registryEntries(subject, seedPkgs, { fetch: fetchImpl = globalThis.fetch, base = REGISTRY_BASE } = {}) {
+export const REGISTRY_PAGE = 100;
+export async function registryEntries(subject, seedPkgs, { fetch: fetchImpl = globalThis.fetch, base = REGISTRY_BASE, stats = null } = {}) {
   const [owner, name] = subject.split('/');
   const seedIds = new Set(seedPkgs.map((p) => String(p.registry).toLowerCase() + ':' + String(p.identifier).toLowerCase()));
   const queries = [...new Set([name, owner + '/' + name, ...seedPkgs.filter((p) => ['npm', 'pypi'].includes(p.registry)).map((p) => p.identifier.split('/').pop())])].filter((q) => q && q.length <= 200).slice(0, 5);
   const found = new Map();
   for (const q of queries) {
     const d = await getJson(fetchImpl, base + '/v0.1/servers?search=' + encodeURIComponent(q) + '&version=latest&limit=100');
+    // A search page of 100 is full, and we do not page: the entry we want may be on a page we never fetched (R-LP-38).
+    if (stats && Array.isArray(d && d.servers) && d.servers.length >= REGISTRY_PAGE) stats.full = true;
     for (const x of Array.isArray(d && d.servers) ? d.servers : []) {
       const s = x && isObj(x.server) ? x.server : x;
       if (!isObj(s) || typeof s.name !== 'string' || found.has(s.name)) continue;
@@ -738,7 +779,7 @@ export async function registryEntries(subject, seedPkgs, { fetch: fetchImpl = gl
   return [...found.values()].sort((a, b) => (b.seed - a.seed) || (b.namespace - a.namespace) || (a.server.name < b.server.name ? -1 : 1));
 }
 
-const DETAIL_ORDER = ['unverified_registry_entry', 'image_too_large', 'oci_host_not_allowed', 'unsupported_transport', 'image_unavailable', 'launch_invalid', 'private_registry', 'unsupported_package'];
+const DETAIL_ORDER = ['unverified_registry_entry', 'image_too_large', 'oci_host_not_allowed', 'unsupported_transport', 'image_registry_unreadable', 'image_unavailable', 'launch_invalid', 'private_registry', 'unsupported_package'];
 
 /**
  * How to run one subject: { status: 'runnable', launch, choice, registry, subdir } or { status: 'skipped', detail }.
@@ -750,7 +791,8 @@ export async function resolveSubject(item, { seed = new Map(), fetch: fetchImpl 
   const seedPkgs = seed.get(item.repo.toLowerCase()) || [];
   out.seed_packages = seedPkgs.length;
   try {
-    const entries = await registryEntries(item.repo, seedPkgs, { fetch: fetchImpl, base });
+    const lookup = { full: false };
+    const entries = await registryEntries(item.repo, seedPkgs, { fetch: fetchImpl, base, stats: lookup });
     const cands = [];
     for (const e of entries) for (const p of Array.isArray(e.server.packages) ? e.server.packages.slice(0, 20) : []) if (isObj(p)) cands.push({ server: e.server, entry: e, by: e.by, pkg: p });
     if (!entries.length) for (const p of seedPkgs) cands.push({ server: null, entry: null, by: 'seed-only', pkg: { registryType: p.registry, identifier: p.identifier } });
@@ -781,6 +823,16 @@ export async function resolveSubject(item, { seed = new Map(), fetch: fetchImpl 
       }
       const s = c.server;
       out.status = 'runnable'; out.launch = r.launch; out.choice = { ...r.choice, matched_by: c.by, verified_by: verifiedBy };
+      // A PyPI launch runs the console script the wheel declares, not a guess from the package name (R-LP-48).
+      if (out.launch.kind === 'pypi' && !out.launch.entry) {
+        const e = await pypiEntry(out.launch.package, out.launch.version, { fetch: fetchImpl });
+        // The sandbox takes at most 40 args: a module launch that would not fit stays on the guess.
+        const fits = !e.args_prefix || e.args_prefix.length + (out.launch.args || []).length <= 40;
+        if (e.entry && fits) out.launch = { ...out.launch, entry: e.entry, ...(e.args_prefix ? { args: [...e.args_prefix, ...(out.launch.args || [])] } : {}) };
+        out.choice.entry_source = e.entry && !fits ? 'too_many_args' : e.entry_source;
+        out.choice.entry_wheel = e.wheel || null;
+        out.choice.entry = (fits && e.entry) || null;
+      }
       if (s) {
         out.registry = { name: s.name, version: typeof s.version === 'string' ? s.version.slice(0, 64) : null, entries: entries.length, transports: [...new Set((s.packages || []).map((p) => (p && p.transport && typeof p.transport.type === 'string' ? p.transport.type : 'stdio')))].slice(0, 5), remotes: Array.isArray(s.remotes) ? s.remotes.length : 0 };
         const sub = s.repository && typeof s.repository.subfolder === 'string' ? s.repository.subfolder.replace(/^\.?\/+|\/+$/g, '') : '';
@@ -790,7 +842,7 @@ export async function resolveSubject(item, { seed = new Map(), fetch: fetchImpl 
     }
     // A remote-only entry counts only when it is the subject's own (seed or namespace); otherwise it is someone's claim.
     const own = entries.filter((e) => e.seed || e.namespace);
-    if (!cands.length) out.detail = own.some(({ server }) => Array.isArray(server.remotes) && server.remotes.length) ? 'remote_only' : entries.length > own.length ? 'unverified_registry_entry' : 'no_package';
+    if (!cands.length) out.detail = own.some(({ server }) => Array.isArray(server.remotes) && server.remotes.length) ? 'remote_only' : entries.length > own.length ? 'unverified_registry_entry' : lookup.full ? 'registry_lookup_truncated' : 'no_package';
     else out.detail = DETAIL_ORDER.find((d) => details.includes(d)) || 'unsupported_package';
     if (own.length) out.registry = { name: own[0].server.name, version: typeof own[0].server.version === 'string' ? own[0].server.version.slice(0, 64) : null, entries: own.length, transports: [], remotes: Array.isArray(own[0].server.remotes) ? own[0].server.remotes.length : 0 };
   } catch (e) {
@@ -817,8 +869,8 @@ export function targetLists(plan, { node24Image, forgery = forgeryScript() }) {
   const controls = {
     format: TARGETS_FORMAT, about: 'live-probe controls', defaults: { timeout_s: 300 },
     targets: [
-      { id: KNOWN_ANSWER.id, repo: KNOWN_ANSWER.repo, commit: KNOWN_ANSWER.commit, registry: KNOWN_ANSWER.registry, launch: { ...KNOWN_ANSWER.launch, args: [...KNOWN_ANSWER.launch.args] }, timeout_s: KNOWN_ANSWER.timeout_s + ORACLE_ALLOWANCE_S },
-      { id: FORGERY.id, repo: FORGERY.repo, commit: FORGERY.commit, launch: { kind: 'docker', image: node24Image, entrypoint: 'node', args: ['-e', forgery, plan.marker] }, timeout_s: FORGERY.timeout_s + ORACLE_ALLOWANCE_S },
+      { id: KNOWN_ANSWER.id, repo: KNOWN_ANSWER.repo, commit: KNOWN_ANSWER.commit, registry: KNOWN_ANSWER.registry, launch: { ...KNOWN_ANSWER.launch, args: [...KNOWN_ANSWER.launch.args] }, timeout_s: KNOWN_ANSWER.timeout_s + ORACLE_ALLOWANCE_S + (plan.fuzz ? FUZZ_ALLOWANCE_S : 0) },
+      { id: FORGERY.id, repo: FORGERY.repo, commit: FORGERY.commit, launch: { kind: 'docker', image: node24Image, entrypoint: 'node', args: ['-e', forgery, plan.marker] }, timeout_s: FORGERY.timeout_s + ORACLE_ALLOWANCE_S + (plan.fuzz ? FUZZ_ALLOWANCE_S : 0) },
     ],
   };
   const isOci = (x) => x.target && x.target.launch.kind === 'docker';
@@ -835,7 +887,7 @@ export const subjectTimeout = (n) => Math.max(SUBJECT_TIMEOUT_MIN_S, Math.min(SU
  * The shard plan. validateTarget is the sandbox's own check of one target (mcp-surface-corpus src/targets.mjs): a
  * target it refuses becomes a launch_invalid skip instead of stopping the whole list.
  */
-export async function planShard({ inputs, seed = new Map(), fetch: fetchImpl = globalThis.fetch, validateTarget = () => {}, marker = newMarker(), now = () => new Date(), clock = () => Date.now(), base = REGISTRY_BASE }) {
+export async function planShard({ inputs, seed = new Map(), fetch: fetchImpl = globalThis.fetch, validateTarget = () => {}, marker = newMarker(), now = () => new Date(), clock = () => Date.now(), base = REGISTRY_BASE, fuzz = false }) {
   const items = [];
   for (const it of inputs.items) {
     const t0 = clock();
@@ -852,8 +904,10 @@ export async function planShard({ inputs, seed = new Map(), fetch: fetchImpl = g
   const runnable = items.filter((x) => x.target).length;
   const timeout = subjectTimeout(runnable);
   // The oracle stage runs only for stdio targets (corpus/live-probe-driver.mjs): only they get its allowance.
+  // The fuzz stage (off unless switched on) runs for the same targets and has an allowance of its own.
   for (const x of items) if (x.target) x.target.timeout_s = timeout + ((x.target.launch.transport || 'stdio') === 'stdio' ? ORACLE_ALLOWANCE_S : 0);
-  return { format: PLAN_FORMAT, shard_id: inputs.shardId, attempt_id: inputs.attemptId, marker, planned_at: now().toISOString(), subject_timeout_s: timeout, runnable, items };
+  if (fuzz) for (const x of items) if (x.target && (x.target.launch.transport || 'stdio') === 'stdio') x.target.timeout_s += FUZZ_ALLOWANCE_S;
+  return { format: PLAN_FORMAT, shard_id: inputs.shardId, attempt_id: inputs.attemptId, marker, planned_at: now().toISOString(), subject_timeout_s: timeout, runnable, ...(fuzz ? { fuzz: true } : {}), items };
 }
 
 // ------------------------------------------------------------------ grading
@@ -971,33 +1025,170 @@ export function networkEvents(records, cap = 200) {
   return out;
 }
 
-/** Why an item that had a target got no live list: a detail code (DETAILS). */
-export function failureDetail(rec, bare, envp, { deadlineHit = false } = {}) {
+/** Package-level install errors: the package, its version or its launcher is not there (the server's own publishing). */
+const PACKAGE_ERROR = /\bE404\b|\bETARGET\b|No matching distribution|declares no bin/;
+/**
+ * Stderr that says the server needs configuration (R-LP-44): a config file missing or unreadable, a kubeconfig or
+ * current-context, --config, a usage block, a missing or required argument, option, flag or environment variable, or
+ * "please create/set/provide/specify".
+ */
+export const CONFIG_TEXT = new RegExp([
+  String.raw`\bconfig(?:uration)?(?:[\s_.-]?(?:file|path|dir(?:ectory)?))?\b[^\n]{0,100}?(?:not found|not exist|no such file|missing|not readable|failed to (?:read|load|open)|cannot (?:read|open|load|find)|could not (?:read|open|load|find)|unable to (?:read|open|load|find))`,
+  String.raw`(?:not found|no such file|missing|failed to (?:read|load|open)|cannot (?:read|open|load|find)|could not (?:read|open|load|find)|unable to (?:read|open|load|find))[^\n]{0,100}?\bconfig(?:uration)?\b`,
+  String.raw`kubeconfig`, String.raw`current-context`, String.raw`--config\b`, String.raw`\busage:`,
+  String.raw`\b(?:missing|required|expected)\s+(?:required\s+)?(?:positional\s+)?(?:argument|option|flag|parameter|env(?:ironment)?(?:\s+var(?:iable)?)?)`,
+  String.raw`\b(?:argument|option|flag|parameter|env(?:ironment)?\s+var(?:iable)?)s?\b[^\n]{0,60}?\b(?:is|are)\s+(?:required|missing|not set)`,
+  String.raw`\bplease\s+(?:create|set|provide|specify)\b`,
+].join('|'), 'i');
+
+/**
+ * A named setting the server says is missing (R-LP-47): an environment-style name (with an underscore, case-sensitive) next
+ * to missing, required, not set or undefined. A server that throws its own "API_KEY missing" error with a stack is asking
+ * for configuration, not crashing.
+ */
+export const ENV_NAME_TEXT = new RegExp([
+  String.raw`\b[A-Z][A-Z0-9]*_[A-Z0-9_]+\b[^\n]{0,40}?\b(?:missing|required|not set|is not defined|undefined|must be set)\b`,
+  String.raw`\b(?:[Mm]issing|[Rr]equired|[Ss]et(?: the)?)\s+(?:env(?:ironment)?\s+(?:var(?:iable)?\s+)?)?[A-Z][A-Z0-9]*_[A-Z0-9_]+\b`,
+].join('|'));
+
+/**
+ * Stderr that shows the server itself crashed (R-LP-45): a panic, a Python traceback, an uncaught or unhandled
+ * exception or rejection, a segmentation fault, a missing module, an import, syntax, reference or type error, a fatal
+ * error, a stack overflow.
+ */
+export const CRASH_TEXT = new RegExp([
+  // Case-sensitive and in the form each runtime prints, at the start of a line: a log line or a validation message that
+  // merely mentions "panic:", "ImportError" or "TypeError" is no crash (R-LP-46).
+  String.raw`(?:^|\n)panic: `, String.raw`thread '[^']*' panicked at `, String.raw`thread '[^']*' has overflowed its stack`,
+  String.raw`(?:^|\n)Traceback \(most recent call last\):`, String.raw`(?:^|\n)(?:ModuleNotFoundError|ImportError|SyntaxError): `,
+  // A JavaScript error is a crash only with its stack: the next line is a frame ("    at ...").
+  String.raw`(?:^|\n)(?:Uncaught )?(?:TypeError|ReferenceError|SyntaxError|RangeError|Error): [^\n]*\n\s+at `,
+  String.raw`(?:^|\n)(?:\(node:\d+\) )?(?:Uncaught \w*(?:Error|Exception)|Unhandled promise rejection|UnhandledPromiseRejection)`,
+  String.raw`(?:^|\n)Error: Cannot find module '`, String.raw`Segmentation fault|\bSIGSEGV\b|\(core dumped\)`,
+  // A Go runtime fatal error prints its goroutine dump after it.
+  String.raw`(?:^|\n)fatal error: [^\n]*\n(?:[^\n]*\n){0,4}goroutine \d+ \[`,
+].join('|'));
+
+const OOM_TEXT = /\bENOMEM\b|out of memory|\bOOM\b/i;
+/** A list error that is the server's own: a malformed result. (A JSON-RPC error is told by its numeric code.) */
+const MALFORMED_LIST = /^the .* result has no .* array$|^nextCursor is not a string$|^the server repeated the same cursor$|^the answer has no result object$/;
+
+/** Everything the install steps and the steps log say, as one text (step fields are only strings the driver wrote). */
+function installText(inst, stepsLog) {
+  const parts = [];
+  for (const st of Array.isArray(inst.steps) ? inst.steps : []) if (st) for (const k of ['stderr', 'stdout', 'error', 'message', 'tail']) if (typeof st[k] === 'string') parts.push(st[k]);
+  if (typeof stepsLog === 'string') parts.push(stepsLog);
+  else if (Buffer.isBuffer(stepsLog)) parts.push(stepsLog.toString('utf8'));
+  return parts.join('\n');
+}
+
+/** How many installs the proxy refused: the count the lane records, or the refused entries of the egress list. */
+function refusedCount(inst) {
+  if (Number.isInteger(inst.egress_refused)) return inst.egress_refused;
+  return (Array.isArray(inst.egress) ? inst.egress : []).filter((e) => e && e.allowed === false).length;
+}
+
+/**
+ * Network evidence in a runsc trace summary (mcp-surface-corpus trace-summary.mjs): a failed network call, a connect,
+ * a send or a looked-up name. The trace is kept when the netlog files are lost (R-LP-41). Not counts.network: a healthy
+ * server that touched no network showed counts.network 4 (local sockets inside the runtime), so it would mark every
+ * server as needing the network and nothing could be the server's own failure (R-LP-42).
+ */
+function traceNetwork(sum) {
+  if (!isObj(sum)) return false;
+  const n = isObj(sum.network) ? sum.network : {};
+  const len = (v) => (Array.isArray(v) ? v.length : Number(v) || 0);
+  return (isObj(sum.failed) && Number(sum.failed.network) > 0) || len(n.connects) > 0 || len(n.sends) > 0 || len(n.dns_names) > 0;
+}
+
+/** Whether the server itself tried the network (the run has none): a lookup or connection in its role, or a failed network call in its trace. */
+export function serverNetworkAttempt(records) {
+  return (Array.isArray(records) ? records : []).some((r) => isObj(r) && r.role === 'server' && (r.type === 'dns_query' || r.type === 'connection'
+    || (r.type === 'trace_summary' && traceNetwork(r.summary))));
+}
+
+/** How the server's process ended, from the probe: { exit, signal }, read from the transport, else from the error text. */
+function exitOf(p) {
+  const t = isObj(p.transport) ? p.transport : {};
+  if (Number.isInteger(t.exit) || (typeof t.signal === 'string' && t.signal)) return { exit: Number.isInteger(t.exit) ? t.exit : null, signal: t.signal || null };
+  const m = /\(exit (-?\d+|null), signal ([A-Za-z0-9]+|null)\)/.exec(String(p.initialize_error || p.error || ''));
+  return m ? { exit: m[1] === 'null' ? null : Number(m[1]), signal: m[2] === 'null' ? null : m[2] } : { exit: null, signal: null };
+}
+
+/** How long the probe whose exit we read ran: its own total_ms (in the record's probe entry or the probe), else captured_at - started_at. */
+function probeMs(rec, p, tag) {
+  const t = [isObj(p.timing) ? p.timing.total_ms : null, isObj(rec.probes) && isObj(rec.probes[tag]) && isObj(rec.probes[tag].timing) ? rec.probes[tag].timing.total_ms : null];
+  for (const v of t) if (Number.isFinite(v) && v >= 0) return v;
+  const d = Date.parse(p.captured_at) - Date.parse(p.started_at);
+  return Number.isFinite(d) && d >= 0 ? d : null;
+}
+
+/** A list that did not come: the server's own fault only when it sent a JSON-RPC error or a malformed result. */
+function listDetail(p) {
+  const L = isObj(p.lists) ? p.lists['tools/list'] : null;
+  const err = isObj(L) && typeof L.error === 'string' ? L.error : null;
+  if (err) {
+    if (Number.isInteger(L.error_code) && !/^HTTP \d{3}/.test(err)) return 'list_failed';
+    if (MALFORMED_LIST.test(err)) return 'list_failed';
+  }
+  return 'list_probe_limited';
+}
+
+/**
+ * Why an item that had a target got no live list: a detail code (DETAILS). The server is the one at fault (subject) only
+ * with evidence our own environment cannot explain (R-LP-29..38); anything else is ours (tool). `ctx` carries what the lane
+ * records beside the driver's record: records (this target's telemetry), stepsLog (the install's log text), launch and
+ * argsUnfilled (the plan's resolution of it).
+ */
+export function failureDetail(rec, bare, envp, { deadlineHit = false, records = [], stepsLog = null, launch = null, argsUnfilled = null } = {}) {
   if (!rec) return deadlineHit ? 'shard_deadline' : 'harness_error';
   if (rec.excluded) return 'sandbox_evidence_missing';
   const inst = rec.install;
   if (!inst) return rec.timed_out ? 'shard_deadline' : 'harness_error';
   if (!inst.ok) {
-    if (inst.kind === 'docker') return 'image_unavailable';
-    if (rec.timed_out || (Array.isArray(inst.steps) && inst.steps.some((s) => s && s.timed_out))) return 'install_timeout';
-    if (Array.isArray(inst.steps) && inst.steps.some((s) => s && Number.isInteger(s.exit) && s.exit !== 0)) return 'install_failed';
-    return 'harness_error';
+    // The planner already read this image's digest, so a failed pull is not the image's absence (R-LP-37).
+    if (inst.kind === 'docker') return 'image_pull_failed';
+    const steps = Array.isArray(inst.steps) ? inst.steps : [];
+    if (rec.timed_out || steps.some((s) => s && s.timed_out)) return 'install_timeout';
+    const failed = steps.filter((s) => s && Number.isInteger(s.exit) && s.exit !== 0);
+    if (!failed.length) return 'harness_error';
+    const text = installText(inst, stepsLog);
+    if (failed.some((s) => s.exit === 137 || s.exit === 124) || OOM_TEXT.test(text)) return 'install_resource_limit';
+    if (refusedCount(inst) > 0) return 'install_blocked';
+    if (PACKAGE_ERROR.test(text)) return 'install_failed';
+    return 'install_build_failed';
   }
   const p = envp || bare;
   if (!p) return rec.timed_out ? 'start_timeout' : 'harness_error';
+  if (p.initialize || p.era === 'modern') return listDetail(p);
+  if (rec.timed_out || /^time limit/.test(String(p.error || ''))) return 'start_timeout';
   // Credentials only when the publisher declares a required env var (the registry entry). A secret-looking name in the
   // README or the source is no such evidence: optional keys are common, and the server failed with dummies too.
   const needsEnv = !!(rec.env && rec.env.names && Array.isArray(rec.env.names.registry) && rec.env.names.registry.length);
-  if (p.initialize || p.era === 'modern') return needsEnv ? 'needs_credentials' : 'list_failed';
-  if (rec.timed_out || /^time limit/.test(String(p.error || ''))) return needsEnv ? 'needs_credentials' : 'start_timeout';
-  return needsEnv ? 'needs_credentials' : 'start_failed';
+  const net = serverNetworkAttempt(records);
+  const { exit, signal } = exitOf(p);
+  // 125 is docker run's own failure, 126 and 127 are not-executable and command-not-found (what an unresolved PyPI
+  // venv/bin/<package> guess gives), 137 a kill: none is the server's own exit (R-LP-39).
+  const own = Number.isInteger(exit) && exit !== 0 && ![125, 126, 127, 137].includes(exit) && !signal;
+  // A PyPI launch with no entry runs venv/bin/<package name>, a guess: the console script often has another name.
+  const guess = !isObj(launch) || !launch.kind || (launch.kind === 'pypi' && !launch.entry);
+  const sound = own && argsUnfilled === 0 && !guess;
+  if (needsEnv) return net ? 'start_needs_network' : sound ? 'needs_credentials' : 'start_env_limited';
+  if (net) return 'start_env_limited';
+  // The probe's own duration, not the record's total (which holds the install and the analysis too, R-LP-40).
+  const ms = probeMs(rec, p, p === envp ? 'env' : 'bare');
+  // The server's own exit and its stderr: it said it needs configuration we did not give it (R-LP-44), which is no defect.
+  const err = typeof p.stderr === 'string' ? p.stderr : '';
+  if (own && (CONFIG_TEXT.test(err) || ENV_NAME_TEXT.test(err))) return 'start_needs_config';
+  // A crash signature is the evidence; an early exit with no telling stderr is not (R-LP-45).
+  return sound && ms !== null && ms < START_QUICK_MS && CRASH_TEXT.test(err) ? 'start_failed' : 'start_env_limited';
 }
 
 // ------------------------------------------------------------------ observations
 
 /** One observations line, checked against FIELDS. A value of the wrong type is written as null with why. */
 export function obs(field, value, why) {
-  const type = FIELDS[field] || (EMIT_TOOL_LIST_FIELDS ? TOOL_LIST_FIELDS[field] : undefined) || (EMIT_ORACLE_FIELDS ? ORACLE_FIELDS[field] : undefined);
+  const type = FIELDS[field] || (EMIT_TOOL_LIST_FIELDS ? TOOL_LIST_FIELDS[field] : undefined) || (EMIT_ORACLE_FIELDS ? ORACLE_FIELDS[field] : undefined) || (EMIT_FUZZ_FIELDS ? FUZZ_FIELDS[field] : undefined);
   if (!type) throw new Error('not a field of this lane: ' + field);
   const ok = value !== null && value !== undefined && checkType(type, value);
   return JSON.stringify(ok ? { field, value, stage: STAGE } : { field, value: null, why: why || (value === null || value === undefined ? 'not observed' : 'not of the registry type'), stage: STAGE });
@@ -1114,6 +1305,64 @@ export function oracleFor(dir, item, reader, ctx) {
   return { lines, raw, summary, components: j.components };
 }
 
+
+// ------------------------------------------------------------------ the fuzz stage
+
+const FUZZ_WORD = /^[a-z][a-z0-9_-]{0,59}$/;
+const CODEPOINT = /^U\+[0-9A-F]{4,6}$/;
+const HEX64 = /^[0-9a-f]{64}$/;
+/** Evidence as it may leave raw/: counts, hashes and code points only. A server's strings never pass. */
+export function safeEvidence(ev) {
+  if (!isObj(ev)) return {};
+  const out = {};
+  for (const [k, v] of Object.entries(ev)) {
+    if (!FUZZ_WORD.test(k)) continue;
+    if (Number.isSafeInteger(v) || typeof v === 'boolean') out[k] = v;
+    else if (typeof v === 'string' && (HEX64.test(v) || FUZZ_WORD.test(v))) out[k] = v;
+    else if (k === 'findings' && Array.isArray(v)) out[k] = v.slice(0, 50).map((f) => ({ primitive: safeText(f.primitive, /^(tools|prompts|resources|templates|\*)$/), field: safeText(f.field, /^(name|uri|\*)$/), index: int(f.index), kind: safeText(f.kind, FUZZ_WORD), codepoints: (Array.isArray(f.codepoints) ? f.codepoints : []).filter((c) => typeof c === 'string' && CODEPOINT.test(c)).slice(0, 8), name_sha256: HEX64.test(f.name_sha256) ? f.name_sha256 : null }));
+  }
+  return out;
+}
+
+/** One result as it goes into results/ and the fields. */
+export function fuzzRow(r) {
+  return { id: safeText(r.id, /^(FZ-[A-Z]+-[0-9]|\*)$/), primitive: safeText(r.primitive, /^(tools|prompts|resources|templates|\*)$/), verdict: safeText(r.verdict, /^(pass|fail|warn|observation|na|inconclusive)$/), kind: safeText(r.kind, FUZZ_WORD), fault: r.fault === 'subject' || r.fault === 'tool' ? r.fault : null, reproduced: r.reproduced === true ? true : r.reproduced === false ? false : null, evidence: safeEvidence(r.evidence) };
+}
+
+/** probe_ms without the stages that run inside the driver's probe call (the oracle stage, R-ORC-02, and the fuzz stage). */
+export const withoutStages = (probeMs, ...stageMs) => (probeMs === null || probeMs === undefined ? null : Math.max(0, probeMs - stageMs.reduce((a, x) => a + (Number.isSafeInteger(x) ? x : 0), 0)));
+
+export function fuzzRecord(dir) {
+  const rec = dir ? readJson(join(dir, 'fuzz.json')) : null;
+  return isObj(rec) && rec.format === 'isokron-live-probe-fuzz/1' ? rec : null;
+}
+
+/**
+ * One target's fuzz results: the field lines (only while EMIT_FUZZ_FIELDS), the raw record, and a summary for
+ * results/. Null when the stage is not switched on for this shard: such a bundle holds nothing of it.
+ */
+export function fuzzFor(dir, item, ctx) {
+  if (!ctx.plan || ctx.plan.fuzz !== true) return null;
+  const transport = item.target && item.target.launch ? item.target.launch.transport || 'stdio' : null;
+  const rec = fuzzRecord(dir);
+  const lines = []; const raw = [];
+  const status = !rec ? 'not_run' : rec.mode === 'full' ? 'ran' : rec.mode === 'skipped' ? 'skipped' : 'error';
+  const why = !rec ? (transport && transport !== 'stdio' ? 'http_transport' : 'not_run') : safeText(rec.why, FUZZ_WORD);
+  const rows = rec && Array.isArray(rec.results) ? rec.results.map(fuzzRow) : [];
+  const stage = { status, mode: rec ? safeText(rec.mode, FUZZ_WORD) : null, why, ms: rec ? int(rec.ms) : null, rounds: rec && Array.isArray(rec.rounds) ? rec.rounds.length : 0, sessions: rec && Array.isArray(rec.containers) ? rec.containers.length : 0 };
+  if (rec) raw.push(['raw/fuzz.json', Buffer.from(json(rec))]);
+  if (EMIT_FUZZ_FIELDS) {
+    lines.push(obs('fuzz_stage', stage));
+    if (status === 'ran') {
+      lines.push(obs('invariant_results', rows.filter((r) => !r.id || !r.id.startsWith('FZ-UNI'))));
+      lines.push(obs('unicode_identifier_findings', rows.filter((r) => r.id && r.id.startsWith('FZ-UNI'))));
+      const det = rows.filter((r) => (r.id === 'FZ-CAT-1' || r.id === 'FZ-CAT-2') && r.primitive === 'tools' && (r.verdict === 'pass' || r.verdict === 'fail' || r.verdict === 'warn'));
+      if (det.length) lines.push(obs('list_determinism', det.every((r) => r.verdict === 'pass')));
+    }
+  }
+  return { lines, raw, summary: { ...stage, counts: rec && rec.summary ? rec.summary : null, results: rows } };
+}
+
 // ------------------------------------------------------------------ one item
 
 /** Everything about one item: { status, detail, files, skips, subjectSha }. Never throws on subject data. */
@@ -1122,14 +1371,14 @@ export function buildItem(item, ctx) {
   const r = item.resolution;
   const lines = [obs('subject_id', item.subject)];
   const result = {
-    format: FORMAT, lane: LANE, subject: item.subject, status: null, detail: null, skip_reason: null, retryable: false,
+    format: FORMAT, lane: LANE, subject: item.subject, status: null, detail: null, skip_reason: null, fault: null, retryable: false,
     engine_version: VERSION, rubric_version: M.RUBRIC_VERSION, spec_version: M.SPEC_VERSION,
     install: null, unverified: null, live: null, static_vs_live: null, timing: { resolve_ms: int(item.resolve_ms) }, sandbox: ctx.sandboxSummary,
     driver: null, oracles: null, raw_truncated: [],
   };
   if (r) {
     lines.push(...resolutionObs(r));
-    result.install = r.choice ? { method: r.choice.type, matched_by: safeText(r.choice.matched_by, /^[a-z+-]{1,40}$/), verified_by: safeText(r.choice.verified_by, /^[a-z_]{1,20}$/), provenance_signer: safeText(r.choice.provenance_signer, /^[a-z_]{1,40}$/), oci_bytes: int(r.choice.oci_bytes), transport: r.choice.transport, version_requested: safeText(r.choice.version, SAFE_VERSION), args: r.choice.args_n, args_unfilled: r.choice.args_unfilled, env_declared: r.choice.env_names.length, registry_entries: r.registry ? r.registry.entries : 0 } : null;
+    result.install = r.choice ? { method: r.choice.type, matched_by: safeText(r.choice.matched_by, /^[a-z+-]{1,40}$/), verified_by: safeText(r.choice.verified_by, /^[a-z_]{1,20}$/), provenance_signer: safeText(r.choice.provenance_signer, /^[a-z_]{1,40}$/), oci_bytes: int(r.choice.oci_bytes), transport: r.choice.transport, version_requested: safeText(r.choice.version, SAFE_VERSION), args: r.choice.args_n, args_unfilled: r.choice.args_unfilled, env_declared: r.choice.env_names.length, registry_entries: r.registry ? r.registry.entries : 0, entry_source: safeText(r.choice.entry_source, /^[a-z_]{1,30}$/) } : null;
     if (Array.isArray(r.unverified)) result.unverified = r.unverified.map((u) => safeText(u.why, /^[a-z_]{1,40}$/));
     files['raw/resolution.json'] = json({ registry: r.registry, choice: r.choice, candidates: r.candidates, launch: r.launch, subdir: r.subdir, seed_packages: r.seed_packages, invalid: r.invalid ?? null, unverified: r.unverified ?? null });
   }
@@ -1164,8 +1413,9 @@ export function buildItem(item, ctx) {
     }
     const primary = listed(envp) ? envp : listed(bare) ? bare : null;
     let reader = { listed: false };
+    const tel = telemetryFor(telemetryFile, item.target_id);
     if (!primary) {
-      detail = ociRun && ociRun.outcome === 'disk_low' ? 'disk_low' : failureDetail(rec, bare, envp, { deadlineHit });
+      detail = ociRun && ociRun.outcome === 'disk_low' ? 'disk_low' : failureDetail(rec, bare, envp, { deadlineHit, records: tel.records, stepsLog: readText(join(dir, 'steps.log')), launch: r.launch, argsUnfilled: r.choice ? r.choice.args_unfilled : null });
     } else {
       const text = listText(primary.lists['tools/list'].raw_pages);
       let g = null;
@@ -1211,23 +1461,27 @@ export function buildItem(item, ctx) {
     oracle = oracleFor(dir, item, reader, ctx);
     lines.push(...oracle.lines);
     result.oracles = oracle.summary;
+    const fuzz = fuzzFor(dir, item, ctx);
+    if (fuzz) { lines.push(...fuzz.lines); result.fuzz = fuzz.summary; }
     // The driver times its probe around the probe option, so its probe_ms holds the oracle stage too (R-ORC-02):
     // step_telemetry keeps the two apart.
     const oms = oracle.summary ? int(oracle.summary.ms) : null;
-    if (oms !== null) {
-      result.timing.oracle_ms = oms;
-      if (result.timing.probe_ms !== null) result.timing.probe_ms = Math.max(0, result.timing.probe_ms - oms);
-    }
+    // The fuzz stage runs inside the same probe call: its time comes out of probe_ms too.
+    const fms = fuzz && fuzz.summary ? int(fuzz.summary.ms) : null;
+    if (oms !== null) result.timing.oracle_ms = oms;
+    if (fms !== null) result.timing.fuzz_ms = fms;
+    if ('probe_ms' in result.timing) result.timing.probe_ms = withoutStages(result.timing.probe_ms, oms, fms);
     // The captured bytes: the tools/list answers, each probe whole, the static read, the registry entry, the logs.
     const raw = [];
     if (primary) raw.push(['raw/tools-list.json', Buffer.from(json(primary.lists['tools/list'].raw_pages))]);
     for (const [k, p] of [['bare', bare], ['env', envp]]) if (p) raw.push(['raw/probe-' + k + '.json', Buffer.from(json(p))]);
     if (rec) raw.push(['raw/record.json', Buffer.from(json(rec))]);
     for (const f of ['registry.json', 'static.json', 'analysis.json', 'steps.log']) { const b = readText(join(dir, f)); if (b) raw.push(['raw/' + f.replace(/\.log$/, '.txt'), b]); }
-    const tel = telemetryFor(telemetryFile, item.target_id);
+
     if (tel.lines.length) raw.push(['raw/telemetry.jsonl', Buffer.from(tel.lines.join('\n') + '\n')]);
     lines.push(...networkEvents(tel.records).map((e) => obs('network_event', e)));
     raw.push(...oracle.raw);
+    if (fuzz) raw.push(...fuzz.raw);
     addRaw(files, raw, result);
   }
   lines.push(obs('step_telemetry', result.timing));
@@ -1235,12 +1489,12 @@ export function buildItem(item, ctx) {
   lines.push(obs('runner_env', ctx.runnerEnv, 'the sandbox wrote no shard record'));
   lines.push(obs('our_tool_versions', ctx.toolVersions));
   if (detail) {
-    const [reason, retryable, stage] = DETAILS[detail] || DETAILS.harness_error;
-    result.status = 'skipped'; result.detail = detail; result.skip_reason = reason; result.retryable = retryable;
+    const [reason, retryable, stage, fault] = DETAILS[detail] || DETAILS.harness_error;
+    result.status = 'skipped'; result.detail = detail; result.skip_reason = reason; result.fault = fault; result.retryable = retryable;
     lines.push(obs('error_taxonomy_code', detail));
     files[RESULT_PATH] = json(result);
     files['observations/live.ndjson'] = lines.join('\n') + '\n';
-    return { status: 'skipped', detail, files, skips: [{ stage, reason, evidence: RESULT_PATH, ...(retryable ? { retryable: true } : {}) }], subjectSha, components: oracle.components };
+    return { status: 'skipped', detail, files, skips: [{ stage, reason, fault, evidence: RESULT_PATH, ...(retryable ? { retryable: true } : {}) }], subjectSha, components: oracle.components };
   }
   result.status = 'graded';
   files[RESULT_PATH] = json(result);
@@ -1377,10 +1631,23 @@ export function settingsDigest(mscCommit) {
 }
 
 /**
+ * The components a bundle reports in manifest `tools`, as tool-qa's version pins (R-PIN-01) expect them: this
+ * repository at the commit that ran (the package, and the fuzz stage only when it ran), and the sandbox at the
+ * mcp-surface-corpus commit it used.
+ */
+export function toolsRan({ commit, mscCommit, fuzz }) {
+  return [
+    { name: '@isokron/mcp-check', version: commit },
+    ...(mscCommit ? [{ name: 'isokron-ai/mcp-surface-corpus', version: mscCommit }] : []),
+    ...(fuzz ? [{ name: 'fuzz', version: commit }] : []),
+  ];
+}
+
+/**
  * Builds every item's bundle from <work>. Throws ControlFailure when a control did not give its expected outcome: then
  * nothing is written and nothing may be uploaded.
  */
-export function bundleShard({ work, now = () => new Date(), log = () => {}, knownFile = KNOWN_ANSWER_FILE, pinsFile = ORACLE_PINS_FILE, baselineFile = ORACLE_BASELINE_FILE }) {
+export function bundleShard({ work, env = process.env, now = () => new Date(), log = () => {}, knownFile = KNOWN_ANSWER_FILE, pinsFile = ORACLE_PINS_FILE, baselineFile = ORACLE_BASELINE_FILE }) {
   const plan = readJson(join(work, 'plan.json'));
   if (!plan || plan.format !== PLAN_FORMAT) throw new ControlFailure('no plan in the work folder');
   const state = readJson(join(work, 'sandbox.json')) || {};
@@ -1420,7 +1687,7 @@ export function bundleShard({ work, now = () => new Date(), log = () => {}, know
     for (const [p, data] of Object.entries(files)) { mkdirSync(dirname(join(dir, 'bundle', p)), { recursive: true }); writeFileSync(join(dir, 'bundle', p), data); }
     const meta = {
       subject: { id: item.subject, repo: item.repo, sha: b.subjectSha },
-      tools: [{ name: '@isokron/mcp-check', version: VERSION }, ...(mscCommit ? [{ name: 'isokron-ai/mcp-surface-corpus', version: mscCommit }] : [])],
+      tools: toolsRan({ commit: ranCommit(env), mscCommit, fuzz: plan.fuzz === true }),
       oracles: [...new Map((b.components || []).map((c) => [c.name + '@' + c.version, c])).values()].filter((c) => /^[A-Za-z0-9@][A-Za-z0-9@/._-]{0,127}$/.test(c.name) && /^[A-Za-z0-9][A-Za-z0-9.+:_-]{0,127}$/.test(String(c.version))),
       settings_manifest_digest: digest,
       started_at: plan.planned_at,
@@ -1430,7 +1697,7 @@ export function bundleShard({ work, now = () => new Date(), log = () => {}, know
     };
     writeFileSync(join(dir, 'meta.json'), json(meta));
     summary.push({ index: item.index, status: b.status, detail: b.detail });
-    log('item ' + item.index + ': ' + b.status + (b.detail ? ' (' + b.detail + ', ' + DETAILS[b.detail][0] + (DETAILS[b.detail][1] ? ', retryable' : '') + ')' : ''));
+    log('item ' + item.index + ': ' + b.status + (b.detail ? ' (' + b.detail + ', ' + DETAILS[b.detail][0] + ', ' + DETAILS[b.detail][3] + (DETAILS[b.detail][1] ? ', retryable' : '') + ')' : ''));
   }
   return summary;
 }
@@ -1458,6 +1725,17 @@ export function oracleExpectProblems(res, manifest) {
   const off = o && Array.isArray(o.clients) ? o.clients.filter((c) => c.outcome === 'unavailable' || c.outcome === 'skipped').map((c) => c.client) : [];
   if (off.length) p.push({ reason: 'oracle_client_unavailable', clients: off });
   if (!manifest || !Array.isArray(manifest.oracles) || !manifest.oracles.length) p.push({ reason: 'oracle_components_missing' });
+  return p;
+}
+
+/** The self test's checks of the fuzz stage on our own servers: it ran, and found nothing (they are the controls of the invariants). */
+export function fuzzExpectProblems(res) {
+  const f = res.fuzz;
+  if (!f || f.status !== 'ran') return [{ reason: 'fuzz_not_run', got: f ? f.status + (f.why ? ' (' + f.why + ')' : '') : null }];
+  const bad = f.results.filter((r) => r.verdict === 'fail' || r.verdict === 'warn' || r.fault === 'subject').map((r) => r.id + ' ' + r.primitive + ' ' + r.verdict + ' ' + r.kind);
+  const p = bad.length ? [{ reason: 'fuzz_finding_on_our_own_server', results: bad }] : [];
+  // The time guard: the stage must stay inside its own budget, or the lease and the shard time are wrong (corpus/FUZZ.md, "Time").
+  if (!Number.isSafeInteger(f.ms) || f.ms > FUZZ_STAGE_MAX_MS) p.push({ reason: 'fuzz_over_budget', ms: f.ms, max: FUZZ_STAGE_MAX_MS });
   return p;
 }
 
@@ -1506,6 +1784,7 @@ export async function verifyBundles({ toolQa, ingest = toolQa, tars, expect, env
     if (manifest.controls.length !== (oracleRun ? 4 : 3)) problems.push({ tar: t, reason: 'controls_missing', got: manifest.controls.length });
     if (oracleRun && !manifest.controls.some((c) => c.kind === 'known_good' && c.output === 'controls/oracle-known-answer.json' && c.observed === 'match')) problems.push({ tar: t, reason: 'oracle_control_missing' });
     if (want.oracles) for (const p of oracleExpectProblems(res, manifest)) problems.push({ tar: t, ...p });
+    if (want.fuzz) for (const p of fuzzExpectProblems(res)) problems.push({ tar: t, ...p });
   }
   if (results.length !== expect.items.length) problems.push({ reason: 'bundle_count', want: expect.items.length, got: results.length });
   return { problems, results };
@@ -1535,7 +1814,7 @@ export async function main(argv, { env = process.env, stdout = process.stdout, s
     const { validateTarget } = await import(pathToFileURL(join(resolve(opt['--msc']), 'src', 'targets.mjs')).href);
     const images = JSON.parse(readFileSync(join(resolve(opt['--msc']), 'images.json'), 'utf8'));
     const seed = loadSeed(opt['--seed']);
-    const plan = await planShard({ inputs, seed, fetch: fetchImpl, validateTarget });
+    const plan = await planShard({ inputs, seed, fetch: fetchImpl, validateTarget, fuzz: env.LIVE_PROBE_FUZZ === 'on' });
     const lists = targetLists(plan, { node24Image: images.node24 });
     mkdirSync(work, { recursive: true });
     writeFileSync(join(work, 'plan.json'), json(plan));
@@ -1544,7 +1823,7 @@ export async function main(argv, { env = process.env, stdout = process.stdout, s
     mkdirSync(join(work, 'oci'), { recursive: true });
     for (const o of lists.oci) writeFileSync(join(work, 'oci', o.id + '.json'), json(o.list));
     writeFileSync(join(work, 'oci.json'), json(lists.oci.map((o) => ({ id: o.id, image: o.image, bytes: o.bytes }))));
-    const lines = ['subject_timeout_s=' + plan.subject_timeout_s, 'runnable=' + plan.runnable];
+    const lines = ['subject_timeout_s=' + plan.subject_timeout_s, 'runnable=' + plan.runnable, 'fuzz=' + (plan.fuzz ? 'on' : 'off')];
     for (const it of plan.items) lines.push('has_' + it.index + '=true', 'fence_' + it.index + '=' + it.fence, 'run_key_' + it.index + '=' + it.run_key);
     output(env, lines, stdout);
     for (const it of plan.items) say('item ' + it.index + ': ' + (it.target ? 'runnable (' + it.resolution.choice.type + ', ' + it.resolution.choice.transport + ')' : 'skipped (' + it.resolution.detail + ')'));

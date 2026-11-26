@@ -97,7 +97,7 @@ async function fromRepo(ref, opt, via = null) {
   const token = opt.githubTokenEnv ? process.env[opt.githubTokenEnv] : undefined;
   if (opt.githubTokenEnv && !token) throw new InputFailure('--github-token-env ' + opt.githubTokenEnv + ' is not set in the environment', 'usage');
   let r;
-  try { r = await withDeadline(Repo.fromGitHub(ref, { githubToken: token }), opt.timeout * 1000, 'Reading ' + ref); } catch (e) {
+  try { r = await withDeadline(Repo.fromGitHub(ref, { githubToken: token, effects: !!opt.codeEffects, effectsDepth: opt.codeEffectsDepth }), opt.timeout * 1000, 'Reading ' + ref); } catch (e) {
     if (e && /Not a GitHub repository URL/.test(e.message)) throw new InputFailure(e.message + ' Use github.com/owner/repo.', 'usage');
     throw new InputFailure('could not read ' + line(ref) + ': ' + line(e.message), 'unreachable');
   }
@@ -107,7 +107,7 @@ async function fromRepo(ref, opt, via = null) {
   const c = cliUsable(r, line(where), pick);
   const { provenance: prov, left, cond } = repoProvenance(c);
   const provenance = prov + budgetNote(r);
-  return { data: c.tools, reader: readerNotes(c), source: { kind: 'repo', repo: r.repo, sha: r.sha, via: r.via, fidelity: c.fidelity, approximate: isApproximate(c), provenance, from: c.kind, ...(c.language ? { language: c.language.toLowerCase() } : {}), ...(registrationNotSeen(c).length ? { registration_not_seen: registrationNotSeen(c).map((x) => line(x, 128)) } : {}), files: c.files || [c.path], ...(unreadableNames(c) ? { unreadable: unreadableNames(c) } : {}), ...(c.unresolvedNames ? { unresolved_names: c.unresolvedNames } : {}), ...(left.length ? { left_out: left.map((x) => ({ name: line(x.name, 128), reasons: x.reasons.map((y) => line(y, 160)) })) } : {}), ...(cond.length ? { conditional: cond.map((x) => line(x.name, 128)) } : {}), ...(via ? { registry: via } : {}) } };
+  return { data: c.tools, reader: readerNotes(c), ...(opt.codeEffects ? { effects: c.effects || null } : {}), source: { kind: 'repo', repo: r.repo, sha: r.sha, via: r.via, fidelity: c.fidelity, approximate: isApproximate(c), provenance, from: c.kind, ...(c.language ? { language: c.language.toLowerCase() } : {}), ...(registrationNotSeen(c).length ? { registration_not_seen: registrationNotSeen(c).map((x) => line(x, 128)) } : {}), files: c.files || [c.path], ...(unreadableNames(c) ? { unreadable: unreadableNames(c) } : {}), ...(c.unresolvedNames ? { unresolved_names: c.unresolvedNames } : {}), ...(left.length ? { left_out: left.map((x) => ({ name: line(x.name, 128), reasons: x.reasons.map((y) => line(y, 160)) })) } : {}), ...(cond.length ? { conditional: cond.map((x) => line(x.name, 128)) } : {}), ...(via ? { registry: via } : {}) } };
 }
 
 /** The advice every "cannot grade this read" message ends with (the CLI's and the Action's names for the live inputs). */
@@ -250,7 +250,7 @@ async function fromRepoDir(dir, opt) {
   // The --compare file is what the list is compared with, never the list itself.
   const cmp = opt.compare ? relative(resolve(String(dir)), resolve(String(opt.compare))).split(sep).join('/') : '';
   const exclude = cmp && !cmp.startsWith('..') && !isAbsolute(cmp) ? [cmp] : [];
-  try { r = await withDeadline(Repo.fromDirectory(dir, { exclude }), opt.timeout * 1000, 'Reading ' + dir); } catch (e) {
+  try { r = await withDeadline(Repo.fromDirectory(dir, { exclude, effects: !!opt.codeEffects, effectsDepth: opt.codeEffectsDepth }), opt.timeout * 1000, 'Reading ' + dir); } catch (e) {
     if (e && e.code === 'not_found') throw new InputFailure(line(e.message), 'usage');
     throw new InputFailure('could not read ' + line(dir) + ': ' + line(e && e.message), 'unreachable');
   }
@@ -258,7 +258,7 @@ async function fromRepoDir(dir, opt) {
   const c = cliUsable(r, line(dir), (folder) => '--repo-dir ' + (folder === '.' ? base : base + '/' + folder));
   const { provenance: prov, left, cond } = repoProvenance(c);
   const provenance = prov + budgetNote(r);
-  return { data: c.tools, where: c.where || null, reader: readerNotes(c), source: { kind: 'dir', dir: r.repo, fidelity: c.fidelity, approximate: isApproximate(c), provenance, from: c.kind, ...(c.language ? { language: c.language.toLowerCase() } : {}), ...(registrationNotSeen(c).length ? { registration_not_seen: registrationNotSeen(c).map((x) => line(x, 128)) } : {}), files: c.files || [c.path], ...(unreadableNames(c) ? { unreadable: unreadableNames(c) } : {}), ...(c.unresolvedNames ? { unresolved_names: c.unresolvedNames } : {}), ...(c.built ? { built: true } : {}), ...(r.truncated ? { truncated: true } : {}), ...(left.length ? { left_out: left.map((x) => ({ name: line(x.name, 128), reasons: x.reasons.map((y) => line(y, 160)) })) } : {}), ...(cond.length ? { conditional: cond.map((x) => line(x.name, 128)) } : {}) } };
+  return { data: c.tools, where: c.where || null, reader: readerNotes(c), ...(opt.codeEffects ? { effects: c.effects || null } : {}), source: { kind: 'dir', dir: r.repo, fidelity: c.fidelity, approximate: isApproximate(c), provenance, from: c.kind, ...(c.language ? { language: c.language.toLowerCase() } : {}), ...(registrationNotSeen(c).length ? { registration_not_seen: registrationNotSeen(c).map((x) => line(x, 128)) } : {}), files: c.files || [c.path], ...(unreadableNames(c) ? { unreadable: unreadableNames(c) } : {}), ...(c.unresolvedNames ? { unresolved_names: c.unresolvedNames } : {}), ...(c.built ? { built: true } : {}), ...(r.truncated ? { truncated: true } : {}), ...(left.length ? { left_out: left.map((x) => ({ name: line(x.name, 128), reasons: x.reasons.map((y) => line(y, 160)) })) } : {}), ...(cond.length ? { conditional: cond.map((x) => line(x.name, 128)) } : {}) } };
 }
 
 async function fromRegistry(name, opt, note) {

@@ -34,6 +34,10 @@ umask 077
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 oracles="${ORACLE_CLIENTS:-none}"
+# The fuzz stage (corpus/FUZZ.md) is on only when the plan says so (the plan step reads LIVE_PROBE_FUZZ): one decision
+# for the targets' time limits and for the stage.
+fuzz=off
+if [ -f "$work/plan.json" ] && node -e 'process.exit(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).fuzz === true ? 0 : 1)' "$work/plan.json" 2>/dev/null; then fuzz=on; fi
 oracles_installed=false
 if [ "$oracles" != none ] && [ -f "$oracles" ] && node -e '
   const r = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
@@ -66,7 +70,7 @@ sweep() {
 drive() {
   local list="$1" out="$2" limit="$3"
   mkdir -p "$out/_shard"
-  timeout --kill-after=30 "$limit" node "$here/live-probe-driver.mjs" --msc "$msc" --oracles "$oracles" -- --targets "$list" --out "$out" --lane ci \
+  timeout --kill-after=30 "$limit" node "$here/live-probe-driver.mjs" --msc "$msc" --oracles "$oracles" --fuzz "$fuzz" -- --targets "$list" --out "$out" --lane ci \
     2>>"$out/_shard/driver-stderr.log" | grep --line-buffered -E '^run finished, exit [0-9]+$'
   return "${PIPESTATUS[0]}"
 }

@@ -15,30 +15,36 @@
  *
  * Streamable HTTP targets are probed inside the sandbox by a helper container, not through this option: the oracle
  * stage does not run for them (oracles.json is then absent, and the bundle says so).
+ *
+ * With `--fuzz on` (default off; the plan decides, corpus/FUZZ.md) the fuzz stage runs after that, once per target,
+ * after the first probe that got a tool list: read-only protocol sessions (corpus/fuzz/), written to <out>/<target>/fuzz.json.
  */
 import { readFileSync, existsSync, mkdirSync, rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { runOracles, writeOracles } from './oracles/run.mjs';
+import { runFuzz, FUZZ_BUDGET_MS } from './fuzz/run.mjs';
 
 export const ORACLE_BUDGET_MS = 150_000;
 export const RESERVE_MS = 75_000;
 export const MIN_BUDGET_MS = 20_000;
+export const FUZZ_MIN_BUDGET_MS = 20_000;
 const TARGET_RE = /^s[0-9]{3}$/;
 /** The driver's server container name: surface-<run>-<target>-s<n> (mcp-surface-corpus src/docker.mjs name()). */
 const SERVER_NAME_RE = /^surface-[0-9a-f]{12}-(s[0-9]{3})-s[0-9]+$/;
 
 export function parse(argv) {
-  const o = { msc: null, oracles: 'none', rest: [] };
+  const o = { msc: null, oracles: 'none', fuzz: 'off', rest: [] };
   const i = argv.indexOf('--');
   const head = i < 0 ? argv : argv.slice(0, i);
   o.rest = i < 0 ? [] : argv.slice(i + 1);
   for (let k = 0; k < head.length; k += 2) {
     if (head[k] === '--msc') o.msc = head[k + 1];
     else if (head[k] === '--oracles') o.oracles = head[k + 1];
+    else if (head[k] === '--fuzz') { if (!['on', 'off'].includes(head[k + 1])) throw new Error('--fuzz is on or off'); o.fuzz = head[k + 1]; }
     else throw new Error(`unknown option ${head[k]}`);
   }
-  if (!o.msc || !o.oracles || !o.rest.length) throw new Error('usage: live-probe-driver.mjs --msc DIR --oracles FILE|none -- <run-shard args>');
+  if (!o.msc || !o.oracles || !o.rest.length) throw new Error('usage: live-probe-driver.mjs --msc DIR --oracles FILE|none [--fuzz on|off] -- <run-shard args>');
   return o;
 }
 
@@ -89,6 +95,35 @@ export function oracleProbe({ probe, listed, out, install, pins, starts, limits,
   };
 }
 
+/**
+ * The fuzz stage's probe option: the inner probe (the driver's own, with the oracle stage), then, only when `enabled`,
+ * the fuzz stage once per target, after the first probe that got a tool list. Same time rule as the oracle stage: it
+ * never runs past the target's limit less RESERVE_MS, and a stage error never reaches the driver.
+ */
+export function fuzzProbe({ probe, listed, out, enabled, starts, limits, run = runFuzz, write = writeOracles, remove = removeQuietly, takeTrace, now = () => Date.now(), log = () => {} }) {
+  const done = new Set();
+  return async (command, opts) => {
+    const p = await probe(command, opts);
+    const id = targetOf(command);
+    if (!enabled || !id || done.has(id) || !listed(p)) return p;
+    done.add(id);
+    const file = join(out, id, 'fuzz.json');
+    try {
+      const start = starts.get(id) ?? now();
+      const limit = (limits.get(id) ?? 0) * 1000;
+      const budget = Math.min(FUZZ_BUDGET_MS, start + limit - RESERVE_MS - now());
+      mkdirSync(join(out, id), { recursive: true });
+      if (budget < FUZZ_MIN_BUDGET_MS) { write(file, { format: 'isokron-live-probe-fuzz/1', mode: 'skipped', why: 'time_budget', budget_ms: Math.max(0, Math.floor(budget)) }); return p; }
+      await remove(command, opts);
+      write(file, await run({ command, dockerEnv: opts && opts.env, budgetMs: budget, takeTrace }));
+    } catch (e) {
+      log(`${id}: fuzz stage error: ${String(e && e.message).slice(0, 300)}`);
+      try { write(file, { format: 'isokron-live-probe-fuzz/1', mode: 'error', error: String(e && e.message).slice(0, 300) }); } catch { /* nothing more to do */ }
+    }
+    return p;
+  };
+}
+
 /** The probe's container is gone before the first oracle session takes its address. */
 export async function removeQuietly(command, opts) {
   const i = command.indexOf('--name');
@@ -128,7 +163,9 @@ export async function main(argv = process.argv.slice(2)) {
   }
   const cfg = loadRunscConfig();
   mkdirSync(join(out, '_shard'), { recursive: true });
-  const probe = oracleProbe({ probe: probeStdio, listed, out, install, pins, starts, limits, takeTrace: (cid) => takeTrace(cfg, cid, { waitMs: 3000 }) });
+  const trace = (cid) => takeTrace(cfg, cid, { waitMs: 3000 });
+  const withOracles = oracleProbe({ probe: probeStdio, listed, out, install, pins, starts, limits, takeTrace: trace });
+  const probe = o.fuzz === 'on' ? fuzzProbe({ probe: withOracles, listed, out, enabled: true, starts, limits, takeTrace: trace }) : withOracles;
   return runShard(o.rest, { makeDocker: (x) => new TimedDocker(x), probe, runscConfig: cfg });
 }
 

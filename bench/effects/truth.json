@@ -1,0 +1,504 @@
+{
+ "about": "Hand labels of what each tool really does, written from the source by reading it, before the analyser ran on the cases (tools added later were labelled from their source in the same way). state_change: the tool changes state outside itself (file, database, remote service, process); a temporary file written and used only inside the call is not a change. deletes: it removes or destroys something. ambiguous: excluded from the lenient scores and counted as a miss or false alarm in the strict ones.",
+ "tools": {
+  "ts-mixed/read_note": {
+   "state_change": false,
+   "deletes": false,
+   "why": "reads a file"
+  },
+  "ts-mixed/list_notes": {
+   "state_change": false,
+   "deletes": false,
+   "why": "lists a folder"
+  },
+  "ts-mixed/preview_note": {
+   "state_change": true,
+   "deletes": false,
+   "why": "writes a note file two calls down"
+  },
+  "ts-mixed/tidy_note": {
+   "state_change": true,
+   "deletes": true,
+   "why": "deletes a note file"
+  },
+  "ts-mixed/check_remote": {
+   "state_change": true,
+   "deletes": true,
+   "why": "HTTP DELETE"
+  },
+  "ts-mixed/top_notes": {
+   "state_change": true,
+   "deletes": false,
+   "why": "UPDATE counters"
+  },
+  "ts-mixed/export_report": {
+   "state_change": true,
+   "deletes": false,
+   "why": "creates an issue through an SDK client"
+  },
+  "ts-mixed/render_preview": {
+   "state_change": false,
+   "deletes": false,
+   "why": "writes a temporary file only"
+  },
+  "ts-mixed/git_status": {
+   "state_change": false,
+   "deletes": false,
+   "why": "git status"
+  },
+  "ts-mixed/save_note": {
+   "state_change": true,
+   "deletes": false,
+   "why": "writes a note file"
+  },
+  "ts-mixed/run_check": {
+   "state_change": true,
+   "deletes": false,
+   "ambiguous": true,
+   "why": "runs a command the caller supplies"
+  },
+  "ts-lowlevel/get_item": {
+   "state_change": false,
+   "deletes": false,
+   "why": "reads a file"
+  },
+  "ts-lowlevel/touch_item": {
+   "state_change": true,
+   "deletes": false,
+   "why": "writes a marker file"
+  },
+  "ts-lowlevel/delete_item": {
+   "state_change": true,
+   "deletes": true,
+   "why": "removes a file"
+  },
+  "ts-lowlevel/count_items": {
+   "state_change": false,
+   "deletes": false,
+   "why": "counts files"
+  },
+  "py-fastmcp/get_user": {
+   "state_change": false,
+   "deletes": false,
+   "why": "SELECT"
+  },
+  "py-fastmcp/export_user": {
+   "state_change": true,
+   "deletes": false,
+   "why": "writes the file at path"
+  },
+  "py-fastmcp/remove_user": {
+   "state_change": true,
+   "deletes": true,
+   "why": "DELETE FROM"
+  },
+  "py-fastmcp/sync_user": {
+   "state_change": true,
+   "deletes": true,
+   "why": "HTTP DELETE"
+  },
+  "py-fastmcp/bill_user": {
+   "state_change": true,
+   "deletes": false,
+   "why": "creates an invoice through an SDK client"
+  },
+  "py-fastmcp/list_users": {
+   "state_change": false,
+   "deletes": false,
+   "why": "SELECT"
+  },
+  "py-fastmcp/disk_usage": {
+   "state_change": true,
+   "deletes": false,
+   "ambiguous": true,
+   "why": "du with a caller-built command line: read-only intent, shell injection possible"
+  },
+  "py-lowlevel/read_job": {
+   "state_change": false,
+   "deletes": false,
+   "why": "reads a file"
+  },
+  "py-lowlevel/reset_job": {
+   "state_change": true,
+   "deletes": true,
+   "why": "os.remove"
+  },
+  "py-lowlevel/clear_jobs": {
+   "state_change": true,
+   "deletes": true,
+   "why": "rmtree"
+  },
+  "ts-sinks/axios_post": {
+   "state_change": true,
+   "deletes": false,
+   "why": "POST to an items endpoint"
+  },
+  "ts-sinks/got_delete": {
+   "state_change": true,
+   "deletes": true,
+   "why": "HTTP DELETE"
+  },
+  "ts-sinks/fetch_put": {
+   "state_change": true,
+   "deletes": false,
+   "why": "HTTP PUT"
+  },
+  "ts-sinks/fetch_get": {
+   "state_change": false,
+   "deletes": false,
+   "why": "GET"
+  },
+  "ts-sinks/fetch_post_search": {
+   "state_change": false,
+   "deletes": false,
+   "why": "POST to a search endpoint: no state change"
+  },
+  "ts-sinks/prisma_update": {
+   "state_change": true,
+   "deletes": false,
+   "why": "prisma update"
+  },
+  "ts-sinks/prisma_find": {
+   "state_change": false,
+   "deletes": false,
+   "why": "prisma findMany"
+  },
+  "ts-sinks/sequelize_destroy": {
+   "state_change": true,
+   "deletes": true,
+   "why": "destroy"
+  },
+  "ts-sinks/mongo_insert": {
+   "state_change": true,
+   "deletes": false,
+   "why": "insertOne"
+  },
+  "ts-sinks/knex_delete": {
+   "state_change": true,
+   "deletes": true,
+   "why": "del"
+  },
+  "ts-sinks/fs_append": {
+   "state_change": true,
+   "deletes": false,
+   "why": "appendFileSync"
+  },
+  "ts-sinks/fs_mkdir": {
+   "state_change": true,
+   "deletes": false,
+   "why": "mkdirSync"
+  },
+  "ts-sinks/fs_read_dir": {
+   "state_change": false,
+   "deletes": false,
+   "why": "readdirSync"
+  },
+  "ts-sinks/exec_ls": {
+   "state_change": false,
+   "deletes": false,
+   "why": "ls"
+  },
+  "ts-sinks/exec_rm": {
+   "state_change": true,
+   "deletes": true,
+   "why": "rm -rf"
+  },
+  "ts-sinks/log_mentions_delete": {
+   "state_change": false,
+   "deletes": false,
+   "why": "a log line and a comment mention deleting"
+  },
+  "ts-sinks/sql_insert_tpl": {
+   "state_change": true,
+   "deletes": false,
+   "why": "INSERT through a tagged template"
+  },
+  "ts-sinks/cleanup": {
+   "state_change": false,
+   "deletes": false,
+   "why": "lists a folder; a function of the same name elsewhere deletes"
+  },
+  "ts-sinks/deep_write": {
+   "state_change": true,
+   "deletes": false,
+   "why": "writes a file four calls down"
+  },
+  "ts-sinks/callback_write": {
+   "state_change": true,
+   "deletes": false,
+   "why": "writes in a promise callback"
+  },
+  "ts-sinks/table_dispatch": {
+   "state_change": true,
+   "deletes": true,
+   "why": "runs wipe or stamp from a table by name"
+  },
+  "ts-sinks/spawn_dynamic": {
+   "state_change": true,
+   "deletes": false,
+   "ambiguous": true,
+   "why": "starts a program the caller names"
+  },
+  "py-sinks/requests_post": {
+   "state_change": true,
+   "deletes": false,
+   "why": "POST"
+  },
+  "py-sinks/requests_get": {
+   "state_change": false,
+   "deletes": false,
+   "why": "GET"
+  },
+  "py-sinks/httpx_put": {
+   "state_change": true,
+   "deletes": false,
+   "why": "PUT"
+  },
+  "py-sinks/httpx_client_delete": {
+   "state_change": true,
+   "deletes": true,
+   "why": "HTTP DELETE"
+  },
+  "py-sinks/aiohttp_patch": {
+   "state_change": true,
+   "deletes": false,
+   "why": "PATCH"
+  },
+  "py-sinks/requests_post_search": {
+   "state_change": false,
+   "deletes": false,
+   "why": "POST to a search endpoint: no state change"
+  },
+  "py-sinks/sqlalchemy_add": {
+   "state_change": true,
+   "deletes": false,
+   "why": "session.add and commit"
+  },
+  "py-sinks/django_delete": {
+   "state_change": true,
+   "deletes": true,
+   "why": "queryset delete"
+  },
+  "py-sinks/django_create": {
+   "state_change": true,
+   "deletes": false,
+   "why": "objects.create"
+  },
+  "py-sinks/django_get": {
+   "state_change": false,
+   "deletes": false,
+   "why": "objects.get"
+  },
+  "py-sinks/shutil_move": {
+   "state_change": true,
+   "deletes": false,
+   "why": "shutil.move"
+  },
+  "py-sinks/pathlib_write": {
+   "state_change": true,
+   "deletes": false,
+   "why": "write_text"
+  },
+  "py-sinks/pathlib_read": {
+   "state_change": false,
+   "deletes": false,
+   "why": "read_text"
+  },
+  "py-sinks/open_append": {
+   "state_change": true,
+   "deletes": false,
+   "why": "open(..., \"a\")"
+  },
+  "py-sinks/open_read": {
+   "state_change": false,
+   "deletes": false,
+   "why": "open(p)"
+  },
+  "py-sinks/subprocess_ls": {
+   "state_change": false,
+   "deletes": false,
+   "why": "ls -l"
+  },
+  "py-sinks/subprocess_rm": {
+   "state_change": true,
+   "deletes": true,
+   "why": "rm -rf"
+  },
+  "py-sinks/tempfile_write": {
+   "state_change": false,
+   "deletes": false,
+   "why": "a temporary file only"
+  },
+  "py-sinks/sqlite_insert": {
+   "state_change": true,
+   "deletes": false,
+   "why": "INSERT"
+  },
+  "py-sinks/sqlite_select": {
+   "state_change": false,
+   "deletes": false,
+   "why": "SELECT"
+  },
+  "py-sinks/sql_log_only": {
+   "state_change": false,
+   "deletes": false,
+   "why": "a log line and a comment mention deleting"
+  },
+  "py-sinks/sdk_may": {
+   "state_change": true,
+   "deletes": false,
+   "why": "creates an invoice through an SDK client"
+  },
+  "py-sinks/cleanup": {
+   "state_change": false,
+   "deletes": false,
+   "why": "lists a folder; a function of the same name elsewhere deletes"
+  },
+  "py-sinks/deep_write": {
+   "state_change": true,
+   "deletes": false,
+   "why": "writes a file four calls down"
+  },
+  "py-sinks/table_dispatch": {
+   "state_change": true,
+   "deletes": true,
+   "why": "runs a function from a table by name (wipe removes a file)"
+  },
+  "fp-ts/gql_query": {
+   "state_change": false,
+   "deletes": false,
+   "why": "GraphQL query sent by POST"
+  },
+  "fp-ts/es": {
+   "state_change": false,
+   "deletes": false,
+   "why": "Elasticsearch count sent by POST"
+  },
+  "fp-ts/with_log": {
+   "state_change": false,
+   "deletes": false,
+   "why": "appends a line to an audit log: bookkeeping"
+  },
+  "fp-ts/ensure": {
+   "state_change": false,
+   "deletes": false,
+   "why": "makes an output directory: bookkeeping"
+  },
+  "fp-ts/deadbranch": {
+   "state_change": false,
+   "deletes": false,
+   "why": "the delete is in a branch that never runs"
+  },
+  "fp-ts/shared_read": {
+   "state_change": false,
+   "deletes": false,
+   "why": "a shared helper whose write mode is not used"
+  },
+  "fp-ts/collide": {
+   "state_change": false,
+   "deletes": false,
+   "why": "returns its argument"
+  },
+  "fp-ts/sel_update": {
+   "state_change": false,
+   "deletes": false,
+   "why": "SELECT ... FOR UPDATE and comments naming DELETE"
+  },
+  "fp-ts/helpish": {
+   "state_change": false,
+   "deletes": false,
+   "why": "returns a help string that names DELETE FROM"
+  },
+  "fp-ts/rpc": {
+   "state_change": false,
+   "deletes": false,
+   "why": "JSON-RPC read (eth_blockNumber) sent by POST"
+  },
+  "fp-ts/mapdel": {
+   "state_change": false,
+   "deletes": false,
+   "why": "deletes from local Map, Set and URLSearchParams objects"
+  },
+  "fp-ts/dl": {
+   "state_change": true,
+   "deletes": false,
+   "why": "writes a thumbnail under /var/data (a real file write by a tool declared read-only; kept out of the scores as it is a judgement)",
+   "ambiguous": true
+  },
+  "fp-py/rd": {
+   "state_change": false,
+   "deletes": false,
+   "why": "reads a file"
+  },
+  "fp-py/post_search": {
+   "state_change": false,
+   "deletes": false,
+   "why": "POST to an items endpoint with a query body"
+  },
+  "fp-py/metrics": {
+   "state_change": false,
+   "deletes": false,
+   "why": "writes a metrics file: bookkeeping"
+  },
+  "fp-py/err_path": {
+   "state_change": false,
+   "deletes": false,
+   "why": "the delete is in an error path"
+  },
+  "fp-py/sess": {
+   "state_change": false,
+   "deletes": false,
+   "why": "POST to a login endpoint: no data change"
+  },
+  "fp2-ts/upd_check": {
+   "state_change": false,
+   "deletes": false,
+   "why": "POST to an update-check endpoint"
+  },
+  "fp2-ts/sync_status": {
+   "state_change": false,
+   "deletes": false,
+   "why": "PUT to a sync status endpoint that reports status"
+  },
+  "fp2-ts/evict": {
+   "state_change": false,
+   "deletes": false,
+   "why": "deletes the server's own session at a fixed URL: housekeeping"
+  },
+  "fp2-ts/rmtemp": {
+   "state_change": false,
+   "deletes": false,
+   "why": "removes a cached responses file the server keeps for itself"
+  },
+  "fp2-ts/datacache": {
+   "state_change": false,
+   "deletes": false,
+   "why": "rewrites the server's own index cache"
+  },
+  "fp2-ts/rmcache": {
+   "state_change": false,
+   "deletes": false,
+   "why": "clears a thumbnail cache at a fixed path"
+  },
+  "fp2-ts/gqlmut": {
+   "state_change": false,
+   "deletes": false,
+   "why": "a GraphQL query (not a mutation) sent by POST"
+  },
+  "fp2-ts/delete_file": {
+   "state_change": true,
+   "deletes": true,
+   "why": "unlinks the path the caller gives"
+  },
+  "fp2-ts/delete_in_dir": {
+   "state_change": true,
+   "deletes": true,
+   "why": "removes the file the caller names under a fixed folder"
+  },
+  "fp2-ts/evict_user": {
+   "state_change": true,
+   "deletes": true,
+   "why": "DELETE of the session whose id the caller gives"
+  }
+ }
+}
