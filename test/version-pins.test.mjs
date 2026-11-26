@@ -120,7 +120,7 @@ test('R-PIN-04: scan-static reports mcp-check at the commit that ran, not the pa
 });
 
 test('R-PIN-05: live-probe reports the package, the corpus commit it used, and fuzz only when the stage ran', () => {
-  const msc = '4c16b586e8e5886acb098285b6ec405fd4db4ac7';
+  const msc = '11974fbb75a8c276214c887a079d6ad6df374124';
   assert.deepEqual(toolsRan({ commit: FULL, mscCommit: msc, fuzz: true }), [
     { name: '@isokron/mcp-check', version: FULL }, { name: 'isokron-ai/mcp-surface-corpus', version: msc }, { name: 'fuzz', version: FULL },
   ]);
@@ -156,8 +156,8 @@ function checkPinsCopy(expected, tools) {
 }
 const realPins = process.env.TOOL_QA_PINS && existsSync(process.env.TOOL_QA_PINS) ? await import(pathToFileURL(process.env.TOOL_QA_PINS).href) : null;
 const SCAN_PINS = { tool: { 'mcp-check': '75503c1' }, probe: {} };
-const LIVE_PINS = { tool: { 'mcp-check': 'd4a373a' }, probe: { 'mcp-surface-corpus': '4c16b58', fuzz: 'd4a373a' } };
-const MSC = '4c16b586e8e5886acb098285b6ec405fd4db4ac7';
+const LIVE_PINS = { tool: { 'mcp-check': 'd4a373a' }, probe: { 'mcp-surface-corpus': '11974fb', fuzz: 'd4a373a' } };
+const MSC = '11974fbb75a8c276214c887a079d6ad6df374124';
 
 test('R-PIN-06: the reported shapes prove the lane pins to tool-qa\'s pin check: a full commit proves a short pin, another commit contradicts it, a package version proves nothing', () => {
   const impls = [['copy', (e, t) => checkPinsCopy(e, t)], ...(realPins ? [['tool-qa pump/pins.mjs', (e, t) => realPins.checkPins(e, t)]] : [])];
