@@ -146,6 +146,11 @@
   // what they collected and hand it on whenever they are used again. publicTools turns it into unreadable.text.
   const LOST = { cur: null };
   function lose(x) { if (LOST.cur && x && (typeof x === 'string' ? x.trim() : x.length)) LOST.cur.push(x); }
+  // Like collecting, but what fn leaves is not handed on: the caller passes it on (lose) only if it uses the result.
+  function quietly(fn) {
+    const prev = LOST.cur; const mine = []; LOST.cur = mine;
+    try { return [fn(), mine]; } finally { LOST.cur = prev; }
+  }
   function collecting(fn) {
     const prev = LOST.cur; const mine = []; LOST.cur = mine;
     try { return [fn(), mine]; } finally { LOST.cur = prev; if (prev && mine.length) prev.push(mine); }
@@ -288,7 +293,7 @@
       // id('Project id'), ymd().optional(): a schema factory of this file or a direct import, read with its arguments
       const call = callFactory(t, i, ctx);
       if (call && call.r.zod) {
-        const nx = call.end;
+        lose(call.lost); const nx = call.end;
         if (isP(t[nx], '.') && t[nx + 1] && t[nx + 1].type === 'id' && isP(t[nx + 2], '(')) { const z = parseZod(t, i, ctx, { value: call.r.value, exact: call.r.exact, optional: call.r.optional }, nx); if (z) r = z; }
         else r = { value: call.r.value, end: nx, exact: call.r.exact, zod: true, optional: call.r.optional };
       }
@@ -534,11 +539,20 @@
   }
   // A call of a factory at token i (the name; "(" at i + 1): { r, end } with r the value read from its returned
   // expression, or null.
+  // The text the call left unread is returned as `lost`, for the caller to pass on if it uses the value.
   function callFactory(t, i, ctx) {
     const fn = ctx.consts[FN + t[i].value]; const depth = ctx.fnDepth || 0;
     if (!fn || depth >= FN_DEPTH) return null;
+    const [res, lost] = quietly(() => readCall(fn, t, i, ctx, depth));
+    return res && Object.assign(res, { lost });
+  }
+  function readCall(fn, t, i, ctx, depth) {
     const close = matchClose(t, i + 1); const args = []; let k = i + 2;
-    while (k < close) { const v = parseValue(t, k, ctx); args.push(v); k = v.end; if (isP(t[k], ',')) k++; else break; }
+    while (k < close) {
+      const v = parseValue(t, k, ctx); args.push(v);
+      if (v.value === SKIP) lose(literalsArr(t, k, v.end)); // an argument it cannot read: its text is still scanned
+      k = v.end; if (isP(t[k], ',')) k++; else break;
+    }
     if (k !== close) return null;
     // The parameters are bound in the definition's own table for the time of the read and restored after it (a copy
     // of the table per call would cost its size on every call).
@@ -566,7 +580,11 @@
     return { r, end: close + 1 };
   }
   // A spread in a shape that is not a plain constant: a factory call, or a constant object filtered by key.
-  function spreadExpr(t, k, ctx) { return spreadCall(t, k, ctx) || filteredEntries(t, k, ctx); }
+  function spreadExpr(t, k, ctx) {
+    const sp = spreadCall(t, k, ctx); if (sp) return sp;
+    const [fe, lost] = quietly(() => filteredEntries(t, k, ctx)); if (fe) lose(lost);
+    return fe;
+  }
   // Object.fromEntries(Object.entries(FIELDS).filter(([key]) => key !== 'title')): the constant object FIELDS (read
   // whole) without the keys the test rejects. The test may compare the key with string literals (=== !== == !=), test
   // it with [..].includes(key) or a constant array's .includes(key), negate with !, and join with && and ||; anything
@@ -615,6 +633,7 @@
     if (!t[k] || t[k].type !== 'id' || !isP(t[k + 1], '(') || !ctx || !ctx.consts || !hasOwn(ctx.consts, FN + t[k].value)) return null;
     const call = callFactory(t, k, ctx); const v = call && call.r.value;
     if (!call || call.r.zod || !v || typeof v !== 'object' || Array.isArray(v)) return null;
+    lose(call.lost);
     return { value: v, exact: call.r.exact, optionalKeys: call.r.optionalKeys || OPTIONAL_OF.get(v) || null, zod: false, end: call.end };
   }
 
