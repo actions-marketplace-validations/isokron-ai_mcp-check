@@ -104,9 +104,9 @@ test('R-LP-55 mutation check: without the build list a crate would run among the
 
 const cargoRec = (steps, o = {}) => ({ install: { kind: 'cargo', ok: false, steps, egress_refused: 0, ...o }, env: { names: { registry: [] }, secret_named: [] }, timing: { total_ms: 60000 }, timed_out: false });
 const LAUNCH = { kind: 'cargo', crate: 'rusty-mcp', version: 'latest' };
-const fd = (rec, stepsLog) => LP.failureDetail(rec, null, null, { stepsLog, launch: LAUNCH, argsUnfilled: 0 });
+const fd = (rec, stepsLog, owned = true) => LP.failureDetail(rec, null, null, { stepsLog, launch: LAUNCH, argsUnfilled: 0, owned });
 
-test('R-LP-56: a crate\'s failed install is the crate\'s only on cargo\'s own word before anything compiled, with no trouble reaching crates.io, or the entry helper\'s no_binary; everything else is ours', () => {
+test('R-LP-56: a crate\'s failed install is the crate\'s only on cargo\'s own word before anything compiled, with no trouble reaching crates.io, and only when its registry entry is the subject\'s own; what our entry helper cannot find and everything else is ours', () => {
   const install = (exit = 101) => [{ name: 'install', exit, timed_out: false }];
   assert.equal(fd(cargoRec(install()), '    Updating crates.io index\nerror: could not find `rusty-mcp` in registry `crates-io` with version `*`\n'), 'install_failed');
   assert.equal(fd(cargoRec(install()), 'error: could not find `rusty_mcp` in registry `crates-io`\n'), 'install_failed', 'cargo treats - and _ alike');
@@ -121,12 +121,19 @@ test('R-LP-56: a crate\'s failed install is the crate\'s only on cargo\'s own wo
   assert.equal(fd(cargoRec(install(137)), ''), 'install_resource_limit');
   assert.equal(fd(cargoRec([{ name: 'install', exit: null, timed_out: true }]), ''), 'install_timeout');
   assert.equal(fd(cargoRec(install()), 'error: linker `cc` not found\n'), 'install_build_failed');
-  // The entry helper (mcp-surface-corpus sandbox/cargo-entry.mjs): no binary is the crate's; several is ours (no guess).
+  // The entry helper (mcp-surface-corpus sandbox/cargo-entry.mjs) runs after a successful install: what it cannot find is a
+  // limit of its own checks (its name pattern, its regular-file test), never the crate's; several is ours too (no guess).
   const entry = (error) => [{ name: 'install', exit: 0 }, { name: 'entry', exit: 1, result: { error } }];
-  assert.equal(fd(cargoRec(entry('no_binary')), ''), 'package_not_runnable');
+  for (const e of ['no_binary', 'not_installed', null]) assert.equal(fd(cargoRec(entry(e)), ''), 'entry_unresolved', String(e));
   assert.equal(fd(cargoRec(entry('several_binaries')), ''), 'entry_ambiguous');
-  assert.equal(fd(cargoRec(entry('not_installed')), ''), 'install_build_failed');
-  assert.equal(fd(cargoRec([{ name: 'install', exit: 0 }, { name: 'entry', exit: 1 }]), ''), 'install_build_failed');
+  assert.equal(fd(cargoRec([{ name: 'install', exit: 0 }, { name: 'entry', exit: 1 }]), ''), 'entry_unresolved');
+  // cargo's own word about a crate whose registry entry is not the subject's own (seed-only, seed-matched, repository-only): ours.
+  assert.equal(fd(cargoRec(install()), 'error: could not find `rusty-mcp` in registry `crates-io`\n', false), 'package_error_unowned');
+  assert.equal(fd(cargoRec(install()), 'error: there is nothing to install in `rusty-mcp v0.4.1`, because it has no binaries\n', false), 'package_error_unowned');
+  assert.equal(LP.ownedEntry({ matched_by: 'repository+namespace+seed' }), true);
+  for (const m of ['seed', 'seed-only', 'repository', 'repository+seed', null]) assert.equal(LP.ownedEntry({ matched_by: m }), false, String(m));
+  assert.deepEqual(LP.DETAILS.entry_unresolved, ['install_failed_registry', false, 'install', 'tool']);
+  assert.deepEqual(LP.DETAILS.package_error_unowned, ['install_failed_registry', false, 'install', 'tool']);
   // npm's and pip's package-error words in a crate's log are not evidence about the crate.
   assert.equal(fd(cargoRec(install()), '   Compiling x\nnpm ERR! code E404\nNo matching distribution found for x\n'), 'install_build_failed');
   for (const d of ['package_not_runnable', 'entry_ambiguous']) assert.ok(LP.DETAILS[d], d);
@@ -134,7 +141,7 @@ test('R-LP-56: a crate\'s failed install is the crate\'s only on cargo\'s own wo
   assert.deepEqual(LP.DETAILS.entry_ambiguous, ['install_failed_registry', false, 'install', 'tool']);
 });
 
-test('R-LP-56 mutation check: without the Compiling guard, the network guard or the same-crate check, a crate is blamed for what it did not say', async () => {
+test('R-LP-56 mutation check: without the Compiling guard, the network guard, the same-crate check or the ownership gate, a crate is blamed for what it did not say', async () => {
   for (const [from, to, log] of [
     ["  if (/^\\s*Compiling /m.test(t) || CARGO_NOT_THE_CRATE.test(t)) return null;", '  if (CARGO_NOT_THE_CRATE.test(t)) return null;', '   Compiling evil-build v0.1.0\nerror: could not find `rusty-mcp` in registry `crates-io`\n'],
     ["  if (/^\\s*Compiling /m.test(t) || CARGO_NOT_THE_CRATE.test(t)) return null;", "  if (/^\\s*Compiling /m.test(t)) return null;", 'warning: spurious network error (2 tries remaining)\nerror: could not find `rusty-mcp` in registry `crates-io`\n'],
@@ -142,8 +149,13 @@ test('R-LP-56 mutation check: without the Compiling guard, the network guard or 
   ]) {
     assert.equal(fd(cargoRec([{ name: 'install', exit: 101 }]), log), 'install_build_failed');
     const M = await mutant(from, to);
-    assert.equal(M.failureDetail(cargoRec([{ name: 'install', exit: 101 }]), null, null, { stepsLog: log, launch: LAUNCH, argsUnfilled: 0 }), 'install_failed', 'without the guard: ' + from.slice(0, 50));
+    assert.equal(M.failureDetail(cargoRec([{ name: 'install', exit: 101 }]), null, null, { stepsLog: log, launch: LAUNCH, argsUnfilled: 0, owned: true }), 'install_failed', 'without the guard: ' + from.slice(0, 50));
   }
+  // Without the ownership gate a seed-only crate's absence would be the subject's.
+  const log = 'error: could not find `rusty-mcp` in registry `crates-io`\n';
+  assert.equal(fd(cargoRec([{ name: 'install', exit: 101 }]), log, false), 'package_error_unowned');
+  const M = await mutant("      return ev ? (owned ? ev : 'package_error_unowned') : 'install_build_failed';", "      return ev || 'install_build_failed';");
+  assert.equal(M.failureDetail(cargoRec([{ name: 'install', exit: 101 }]), null, null, { stepsLog: log, launch: LAUNCH, argsUnfilled: 0, owned: false }), 'install_failed');
 });
 
 // ------------------------------------------------------------------ NuGet (.NET tools)
@@ -184,9 +196,9 @@ test('R-LP-57 mutation check: without the package id check an option-like id rea
 
 const nugetRec = (steps, o = {}) => ({ install: { kind: 'nuget', ok: false, steps, egress_refused: 0, ...o }, env: { names: { registry: [] }, secret_named: [] }, timing: { total_ms: 60000 }, timed_out: false });
 const NLAUNCH = { kind: 'nuget', package: 'Acme.Dotty.Mcp', version: 'latest' };
-const nfd = (rec, stepsLog) => LP.failureDetail(rec, null, null, { stepsLog, launch: NLAUNCH, argsUnfilled: 0 });
+const nfd = (rec, stepsLog, owned = true) => LP.failureDetail(rec, null, null, { stepsLog, launch: NLAUNCH, argsUnfilled: 0, owned });
 
-test('R-LP-58: a .NET tool\'s failed install is the package\'s only on the CLI\'s word about this id with no trouble reaching NuGet, or the entry helper\'s no_tool_settings; other platforms only, several commands and everything else are ours', () => {
+test('R-LP-58: a .NET tool\'s failed install is the package\'s only on the CLI\'s word about this id with no trouble reaching NuGet, and only when its registry entry is the subject\'s own; what our entry helper cannot find, other platforms, several commands and everything else are ours', () => {
   const install = (exit = 1) => [{ name: 'config', exit: 0 }, { name: 'install', exit, timed_out: false }];
   assert.equal(nfd(nugetRec(install()), '/work/nuget.config : error NU1101: Unable to find package Acme.Dotty.Mcp. No packages exist with this id in source(s): nuget.org\nTool \'acme.dotty.mcp\' failed to install.\n'), 'install_failed');
   assert.equal(nfd(nugetRec(install()), 'error NU1102: Unable to find package acme.dotty.mcp with version (= 9.9.9)\n'), 'install_failed', 'ids are case-insensitive');
@@ -198,11 +210,12 @@ test('R-LP-58: a .NET tool\'s failed install is the package\'s only on the CLI\'
   assert.equal(nfd(nugetRec(install(137)), ''), 'install_resource_limit');
   assert.equal(nfd(nugetRec(install()), 'npm ERR! code E404\n'), 'install_build_failed', 'npm\'s words are not NuGet\'s');
   const entry = (error) => [...install(0), { name: 'entry', exit: 1, result: { error } }];
-  assert.equal(nfd(nugetRec(entry('no_tool_settings')), ''), 'package_not_runnable');
+  // After a successful install, no tool settings means our store walk (its caps, its name pattern) did not reach them: ours.
+  for (const e of ['no_tool_settings', 'no_command', 'not_installed']) assert.equal(nfd(nugetRec(entry(e)), ''), 'entry_unresolved', e);
+  assert.equal(nfd(nugetRec(install()), 'error NU1101: Unable to find package Acme.Dotty.Mcp.\n', false), 'package_error_unowned', 'not the subject\'s entry');
   assert.equal(nfd(nugetRec(entry('no_linux_build')), ''), 'platform_unsupported');
   assert.equal(nfd(nugetRec(entry('runtime_too_new')), ''), 'platform_unsupported', 'a tool for .NET 11 on our .NET 10');
   assert.equal(nfd(nugetRec(entry('several_commands')), ''), 'entry_ambiguous');
-  assert.equal(nfd(nugetRec(entry('no_command')), ''), 'install_build_failed');
   assert.deepEqual(LP.DETAILS.platform_unsupported, ['no_runnable_artifact', false, 'install', 'tool']);
 });
 
@@ -214,8 +227,20 @@ test('R-LP-58 mutation check: without the network guard or the same-id check, a 
     const rec = nugetRec([{ name: 'install', exit: 1 }]);
     assert.equal(nfd(rec, log), 'install_build_failed');
     const M = await mutant(from, to);
-    assert.equal(M.failureDetail(rec, null, null, { stepsLog: log, launch: NLAUNCH, argsUnfilled: 0 }), 'install_failed', 'without the guard: ' + from.slice(0, 50));
+    assert.equal(M.failureDetail(rec, null, null, { stepsLog: log, launch: NLAUNCH, argsUnfilled: 0, owned: true }), 'install_failed', 'without the guard: ' + from.slice(0, 50));
   }
+});
+
+test('R-LP-58: a .NET tool built for an older runtime runs rolled forward, so its crash is no evidence against it', async () => {
+  const rec = (tfm) => ({ install: { kind: 'nuget', ok: true, steps: [{ name: 'install', exit: 0 }, { name: 'entry', exit: 0, result: { script: '/work/pkg/x.dll', runner: 'dotnet', tfm } }] }, env: { names: { registry: [] }, secret_named: [] }, timing: { total_ms: 60000 }, timed_out: false });
+  const crash = { initialize_error: 'the server exited (exit 2, signal null)', lists: {}, transport: { exit: 2, signal: null }, timing: { total_ms: 2000 }, stderr: 'Unhandled exception. System.TypeLoadException: Could not load type\n   at Program.Main()\nSegmentation fault (core dumped)\n' };
+  assert.equal(LP.rolledForward(rec('net8.0').install), true);
+  assert.equal(LP.rolledForward(rec('net10.0').install), false);
+  assert.equal(LP.failureDetail(rec('net8.0'), crash, null, { launch: NLAUNCH, argsUnfilled: 0, owned: true }), 'start_env_limited');
+  // Mutation check: without the rule the same crash could be the server's.
+  const M = await mutant("  if (rolledForward(inst)) return 'start_env_limited';\n", '');
+  assert.equal(LP.failureDetail(rec('net10.0'), crash, null, { launch: NLAUNCH, argsUnfilled: 0, owned: true }), 'start_failed', 'on the runtime it was built for, a crash is a crash');
+  assert.equal(M.failureDetail(rec('net8.0'), crash, null, { launch: NLAUNCH, argsUnfilled: 0, owned: true }), 'start_failed', 'without the rule the rolled-forward crash is the server\'s');
 });
 
 // ------------------------------------------------------------------ MCP bundles (.mcpb)
@@ -223,6 +248,7 @@ test('R-LP-58 mutation check: without the network guard or the same-id check, a 
 import { createHash } from 'node:crypto';
 import { crc32, deflateRawSync } from 'node:zlib';
 import * as MB from '../corpus/mcpb.mjs';
+MB.RETRY.ms = 0;
 
 /** A zip archive of { name: data } (deflated), as a bundle tool writes it. */
 function zip(files) {
@@ -259,7 +285,7 @@ const manifest = (server, extra = {}) => ({ manifest_version: '0.3', name: 'acme
 const nodeBundle = (m = manifest({ type: 'node', entry_point: 'server/index.js', mcp_config: { command: 'node', args: ['${__dirname}/server/index.js'] } }), more = {}) => zip({ 'manifest.json': m, 'server/index.js': 'console.log(1)', ...more });
 const launchOf = async (bundle, pkg = mcpbPkg()) => { try { return await MB.mcpbLaunch(pkg, { fetch: releases({ [URL1]: { body: bundle } }) }); } catch (e) { return { detail: e.detail, why: e.why }; } };
 
-test('R-LP-59: a bundle is read on the planner as data from its GitHub release asset only, and launched as its manifest says: runtime, args, env and user_config filled the way a client would, the sha256 pinned for the sandbox', async () => {
+test('R-LP-72: a bundle is read on the planner as data from its GitHub release asset only, and launched as its manifest says: runtime, args, env and user_config filled the way a client would, the sha256 pinned for the sandbox', async () => {
   const b = nodeBundle();
   let r = await launchOf(b);
   assert.deepEqual(r.launch, { kind: 'mcpb', url: URL1, sha256: sha(b), workdir: '.', runtime: 'node', args: ['/work/pkg/server/index.js'] });
@@ -295,7 +321,7 @@ test('R-LP-59: a bundle is read on the planner as data from its GitHub release a
   assert.deepEqual([r.launch.runtime, r.launch.entry, r.launch.args], ['binary', 'server/srv', ['--stdio']]);
 });
 
-test('R-LP-59: a bundle is the subject\'s fault only for its own evidence (the release page\'s 404, other bytes than its registry entry names, no archive, a path outside itself, nothing to run); our limits and platforms are ours', async () => {
+test('R-LP-72: a bundle is the subject\'s fault only for its own evidence (the release page\'s 404, other bytes than its registry entry names, no archive, a path outside itself, nothing to run); our limits and platforms are ours', async () => {
   assert.equal((await MB.mcpbLaunch(mcpbPkg('https://github.com/acme/bundle/releases/download/v1/gone.mcpb'), { fetch: releases({}) }).catch((e) => e)).detail, 'bundle_unavailable');
   assert.equal((await launchOf(Buffer.from('#!/bin/sh\necho no archive\n'))).detail, 'bundle_invalid');
   assert.equal((await launchOf(zip({ 'manifest.json': manifest({ type: 'node', mcp_config: { command: 'node', args: ['x'] } }), '../../evil': 'x' }))).detail, 'bundle_invalid');
@@ -324,7 +350,7 @@ test('R-LP-59: a bundle is the subject\'s fault only for its own evidence (the r
   assert.equal(none.detail, 'platform_unsupported', 'our limit for one bundle comes before the other\'s 404');
 });
 
-test('R-LP-59 mutation check: without the sha256 check, the entry-name check, the redirect host check, the required-config check or the ELF check, the fixture gets through', async () => {
+test('R-LP-72 mutation check: without the sha256 check, the entry-name check, the redirect host check, the required-config check or the ELF check, the fixture gets through', async () => {
   const src = readFileSync(join(root, 'corpus', 'mcpb.mjs'), 'utf8');
   const mutate = async (from, to) => {
     assert.ok(src.includes(from), from.slice(0, 60));
@@ -336,7 +362,7 @@ test('R-LP-59 mutation check: without the sha256 check, the entry-name check, th
   const b = nodeBundle();
   let M = await mutate("  if (want && want !== sha256) throw fail('bundle_hash_mismatch');", '');
   assert.ok((await go(M, b, mcpbPkg(URL1, { fileSha256: 'f'.repeat(64) }))).launch, 'other bytes than the registry names');
-  M = await mutate("    if (!n) throw fail('bundle_invalid', { why: 'unsafe_path' });", '');
+  M = await mutate('    if (!n) {\n      // Only a name', '    if (false) {\n      // Only a name');
   assert.ok((await go(M, nodeBundle(undefined, { '../../evil': 'x' }))).launch, 'a path outside the bundle');
   M = await mutate("      u = allowedUrl(next.href);\n      if (!u) throw fail('bundle_host_not_allowed');", '      u = next;');
   assert.ok((await go(M, null, mcpbPkg(), { [URL1]: { location: 'https://release-assets.githubusercontent.com.evil.example/x', body: b } })).detail !== 'bundle_host_not_allowed', 'a redirect elsewhere is followed');
@@ -350,7 +376,7 @@ test('R-LP-59 mutation check: without the sha256 check, the entry-name check, th
 const mcpbRec = (steps) => ({ install: { kind: 'mcpb', ok: false, steps, egress_refused: 0 }, env: { names: { registry: [] }, secret_named: [] }, timing: { total_ms: 60000 }, timed_out: false });
 const MLAUNCH = { kind: 'mcpb', url: URL1, sha256: 'a'.repeat(64), runtime: 'node' };
 
-test('R-LP-60: what goes wrong with a bundle in the sandbox is ours: the planner read and judged those very bytes', () => {
+test('R-LP-73: what goes wrong with a bundle in the sandbox is ours: the planner read and judged those very bytes', () => {
   const fd2 = (rec, log = '') => LP.failureDetail(rec, null, null, { stepsLog: log, launch: MLAUNCH, argsUnfilled: 0 });
   for (const error of ['not_found', 'sha256_mismatch', 'unsafe_path', 'zip_unreadable', 'fetch_failed', 'redirect_refused', 'no_manifest']) assert.equal(fd2(mcpbRec([{ name: 'fetch', exit: 1, result: { error } }])), 'install_build_failed', error);
   for (const error of ['too_large', 'too_many_files', 'too_big_unpacked']) assert.equal(fd2(mcpbRec([{ name: 'fetch', exit: 1, result: { error } }])), 'install_resource_limit', error);
@@ -358,20 +384,72 @@ test('R-LP-60: what goes wrong with a bundle in the sandbox is ours: the planner
   assert.equal(fd2(mcpbRec([{ name: 'fetch', exit: 0 }, { name: 'venv', exit: 0 }, { name: 'requirements', exit: 0 }, { name: 'install', exit: 1 }]), 'ERROR: No matching distribution found for acme\n'), 'install_build_failed');
 });
 
-test('R-LP-61: a bundle that does not run here as shipped (no linux in its manifest, or python or uv on an environment we rebuilt) runs anyway, and its crash is never its fault', async () => {
+test('R-LP-74: a bundle that does not run here as shipped (no linux in its manifest, or python or uv on an environment we rebuilt) runs anyway, and its crash is never its fault', async () => {
   const m = manifest({ type: 'python', entry_point: 'server/main.py', mcp_config: { command: 'python', args: ['${__dirname}/server/main.py'] } });
   assert.equal((await launchOf(zip({ 'manifest.json': m, 'server/main.py': 'x' }))).info.crash_not_evidence, true);
   assert.equal((await launchOf(nodeBundle())).info.crash_not_evidence, false, 'a node bundle runs as shipped');
   assert.equal((await launchOf(nodeBundle(manifest({ type: 'node', entry_point: 'server/index.js', mcp_config: { command: 'node', args: ['${__dirname}/server/index.js'] } }, { compatibility: { platforms: ['darwin'] } })))).info.crash_not_evidence, true);
   const rec = { install: { kind: 'mcpb', ok: true, steps: [{ name: 'fetch', exit: 0 }] }, env: { names: { registry: [] }, secret_named: [] }, timing: { total_ms: 60000 }, timed_out: false };
-  const crash = { initialize: null, era: null, error: null, initialize_error: 'the server exited (exit 1, signal null)', lists: {}, transport: { exit: 1, signal: null }, timing: { total_ms: 3000 }, stderr: 'Traceback (most recent call last):\n  File "x", line 1\nModuleNotFoundError: No module named \'AppKit\'\n' };
+  const crash = { initialize: null, era: null, error: null, initialize_error: 'the server exited (exit 1, signal null)', lists: {}, transport: { exit: 1, signal: null }, timing: { total_ms: 3000 }, stderr: 'Segmentation fault (core dumped)\n' };
   assert.equal(LP.failureDetail(rec, crash, null, { launch: MLAUNCH, argsUnfilled: 0 }), 'start_failed');
   assert.equal(LP.failureDetail(rec, crash, null, { launch: MLAUNCH, argsUnfilled: 0, crashNotEvidence: true }), 'start_env_limited');
+  // Links the sandbox left out when it unpacked the bundle (a file the server may need): its crash is no evidence either.
+  assert.equal(LP.crashNotEvidenceOf({ mcpb: { crash_not_evidence: false } }, { install: { kind: 'mcpb', steps: [{ name: 'fetch', exit: 0, result: { ok: true, links_skipped: 3 } }] } }), true);
+  assert.equal(LP.crashNotEvidenceOf({ mcpb: { crash_not_evidence: false } }, { install: { kind: 'mcpb', steps: [{ name: 'fetch', exit: 0, result: { ok: true, links_skipped: 0 } }] } }), false);
 });
 
-test('R-LP-61 mutation check: without the platform guard a darwin-only bundle\'s crash would be its fault', async () => {
+test('R-LP-74 mutation check: without the platform guard a darwin-only bundle\'s crash would be its fault', async () => {
   const rec = { install: { kind: 'mcpb', ok: true, steps: [] }, env: { names: { registry: [] }, secret_named: [] }, timing: { total_ms: 60000 }, timed_out: false };
-  const crash = { initialize_error: 'the server exited (exit 1, signal null)', lists: {}, transport: { exit: 1, signal: null }, timing: { total_ms: 3000 }, stderr: 'Traceback (most recent call last):\nModuleNotFoundError: x\n' };
+  const crash = { initialize_error: 'the server exited (exit 1, signal null)', lists: {}, transport: { exit: 1, signal: null }, timing: { total_ms: 3000 }, stderr: 'Segmentation fault (core dumped)\n' };
   const M = await mutant('  return sound && !crashNotEvidence && ms !== null', '  return sound && ms !== null');
   assert.equal(M.failureDetail(rec, crash, null, { launch: MLAUNCH, argsUnfilled: 0, crashNotEvidence: true }), 'start_failed');
+});
+
+test('R-LP-72: a bundle\'s own failure is the subject\'s only for an entry in its namespace: a third-party entry naming the repository with a dead bundle is unverified, a seed-only one ours; a bare launcher is never the bundle\'s', async () => {
+  const dead = 'https://github.com/victim/repo/releases/download/v1/gone.mcpb';
+  const entry = (name, repo) => ({ name, version: '1.0.0', repository: { url: 'https://github.com/' + repo, source: 'github' }, packages: [mcpbPkg(dead)] });
+  const reg = (servers) => async (url) => {
+    const u = new URL(url);
+    if (u.hostname === 'registry.modelcontextprotocol.io') { const q = (u.searchParams.get('search') || '').toLowerCase(); return res(200, { servers: servers.filter((s) => s.name.toLowerCase().includes(q)).map((server) => ({ server })) }); }
+    if (u.hostname === 'github.com') return res(404, 'Not Found');
+    throw new Error('unexpected fetch ' + url);
+  };
+  const r = (servers, seed = new Map()) => LP.resolveSubject({ subject: 'victim/repo', repo: 'victim/repo' }, { fetch: reg(servers), seed });
+  assert.equal((await r([entry('io.github.mallory/repo', 'victim/repo')])).detail, 'unverified_registry_entry', 'anyone\'s claim on the repository');
+  assert.equal((await r([], new Map([['victim/repo', [{ registry: 'mcpb', identifier: dead }]]]))).detail, 'bundle_unowned', 'seed-only: not shown to be theirs');
+  assert.equal((await r([entry('io.github.victim/repo', 'victim/repo')])).detail, 'bundle_unavailable', 'their own namespace: theirs');
+  for (const d of LP.SUBJECT_RESOLVE_DETAILS) assert.equal(LP.DETAILS[d][3], 'subject', d);
+  assert.deepEqual(LP.DETAILS.bundle_unowned, ['install_failed_registry', false, 'resolve', 'tool']);
+  // The release page's 404 is asked once more before it counts.
+  let n = 0;
+  const flaky = async (url) => { const u = new URL(url); if (u.hostname === 'github.com') return n++ === 0 ? res(404, '') : { status: 302, ok: false, headers: { get: (h) => (h === 'location' ? ASSET + '&f=x' : null) } }; return res(200, nodeBundle()); };
+  assert.equal((await MB.mcpbLaunch(mcpbPkg(URL1), { fetch: flaky, retryMs: 0 })).launch.runtime, 'node');
+  // A launcher on the user's machine is not a file of the bundle: ours, never package_not_runnable; a shell even when shipped.
+  for (const command of ['npx', 'sh', 'bash', 'bun', 'deno', 'docker', 'uvx', 'server/sh']) {
+    const b = zip({ 'manifest.json': manifest({ type: 'binary', entry_point: 'server/x', mcp_config: { command, args: ['x'] } }), 'server/x': ELF64(), ...(command === 'server/sh' ? { 'server/sh': ELF64() } : {}) });
+    assert.equal((await launchOf(b)).detail, 'bundle_runtime_unsupported', command);
+  }
+  // An entry name our rules do not take is ours; only one that leaves the bundle is its fault.
+  assert.equal((await launchOf(nodeBundle(undefined, { 'a\\b.js': 'x' }))).detail, 'bundle_unreadable');
+  assert.equal((await launchOf(nodeBundle(undefined, { 'a/../../b.js': 'x' }))).detail, 'bundle_invalid');
+  assert.equal((await launchOf(nodeBundle(undefined, { ['a/'.repeat(70) + 'x']: 'x' }))).detail, 'bundle_unreadable', 'our depth limit');
+});
+
+test('R-LP-72 mutation check: without the ownership gate a stranger\'s dead bundle is the victim\'s fault; without the launcher check npx is package_not_runnable', async () => {
+  const dead = 'https://github.com/victim/repo/releases/download/v1/gone.mcpb';
+  const reg = async (url) => { const u = new URL(url); if (u.hostname === 'registry.modelcontextprotocol.io') return res(200, { servers: [{ server: { name: 'io.github.mallory/repo', version: '1', repository: { url: 'https://github.com/victim/repo' }, packages: [mcpbPkg(dead)] } }] }); return res(404, ''); };
+  const M = await mutant("        if (SUBJECT_RESOLVE_DETAILS.includes(r.detail) && !(c.entry && c.entry.namespace))", '        if (false)');
+  M.RETRY && (M.RETRY.ms = 0);
+  assert.equal((await M.resolveSubject({ subject: 'victim/repo', repo: 'victim/repo' }, { fetch: reg })).detail, 'bundle_unavailable');
+  const src = readFileSync(join(root, 'corpus', 'mcpb.mjs'), 'utf8');
+  const from = "    if (LAUNCHERS.has(c.split('/').pop()) || (!c.includes('/') && !names.has(c))) throw fail('bundle_runtime_unsupported', { why: 'launcher' });\n";
+  assert.ok(src.includes(from));
+  const file = join(root, 'corpus', '.mutant-mcpb-' + process.pid + '-l.mjs');
+  writeFileSync(file, src.replace(from, ''));
+  try {
+    const X = await import(pathToFileURL(file).href);
+    const b = zip({ 'manifest.json': manifest({ type: 'binary', entry_point: 'server/x', mcp_config: { command: 'npx', args: ['x'] } }), 'server/x': ELF64() });
+    const out = await X.mcpbLaunch(mcpbPkg(), { fetch: releases({ [URL1]: { body: b } }), retryMs: 0 }).catch((e) => e);
+    assert.equal(out.detail, 'package_not_runnable', 'without the check the user\'s launcher is the bundle\'s missing binary');
+  } finally { rmSync(file, { force: true }); }
 });

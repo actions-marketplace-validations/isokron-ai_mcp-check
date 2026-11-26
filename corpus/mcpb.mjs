@@ -31,6 +31,8 @@ const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
 const RESERVED_ENV = /^(PATH|HOME|TMPDIR|LD_[A-Z_]+|NODE_OPTIONS|NODE_EXTRA_CA_CERTS|PYTHON(PATH|HOME|STARTUP)|HTTPS?_PROXY|ALL_PROXY|NO_PROXY|SSL_CERT_(FILE|DIR)|DOCKER_.*|GITHUB_.*|ACTIONS_.*|RUNNER_.*|SURFACE_.*|CORPUS_.*)$/i;
 const BUNDLE_PATH = /^(?![/.])(?!.*(?:^|\/)\.\.?(?:\/|$))[A-Za-z0-9._@+ /-]{1,300}$/;
 const BIN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$/;
+/** Launchers a client would find on the user's machine: never a bundle's own binary (R-LP-72). */
+const LAUNCHERS = new Set(['sh', 'bash', 'zsh', 'dash', 'fish', 'cmd', 'cmd.exe', 'powershell', 'pwsh', 'npx', 'npm', 'pnpm', 'yarn', 'bun', 'bunx', 'deno', 'docker', 'podman', 'uvx', 'pipx', 'env', 'java', 'dotnet', 'go', 'cargo', 'ruby', 'php', 'perl']);
 const isObj = (x) => x !== null && typeof x === 'object' && !Array.isArray(x);
 const fail = (detail, extra = {}) => Object.assign(new Error(detail), { detail }, extra);
 
@@ -106,7 +108,12 @@ export function readBundle(buf) {
   const names = new Set();
   for (const m of members) {
     const n = safeName(m.name);
-    if (!n) throw fail('bundle_invalid', { why: 'unsafe_path' });
+    if (!n) {
+      // Only a name that leaves the bundle (absolute, or a .. segment) is the bundle's own fault; one our rules merely do
+      // not take (a backslash, a colon, a control character, our length and depth limits) is ours.
+      const escapes = typeof m.name === 'string' && (m.name.startsWith('/') || m.name.split(/[/\\]/).includes('..'));
+      throw fail(escapes ? 'bundle_invalid' : 'bundle_unreadable', { why: 'unsafe_path' });
+    }
     names.add(n);
   }
   const mf = members.find((m) => m.name === 'manifest.json');
@@ -297,6 +304,9 @@ export function bundleLaunch({ manifest, names, members }, { url, sha256, buf, t
   } else {
     // A binary: a file of the bundle (by ${__dirname}, or a path relative to the bundle), linux/amd64, and the manifest
     // must allow linux. Anything else the client would run (sh, npx, a path outside) is not ours to start.
+    // A bare name (npx, sh, bash, bun, deno, docker, uvx ...) is a launcher on the user's machine, not a file of the
+    // bundle: not ours to start, and no fault of the bundle. A shell stays refused even when the bundle ships one.
+    if (LAUNCHERS.has(c.split('/').pop()) || (!c.includes('/') && !names.has(c))) throw fail('bundle_runtime_unsupported', { why: 'launcher' });
     const rel = c.startsWith('/') ? scriptIn(c) : BUNDLE_PATH.test(c) ? c : null;
     if (!rel) throw fail('bundle_runtime_unsupported', { why: 'command' });
     if (!names.has(rel)) throw fail(linuxListed ? 'package_not_runnable' : 'platform_unsupported', { why: 'binary_missing' });
@@ -308,17 +318,27 @@ export function bundleLaunch({ manifest, names, members }, { url, sha256, buf, t
   if (!launch.args.length) delete launch.args;
   // A crash is evidence against the bundle only where it runs as shipped: a node bundle (its node_modules) or a binary, on
   // a platform its manifest lists. A python or uv bundle runs on an environment we rebuilt (our Python, our pip install of
-  // what we read from its pyproject; uv would also read a script's inline metadata), so its crash may be ours (R-LP-61).
+  // what we read from its pyproject; uv would also read a script's inline metadata), so its crash may be ours (R-LP-74).
   const crashNotEvidence = !linuxListed || launch.runtime === 'python' || launch.runtime === 'uv';
   return { launch, info: { server_type: type, runtime: launch.runtime, platform_unlisted: !linuxListed, crash_not_evidence: crashNotEvidence, manifest_version: typeof manifest.manifest_version === 'string' ? manifest.manifest_version.slice(0, 16) : typeof manifest.dxt_version === 'string' ? manifest.dxt_version.slice(0, 16) : null } };
 }
 
 /** The whole resolution of a registry or seed package of type mcpb: { launch, info } or throws { detail }. */
-export async function mcpbLaunch(pkg, { fetch: fetchImpl = globalThis.fetch, transportArgs = [], env = {} } = {}) {
+/** The pause before the release page's 404 is asked again (the tests set it to 0). */
+export const RETRY = { ms: 3000 };
+
+export async function mcpbLaunch(pkg, { fetch: fetchImpl = globalThis.fetch, transportArgs = [], env = {}, retryMs = RETRY.ms } = {}) {
   const url = typeof pkg.identifier === 'string' ? pkg.identifier.trim() : '';
   if (!MCPB_URL.test(url)) throw fail('bundle_host_not_allowed');
   const want = typeof pkg.fileSha256 === 'string' && /^[0-9a-f]{64}$/i.test(pkg.fileSha256) ? pkg.fileSha256.toLowerCase() : null;
-  const { buf, sha256 } = await fetchBundle(url, { fetch: fetchImpl });
+  // The release page's 404 once more after a pause before it counts: an asset that is being replaced can be missing a moment.
+  let got;
+  try { got = await fetchBundle(url, { fetch: fetchImpl }); } catch (e) {
+    if (!e || e.detail !== 'bundle_unavailable') throw e;
+    await new Promise((r) => setTimeout(r, retryMs));
+    got = await fetchBundle(url, { fetch: fetchImpl });
+  }
+  const { buf, sha256 } = got;
   // The registry vouches for these bytes; other bytes at that URL are the publisher's to explain.
   if (want && want !== sha256) throw fail('bundle_hash_mismatch');
   const b = readBundle(buf);

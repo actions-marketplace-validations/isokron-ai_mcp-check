@@ -3469,6 +3469,504 @@
   }
   // files: Map(path -> text) or [[path, text]]. Returns { found, tools, excluded, sdk, unresolved }.
   // opts.maxSourceFiles: at most this many files that may define a tool are read for tools (default 400).
+  // ------------------------------------------------------------ Python: FastMCP.from_fastapi (tools from FastAPI routes)
+  // FastMCP.from_fastapi(app, route_maps=…, route_map_fn=…) turns the app's OpenAPI operations into tools: name = the
+  // operation_id cut at "__", slugified, at most 56 characters; description = the operation description (FastAPI: the
+  // endpoint's cleaned docstring, cut at \f) or else its summary; inputSchema = the path, query, header and cookie
+  // parameters with the JSON body's properties merged in (flat_param_schema), schemas dumped without None values.
+  // Route maps pick which routes are tools: the first RouteMap whose methods, pattern and tags match decides; no match
+  // is a tool. The app's routes are read from its include_router calls before from_fastapi (routers defined in the
+  // repository, a loop over an imported list of them included), with their prefixes and tags. What cannot be worked out
+  // is never guessed: a route whose map cannot be decided, or a router that cannot be found, is left out and the
+  // reason is given in the notes; a parameter or body the reader cannot type marks that tool's input schema unreadable.
+  const FA_METHODS = /^(get|post|put|delete|patch|options|head|trace)$/;
+  const FA_SKIP_TYPES = /^(?:fastapi\.|starlette\.(?:requests\.|responses\.)?)?(Request|Response|BackgroundTasks|WebSocket|HTTPConnection|SecurityScopes)$/;
+  function faStr(s) { // one Python string literal (any quotes, r/u prefix); f-strings and bytes are not read
+    const m = /^([rRuU]{0,1})("""|'''|"|')([\s\S]*)$/.exec(s.trim());
+    if (!m || !m[3].endsWith(m[2]) || m[3].length < m[2].length) return undefined;
+    const body = m[3].slice(0, m[3].length - m[2].length);
+    if (m[2].length === 1 && body.includes('\n')) return undefined;
+    return /r/i.test(m[1]) ? body : pyUnescape(body);
+  }
+  // A literal Python value: strings (adjacent ones joined), numbers, True/False/None, lists, tuples and sets of them,
+  // names of constants; MCPType.X as { mcpType }. undefined when not a literal.
+  function faVal(src, consts, depth) {
+    let s = String(src).trim(); depth = depth || 0;
+    if (!s || depth > 8 || s.length > 20000) return undefined;
+    if (/^\(([\s\S]*)\)$/.test(s) && splitTop(s.slice(1, -1), ',').length <= 1 && !/,\s*\)$/.test(s)) return faVal(s.slice(1, -1), consts, depth + 1);
+    // adjacent string literals
+    const parts = []; let i = 0;
+    while (i < s.length) {
+      while (/\s/.test(s[i] || '')) i++;
+      if (i >= s.length) break;
+      const m = /^[rRuU]?("""|'''|"|')/.exec(s.slice(i)); if (!m) { parts.length = 0; break; }
+      const q = m[1]; let j = i + m[0].length;
+      while (j < s.length) { if (s[j] === '\\') { j += 2; continue; } if (s.startsWith(q, j)) break; j++; }
+      if (j >= s.length) { parts.length = 0; break; }
+      parts.push(s.slice(i, j + q.length)); i = j + q.length;
+    }
+    if (parts.length) { const vs = parts.map(faStr); return vs.every((x) => typeof x === 'string') ? vs.join('') : undefined; }
+    if (/^-?\d+$/.test(s)) return parseInt(s, 10);
+    if (/^-?\d*\.\d+(e-?\d+)?$/i.test(s)) return parseFloat(s);
+    if (s === 'True' || s === 'False') return s === 'True';
+    if (s === 'None') return null;
+    let m;
+    if ((m = /^(?:fastmcp\.server\.openapi\.)?MCPType\.(\w+)$/.exec(s))) return { mcpType: m[1] };
+    if (/^[A-Za-z_]\w*$/.test(s)) return consts && Object.prototype.hasOwnProperty.call(consts, s) ? consts[s] : undefined;
+    if (/^[[({][\s\S]*[\])}]$/.test(s) && !/^\{[\s\S]*:/.test(s.replace(/(["'])(?:\\.|(?!\1).)*\1/g, '""'))) {
+      const xs = splitTop(s.slice(1, -1), ',').filter((x) => x.trim()).map((x) => faVal(x, consts, depth + 1));
+      return xs.every((x) => x !== undefined) ? xs : undefined;
+    }
+    return undefined;
+  }
+  // inspect.cleandoc, then FastAPI's cut at \f and strip
+  function faCleandoc(doc) {
+    const lines = String(doc).replace(/\t/g, '        ').split('\n');
+    let margin = Infinity;
+    lines.slice(1).forEach((l) => { const c = l.replace(/^\s+/, ''); if (c) margin = Math.min(margin, l.length - c.length); });
+    const out = [lines[0].replace(/^\s+/, '')].concat(lines.slice(1).map((l) => (margin < Infinity ? l.slice(margin) : l)));
+    while (out.length && !out[0].trim()) out.shift();
+    while (out.length && !out[out.length - 1].trim()) out.pop();
+    return out.join('\n').split('\f')[0].trim();
+  }
+  const faPyTitle = (s) => s.replace(/[A-Za-z]+/g, (w) => w[0].toUpperCase() + w.slice(1).toLowerCase()); // str.title()
+  function faSlug(s) { return s.replace(/[\s\-.]+/g, '_').replace(/[^a-zA-Z0-9_]/g, '').replace(/_+/g, '_').replace(/^_+|_+$/g, ''); }
+  // One Python file, read once: logical lines, module constants, imports, top-level assignments, defs and decorators.
+  const F_top = (lines, k) => lines[k].indent === 0;
+  function faFile(path, text) {
+    const lines = pyLogicalLines(pyStripComments(text));
+    const consts = {}; const imports = {}; const assigns = {}; const defs = {};
+    lines.forEach((l, k) => {
+      if (l.indent === 0) {
+        let m;
+        if ((m = /^from\s+(\.*[\w.]*)\s+import\s+([\s\S]+)$/.exec(l.text))) {
+          m[2].replace(/^\(|\)\s*$/g, '').split(',').forEach((x) => { const q = /^\s*(\w+)(?:\s+as\s+(\w+))?\s*$/.exec(x); if (q) imports[q[2] || q[1]] = { mod: m[1], name: q[1] }; });
+        } else if ((m = /^import\s+([\w.]+)(?:\s+as\s+(\w+))?\s*$/.exec(l.text))) imports[m[2] || m[1].split('.')[0]] = { mod: m[2] ? m[1] : m[1].split('.')[0], name: null };
+        else if ((m = /^([A-Za-z_]\w*)\s*(?::\s*[^=]+?)?\s*=\s*([\s\S]+)$/.exec(l.text)) && topLevelEq(l.text) > 0) { assigns[m[1]] = { text: m[2].trim(), k }; const v = faVal(m[2], consts); if (v !== undefined) consts[m[1]] = v; }
+      }
+      const d = /^(?:async\s+)?def\s+(\w+)\s*\(/.exec(l.text);
+      if (d && (defs[d[1]] === undefined || (l.indent === 0 && F_top(lines, defs[d[1]])))) defs[d[1]] = k; // the last top-level def wins (@overload stubs come first)
+    });
+    return { path, text, lines, consts, imports, assigns, defs };
+  }
+  // The body lines of the logical line at k (deeper indent, up to the next line at its indent or less).
+  function faBody(F, k) { const ind = F.lines[k].indent; let e = k + 1; while (e < F.lines.length && F.lines[e].indent > ind) e++; return [k + 1, e]; }
+  function faCall(text) { // NAME(args) -> { fn, args } (args: positional and keyword texts)
+    const m = /^([\w.]+)\s*\(([\s\S]*)\)\s*$/.exec(text.trim()); if (!m) return null;
+    const pos = []; const kw = {};
+    splitTop(m[2], ',').forEach((p) => { const eq = topLevelEq(p); if (eq > 0 && /^\w+$/.test(p.slice(0, eq).trim())) kw[p.slice(0, eq).trim()] = p.slice(eq + 1).trim(); else if (p) pos.push(p); });
+    return { fn: m[1], pos, kw };
+  }
+  function faParams(head) { // def f(a: T = d, …) -> [{ name, ann, def }]
+    const o = head.indexOf('('); if (o < 0) return null;
+    let d = 0; let c = -1; let q = null;
+    for (let x = o; x < head.length; x++) { const ch = head[x]; if (q) { if (ch === '\\') x++; else if (ch === q) q = null; continue; } if (ch === '"' || ch === "'") q = ch; else if ('([{'.includes(ch)) d++; else if (')]}'.includes(ch)) { d--; if (d === 0) { c = x; break; } } }
+    if (c < 0) return null;
+    const out = [];
+    for (const p of splitTop(head.slice(o + 1, c), ',')) {
+      if (!p || p === '/' || p === '*') continue;
+      if (/^\*/.test(p)) return null; // *args / **kwargs: FastAPI reads them as query params; not read here
+      const eq = topLevelEq(p); const lhs = eq < 0 ? p : p.slice(0, eq); const colon = lhs.indexOf(':');
+      const name = (colon < 0 ? lhs : lhs.slice(0, colon)).trim(); if (!/^\w+$/.test(name)) return null;
+      if (name === 'self' || name === 'cls') continue;
+      out.push({ name, ann: colon < 0 ? null : lhs.slice(colon + 1).trim(), def: eq < 0 ? undefined : p.slice(eq + 1).trim() });
+    }
+    return out;
+  }
+  // The FastMCP versions the fixtures of R-RD-37 were checked against: tool names (operation id cut at "__", slugified,
+  // 56 characters) are listed as these versions write them; for any other version, or none pinned, the names are marked
+  // as not certain. Unmatched routes default to TOOL from FastMCP 2.8.0 (before it, DEFAULT_ROUTE_MAPPINGS made GET
+  // routes resources and resource templates, src/fastmcp/server/openapi.py at v2.7.1); a dependency range whose lowest
+  // version is older leaves out GET routes no route map decides.
+  const FA_VERIFIED = ['2.14.5', '4.1.6', '4.1.7'];
+  const FA_TOOL_DEFAULT_FROM = [2, 8, 0];
+  const verCmp = (a, b) => { for (let i = 0; i < 3; i++) { const d = (a[i] || 0) - (b[i] || 0); if (d) return d; } return 0; };
+  // The fastmcp version of a package: { pinned: 'x.y.z' | null, lowest: [x, y, z] | null } from uv.lock (exact), then an
+  // exact pin (==) or the lowest version of a range (>=, ~=, >, ^) in requirements or pyproject.
+  function faVersion(entries) {
+    let pinned = null; let lowest = null;
+    entries.forEach(([p, t]) => {
+      if (typeof t !== 'string') return;
+      let m;
+      if (/(^|\/)uv\.lock$/.test(p) && (m = /\[\[package\]\]\s*\nname\s*=\s*"fastmcp(?:-slim)?"\s*\nversion\s*=\s*"(\d+)\.(\d+)\.(\d+)[^"]*"/.exec(t))) { pinned = m[1] + '.' + m[2] + '.' + m[3]; lowest = [+m[1], +m[2], +m[3]]; }
+    });
+    if (pinned) return { pinned, lowest };
+    entries.forEach(([p, t]) => {
+      if (typeof t !== 'string' || lowest || !/(^|\/)(requirements[^/]*\.txt|pyproject\.toml)$/.test(p)) return;
+      const m = /\bfastmcp(?:-slim)?\s*(?:\[[^\]]*\])?\s*(===?|~=|>=|>|\^)\s*v?(\d+)(?:\.(\d+))?(?:\.(\d+))?/.exec(t);
+      if (!m) return;
+      lowest = [+m[2], +(m[3] || 0), +(m[4] || 0)];
+      if (/^==/.test(m[1]) && m[3] !== undefined && m[4] !== undefined) pinned = lowest.join('.');
+    });
+    return { pinned, lowest };
+  }
+  // A route map pattern (Python re, searched in the path) as a JavaScript RegExp, or null when JavaScript would read it
+  // differently or it may backtrack without end: escapes other than \d \D \w \W \s \S \b \B \n \r \t \f \v and
+  // punctuation (\A, \Z, \z, \u…, backreferences), groups other than (?:…) (?=…) (?!…) (?<=…) (?<!…) (?<name>…) and
+  // (?P<name>…) (inline flags, (?P=name), comments, conditionals), possessive quantifiers, {,n}, and a quantified group
+  // holding a quantifier ((a+)+). Longer than FA_MAX_PATTERN characters is not read.
+  const FA_MAX_PATTERN = 200;
+  function faPattern(src) {
+    if (typeof src !== 'string' || src.length > FA_MAX_PATTERN) return null;
+    let out = ''; const groups = []; let inClass = false;
+    for (let i = 0; i < src.length; i++) {
+      const ch = src[i];
+      if (ch === '\\') {
+        const nx = src[i + 1]; if (nx === undefined) return null;
+        if (/[A-Za-z0-9]/.test(nx) && !/[dDwWsSbBnrtfv]/.test(nx)) return null;
+        out += ch + nx; i++; continue;
+      }
+      if (inClass) { if (ch === ']') inClass = false; out += ch; continue; }
+      if (ch === '[') { inClass = true; out += ch; if (src[i + 1] === '^') { out += '^'; i++; } if (src[i + 1] === ']') { out += '\\]'; i++; } continue; }
+      if (ch === '(') {
+        if (src[i + 1] === '?') {
+          const rest = src.slice(i + 2);
+          if (/^P<[A-Za-z_]\w*>/.test(rest)) { out += '(?<'; i += 3; groups.push(false); continue; }
+          if (!/^(?::|=|!|<=|<!|<[A-Za-z_]\w*>)/.test(rest)) return null;
+        }
+        groups.push(false); out += ch; continue;
+      }
+      if (ch === ')') {
+        if (!groups.length) return null;
+        const quantInside = groups.pop();
+        const q = src[i + 1];
+        if (quantInside && (q === '+' || q === '*' || (q === '{' && /^\{\d*,/.test(src.slice(i + 1))))) return null;
+        if (groups.length && (quantInside || q === '+' || q === '*' || q === '{')) groups[groups.length - 1] = true;
+        out += ch; continue;
+      }
+      if (ch === '*' || ch === '+' || ch === '?' || ch === '}') {
+        if (src[i + 1] === '+') return null; // possessive (Python 3.11+)
+        if (groups.length && ch !== '?') groups[groups.length - 1] = true;
+      }
+      if (ch === '{' && /^\{,/.test(src.slice(i))) return null; // {,n}: Python's {0,n}, a literal to JavaScript
+      out += ch;
+    }
+    if (inClass || groups.length) return null;
+    try { return new RegExp(out); } catch (e) { return null; }
+  }
+  function pyFastapiTools(readable, allText) {
+    const out = { found: [], notes: [] };
+    const pyFiles = readable.filter(([p]) => /\.py$/.test(p));
+    const servers = pyFiles.filter(([, t]) => /\bfrom_fastapi\s*\(/.test(t));
+    if (!servers.length) return out;
+    const files = new Map(); const fileOf = (p) => { if (!files.has(p)) { const e = pyFiles.find(([q]) => q === p); files.set(p, e ? faFile(p, e[1]) : null); } return files.get(p); };
+    // module name -> file: every dotted suffix of a .py path (src layouts, packages read from a subfolder)
+    const mods = new Map();
+    pyFiles.forEach(([p]) => { const segs = p.replace(/\.py$/, '').split('/'); if (segs[segs.length - 1] === '__init__') segs.pop(); for (let i = 0; i < segs.length; i++) { const k = segs.slice(i).join('.'); if (!mods.has(k)) mods.set(k, []); mods.get(k).push(p); } });
+    // Imports resolve only to modules under the server file's package root (the nearest folder above it with a
+    // pyproject.toml, setup.py or setup.cfg; the repository when there is none), so a module of another package of a
+    // monorepo with the same dotted name is never taken for the server's.
+    const all = allText instanceof Map ? Array.from(allText.entries()) : readable;
+    const pkgDirs = all.map(([p]) => p).filter((p) => /(^|\/)(pyproject\.toml|setup\.py|setup\.cfg)$/.test(p)).map((p) => (p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : ''));
+    const rootOf = (p) => { let best = ''; pkgDirs.forEach((d) => { if ((d === '' || p.startsWith(d + '/')) && d.length > best.length) best = d; }); return best; };
+    const under = (root, p) => root === '' || p.startsWith(root + '/');
+    let pkgRoot = '';
+    const modFile = (F, mod) => {
+      if (/^\./.test(mod)) { const dots = /^\.+/.exec(mod)[0].length; const base = F.path.split('/').slice(0, -dots); const rest = mod.slice(dots); const stem = base.concat(rest ? rest.split('.') : []).join('/'); return [stem + '.py', stem + '/__init__.py'].find((x) => under(pkgRoot, x) && fileOf(x)) || null; }
+      const c = (mods.get(mod) || []).filter((p) => under(pkgRoot, p)); return c.length === 1 ? c[0] : null;
+    };
+    // the fastmcp version of the server's package (set per server below)
+    let ver = { pinned: null, lowest: null }; let major = null;
+    // a decorator below the route decorator: kept only when it is a repository function that uses functools.wraps
+    const wrapsOk = new Map();
+    const decoratorKeeps = (name) => {
+      if (wrapsOk.has(name)) return wrapsOk.get(name);
+      let ok = false;
+      for (const [p] of pyFiles) { const F = fileOf(p); const k = F.defs[name]; if (k === undefined || F.lines[k].indent !== 0) continue; const [a, b] = faBody(F, k); ok = F.lines.slice(a, b).some((l) => /(^|[^\w])(functools\.)?wraps\s*\(/.test(l.text)); break; }
+      wrapsOk.set(name, ok); return ok;
+    };
+    // a Depends(f): adds nothing when f is a repository function without parameters (or only a Request)
+    const depKeeps = (expr, F) => {
+      const c = faCall(expr); if (!c || !/^(?:fastapi\.)?(Depends|Security)$/.test(c.fn) || c.pos.length !== 1 || Object.keys(c.kw).length) return false;
+      const fn = c.pos[0].trim(); if (!/^\w+$/.test(fn)) return false;
+      let D = null; let k;
+      if (F.defs[fn] !== undefined) { D = F; k = F.defs[fn]; }
+      else if (F.imports[fn]) { const p = modFile(F, F.imports[fn].mod); const G = p && fileOf(p); const nm = F.imports[fn].name || fn; if (G && G.defs[nm] !== undefined) { D = G; k = G.defs[nm]; } }
+      if (!D) return false;
+      const ps = faParams(D.lines[k].text); return !!ps && ps.every((p) => p.ann && FA_SKIP_TYPES.test(p.ann.trim()));
+    };
+    // a Pydantic model of the repository as Pydantic writes its JSON schema: { schema, ok }
+    const modelCache = new Map();
+    const modelOf = (F, name, depth) => {
+      if (depth > 4) return null;
+      let G = F; let nm = name;
+      if (!G.lines.some((l) => l.indent === 0 && new RegExp('^class\\s+' + nm + '\\b').test(l.text))) {
+        const im = F.imports[name]; if (!im) return null; const p = modFile(F, im.mod); G = p && fileOf(p); nm = im.name || name; if (!G) return null;
+        if (!G.lines.some((l) => l.indent === 0 && new RegExp('^class\\s+' + nm + '\\b').test(l.text))) return G.imports[nm] ? modelOf(G, nm, depth + 1) : null;
+      }
+      const key = G.path + ':' + nm; if (modelCache.has(key)) return modelCache.get(key);
+      const k = G.lines.findIndex((l) => l.indent === 0 && new RegExp('^class\\s+' + nm + '\\b').test(l.text));
+      const head = /^class\s+\w+\s*(?:\(([^)]*)\))?\s*:/.exec(G.lines[k].text);
+      const bases = head && head[1] ? splitTop(head[1], ',') : [];
+      if (!(bases.length === 1 && /^(?:pydantic\.)?BaseModel$/.test(bases[0]))) { modelCache.set(key, null); return null; }
+      const props = {}; const required = []; let ok = true;
+      const [a, b] = faBody(G, k); const ind = a < b ? G.lines[a].indent : 0;
+      G.lines.slice(a, b).forEach((l, i) => {
+        if (l.indent !== ind) return;
+        if (i === 0 && /^[rRuU]?["']/.test(l.text)) return; // the class docstring
+        if (/^(?:async\s+)?def\s|^@|^class\s|^pass$|^\.\.\.$/.test(l.text)) { if (/^class\s+Config\b/.test(l.text)) ok = false; return; }
+        const m = /^(\w+)\s*:\s*([\s\S]+?)(?:\s*=\s*([\s\S]+))?$/.exec(l.text);
+        if (!m) { if (/^model_config\b/.test(l.text)) ok = false; return; }
+        if (/^ClassVar\b/.test(m[2])) return;
+        if (m[1] === 'model_config') { ok = false; return; }
+        let ann = m[2]; let def = m[3]; const s = { title: faPyTitle(m[1].replace(/_/g, ' ')) }; let kw = {}; let name = m[1];
+        const ann2 = /^Annotated\[([\s\S]+)\]$/.exec(ann);
+        if (ann2) { const ps = splitTop(ann2[1], ','); ann = ps[0]; const fc = ps.slice(1).map(faCall).find((c) => c && /^(?:pydantic\.)?Field$/.test(c.fn)); if (fc) { kw = fc.kw; if (fc.pos.length) def = fc.pos[0]; } }
+        const fcall = def !== undefined ? faCall(def) : null;
+        if (fcall && /^(?:pydantic\.)?Field$/.test(fcall.fn)) { kw = Object.assign({}, kw, fcall.kw); def = fcall.pos.length ? fcall.pos[0] : kw.default; }
+        if (kw.alias !== undefined) { const v = faVal(kw.alias, G.consts); if (typeof v !== 'string') ok = false; else { name = v; s.title = faPyTitle(v.replace(/_/g, ' ')); } }
+        if (kw.default_factory !== undefined) def = undefined;
+        const t = pyType(ann);
+        if (!t.exact) ok = false;
+        Object.assign(s, t.schema);
+        const tgt = s.anyOf && s.anyOf.length === 2 && s.anyOf.some((x) => x.type === 'null') ? s.anyOf.find((x) => x.type !== 'null') : s;
+        const kwv = {}; Object.keys(kw).forEach((x) => { if (['ge', 'le', 'gt', 'lt', 'min_length', 'max_length', 'multiple_of', 'pattern'].includes(x)) { const v = faVal(kw[x], G.consts); if (v === undefined) ok = false; else kwv[x] = typeof v === 'string' ? JSON.stringify(v) : String(v); } else if (!['description', 'default', 'alias', 'title', 'examples', 'default_factory'].includes(x)) ok = false; });
+        pyConstraints(tgt, kwv);
+        if (kw.description !== undefined) { const v = faVal(kw.description, G.consts); if (typeof v === 'string') s.description = v; else ok = false; }
+        if (kw.title !== undefined) { const v = faVal(kw.title, G.consts); if (typeof v === 'string') s.title = v; else ok = false; }
+        if (kw.examples !== undefined) ok = false;
+        if (def === undefined || def.trim() === '...') { if (kw.default_factory === undefined) required.push(name); }
+        else { const v = faVal(def, G.consts); if (v === undefined || (v && typeof v === 'object' && !Array.isArray(v))) ok = false; else if (v !== null) s.default = v; }
+        props[name] = s;
+      });
+      const r = { schema: { type: 'object', properties: props, required }, ok };
+      modelCache.set(key, r); return r;
+    };
+    // routes of a router (or the app) named `name` in file F: [{ F, k (def line), method, path, opts, tags, deps }]
+    const routesOf = (F, name, prefix, tags, depth, why, deps, isApp) => {
+      if (depth > 6) { why.push('included routers nested deeper than the reader follows'); return []; }
+      const res = [];
+      if (isApp) return decorated(F, name, prefix, tags, deps, why);
+      // the router variable: assigned here, or imported
+      if (!F.assigns[name] && F.imports[name]) {
+        const im = F.imports[name]; const p = modFile(F, im.mod); const G = p && fileOf(p);
+        if (!G) { why.push('router ' + name + ' imported from ' + im.mod + ', not found in the repository'); return res; }
+        return routesOf(G, im.name || name, prefix, tags, depth + 1, why, deps);
+      }
+      const as = F.assigns[name];
+      if (!as) { why.push('router ' + name + ' not found in ' + F.path); return res; }
+      const c = faCall(as.text);
+      let rprefix = ''; let rtags = []; let rdeps = deps;
+      if (c && /^(?:fastapi\.)?APIRouter$/.test(c.fn)) {
+        if (c.kw.prefix !== undefined) { const v = faVal(c.kw.prefix, F.consts); if (typeof v !== 'string') { why.push('the prefix of router ' + name + ' in ' + F.path); return res; } rprefix = v; }
+        if (c.kw.tags !== undefined) { const v = faVal(c.kw.tags, F.consts); if (!Array.isArray(v)) { why.push('the tags of router ' + name + ' in ' + F.path); return res; } rtags = v; }
+        if (c.kw.dependencies !== undefined) rdeps = true;
+        if (c.kw.generate_unique_id_function !== undefined || c.kw.route_class !== undefined) { why.push('router ' + name + ' in ' + F.path + ' sets its own operation ids or route class'); return res; }
+      } else if (!(c && /^(?:fastapi\.)?FastAPI$/.test(c.fn))) { why.push(name + ' in ' + F.path + ' is not an APIRouter the reader can read'); return res; }
+      const pre = prefix + rprefix; const tg = tags.concat(rtags);
+      res.push(...decorated(F, name, pre, tg, rdeps, why));
+      // routers included into this one
+      F.lines.forEach((l) => {
+        const m = new RegExp('^' + name + '\\.include_router\\s*\\(').exec(l.text); if (!m) return;
+        res.push(...includeInto(F, l, pre, tg, depth + 1, why, rdeps));
+      });
+      return res;
+    };
+    // the routes decorated @name.<method>(…) in F
+    const decorated = (F, name, pre, tg, rdeps, why) => {
+      const res = [];
+      F.lines.forEach((l, k) => {
+        const dm = new RegExp('^@' + name + '\\.(\\w+)\\s*\\(').exec(l.text);
+        if (!dm) return;
+        const dc = faCall(l.text.slice(1));
+        if (!FA_METHODS.test(dm[1])) { if (/^(api_route|websocket|route)$/.test(dm[1])) why.push('a ' + dm[1] + ' route at ' + F.path + ':' + l.line + ' (its methods are not read)'); return; }
+        // the def it decorates, and the decorators between them
+        let j = k + 1; const below = [];
+        while (j < F.lines.length && /^@/.test(F.lines[j].text)) { below.push(F.lines[j].text.slice(1)); j++; }
+        if (j >= F.lines.length || !/^(?:async\s+)?def\s/.test(F.lines[j].text)) return;
+        res.push({ F, k: j, deco: l, method: dm[1], call: dc, prefix: pre, tags: tg, below, deps: rdeps });
+      });
+      return res;
+    };
+    const includeInto = (F, l, prefix, tags, depth, why, deps) => {
+      const c = faCall(l.text.replace(/^\w+\./, '')); if (!c || !c.pos.length) { why.push('an include_router call at ' + F.path + ':' + l.line); return []; }
+      let p2 = ''; let t2 = [];
+      if (c.kw.include_in_schema !== undefined && faVal(c.kw.include_in_schema, F.consts) === false) return [];
+      if (c.kw.prefix !== undefined) { const v = faVal(c.kw.prefix, F.consts); if (typeof v !== 'string') { why.push('the prefix at ' + F.path + ':' + l.line); return []; } p2 = v; }
+      if (c.kw.tags !== undefined) { const v = faVal(c.kw.tags, F.consts); if (!Array.isArray(v)) { why.push('the tags at ' + F.path + ':' + l.line); return []; } t2 = v; }
+      const d2 = deps || c.kw.dependencies !== undefined;
+      const r = c.pos[0].trim();
+      if (/^\w+$/.test(r)) return routesOf(F, r, prefix + p2, tags.concat(t2), depth, why, d2);
+      const am = /^(\w+)\.(\w+)$/.exec(r); // module.router
+      if (am && F.imports[am[1]]) { const im = F.imports[am[1]]; const p = modFile(F, im.name ? (im.mod.replace(/\.$/, '') + (im.mod.endsWith('.') ? '' : '.') + im.name) : im.mod); const G = p && fileOf(p); if (G) return routesOf(G, am[2], prefix + p2, tags.concat(t2), depth, why, d2); }
+      why.push('router ' + r + ' included at ' + F.path + ':' + l.line);
+      return [];
+    };
+    for (const [sp] of servers) {
+      const S = fileOf(sp); if (!S) continue;
+      pkgRoot = rootOf(sp);
+      ver = faVersion(all.filter(([p]) => under(pkgRoot, p)));
+      major = ver.lowest ? ver.lowest[0] : null;
+      const namesSure = !!ver.pinned && FA_VERIFIED.includes(ver.pinned);
+      const oldDefault = !!ver.lowest && verCmp(ver.lowest, FA_TOOL_DEFAULT_FROM) < 0;
+      S.lines.forEach((l, k) => {
+        const at = l.text.search(/\bFastMCP\.from_fastapi\s*\(/); if (at < 0) return;
+        const where = sp + ':' + l.line;
+        const callText = l.text.slice(at); const open = callText.indexOf('(');
+        let d = 0; let close = -1; let q = null;
+        for (let x = open; x < callText.length; x++) { const ch = callText[x]; if (q) { if (ch === '\\') x++; else if (ch === q) q = null; continue; } if (ch === '"' || ch === "'") q = ch; else if ('([{'.includes(ch)) d++; else if (')]}'.includes(ch)) { d--; if (d === 0) { close = x; break; } } }
+        const c = close > 0 ? faCall(callText.slice(0, close + 1).replace(/^FastMCP\./, '')) : null;
+        const appExpr = c && (c.kw.app || c.pos[0]);
+        if (!c || !appExpr || !/^\w+$/.test(appExpr.trim())) { out.notes.push('FastMCP.from_fastapi at ' + where + ': the app is not a name the reader can follow, so its routes are not listed'); return; }
+        const app = appExpr.trim();
+        for (const bad of ['mcp_names', 'component_fn', 'mcp_component_fn']) if (c.kw[bad] !== undefined) { out.notes.push('FastMCP.from_fastapi at ' + where + ' passes ' + bad + ', which the reader does not apply, so its routes are not listed'); return; }
+        // route maps
+        let maps = []; let mapFn = null;
+        if (c.kw.route_maps !== undefined) {
+          const items = /^\[([\s\S]*)\]$/.exec(c.kw.route_maps.trim());
+          const parsed = items ? splitTop(items[1], ',').filter(Boolean).map((x) => {
+            const rc = faCall(x); if (!rc || !/^(?:\w+\.)*RouteMap$/.test(rc.fn) || rc.pos.length) return null;
+            const o = { methods: '*', pattern: null, tags: [], type: null };
+            for (const kn of Object.keys(rc.kw)) {
+              const v = faVal(rc.kw[kn], S.consts);
+              if (kn === 'methods') { if (v === '*' || (Array.isArray(v) && v.every((y) => typeof y === 'string'))) o.methods = v === '*' ? '*' : v.map((y) => y.toUpperCase()); else return null; }
+              else if (kn === 'pattern') { if (typeof v !== 'string') return null; o.pattern = faPattern(v); if (!o.pattern) return null; }
+              else if (kn === 'tags') { if (!Array.isArray(v)) return null; o.tags = v; }
+              else if (kn === 'mcp_type') { if (!v || !v.mcpType) return null; o.type = v.mcpType; }
+              else if (kn === 'mcp_tags') { /* tags given to the component: not part of the tool list */ }
+              else return null;
+            }
+            return o.type ? o : null;
+          }) : null;
+          if (!parsed || parsed.some((x) => !x)) { out.notes.push('FastMCP.from_fastapi at ' + where + ': route_maps not read, so which routes are tools is not known; none listed'); return; }
+          maps = parsed;
+        }
+        if (c.kw.route_map_fn !== undefined) {
+          // def f(route, mcp_type): return MCPType.A if route.operation_id [not] in NAMES else MCPType.B
+          const fn = c.kw.route_map_fn.trim(); const k2 = /^\w+$/.test(fn) ? S.defs[fn] : undefined;
+          const ps = k2 !== undefined ? faParams(S.lines[k2].text) : null;
+          let ok = false;
+          if (ps && ps.length === 2) {
+            const [a, b] = faBody(S, k2); const body = S.lines.slice(a, b).filter((x, i) => !(i === 0 && /^[rRuU]?["']/.test(x.text)));
+            const m = body.length === 1 && new RegExp('^return\\s+([\\w.]+)\\s+if\\s+' + ps[0].name + '\\.operation_id\\s+(not\\s+in|in)\\s+(\\w+)\\s+else\\s+([\\w.]+)$').exec(body[0].text);
+            const names = m && faVal(m[3], S.consts);
+            const side = (x) => (x === ps[1].name ? { keep: true } : faVal(x, S.consts));
+            const yes = m && side(m[1]); const no = m && side(m[4]);
+            if (m && Array.isArray(names) && names.every((x) => typeof x === 'string') && yes && no && (yes.keep || yes.mcpType) && (no.keep || no.mcpType)) {
+              const inside = /not/.test(m[2]) ? no : yes; const outside = /not/.test(m[2]) ? yes : no;
+              mapFn = (route, t) => { const r = names.includes(route.operationId) ? inside : outside; return r.keep ? t : r.mcpType; };
+              ok = true;
+            }
+          }
+          if (!ok) { out.notes.push('FastMCP.from_fastapi at ' + where + ': route_map_fn ' + fn + ' not read, so which routes are tools is not known; none listed'); return; }
+        }
+        // the app: its last `app = FastAPI(...)` before the call, at the call's indent or less, and its include_router
+        // calls and routes between the two
+        let start = -1;
+        for (let j = k - 1; j >= 0; j--) { const m = new RegExp('^' + app + '\\s*(?::[^=]+)?=\\s*([\\s\\S]+)$').exec(S.lines[j].text); if (m && S.lines[j].indent <= l.indent) { const ac = faCall(m[1]); if (ac && /^(?:fastapi\.)?FastAPI$/.test(ac.fn)) { start = j; if (ac.kw.dependencies !== undefined || ac.kw.generate_unique_id_function !== undefined || ac.kw.openapi_prefix !== undefined || ac.kw.root_path !== undefined) start = -2; } break; } }
+        if (start === -1 && S.imports[app]) { out.notes.push('FastMCP.from_fastapi at ' + where + ': the app is imported, and the reader reads only an app built in the same file; its routes are not listed'); return; }
+        if (start < 0) { out.notes.push('FastMCP.from_fastapi at ' + where + ': the FastAPI app ' + app + ' ' + (start === -2 ? 'sets dependencies, operation ids or a root path the reader does not apply' : 'was not found') + '; its routes are not listed'); return; }
+        const why = []; const routes = [];
+        for (let j = start + 1; j < k; j++) {
+          const t = S.lines[j].text;
+          if (new RegExp('^' + app + '\\.include_router\\s*\\(').test(t)) routes.push(...includeInto(S, S.lines[j], '', [], 0, why, false));
+          const lm = /^for\s+(\w+)\s+in\s+(\w+)\s*:\s*$/.exec(t);
+          if (lm) {
+            const [a, b] = faBody(S, j);
+            const inc = S.lines.slice(a, b).filter((x) => new RegExp('^' + app + '\\.include_router\\s*\\(\\s*' + lm[1] + '\\b').test(x.text));
+            if (!inc.length) continue;
+            // the list: here, or imported (a module-level list of router names)
+            let G = S; let ln = lm[2];
+            if (!G.assigns[ln] && G.imports[ln]) { const p = modFile(G, G.imports[ln].mod); const H = p && fileOf(p); if (H) { ln = G.imports[ln].name || ln; G = H; } }
+            const lt = G.assigns[ln] && /^[[(]([\s\S]*)[\])]$/.exec(G.assigns[ln].text);
+            const names = lt ? splitTop(lt[1], ',').filter(Boolean) : null;
+            if (!names || !names.every((x) => /^\w+$/.test(x))) { why.push('the routers of the loop at ' + S.path + ':' + S.lines[j].line); continue; }
+            names.forEach((nm) => { inc.forEach((x) => { const fake = Object.assign({}, x, { text: x.text.replace(new RegExp('\\(\\s*' + lm[1] + '\\b'), '(' + nm) }); routes.push(...includeInto(G, fake, '', [], 0, why, false)); }); });
+            j = b - 1;
+          }
+        }
+        routes.push(...routesOf(S, app, '', [], 0, why, false, true).filter((r) => r.k > start && r.k < k));
+        if (why.length) out.notes.push('FastMCP.from_fastapi at ' + where + ': routes not listed because the reader could not resolve ' + Array.from(new Set(why)).slice(0, 4).join('; ') + (why.length > 4 ? ' and more' : ''));
+        const seen = new Set(); let unsure = 0; let oldGets = 0;
+        routes.forEach((r) => {
+          const F = r.F; const dl = F.lines[r.k]; const dc = r.call || { pos: [], kw: {} };
+          const un = [];
+          const v = (x) => faVal(x, F.consts);
+          if (dc.kw.include_in_schema !== undefined && v(dc.kw.include_in_schema) === false) return;
+          const pathV = v(dc.pos[0] !== undefined ? dc.pos[0] : dc.kw.path); if (typeof pathV !== 'string') { out.notes.push('a route at ' + F.path + ':' + r.deco.line + ' whose path is not a literal; not listed'); return; }
+          const full = r.prefix + pathV;
+          const rtags = dc.kw.tags !== undefined ? v(dc.kw.tags) : [];
+          if (!Array.isArray(rtags)) { out.notes.push('the route at ' + F.path + ':' + r.deco.line + ' has tags the reader cannot read; not listed'); return; }
+          const allTags = r.tags.concat(rtags);
+          const fname = /def\s+(\w+)/.exec(dl.text)[1];
+          let opId = dc.kw.operation_id !== undefined ? v(dc.kw.operation_id) : undefined;
+          if (dc.kw.operation_id !== undefined && typeof opId !== 'string') { out.notes.push('the route at ' + F.path + ':' + r.deco.line + ' has an operation_id the reader cannot read; not listed'); return; }
+          if (opId === undefined) { const rn = dc.kw.name !== undefined ? v(dc.kw.name) : fname; if (typeof rn !== 'string') { out.notes.push('the route at ' + F.path + ':' + r.deco.line + ' has a name the reader cannot read; not listed'); return; } opId = (rn + full).replace(/\W/g, '_') + '_' + r.method; }
+          // the route map
+          const method = r.method.toUpperCase();
+          const hit = maps.find((m) => (m.methods === '*' || m.methods.includes(method)) && (!m.pattern || m.pattern.test(full)) && m.tags.every((t) => allTags.includes(t)));
+          // before FastMCP 2.8.0 a GET route no map decides is a resource (template), from 2.8.0 a tool
+          if (!hit && !mapFn && oldDefault && method === 'GET') { oldGets++; return; }
+          let type = hit ? hit.type : 'TOOL';
+          if (mapFn) { if (!hit && oldDefault && method === 'GET') { oldGets++; return; } type = mapFn({ operationId: opId, path: full, method }, type); }
+          if (type !== 'TOOL') return;
+          const name = faSlug(opId.split('__')[0]).slice(0, 56);
+          if (seen.has(name)) { out.notes.push('a second route named ' + name + ' at ' + F.path + ':' + r.deco.line + ' (FastMCP renames it); not listed'); return; }
+          seen.add(name);
+          // description: the decorator's, else the docstring, else the summary
+          let description; let doc;
+          const bl = F.lines[r.k + 1]; if (bl && bl.indent > dl.indent && /^[rRuU]?["']/.test(bl.text)) { const s = faVal(bl.text, {}); if (typeof s === 'string') doc = s; }
+          if (dc.kw.description !== undefined) { const s = v(dc.kw.description); if (typeof s === 'string') description = s; else un.push('description'); }
+          else if (doc !== undefined && faCleandoc(doc)) description = faCleandoc(doc);
+          else if (dc.kw.summary !== undefined) { const s = v(dc.kw.summary); if (typeof s === 'string') description = s; else un.push('description'); }
+          else description = faPyTitle((dc.kw.name !== undefined && typeof v(dc.kw.name) === 'string' ? v(dc.kw.name) : fname).replace(/_/g, ' '));
+          // the endpoint's parameters
+          const props = {}; const req = { path: [], query: [], header: [], cookie: [] }; const order = { path: [], query: [], header: [], cookie: [] };
+          let body = null; let bodyReq = false;
+          const below = r.below.filter((x) => !decoratorKeeps(/^([\w.]+)/.exec(x)[1].split('.').pop()));
+          if (below.length || r.deps || dc.kw.dependencies !== undefined) un.push('inputSchema');
+          if (below.length) un.push('description');
+          const ps = faParams(dl.text); if (!ps) un.push('inputSchema');
+          const pathNames = (full.match(/\{(\w+)(?::\w+)?\}/g) || []).map((x) => /\{(\w+)/.exec(x)[1]);
+          (ps || []).forEach((p) => {
+            let ann = p.ann || ''; let marker = p.def !== undefined ? faCall(p.def) : null; let def = p.def;
+            const an = /^Annotated\[([\s\S]+)\]$/.exec(ann);
+            if (an) { const xs = splitTop(an[1], ','); ann = xs[0]; const mk = xs.slice(1).map(faCall).find((x) => x && /^(?:fastapi\.)?(Query|Path|Header|Cookie|Body|Depends|Security|Form|File)$/.test(x.fn)); if (mk) { marker = mk; } }
+            if (ann && FA_SKIP_TYPES.test(ann.trim())) return;
+            const kind = marker && /^(?:fastapi\.)?(Query|Path|Header|Cookie|Body|Depends|Security|Form|File)$/.exec(marker.fn);
+            if (kind && /^(Depends|Security)$/.test(kind[1])) { if (!depKeeps((an ? marker.fn + '(' + marker.pos.concat(Object.keys(marker.kw).map((x) => x + '=' + marker.kw[x])).join(', ') + ')' : p.def), F)) un.push('inputSchema'); return; }
+            if (kind && /^(Form|File|Body)$/.test(kind[1])) { un.push('inputSchema'); return; }
+            let loc = kind ? kind[1].toLowerCase() : null; const kw = kind ? marker.kw : {};
+            if (kind) def = an ? def : (marker.pos.length ? marker.pos[0] : kw.default);
+            if (!loc && pathNames.includes(p.name)) loc = 'path';
+            const model = !loc && /^\w+$/.test(ann.trim()) ? modelOf(F, ann.trim(), 0) : null;
+            if (model) { if (body) { un.push('inputSchema'); return; } body = model; bodyReq = def === undefined; if (!model.ok) un.push('inputSchema'); return; }
+            if (!loc) loc = 'query';
+            const t = pyType(ann || 'Any'); if (!ann || !t.exact) un.push('inputSchema');
+            let pname = p.name;
+            if (kw.alias !== undefined) { const a = v(kw.alias); if (typeof a === 'string') pname = a; else un.push('inputSchema'); }
+            else if (loc === 'header' && !(kw.convert_underscores !== undefined && v(kw.convert_underscores) === false)) pname = p.name.replace(/_/g, '-');
+            const s = Object.assign({}, t.schema);
+            const tgt = s.anyOf && s.anyOf.length === 2 && s.anyOf.some((x) => x.type === 'null') ? s.anyOf.find((x) => x.type !== 'null') : s;
+            const kwv = {}; Object.keys(kw).forEach((x) => { if (['ge', 'le', 'gt', 'lt', 'min_length', 'max_length', 'multiple_of', 'pattern'].includes(x)) { const y = v(kw[x]); if (y === undefined) un.push('inputSchema'); else kwv[x] = typeof y === 'string' ? JSON.stringify(y) : String(y); } else if (x === 'regex') un.push('inputSchema'); });
+            pyConstraints(tgt, kwv);
+            s.title = kw.alias !== undefined ? pname : faPyTitle(p.name.replace(/_/g, ' '));
+            if (kw.description !== undefined) { const y = v(kw.description); if (typeof y === 'string') s.description = y; else un.push('inputSchema'); }
+            if (loc === 'path' && kw.description !== undefined && (major === null || major < 3)) un.push('description'); // 2.x lists described path parameters in the description; with no version known, either may hold
+            const required = loc === 'path' || def === undefined || def.trim() === '...';
+            if (!required) { const y = v(def); if (y === undefined || (y && typeof y === 'object')) un.push('inputSchema'); else if (y !== null) s.default = y; }
+            if (props[pname]) un.push('inputSchema');
+            props[pname] = s; order[loc].push(pname); if (required) req[loc].push(pname);
+          });
+          const required = req.path.concat(req.query, req.header, req.cookie);
+          if (body) {
+            Object.keys(body.schema.properties).forEach((n) => { if (props[n]) un.push('inputSchema'); props[n] = body.schema.properties[n]; });
+            if (bodyReq) required.push(...body.schema.required);
+          }
+          if (!namesSure) { un.push('name'); unsure++; }
+          const tool = { name };
+          if (description) tool.description = description;
+          tool.inputSchema = { type: 'object', properties: props, required };
+          if (un.length) tool._unreadable = Array.from(new Set(un));
+          out.found.push({ path: F.path, line: dl.line, tool, fidelity: 'derived', marks: [] });
+        });
+        const vtext = ver.pinned ? 'pins fastmcp ' + ver.pinned : ver.lowest ? 'allows fastmcp from ' + ver.lowest.join('.') : 'pins no fastmcp version';
+        if (unsure) out.notes.push('FastMCP.from_fastapi at ' + where + ': tool names are written as FastMCP ' + FA_VERIFIED.join(', ') + ' write them; the package ' + vtext + ', so ' + unsure + ' tool name' + (unsure === 1 ? '' : 's') + ' may differ');
+        if (oldGets) out.notes.push('FastMCP.from_fastapi at ' + where + ': ' + oldGets + ' GET route' + (oldGets === 1 ? '' : 's') + ' no route map decides not listed: the package ' + vtext + ', and before 2.8.0 FastMCP made those resources, not tools');
+      });
+    }
+    return out;
+  }
   function analyseRepo(files, opts) {
     opts = opts || {};
     const all = files instanceof Map ? Array.from(files.entries()) : files;
@@ -3523,11 +4021,14 @@
         if (!byName.has(x.tool.name) || (x.listDup && firstPath.get(x.tool.name) === p)) { if (!byName.has(x.tool.name)) firstPath.set(x.tool.name, p); byName.add(x.tool.name); found.push(Object.assign({ path: p }, x)); } else dupes.push({ path: p, name: x.tool.name });
       });
     });
+    // FastMCP.from_fastapi: tools from the FastAPI app's routes (R-RD-37)
+    let fastapiNotes = [];
+    try { const fa = pyFastapiTools(readable, text); fastapiNotes = fa.notes; fa.found.forEach((x) => { if (!byName.has(x.tool.name)) { byName.add(x.tool.name); found.push(x); } else dupes.push({ path: x.path, name: x.tool.name }); }); } catch (e) { if (e && e.name === 'RangeError') throw e; fastapiNotes = ['FastMCP.from_fastapi: the reader failed on the FastAPI app, so its routes are not listed']; }
     const marks = markConditionals(found, srcList, dupes, readable);
     found.forEach((f) => { f.marks = marks.get(f); f.excluded = f.marks.some((m) => m.exclude); });
     // Never return an empty list because of exclusions: the marks stay, the exclusion does not apply.
     if (found.length && found.every((f) => f.excluded)) found.forEach((f) => { f.excluded = false; f.marks.forEach((m) => { m.exclude = false; }); });
-    return { found, tools: found.filter((f) => !f.excluded), excluded: found.filter((f) => f.excluded), sdk, plan, files: srcList.length, candidates: candidates.length, read: readable.length, unresolved: unresolved.length, unresolvedList: unresolved, overBudget, hostPlugins };
+    return { found, notes: fastapiNotes, tools: found.filter((f) => !f.excluded), excluded: found.filter((f) => f.excluded), sdk, plan, files: srcList.length, candidates: candidates.length, read: readable.length, unresolved: unresolved.length, unresolvedList: unresolved, overBudget, hostPlugins };
   }
 
   // ------------------------------------------------------------ network
@@ -3830,6 +4331,7 @@
       // tools read, and each may register only part of them; the list is their union, and the report says so
       const ctorOnly = Array.from(serverDirs).filter((d) => d && !found.some((x) => x.path === d || x.path.startsWith(d + '/')));
       if (language && ctorOnly.length >= 2) candidates[candidates.length - 1].notes = [ctorOnly.length + ' ' + language + ' servers are started from ' + ctorOnly.slice(0, 4).map((d) => d || '.').join(', ') + (ctorOnly.length > 4 ? ' and more' : '') + ' and share these tools; each may register only part of them (this list is their union)'];
+      if (an.notes && an.notes.length) { const cand = candidates[candidates.length - 1]; cand.notes = (cand.notes || []).concat(an.notes.slice(0, 8)); }
     }
     // A snapshot counts as this repository's exact list only when it names this repository's server. A snapshot of
     // another server (one this repository uses or tests against) is never chosen over tools read from source; with
