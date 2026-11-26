@@ -166,6 +166,54 @@ export function pickMainModule(names, pkg) {
   return mods.length === 1 && SERVER_SIGNAL.test(mods[0]) ? mods[0] : null;
 }
 
+const DIST = /^[a-z0-9][a-z0-9._-]{0,99}$/;
+const EXTRA = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+
+/**
+ * One PEP 508 requirement string: { name (PEP 503), extra (the `extra == "x"` its marker needs, else null), capped
+ * (the specifier has an upper bound: <, <=, ~=, == or ===) }, or null when it is not one this reads.
+ */
+export function requirementOf(s) {
+  const m = /^\s*([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]*\])?\s*([^;]*?)\s*(?:;\s*(.*))?$/.exec(String(s).slice(0, 400));
+  if (!m) return null;
+  const name = normName(m[1]);
+  if (!DIST.test(name)) return null;
+  const spec = m[2].replace(/[()\s]/g, '');
+  const ex = /\bextra\s*==\s*["']([^"']+)["']/.exec(m[3] || '');
+  return { name, extra: ex ? normName(ex[1]) : null, capped: /<|~=|(?:^|,)===?/.test(spec) };
+}
+
+/**
+ * What a release declares and ships, for telling a crash in the server's own code from our environment (R-LP-56):
+ * top (its top-level import names, from the wheel), base (dependencies every install gets), uncapped (base ones with
+ * no upper bound), extra_only (dependencies only an extra brings), extras (Provides-Extra); PEP 503 names, capped.
+ * top is null when the wheel was not read.
+ */
+export function pypiDeps(info, memberNames = null) {
+  const base = new Set(); const uncapped = new Set(); const inExtra = new Set(); const extras = new Set();
+  const reqs = info && Array.isArray(info.requires_dist) ? info.requires_dist.slice(0, 300) : [];
+  for (const s of reqs) {
+    const r = requirementOf(s);
+    if (!r) continue;
+    if (r.extra) { inExtra.add(r.name); if (EXTRA.test(r.extra)) extras.add(r.extra); continue; }
+    base.add(r.name);
+    if (!r.capped) uncapped.add(r.name);
+  }
+  for (const e of info && Array.isArray(info.provides_extra) ? info.provides_extra.slice(0, 50) : []) { const n = normName(e); if (EXTRA.test(n)) extras.add(n); }
+  let top = null;
+  if (Array.isArray(memberNames)) {
+    const t = new Set();
+    for (const n of memberNames) {
+      const m = /^([A-Za-z_][A-Za-z0-9_]*)(?:\/|\.py$)/.exec(n);
+      if (m && !/\.(?:dist-info|data)\//.test(n)) t.add(normName(m[1]));
+      if (t.size >= 50) break;
+    }
+    top = [...t];
+  }
+  const cap = (x) => [...x].slice(0, 100);
+  return { top, base: cap(base), uncapped: cap(uncapped), extra_only: cap([...inExtra].filter((n) => !base.has(n))), extras: cap(extras) };
+}
+
 /** The wheel to read among a release's files: a pure-Python one first, then the smallest. */
 export function pickWheel(files) {
   const wheels = (Array.isArray(files) ? files : []).filter((f) => f && f.packagetype === 'bdist_wheel' && typeof f.url === 'string' && onWheelHost(f.url) && !f.yanked);
@@ -186,6 +234,12 @@ export async function pypiEntry(pkg, version, { fetch: fetchImpl = globalThis.fe
   if (meta.error) return { entry_source: 'lookup_failed' };
   let j;
   try { j = JSON.parse(meta.buf.toString('utf8')); } catch { return { entry_source: 'lookup_failed' }; }
+  const info = j && typeof j === 'object' && j.info && typeof j.info === 'object' ? j.info : null;
+  const { members, ...r } = await entryOf(j, pkg, fetchImpl, timeoutMs);
+  return { ...r, deps: pypiDeps(info, members || null) };
+}
+
+async function entryOf(j, pkg, fetchImpl, timeoutMs) {
   const wheel = pickWheel(j && j.urls);
   if (!wheel) return { entry_source: 'no_wheel' };
   if (Number(wheel.size) > WHEEL_CAP) return { entry_source: 'wheel_unreadable' };
@@ -194,21 +248,22 @@ export async function pypiEntry(pkg, version, { fetch: fetchImpl = globalThis.fe
   const whl = String(wheel.filename || '').slice(0, 200);
   const members = zipMembers(got.buf);
   if (!members) return { entry_source: 'wheel_unreadable' };
+  const names = members.map((m) => m.name);
   // Exactly one top-level *.dist-info/entry_points.txt counts; anything else is not a wheel this trusts.
   const eps = members.filter((m) => /^[^/]+\.dist-info\/entry_points\.txt$/.test(m.name));
-  if (eps.length > 1) return { entry_source: 'wheel_unreadable' };
+  if (eps.length > 1) return { entry_source: 'wheel_unreadable', members: names };
   let scripts = [];
   if (eps.length) {
     const text = zipRead(got.buf, eps[0]);
     // A declaration we cannot read is not "no declaration": never fall through to a module guess.
-    if (!text) return { entry_source: 'wheel_unreadable' };
+    if (!text) return { entry_source: 'wheel_unreadable', members: names };
     scripts = consoleScripts(text.toString('utf8'));
   }
   if (scripts.length) {
     const entry = pickScript(scripts, pkg);
-    return entry ? { entry, entry_source: 'console_script', script_count: scripts.length, wheel: whl } : { entry_source: 'ambiguous', script_count: scripts.length };
+    return entry ? { entry, entry_source: 'console_script', script_count: scripts.length, wheel: whl, members: names } : { entry_source: 'ambiguous', script_count: scripts.length, members: names };
   }
-  const mod = pickMainModule(members.map((m) => m.name), pkg);
-  if (mod) return { entry: 'python', args_prefix: ['-m', mod], entry_source: 'module_main', script_count: 0, wheel: whl };
-  return { entry_source: 'no_entry_point', script_count: 0 };
+  const mod = pickMainModule(names, pkg);
+  if (mod) return { entry: 'python', args_prefix: ['-m', mod], entry_source: 'module_main', script_count: 0, wheel: whl, members: names };
+  return { entry_source: 'no_entry_point', script_count: 0, members: names };
 }

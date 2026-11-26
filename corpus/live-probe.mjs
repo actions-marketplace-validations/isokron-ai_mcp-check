@@ -136,6 +136,9 @@ export const DETAILS = Object.freeze({
   start_failed: ['timeout_start', false, 'start', 'subject'], // a crash signature on stderr (R-LP-45), and exited with its own non-zero code, early, with every argument filled
   start_needs_config: ['timeout_start', false, 'start', 'tool'], // the server exited with its own code and asked for configuration we did not give it (R-LP-44)
   start_env_limited: ['timeout_start', false, 'start', 'tool'], // a start failure our environment could have caused
+  start_needs_extra: ['timeout_start', false, 'start', 'tool'], // a module only an extra of the package brings, which we did not install (R-LP-56)
+  start_dependency_drift: ['timeout_start', false, 'start', 'tool'], // a dependency the release declares with no upper bound lacks what it imports: it changed after the release (R-LP-57)
+  unsupported_platform: ['timeout_start', false, 'start', 'tool'], // the server runs on macOS or Windows only; our sandbox is Linux (R-LP-57)
   start_timeout: ['timeout_start', false, 'start', 'tool'],
   list_failed: ['timeout_start', false, 'list', 'subject'], // a JSON-RPC error the server sent, or a malformed result
   list_probe_limited: ['timeout_start', false, 'list', 'tool'], // our time limit, page cap or read cap, or an HTTP transport failure
@@ -832,6 +835,8 @@ export async function resolveSubject(item, { seed = new Map(), fetch: fetchImpl 
         out.choice.entry_source = e.entry && !fits ? 'too_many_args' : e.entry_source;
         out.choice.entry_wheel = e.wheel || null;
         out.choice.entry = (fits && e.entry) || null;
+        // What the release declares and ships: failureDetail tells the server's own modules from its dependencies (R-LP-56).
+        if (e.deps) out.choice.pydeps = e.deps;
       }
       if (s) {
         out.registry = { name: s.name, version: typeof s.version === 'string' ? s.version.slice(0, 64) : null, entries: entries.length, transports: [...new Set((s.packages || []).map((p) => (p && p.transport && typeof p.transport.type === 'string' ? p.transport.type : 'stdio')))].slice(0, 5), remotes: Array.isArray(s.remotes) ? s.remotes.length : 0 };
@@ -1032,14 +1037,24 @@ const PACKAGE_ERROR = /\bE404\b|\bETARGET\b|No matching distribution|declares no
  * current-context, --config, a usage block, a missing or required argument, option, flag or environment variable, or
  * "please create/set/provide/specify".
  */
-export const CONFIG_TEXT = new RegExp([
+const CONFIG_BASE = [
   String.raw`\bconfig(?:uration)?(?:[\s_.-]?(?:file|path|dir(?:ectory)?))?\b[^\n]{0,100}?(?:not found|not exist|no such file|missing|not readable|failed to (?:read|load|open)|cannot (?:read|open|load|find)|could not (?:read|open|load|find)|unable to (?:read|open|load|find))`,
   String.raw`(?:not found|no such file|missing|failed to (?:read|load|open)|cannot (?:read|open|load|find)|could not (?:read|open|load|find)|unable to (?:read|open|load|find))[^\n]{0,100}?\bconfig(?:uration)?\b`,
   String.raw`kubeconfig`, String.raw`current-context`, String.raw`--config\b`, String.raw`\busage:`,
   String.raw`\b(?:missing|required|expected)\s+(?:required\s+)?(?:positional\s+)?(?:argument|option|flag|parameter|env(?:ironment)?(?:\s+var(?:iable)?)?)`,
   String.raw`\b(?:argument|option|flag|parameter|env(?:ironment)?\s+var(?:iable)?)s?\b[^\n]{0,60}?\b(?:is|are)\s+(?:required|missing|not set)`,
   String.raw`\bplease\s+(?:create|set|provide|specify)\b`,
-].join('|'), 'i');
+];
+/** R-LP-58: configuration requests the 26 Nov start-failure review found the patterns above missed. */
+const CONFIG_MORE = [
+  String.raw`\bmissing\s+required\s+(?:[a-z]+\s+){0,2}?(?:settings?|credentials?|parameters?|keys?|values?|fields?)\b`,
+  String.raw`\bconfiguration[\s_-]*(?:path[\s_-]*)?(?:error|required)\b`, String.raw`\binvalid\s+config(?:uration)?\b`,
+  String.raw`\b(?:is|are)\s+not\s+configured\b`, String.raw`\bno\s+(?:[A-Za-z]+\s+){0,2}?(?:credentials?|api[\s_-]?keys?|tokens?)\s+(?:configured|found|supplied|provided|set)\b`,
+  String.raw`\b(?:pass|provide|specify)\s+--[a-z][a-z0-9-]{1,40}\b`, String.raw`\b(?:run|initiali[sz]e|configure)\s+[^\n]{1,40}?\s+first\b`,
+];
+export const CONFIG_TEXT = new RegExp([...CONFIG_BASE, ...CONFIG_MORE].join('|'), 'i');
+const CONFIG_BASE_RE = new RegExp(CONFIG_BASE.join('|'), 'i');
+const CONFIG_MORE_RE = new RegExp(CONFIG_MORE.join('|'), 'i');
 
 /**
  * A named setting the server says is missing (R-LP-47): an environment-style name (with an underscore, case-sensitive) next
@@ -1070,6 +1085,95 @@ export const CRASH_TEXT = new RegExp([
 ].join('|'));
 
 const OOM_TEXT = /\bENOMEM\b|out of memory|\bOOM\b/i;
+
+// The mutation check (R-LP-60): a test switches one start rule off and shows its regression fixture is then blamed on
+// the server, so no rule is dead code. Never set outside the tests.
+let MUTED = null;
+export function setStartMutation(id) { MUTED = id || null; }
+const on = (id) => MUTED !== id && MUTED !== 'all';
+
+/**
+ * Stderr that shows our sandbox, not the server, stopped the start (R-LP-55): a write the read-only root or uid 65534
+ * refused, a shared library or loader our slim images lack, a binary for another CPU, an executable that is not in them, or a file under /tmp,
+ * the working directory we force, that the image expected under its own WORKDIR.
+ */
+export const ENV_TEXT = new RegExp([
+  String.raw`Read-only file system`, String.raw`\bEROFS\b`, String.raw`\[Errno (?:30|13)\]`, String.raw`\bEACCES\b`, String.raw`\bPermission denied\b`,
+  String.raw`unable to open database file`,
+  String.raw`cannot open shared object file`, String.raw`error while loading shared libraries`, String.raw`version \x60GLIBC_[0-9.]+' not found`,
+  String.raw`Exec format error`,
+  String.raw`Cannot find module '/tmp/`, String.raw`can't open file '/tmp/`,
+].join('|'));
+/** An executable the server tried to run that is not in our image: [whole match, name]. */
+const MISSING_BIN = [
+  /FileNotFoundError: \[Errno 2\] No such file or directory: '([A-Za-z0-9_+-]+(?:\.exe)?)'/,
+  /\bspawn ([A-Za-z0-9_.+-]+) ENOENT\b/,
+  /(?:^|\n)(?:\/bin\/)?(?:ba|da)?sh: (?:\d+: )?([A-Za-z0-9_.+-]+): (?:command )?not found/,
+  /\bexec: "([A-Za-z0-9_.+-]+)": executable file not found in \$PATH/,
+];
+/** Executables only macOS or Windows have: a server that needs one cannot start on Linux at all. */
+const PLATFORM_BIN = /^(?:xcrun|xcodebuild|xcode-select|osascript|sw_vers|pbcopy|pbpaste|launchctl|mdfind|powershell(?:\.exe)?|cmd\.exe|wmic(?:\.exe)?|reg\.exe)$/i;
+/** A server that says it runs on another operating system only (R-LP-57). */
+export const PLATFORM_TEXT = new RegExp([
+  String.raw`\b(?:windows|macos|mac\s?os(?:\s?x)?|darwin|win32)[\s-]+only\b`,
+  String.raw`\bonly\s+(?:be\s+)?(?:supported|available|works?|runs?|run)\s+(?:on|for|under)\s+(?:windows|macos|mac\s?os(?:\s?x)?|darwin)\b`,
+  String.raw`\brequires?\s+(?:microsoft\s+)?(?:windows|macos|mac\s?os(?:\s?x)?|darwin)\b`,
+  String.raw`\bnot\s+supported\s+on\s+(?:linux|this\s+(?:platform|os|operating\s+system))\b`,
+  String.raw`\bunsupported\s+(?:platform|operating\s+system)\b`,
+].join('|'), 'i');
+/** Stderr that shows the server reaching for the network, when the telemetry did not record it (R-LP-59). */
+export const NETWORK_TEXT = new RegExp([
+  String.raw`\bgetaddrinfo\s+(?:ENOTFOUND|EAI_AGAIN)\b`, String.raw`Temporary failure in name resolution`, String.raw`Name or service not known`,
+  String.raw`\b(?:ENETUNREACH|EHOSTUNREACH|ECONNREFUSED|ECONNRESET|ETIMEDOUT)\b`, String.raw`Network is unreachable`, String.raw`Failed to establish a new connection`,
+  String.raw`Could not resolve host`, String.raw`(?:^|\n)(?:[\w.]+\.)?(?:ConnectError|ConnectionError|ConnectTimeout|NameResolutionError): `,
+].join('|'));
+/** A server telling us to install one of its extras: `pip install 'pkg[extra]'` (R-LP-56). */
+const EXTRA_HINT = /pip install\s+["']?[A-Za-z0-9._-]+\[[A-Za-z0-9_.,-]+\]/;
+/** Import names whose distribution is named otherwise (PEP 503), for the common ones. */
+const IMPORT_DIST = Object.freeze({ yaml: 'pyyaml', pil: 'pillow', cv2: 'opencv-python', sklearn: 'scikit-learn', bs4: 'beautifulsoup4', dotenv: 'python-dotenv', jwt: 'pyjwt', dateutil: 'python-dateutil', magic: 'python-magic', docx: 'python-docx', pptx: 'python-pptx', git: 'gitpython', attr: 'attrs', google: 'protobuf', fitz: 'pymupdf' });
+const normDist = (s) => String(s).toLowerCase().replace(/[-_.]+/g, '-');
+
+/**
+ * The import that failed, from a Python traceback's last import error: { module, kind } where kind is `missing` (the
+ * top-level module is not installed at all) or `api` (the module is there but lacks the submodule, name or attribute
+ * imported from it); or a Node ESM import of a name or subpath a package does not export. Null when there is none.
+ */
+export function failedImport(err) {
+  let last = null;
+  const re = /(?:^|\n)(?:ModuleNotFoundError: No module named '([A-Za-z_][\w.]{0,200})'|ImportError: cannot import name '\w+' from '([A-Za-z_][\w.]{0,200})'|AttributeError: module '([A-Za-z_][\w.]{0,200})' has no attribute )/g;
+  for (const m of String(err).matchAll(re)) {
+    if (m[1]) last = { module: m[1], kind: m[1].includes('.') ? 'api' : 'missing', runtime: 'python' };
+    else last = { module: m[2] || m[3], kind: 'api', runtime: 'python' };
+  }
+  if (last) return last;
+  const esm = /(?:^|\n)SyntaxError: The requested module '([^'\s]{1,200})' does not provide an export named /.exec(err) || /\[ERR_PACKAGE_PATH_NOT_EXPORTED\]: Package subpath '[^']{1,200}' is not defined by "exports" in [^\n]*?node_modules\/((?:@[^/\s]+\/)?[^/\s]+)\/package\.json/.exec(err);
+  if (esm && !/^[./]/.test(esm[1])) return { module: esm[1], kind: 'api', runtime: 'node' };
+  return null;
+}
+
+/**
+ * Whether a failed import is the server's own code (its own module), a dependency that changed under it, an extra we
+ * did not install, or not ours to tell. own | drift | extra | env.
+ */
+export function importCause(imp, { pydeps = null, pkg = null } = {}) {
+  if (!imp) return null;
+  if (imp.runtime === 'node') {
+    const name = imp.module.startsWith('@') ? imp.module.split('/').slice(0, 2).join('/') : imp.module.split('/')[0];
+    return pkg && name === pkg ? 'own' : 'drift';
+  }
+  const top = normDist(imp.module.split('.')[0]);
+  const ownTops = isObj(pydeps) && Array.isArray(pydeps.top) ? pydeps.top.map(normDist) : null;
+  const pkgName = pkg ? normDist(pkg) : null;
+  // With the wheel read, only its own top-level modules are the server's; without it, only one named like the package.
+  const own = ownTops && ownTops.length ? ownTops.includes(top) : !!pkgName && (pkgName === top || pkgName.replace(/^mcp-(?:server-)?|-mcp(?:-server)?$|-server$/g, '') === top);
+  if (own) return 'own';
+  const dist = IMPORT_DIST[top] || top;
+  const has = (k) => isObj(pydeps) && Array.isArray(pydeps[k]) && (pydeps[k].includes(dist) || pydeps[k].includes(top));
+  if (imp.kind === 'missing') return has('extra_only') ? 'extra' : 'env';
+  // The dependency is there but lacks what the server imports: it changed under the release. Called drift only when
+  // the release declares it with no upper bound; anything else is not ours to tell (env, still not the server's fault).
+  return has('uncapped') ? 'drift' : 'env';
+}
 /** A list error that is the server's own: a malformed result. (A JSON-RPC error is told by its numeric code.) */
 const MALFORMED_LIST = /^the .* result has no .* array$|^nextCursor is not a string$|^the server repeated the same cursor$|^the answer has no result object$/;
 
@@ -1138,9 +1242,11 @@ function listDetail(p) {
  * Why an item that had a target got no live list: a detail code (DETAILS). The server is the one at fault (subject) only
  * with evidence our own environment cannot explain (R-LP-29..38); anything else is ours (tool). `ctx` carries what the lane
  * records beside the driver's record: records (this target's telemetry), stepsLog (the install's log text), launch and
- * argsUnfilled (the plan's resolution of it).
+ * argsUnfilled (the plan's resolution of it), and pydeps (a PyPI release's own modules and declared dependencies, R-LP-56).
+ * Our sandbox's limits, another platform, the network, extras and dependency drift are told apart before any crash
+ * is blamed (R-LP-54..60).
  */
-export function failureDetail(rec, bare, envp, { deadlineHit = false, records = [], stepsLog = null, launch = null, argsUnfilled = null } = {}) {
+export function failureDetail(rec, bare, envp, { deadlineHit = false, records = [], stepsLog = null, launch = null, argsUnfilled = null, pydeps = null } = {}) {
   if (!rec) return deadlineHit ? 'shard_deadline' : 'harness_error';
   if (rec.excluded) return 'sandbox_evidence_missing';
   const inst = rec.install;
@@ -1173,13 +1279,24 @@ export function failureDetail(rec, bare, envp, { deadlineHit = false, records = 
   // A PyPI launch with no entry runs venv/bin/<package name>, a guess: the console script often has another name.
   const guess = !isObj(launch) || !launch.kind || (launch.kind === 'pypi' && !launch.entry);
   const sound = own && argsUnfilled === 0 && !guess;
-  if (needsEnv) return net ? 'start_needs_network' : sound ? 'needs_credentials' : 'start_env_limited';
-  if (net) return 'start_env_limited';
+  const err = typeof p.stderr === 'string' ? p.stderr : '';
+  // What stopped the start before the server's own code could fail, in our words (R-LP-55..59), ahead of any
+  // finding against the server: another operating system, the network, our sandbox's limits.
+  const bin = MISSING_BIN.map((re) => re.exec(err)).find(Boolean);
+  if (on('platform') && (PLATFORM_TEXT.test(err) || (bin && PLATFORM_BIN.test(bin[1])))) return 'unsupported_platform';
+  if (net || (on('network') && NETWORK_TEXT.test(err))) return 'start_needs_network';
+  if (on('env') && (ENV_TEXT.test(err) || bin)) return 'start_env_limited';
+  // An import that failed: an extra we did not install, a dependency that changed under the release, or one we cannot
+  // tell; only the server's own module can be its crash (R-LP-56, R-LP-57).
+  const imp = importCause(failedImport(err), { pydeps, pkg: isObj(launch) ? launch.package : null });
+  if (on('extra') && (EXTRA_HINT.test(err) || imp === 'extra')) return 'start_needs_extra';
+  if (on('drift') && imp === 'drift') return 'start_dependency_drift';
+  if (on('import') && imp === 'env') return 'start_env_limited';
+  if (needsEnv) return sound ? 'needs_credentials' : 'start_env_limited';
   // The probe's own duration, not the record's total (which holds the install and the analysis too, R-LP-40).
   const ms = probeMs(rec, p, p === envp ? 'env' : 'bare');
   // The server's own exit and its stderr: it said it needs configuration we did not give it (R-LP-44), which is no defect.
-  const err = typeof p.stderr === 'string' ? p.stderr : '';
-  if (own && (CONFIG_TEXT.test(err) || ENV_NAME_TEXT.test(err))) return 'start_needs_config';
+  if (own && (CONFIG_BASE_RE.test(err) || (on('config') && CONFIG_MORE_RE.test(err)) || ENV_NAME_TEXT.test(err))) return 'start_needs_config';
   // A crash signature is the evidence; an early exit with no telling stderr is not (R-LP-45).
   return sound && ms !== null && ms < START_QUICK_MS && CRASH_TEXT.test(err) ? 'start_failed' : 'start_env_limited';
 }
@@ -1415,7 +1532,7 @@ export function buildItem(item, ctx) {
     let reader = { listed: false };
     const tel = telemetryFor(telemetryFile, item.target_id);
     if (!primary) {
-      detail = ociRun && ociRun.outcome === 'disk_low' ? 'disk_low' : failureDetail(rec, bare, envp, { deadlineHit, records: tel.records, stepsLog: readText(join(dir, 'steps.log')), launch: r.launch, argsUnfilled: r.choice ? r.choice.args_unfilled : null });
+      detail = ociRun && ociRun.outcome === 'disk_low' ? 'disk_low' : failureDetail(rec, bare, envp, { deadlineHit, records: tel.records, stepsLog: readText(join(dir, 'steps.log')), launch: r.launch, argsUnfilled: r.choice ? r.choice.args_unfilled : null, pydeps: r.choice ? r.choice.pydeps : null });
     } else {
       const text = listText(primary.lists['tools/list'].raw_pages);
       let g = null;
