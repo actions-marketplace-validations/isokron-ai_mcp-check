@@ -2048,6 +2048,49 @@
     // every def of the file: name -> { index of its logical line }
     const defs = new Map();
     L.forEach((l, k) => { const m = /^(?:async\s+)?def\s+(\w+)\s*\(/.exec(l.text); if (m && !defs.has(m[1])) defs.set(m[1], k); });
+    // The loop that binds name v around logical line k (for v in ITEMS: at the same function level), with ITEMS read as a
+    // list of this file's functions: { items: [names] }, { items: null } when the loop is there but its items cannot be
+    // known (not a literal list or tuple of names, a list changed after it is built, a name that is not a def of this
+    // file, a registration under an if or after a continue/break/return/raise), or null when v is not a loop variable.
+    const pyLoopOver = (k, v) => {
+      const FOR = /^(?:async\s+)?for\s+([A-Za-z_]\w*)\s+in\s+([\s\S]+?)\s*:\s*([\s\S]*)$/;
+      const fnScope = (q) => { // the def around logical line q: [first line, end) or [0, L.length) at module level
+        let ind = L[q].indent; for (let r = q - 1; r >= 0; r--) { if (L[r].indent >= ind) continue; if (/^(?:async\s+)?(def|class)\s/.test(L[r].text.trim())) { let e = r + 1; while (e < L.length && L[e].indent > L[r].indent) e++; return [r + 1, e]; } ind = L[r].indent; }
+        return [0, L.length];
+      };
+      const listOf = (expr, q) => {
+        const ids = (txt) => { const m = /^[[(]([\s\S]*)[\])]$/.exec(txt.trim()); if (!m) return null; const parts = m[1].split(',').map((x) => x.trim()).filter(Boolean); return parts.length && parts.every((x) => /^[A-Za-z_]\w*$/.test(x)) ? parts : null; };
+        let items = ids(expr);
+        if (!items && /^[A-Za-z_]\w*$/.test(expr.trim())) {
+          const name = expr.trim();
+          const asg = new RegExp('^' + name + '\\s*(?::[^=]+)?=(?!=)\\s*([\\s\\S]+)$');
+          const changed = new RegExp('(?:^|[^\\w.])' + name + '\\s*(?:\\.\\s*(?:append|extend|insert|remove|pop|clear|sort|reverse)\\s*\\(|\\[[^\\]]*\\]\\s*=(?!=)|[-+*|]=)|^del\\s+' + name + '\\b|^(?:global|nonlocal)\\s[^\\n]*\\b' + name + '\\b');
+          const look = (a, b, topOnly) => { const hits = []; for (let r = a; r < b; r++) { if (topOnly && L[r].indent !== 0) continue; const tx = L[r].text.trim(); if (changed.test(tx)) return null; const m = asg.exec(tx); if (m) hits.push(m[1]); } return hits; };
+          const [a, b] = fnScope(q);
+          let hits = look(a, b, false);
+          if (hits && !hits.length && a > 0) hits = look(0, L.length, true);
+          if (!hits || hits.length !== 1) return null;
+          items = ids(hits[0]);
+        }
+        if (!items || items.some((x) => !defs.has(x))) return null;
+        return items;
+      };
+      const here = FOR.exec(L[k].text.trim());
+      if (here && here[1] === v && here[3]) return { items: listOf(here[2], k) }; // for v in X: mcp.add_tool(v)
+      let ind = L[k].indent;
+      for (let q = k - 1; q >= 0; q--) {
+        const x = L[q]; if (x.indent >= ind) continue;
+        const tx = x.text.trim(); const m = FOR.exec(tx);
+        if (m && m[1] === v && !m[3]) {
+          if (L[k].indent !== L[q + 1].indent) return { items: null }; // under an if or another block of the loop
+          for (let r = q + 1; r < k; r++) if (/^(continue|break|return|raise)\b/.test(L[r].text.trim())) return { items: null };
+          return { items: listOf(m[2], q) };
+        }
+        if (/^(?:async\s+)?(def|class)\s/.test(tx)) return null;
+        ind = x.indent;
+      }
+      return null;
+    };
     const exprVal = (text) => { const t = pyTokenize(text); const v = pyValue(t, 0, ctx); return v.value !== PY_SKIP && v.end >= t.length ? v : null; };
     // the name of a tool from its expression: a string, or a prefix variable + literal (namespace_prefix + "read" -> "read")
     const nameOf = (text) => {
@@ -2382,7 +2425,15 @@
         }
         if (given.nameUnknown) { unresolved.push(unresolvedText(l.line, given)); continue; }
         const dk = defs.get(fnRef);
-        if (dk === undefined && given.name === undefined) continue; // a parameter or a function from elsewhere, named nowhere here
+        if (dk === undefined && given.name === undefined) {
+          // for tool in tools: mcp.add_tool(tool), over a list of this file's functions, is read once per function
+          // (R-RD-34); a loop over anything else is counted as unresolved, never guessed
+          const loop = pyLoopOver(k, fnRef);
+          if (loop === null) continue; // a parameter or a function from elsewhere, named nowhere here
+          if (!loop.items) { unresolved.push(unresolvedText(l.line, given)); i = a.close; continue; }
+          loop.items.forEach((nm) => { const r = fromDef(defs.get(nm), Object.assign({}, given)); if (r) add(r.tool, l.line, { exactTypes: r.exactTypes, server: dotted && fn !== 'from_function' ? owner : null, fn: nm, unrolled: true }); });
+          i = a.close; continue;
+        }
         if (dk !== undefined) {
           if (/ToolDefinition$/.test(fn)) { given.annotationsUnknown = given.annotations === undefined; given.fastmcpTags = false; }
           const r = fromDef(dk, given);
