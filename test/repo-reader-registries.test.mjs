@@ -153,7 +153,7 @@ test('R-RD-32: registerTool(server, tool) forwarding tool.name, tool.description
 test('R-RD-32: an imported helper called with a name the reader cannot work out is counted as unresolved and not listed; a helper from a package is not followed', () => {
   const an = read({
     'package.json': PKG(),
-    'src/reg.ts': "export function registerTool(server: any, name: string, description: string, shape: any, cb: any) { server.tool(name, description, shape, cb); }\n",
+    'src/reg.ts': "import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';\nexport function registerTool(server: McpServer, name: string, description: string, shape: any, cb: any) { server.tool(name, description, shape, cb); }\n",
     'src/index.ts': [
       "import { z } from 'zod';",
       SERVER,
@@ -168,6 +168,56 @@ test('R-RD-32: an imported helper called with a name the reader cannot work out 
   assert.deepEqual(names(an), ['lookup']);
   assert.equal(an.unresolved, 1);
   assert.equal(an.unresolvedList[0].description, 'Search the index.');
+});
+
+// Synthetic, in the shape of the outlook helper above. A .tool() method of another library (a CLI builder) is not the
+// SDK's: a helper forwarding to it is a helper only in a file that imports the MCP SDK, or when its receiver is a
+// parameter typed McpServer (imported here through a module of the repository).
+test('R-RD-32: a helper forwarding to X.tool(…) is a register helper only in a file importing the MCP SDK or on a parameter typed McpServer', () => {
+  const an = read({
+    'package.json': PKG(),
+    'src/types.ts': "export type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';\n",
+    'src/cli.ts': "import { program } from 'commander';\nexport function addCommand(cli: any, name: string, description: string, opts: any, cb: any) { cli.tool(name, description, opts, cb); }\n",
+    'src/typed.ts': "import type { McpServer } from './types.js';\nexport function addTool(server: McpServer, name: string, description: string, shape: any, cb: any) { server.tool(name, description, shape, cb); }\n",
+    'src/index.ts': [
+      "import { z } from 'zod';",
+      SERVER,
+      "import { addCommand } from './cli.js';",
+      "import { addTool } from './typed.js';",
+      'addCommand(program, "build", "Build the project.", { watch: true }, () => {});',
+      'addTool(server, "lookup", "Look up one record.", { id: z.string() }, async () => ({ content: [] }));',
+    ].join('\n'),
+  });
+  assert.deepEqual(names(an), ['lookup']);
+  assert.equal(an.unresolved, 0);
+});
+
+// Synthetic, in the shape of the outlook helper above: a description the reader cannot read (getDesc()) is marked
+// unread, and the shape is still the shape argument, not the description's place.
+test('R-RD-32: a helper called with a description the reader cannot read marks the description unread and reads the shape from its own argument', () => {
+  const HELPER = "import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';\nexport function registerTool(server: McpServer, name: string, description: string, params: any, cb: any) { server.tool(name, description, params, cb); }\n";
+  const an = read({
+    'package.json': PKG(),
+    'src/h.ts': HELPER,
+    'src/s.ts': [
+      "import { z } from 'zod';",
+      SERVER,
+      "import { registerTool } from './h.js';",
+      'registerTool(server, "x", getDesc(), { q: z.string() }, async () => ({ content: [] }));',
+      'registerTool(server, "y", getDesc(), async () => ({ content: [] }));',
+      'registerTool(server, "z", { q: z.string() }, async () => ({ content: [] }));',
+    ].join('\n'),
+  });
+  assert.deepEqual(names(an), ['x', 'y', 'z']);
+  const x = an.tools.find((t) => t.tool.name === 'x').tool;
+  assert.equal(x.description, undefined);
+  assert.deepEqual(x._unreadable, ['description']);
+  assert.deepEqual(x.inputSchema.properties, { q: { type: 'string' } });
+  const y = an.tools.find((t) => t.tool.name === 'y').tool;
+  assert.deepEqual(y._unreadable, ['description', 'inputSchema'], 'the callback in the shape\'s place is not a shape');
+  const z = an.tools.find((t) => t.tool.name === 'z').tool;
+  assert.deepEqual(z.inputSchema.properties, { q: { type: 'string' } }, 'a shape in the description\'s place is the shape, as the SDK reads it');
+  assert.equal(z._unreadable, undefined);
 });
 
 // ---------------------------------------------------------------- R-RD-33: typed and imported registries
@@ -273,6 +323,39 @@ test('R-RD-33: an imported registry that its own module changes (push) is not un
   assert.equal(an.unresolved, 1);
 });
 
+// Synthetic, in the shape of the registry above: another module of the repository changes the exported registry, by
+// any name it imports it under, directly or through a re-export, so the loop is counted as unresolved.
+test('R-RD-33: an imported registry that another module changes (push, unshift, an alias, a namespace, a barrel, require, handed to a call) is not unrolled', () => {
+  const cases = {
+    'push': { 'src/plugin.ts': "import { TOOLS } from './registry.js';\nTOOLS.push({ id: 'gamma', summary: 'Third.', args: {} });\n" },
+    'unshift in a function': { 'src/plugin.ts': "import { TOOLS } from './registry.js';\nexport function reg(t: any) { TOOLS.unshift(t); }\n" },
+    'alias': { 'src/plugin.ts': "import { TOOLS as T } from './registry.js';\nT.splice(0, 1);\n" },
+    'namespace': { 'src/plugin.ts': "import * as reg from './registry.js';\nreg.TOOLS.push({});\n" },
+    'namespace handed on': { 'src/plugin.ts': "import * as reg from './registry.js';\nextend(reg);\n" },
+    'barrel export *': { 'src/all.ts': "export * from './registry.js';\n", 'src/plugin.ts': "import { TOOLS } from './all.js';\nTOOLS.push({});\n" },
+    'barrel renamed': { 'src/all.ts': "export { TOOLS as LIST } from './registry.js';\n", 'src/plugin.ts': "import { LIST } from './all.js';\nLIST.pop();\n" },
+    'import re-exported': { 'src/mid.ts': "import { TOOLS } from './registry.js';\nexport { TOOLS };\n", 'src/plugin.ts': "import { TOOLS } from './mid.js';\nTOOLS.push({});\n" },
+    'require': { 'src/plugin.js': "const r = require('./registry');\nr.TOOLS.push({});\n" },
+    'handed to a call': { 'src/plugin.ts': "import { TOOLS } from './registry.js';\naddMore(TOOLS);\n" },
+    'copied to a variable': { 'src/plugin.ts': "import { TOOLS } from './registry.js';\nconst list = TOOLS;\nlist.push({});\n" },
+    'an item assigned': { 'src/plugin.ts': "import { TOOLS } from './registry.js';\nTOOLS[2] = { id: 'gamma', summary: 'Third.', args: {} };\n" },
+  };
+  for (const [label, files] of Object.entries(cases)) {
+    const an = read(Object.assign({ 'package.json': PKG(), 'src/registry.ts': REGISTRY, 'src/index.ts': LOOP + "\nimport './plugin.js';\n" }, files));
+    assert.deepEqual(names(an), [], label);
+    assert.equal(an.unresolved, 1, label);
+  }
+});
+
+test('R-RD-33: a registry that other modules only read (length, for…of, Object.keys, ns.TOOLS.length) is still unrolled', () => {
+  const an = read({
+    'package.json': PKG(), 'src/registry.ts': REGISTRY, 'src/index.ts': LOOP,
+    'src/stats.ts': "import { TOOLS } from './registry.js';\nimport * as reg from './registry.js';\nexport const count = TOOLS.length + reg.TOOLS.length;\nfor (const t of TOOLS) console.log(t.id);\nconsole.log(Object.keys(TOOLS));\n",
+  });
+  assert.deepEqual(names(an), ['alpha', 'beta']);
+  assert.equal(an.unresolved, 0);
+});
+
 // ---------------------------------------------------------------- R-RD-34: Python lists of functions
 // Trimmed from stefanoamorelli/sec-edgar-mcp @ 86646eb0e23f84eb2b2d1a793c888ad63a8a82bc (sec_edgar_mcp/server.py:41-526).
 const PYPROJECT = '[project]\nname = "x"\ndependencies = ["mcp>=1.20"]\n';
@@ -328,6 +411,75 @@ test('R-RD-34: a list with a function from elsewhere, a list changed after it is
     assert.deepEqual(names(an), [], loop.join(' / '));
     assert.equal(an.unresolved, 1, loop.join(' / '));
   });
+});
+
+// Synthetic, in the shape of the sec-edgar fixture above with the list at module level: another module that imports
+// it (by name, under another name, with *, or the module itself) and changes it makes the loop unresolved; one that
+// only reads it, and a module of another package with a list of the same name, do not.
+test('R-RD-34: a module-level list of functions another module changes (append, extend, insert, rebind, handed to a call) is counted as unresolved', () => {
+  const SRV = (inFn) => [
+    'from mcp.server.fastmcp import FastMCP',
+    'mcp = FastMCP("SEC EDGAR MCP")',
+    '',
+    'def get_cik_by_ticker(ticker: str):',
+    '    """Convert a stock ticker symbol to its SEC CIK (Central Index Key)."""',
+    '    return {"ticker": ticker}',
+    '',
+    'def get_company_info(identifier: str):',
+    '    """Retrieve company information from SEC records."""',
+    '    return {"identifier": identifier}',
+    '',
+    'TOOLS = [get_cik_by_ticker, get_company_info]',
+    '',
+  ].concat(inFn ? ['def register_tools():', '    for tool in TOOLS:', '        mcp.add_tool(tool)', '', 'register_tools()'] : ['for tool in TOOLS:', '    mcp.add_tool(tool)']).join('\n');
+  const changed = {
+    'from-import append': 'from sec_edgar_mcp.server import TOOLS\nfrom sec_edgar_mcp.extra import other\nTOOLS.append(other)\n',
+    'relative alias extend': 'from .server import TOOLS as T\nT.extend([print])\n',
+    'star insert': 'from .server import *\nTOOLS.insert(0, print)\n',
+    'module attribute append': 'from sec_edgar_mcp import server\nserver.TOOLS.append(print)\n',
+    'module rebind': 'import sec_edgar_mcp.server as srv\nsrv.TOOLS = []\n',
+    'handed to a call': 'from .server import TOOLS\nadd_more(TOOLS)\n',
+  };
+  for (const inFn of [false, true]) {
+    for (const [label, plugin] of Object.entries(changed)) {
+      const an = read({ 'pyproject.toml': PYPROJECT, 'sec_edgar_mcp/server.py': SRV(inFn), 'sec_edgar_mcp/plugins.py': plugin });
+      assert.deepEqual(names(an), [], label + (inFn ? ' (loop in a function)' : ''));
+      assert.equal(an.unresolved, 1, label);
+    }
+    const kept = {
+      'read only': 'from .server import TOOLS\nfor t in TOOLS:\n    print(t.__name__)\n',
+      'another module of that name': 'from other_pkg.registry import TOOLS\nTOOLS.append(print)\n',
+    };
+    for (const [label, plugin] of Object.entries(kept)) {
+      const an = read({ 'pyproject.toml': PYPROJECT, 'sec_edgar_mcp/server.py': SRV(inFn), 'sec_edgar_mcp/plugins.py': plugin });
+      assert.deepEqual(names(an), ['get_cik_by_ticker', 'get_company_info'], label);
+      assert.equal(an.unresolved, 0, label);
+    }
+  }
+});
+
+// A function of the same file that appends to the module-level list, with the loop inside another function.
+test('R-RD-34: a module-level list a function of the same file appends to is counted as unresolved', () => {
+  const an = read({ 'pyproject.toml': PYPROJECT, 'server.py': [
+    'from mcp.server.fastmcp import FastMCP',
+    'mcp = FastMCP("x")',
+    'def a(q: str):',
+    '    """A."""',
+    '    return q',
+    'def b(q: str):',
+    '    """B."""',
+    '    return q',
+    'TOOLS = [a]',
+    'def more():',
+    '    TOOLS.append(b)',
+    'def register_tools():',
+    '    for tool in TOOLS:',
+    '        mcp.add_tool(tool)',
+    'more()',
+    'register_tools()',
+  ].join('\n') });
+  assert.deepEqual(names(an), []);
+  assert.equal(an.unresolved, 1);
 });
 
 // ---------------------------------------------------------------- R-RD-35: .shape read back through a registry entry

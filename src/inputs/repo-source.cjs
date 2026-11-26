@@ -636,31 +636,63 @@
     return hits.size === 1 ? Array.from(hits)[0] : null;
   }
   // A top-level constant of a file that nothing in that file changes: declared once, with const, and every other use a
-  // read (no assignment, ++/--, delete, push/splice/set/… on it or a member, and not handed to a call other than
-  // Object.entries / keys / values / freeze). Used for a registry another module imports (R-RD-33).
+  // read (no assignment, ++/--, delete, push/splice/set/… on it or a member, not handed to a call other than
+  // Object.entries / keys / values / freeze, and not copied into another variable by `= NAME`). Used for a registry
+  // another module imports (R-RD-33), together with importersReadOnly for the modules that import it.
   const FROZEN_MUTATORS = /^(push|pop|shift|unshift|splice|sort|reverse|fill|copyWithin|set|delete|clear|add)$/;
+  // Whether the use of a name whose tokens run from k0 to k (NAME, or ns . NAME for a namespace import) may change it.
+  function useMayChange(t, k0, k) {
+    const pv = t[k0 - 1];
+    if (pv && ((pv.type === 'id' && pv.value === 'delete') || isP(pv, '++') || isP(pv, '--'))) return true;
+    let m = k + 1;
+    for (let n = 0; n < 64; n++) {
+      if ((isP(t[m], '.') || isP(t[m], '?.')) && t[m + 1] && t[m + 1].type === 'id') { if (FROZEN_MUTATORS.test(t[m + 1].value) && isP(t[m + 2], '(')) return true; m += 2; }
+      else if (isP(t[m], '[')) m = matchClose(t, m) + 1;
+      else break;
+    }
+    if (isP(t[m], '=') || isP(t[m], '++') || isP(t[m], '--') || (t[m] && t[m].type === 'p' && /^([-+*/%|&^]|\?\?|\|\||&&|\*\*|<<|>>)$/.test(t[m].value) && isP(t[m + 1], '='))) return true;
+    if (m === k + 1 && isP(pv, '=')) return true; // const list = NAME: an alias the reader does not follow
+    if (m === k + 1 && (isP(pv, '(') || isP(pv, ',') || isP(pv, '...'))) {
+      // an argument: only Object.entries / keys / values / freeze(NAME) read it
+      let o = k0 - 1; let d = 0; for (; o >= 0; o--) { if (isP(t[o], ')') || isP(t[o], ']') || isP(t[o], '}')) d++; else if (isP(t[o], '(') || isP(t[o], '[') || isP(t[o], '{')) { if (!d) break; d--; } }
+      if (o >= 0 && isP(t[o], '(') && t[o - 1] && t[o - 1].type === 'id' && !(/^(entries|keys|values|freeze)$/.test(t[o - 1].value) && isP(t[o - 2], '.') && t[o - 3] && t[o - 3].value === 'Object') && !/^(if|while|switch|return|for)$/.test(t[o - 1].value)) return true;
+    }
+    return false;
+  }
   function constFrozenIn(t, name) {
     let decls = 0;
     for (let k = 0; k < t.length; k++) {
       const x = t[k]; if (x.type !== 'id' || x.value !== name || isP(t[k - 1], '.') || isP(t[k - 1], '?.')) continue;
       const pv = t[k - 1];
       if (pv && pv.type === 'id' && /^(const|let|var|function|class)$/.test(pv.value)) { decls++; if (pv.value !== 'const') return false; continue; }
-      if (pv && ((pv.type === 'id' && pv.value === 'delete') || isP(pv, '++') || isP(pv, '--'))) return false;
       if (isP(t[k + 1], ':') && (isP(pv, '{') || isP(pv, ','))) continue; // a key of an object literal
-      let m = k + 1;
-      for (let n = 0; n < 64; n++) {
-        if ((isP(t[m], '.') || isP(t[m], '?.')) && t[m + 1] && t[m + 1].type === 'id') { if (FROZEN_MUTATORS.test(t[m + 1].value) && isP(t[m + 2], '(')) return false; m += 2; }
-        else if (isP(t[m], '[')) m = matchClose(t, m) + 1;
-        else break;
-      }
-      if (isP(t[m], '=') || isP(t[m], '++') || isP(t[m], '--') || (t[m] && t[m].type === 'p' && /^([-+*/%|&^]|\?\?|\|\||&&|\*\*|<<|>>)$/.test(t[m].value) && isP(t[m + 1], '='))) return false;
-      if (m === k + 1 && (isP(pv, '(') || isP(pv, ',') || isP(pv, '...'))) {
-        // an argument: only Object.entries / keys / values / freeze(NAME) read it
-        let o = k - 1; let d = 0; for (; o >= 0; o--) { if (isP(t[o], ')') || isP(t[o], ']') || isP(t[o], '}')) d++; else if (isP(t[o], '(') || isP(t[o], '[') || isP(t[o], '{')) { if (!d) break; d--; } }
-        if (o >= 0 && isP(t[o], '(') && t[o - 1] && t[o - 1].type === 'id' && !(/^(entries|keys|values|freeze)$/.test(t[o - 1].value) && isP(t[o - 2], '.') && t[o - 3] && t[o - 3].value === 'Object') && !/^(if|while|switch|return|for)$/.test(t[o - 1].value)) return false;
-      }
+      if (useMayChange(t, k, k)) return false;
     }
     return decls === 1;
+  }
+  // Whether a module that imports the constant uses it only to read it: `locals` are the names it is bound to there
+  // (import { TOOLS as T }), `namespaces` the names of namespace imports of a module that exports it (ns.TOOLS). A
+  // declaration of the same name, or a namespace used other than as ns.member, counts as a change (not followed).
+  function importerReadOnly(t, locals, namespaces, name) {
+    for (let k = 0; k < t.length; k++) {
+      const x = t[k]; if (x.type !== 'id' || isP(t[k - 1], '.') || isP(t[k - 1], '?.')) continue;
+      const pv = t[k - 1]; const declared = pv && pv.type === 'id' && /^(const|let|var|function|class)$/.test(pv.value);
+      if (locals.has(x.value)) {
+        if (isP(t[k + 1], ':') && (isP(pv, '{') || isP(pv, ','))) continue;
+        if (pv && pv.type === 'id' && (pv.value === 'import' || pv.value === 'as' || pv.value === 'type')) continue;
+        if (isP(pv, '{') || isP(pv, ',')) { // inside the import's own braces
+          let o = k - 1; while (o >= 0 && !isP(t[o], '{') && !isP(t[o], ';')) o--;
+          if (o >= 0 && isP(t[o], '{') && t[o - 1] && t[o - 1].type === 'id' && t[o - 1].value === 'import') continue;
+        }
+        if (declared || useMayChange(t, k, k)) return false;
+      } else if (namespaces.has(x.value)) {
+        if (pv && pv.type === 'id' && pv.value === 'as') continue; // import * as ns
+        if (declared) return false;
+        if ((isP(t[k + 1], '.') || isP(t[k + 1], '?.')) && t[k + 2] && t[k + 2].type === 'id') { if (t[k + 2].value === name && useMayChange(t, k, k + 2)) return false; continue; }
+        return false; // the namespace object itself handed on
+      }
+    }
+    return true;
   }
   // Constants each file sees: its own, the ones it imports (followed through re-exports), and for imported names that
   // cannot be followed, a constant of that name defined once in the repository (globals).
@@ -735,19 +767,73 @@
       });
       return out;
     };
-    // Names a file imports (one relative import, from the file that declares them) that are constants nothing changes
-    // in the declaring file (R-RD-33): a registry there can be unrolled where it is iterated.
-    const frozenImports = (p) => {
-      const out = new Set();
-      mod(p).imports.forEach((imp) => {
-        if (!imp.spec.startsWith('.') || imp.imported === '*' || imp.imported === 'default') return;
-        const target = resolveSpec(p, imp.spec, paths, suffixIndex); if (!target || target === p) return;
-        const local = mod(target).exports.names.get(imp.imported);
-        if (typeof local === 'string' && constFrozenIn(toks(target), local)) out.add(imp.local);
-      });
-      return out;
+    // Whether a name file p imports (one relative import, from the file that declares it) is a constant nothing changes
+    // (R-RD-33), so a registry there can be unrolled where it is iterated: the declaring file only reads it after its
+    // one const declaration, and so does every file of the repository that imports it, by any name, directly or
+    // through re-exports. A file that loads the declaring module some other way (require, import()) makes it unknown.
+    // Asked only where a loop needs it, and kept per (declaring file, name).
+    const frozenMemo = new Map();
+    const frozenImport = (p, localName) => {
+      const imp = mod(p).imports.find((x) => x.local === localName);
+      if (!imp || !imp.spec.startsWith('.') || imp.imported === '*' || imp.imported === 'default') return false;
+      const target = resolveSpec(p, imp.spec, paths, suffixIndex); if (!target || target === p) return false;
+      const local = mod(target).exports.names.get(imp.imported);
+      if (typeof local !== 'string') return false;
+      const key = target + '\u0000' + local;
+      if (!frozenMemo.has(key)) { let r = false; try { r = constFrozenIn(toks(target), local) && importersReadOnly(target, local); } catch (e) { r = false; } frozenMemo.set(key, r); }
+      return frozenMemo.get(key);
     };
-    return { seedFor: (p) => seedFor(p, 0), tokens: toks, tableFor: (p) => tableFor(p, 0), module: mod, importedWrappers, frozenImports };
+    // Every other file that imports `local` of `target` (followed through re-exports) uses it only to read it.
+    const importersReadOnly = (target, local) => {
+      // the (file, exported name) pairs that stand for the constant: its own exports, then re-exports of them
+      const alias = new Set(); const key = (f, n) => f + '\u0000' + n;
+      mod(target).exports.names.forEach((v, k) => { if (v === local) alias.add(key(target, k)); });
+      if (mod(target).exports.defaultLocal === local) alias.add(key(target, 'default'));
+      const nsOf = new Set([target]); // files whose namespace object holds the constant as a member
+      const files = Array.from(paths);
+      for (let round = 0, grew = true; grew && round < 8; round++) {
+        grew = false;
+        for (const q of files) {
+          const ex = mod(q).exports;
+          // import { TOOLS } from './registry'; export { TOOLS as LIST } / export default TOOLS: q passes it on too
+          const imported = (n) => { const imp = mod(q).imports.find((x) => x.local === n && x.imported !== '*'); const f = imp && resolveSpec(q, imp.spec, paths, suffixIndex); return !!f && alias.has(key(f, imp.imported)); };
+          if (ex.defaultLocal && !alias.has(key(q, 'default')) && imported(ex.defaultLocal)) { alias.add(key(q, 'default')); grew = true; }
+          ex.names.forEach((v, k) => {
+            if (typeof v === 'string') { if (!alias.has(key(q, k)) && imported(v)) { alias.add(key(q, k)); grew = true; } return; }
+            if (!v || alias.has(key(q, k))) return;
+            const f = resolveSpec(q, v.spec, paths, suffixIndex); if (!f) return;
+            if (v.imported === '*' ? nsOf.has(f) : alias.has(key(f, v.imported))) { if (v.imported === '*') nsOf.add(q); alias.add(key(q, k)); grew = true; }
+          });
+          ex.stars.forEach((sp) => {
+            const f = resolveSpec(q, sp, paths, suffixIndex); if (!f) return;
+            alias.forEach((a) => { const [af, an] = a.split('\u0000'); if (af === f && an !== 'default' && !alias.has(key(q, an))) { alias.add(key(q, an)); nsOf.add(q); grew = true; } });
+          });
+        }
+      }
+      const holders = new Set(Array.from(alias).map((a) => a.split('\u0000')[0]));
+      for (const q of files) {
+        if (q === target) continue;
+        const locals = new Set(); const namespaces = new Set(); let loads = false;
+        mod(q).imports.forEach((imp) => {
+          const f = resolveSpec(q, imp.spec, paths, suffixIndex); if (!f) return;
+          if (imp.imported === '*') { if (nsOf.has(f) || holders.has(f)) namespaces.add(imp.local); }
+          else if (alias.has(key(f, imp.imported))) locals.add(imp.local);
+          // a re-exported namespace (export * as reg from './registry') imported by name: ns.TOOLS through it
+          else { const e = mod(f).exports.names.get(imp.imported); if (e && typeof e === 'object' && e.imported === '*') { const g = resolveSpec(f, e.spec, paths, suffixIndex); if (g && (nsOf.has(g) || holders.has(g))) namespaces.add(imp.local); } }
+        });
+        // require('./registry') / import('./registry') of a file that holds it: not followed
+        const t = toks(q);
+        for (let k = 0; k + 2 < t.length && !loads; k++) {
+          if (t[k].type === 'id' && (t[k].value === 'require' || t[k].value === 'import') && isP(t[k + 1], '(') && t[k + 2].type === 'str' && !isP(t[k - 1], '.')) {
+            const f = resolveSpec(q, t[k + 2].value, paths, suffixIndex); if (f && holders.has(f)) loads = true;
+          }
+        }
+        if (loads) return false;
+        if ((locals.size || namespaces.size) && !importerReadOnly(t, locals, namespaces, local)) return false;
+      }
+      return true;
+    };
+    return { seedFor: (p) => seedFor(p, 0), tokens: toks, tableFor: (p) => tableFor(p, 0), module: mod, importedWrappers, frozenImport };
   }
 
   // ------------------------------------------------------------ JS/TS extraction
@@ -1007,9 +1093,9 @@
           }
         }
       }
-      // declared here once, or imported from a module of the repository that declares it once with const and never
-      // changes it (opts.frozenImports, R-RD-33)
-      const r = ok && (decls === 1 || (decls === 0 && !!opts.frozenImports && opts.frozenImports.has(name))); frozenMemo.set(name, r); return r;
+      // declared here once, or imported from a module of the repository that declares it once with const, where nothing
+      // in the repository changes it (opts.frozenImport, R-RD-33)
+      const r = ok && (decls === 1 || (decls === 0 && !!opts.frozenImport && opts.frozenImport(name))); frozenMemo.set(name, r); return r;
     };
     // Registrations inside a loop over a collection the reader knows (R-RD-15, R-RD-16):
     //   for (const x of LIST) / for (const [name, def] of Object.entries(TABLE)) / LIST.forEach((x) => …)
@@ -1162,12 +1248,21 @@
       if (nm && nm.param) return PARAM;
       if (!nm || !nm.name) return null;
       if (w.kind === 'registerTool') { const cfg = configAt(args[slots[1].p], c); return cfg ? toolFromConfig(nm.name, cfg) : null; }
-      // tool(name, [description], [shape], cb): a description is a string; otherwise that argument is the shape
+      // tool(name, [description], [shape], cb): a description is a string; a shape in the description's place (an
+      // object literal or a zod expression) is the shape, as the SDK reads it. An argument there that is neither and
+      // cannot be read (getDesc()) leaves the description unread, and the shape is the shape argument: if that one is
+      // missing or a function (the callback), the shape is unread too.
       const tool = { name: nm.name }; const un = [];
       let j = args[slots[1].p];
       const strAt = (k) => t[k] && (t[k].type === 'str' || t[k].type === 'tpl' || (t[k].type === 'id' && (() => { const r = chainValue(c, idChain(t, k).ids); return r && typeof r.value === 'string'; })()));
+      const shapeAt = (k) => isP(t[k], '{') || (t[k] && t[k].type === 'id' && (c.zodNames.has(t[k].value) || (() => { const r = chainValue(c, idChain(t, k).ids); return !!r && !!r.value && typeof r.value === 'object' && !Array.isArray(r.value); })()));
+      const fnAt = (k) => t[k] && ((t[k].type === 'id' && /^(async|function)$/.test(t[k].value)) || (isP(t[k], '(') && isP(t[matchClose(t, k) + 1], '=>')) || (t[k].type === 'id' && isP(t[k + 1], '=>')));
       if (j !== undefined && strAt(j)) { const d = parseValue(t, j, c); if (typeof d.value === 'string') tool.description = d.value; if (d.partial || typeof d.value !== 'string') un.push('description'); j = args[slots[2].p]; }
-      if (j === undefined) tool.inputSchema = { type: 'object', properties: {} };
+      else if (j !== undefined && !shapeAt(j)) {
+        un.push('description'); j = args[slots[2].p];
+        if (j === undefined || fnAt(j)) { tool.inputSchema = { type: 'object' }; un.push('inputSchema'); j = null; }
+      }
+      if (j === null) { /* unread above */ } else if (j === undefined) tool.inputSchema = { type: 'object', properties: {} };
       else if (isP(t[j], '{') || (t[j] && t[j].type === 'id' && c.zodNames.has(t[j].value))) {
         const shape = zodShapeAt(t, j, c);
         if (shape.schema && isZodShapeLike(shape.schema)) tool.inputSchema = shape.schema; else { tool.inputSchema = { type: 'object' }; un.push('inputSchema'); }
@@ -1588,6 +1683,23 @@
     const params = (open) => { // simple identifiers, with optional TS types and defaults; null if anything else
       const ps = []; for (const a of argStarts(t, open)) { const x = t[a]; if (!x || x.type !== 'id') return null; ps.push(x.value); } return ps;
     };
+    // parameters typed as the SDK's server (server: McpServer), which make X.tool(…) on them the SDK's method
+    const serverParams = (open) => {
+      const out = new Set();
+      argStarts(t, open).forEach((a) => {
+        if (!t[a] || !isP(t[a + 1], ':')) return;
+        for (let m = a + 2, d = 0; m < t.length; m++) {
+          if (isP(t[m], '<') || isP(t[m], '(') || isP(t[m], '[') || isP(t[m], '{')) d++;
+          else if (isP(t[m], '>') || isP(t[m], ')') || isP(t[m], ']') || isP(t[m], '}')) { if (!d) break; d--; }
+          else if (!d && (isP(t[m], ',') || isP(t[m], '='))) break;
+          else if (t[m].type === 'id' && t[m].value === 'McpServer') { out.add(t[a].value); break; }
+        }
+      });
+      return out;
+    };
+    // X.tool(…) is the SDK's tool() only in a file that imports the MCP SDK, or on a parameter typed McpServer: a
+    // .tool() method of another library (a CLI builder, an AI SDK) is not a register helper.
+    const sdkFile = t.some((x) => x.type === 'str' && /^@modelcontextprotocol\//.test(x.value));
     // the functions that could be helpers: name, parameters and body range
     const fns = [];
     for (let i = 0; i < t.length - 3; i++) {
@@ -1604,7 +1716,7 @@
       let b = matchClose(t, open) + 1; if (isP(t[b], '=>')) b++;
       while (t[b] && !isP(t[b], '{') && !(t[b].type === 'id' || isP(t[b], '('))) b++; // skip a TS return type
       const end = isP(t[b], '{') ? matchClose(t, b) : skipExpr(t, b);
-      fns.push({ name, ps, b, end });
+      fns.push({ name, ps, b, end, open });
     }
     if (!fns.length) return out;
     // nested ranges: each function's parent, so a call finds the functions around it by a search and a short walk up
@@ -1638,6 +1750,7 @@
         if (out.has(f.name)) continue;
         const pos = slots.map((x) => f.ps.indexOf(x.id));
         if (pos.some((x) => x < 0)) continue;
+        if (kind === 'tool' && !sdkFile && !(t[k - 1] && t[k - 1].type === 'id' && serverParams(f.open).has(t[k - 1].value))) continue;
         const sl = slots.map((x, m) => ({ p: pos[m], key: x.key }));
         out.set(f.name, kind === 'registerTool' ? { kind, name: sl[0], cfg: sl[1], nameIdx: sl[0].p, cfgIdx: sl[1].p } : { kind, name: sl[0], desc: sl[1], shape: sl[2] });
       }
@@ -2067,11 +2180,15 @@
           const name = expr.trim();
           const asg = new RegExp('^' + name + '\\s*(?::[^=]+)?=(?!=)\\s*([\\s\\S]+)$');
           const changed = new RegExp('(?:^|[^\\w.])' + name + '\\s*(?:\\.\\s*(?:append|extend|insert|remove|pop|clear|sort|reverse)\\s*\\(|\\[[^\\]]*\\]\\s*=(?!=)|[-+*|]=)|^del\\s+' + name + '\\b|^(?:global|nonlocal)\\s[^\\n]*\\b' + name + '\\b');
-          const look = (a, b, topOnly) => { const hits = []; for (let r = a; r < b; r++) { if (topOnly && L[r].indent !== 0) continue; const tx = L[r].text.trim(); if (changed.test(tx)) return null; const m = asg.exec(tx); if (m) hits.push(m[1]); } return hits; };
+          // a change anywhere in the range (a function of the file appending to a module list included); assignments
+          // only at the top level when topOnly
+          const look = (a, b, topOnly) => { const hits = []; for (let r = a; r < b; r++) { const tx = L[r].text.trim(); if (changed.test(tx)) return null; if (topOnly && L[r].indent !== 0) continue; const m = asg.exec(tx); if (m) hits.push(m[1]); } return hits; };
           const [a, b] = fnScope(q);
-          let hits = look(a, b, false);
-          if (hits && !hits.length && a > 0) hits = look(0, L.length, true);
+          let hits = look(a, b, false); let moduleList = a === 0;
+          if (hits && !hits.length && a > 0) { hits = look(0, L.length, true); moduleList = true; }
           if (!hits || hits.length !== 1) return null;
+          // a module-level list another module of the repository may change (from server import tools; tools.append(f))
+          if (moduleList && opts.pyChangedElsewhere && opts.pyChangedElsewhere(name)) return null;
           items = ids(hits[0]);
         }
         if (!items || items.some((x) => !defs.has(x))) return null;
@@ -2836,6 +2953,44 @@
     return { fn: fn ? fn.name : null, guards: encl.slice(fnIdx + 1).filter((b) => b.kind === 'if' || b.kind === 'else').map((b) => ({ kind: b.kind, cond: b.cond })) };
   }
   // lines: the file's lines, with `up` (the nearest earlier code line with less indentation, from one pass, R-RD-23)
+  // Whether a Python file other than `path` may change the module-level name `name` of `path` (R-RD-34): it imports
+  // the name (from server import tools [as t], from server import *) or the module (import pkg.server [as s], from pkg
+  // import server [as s]) and then appends to it, changes an item, extends it in place, deletes it, rebinds the module
+  // attribute (server.tools = …), or hands it to a call. The module is matched by its dotted path, or by its last part
+  // when the import is relative or names a shorter path; a match that is not the same module only makes the list
+  // unknown, never invents a tool.
+  function pyListChangedElsewhere(files, path, name) {
+    const dotted = path.replace(/\.py$/, '').split('/').filter(Boolean);
+    if (dotted[dotted.length - 1] === '__init__') dotted.pop();
+    if (!dotted.length) return false;
+    const stem = dotted[dotted.length - 1];
+    const isMod = (m) => { const parts = m.replace(/^\.+/, '').split('.').filter(Boolean); if (!parts.length) return false; const tail = dotted.slice(-parts.length); return parts.join('.') === tail.join('.') || parts[parts.length - 1] === stem; };
+    const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const MUT = '\\s*(?:\\.\\s*(?:append|extend|insert|remove|pop|clear|sort|reverse)\\s*\\(|\\[[^\\]]*\\]\\s*=(?!=)|[-+*|]=)';
+    for (const [q, text] of files) {
+      if (q === path || !/\.py$/.test(q) || typeof text !== 'string' || !text.includes(name)) continue;
+      const L = pyLogicalLines(pyStripComments(text));
+      const locals = new Set(); const prefixes = new Set();
+      L.forEach((l) => {
+        const tx = l.text.trim();
+        let m = /^from\s+([.\w]+)\s+import\s+\(?([\s\S]*?)\)?\s*$/.exec(tx);
+        if (m) {
+          const items = m[2].split(',').map((x) => x.trim()).filter(Boolean);
+          if (isMod(m[1])) items.forEach((it) => { const a = /^(\*|\w+)(?:\s+as\s+(\w+))?$/.exec(it); if (a && (a[1] === name || a[1] === '*')) locals.add(a[1] === '*' ? name : a[2] || a[1]); });
+          items.forEach((it) => { const a = /^(\w+)(?:\s+as\s+(\w+))?$/.exec(it); if (a && isMod((m[1].replace(/\.$/, '') + '.' + a[1]).replace(/^\.+/, ''))) prefixes.add(a[2] || a[1]); });
+          return;
+        }
+        m = /^import\s+([\s\S]+)$/.exec(tx);
+        if (m) m[1].split(',').forEach((it) => { const a = /^([\w.]+)(?:\s+as\s+(\w+))?$/.exec(it.trim()); if (a && isMod(a[1])) prefixes.add(a[2] || a[1]); });
+      });
+      if (!locals.size && !prefixes.size) continue;
+      const refs = Array.from(locals).map(esc).concat(Array.from(prefixes).map((x) => esc(x).replace(/\\\./g, '\\s*\\.\\s*') + '\\s*\\.\\s*' + esc(name)));
+      const ref = '(?:' + refs.join('|') + ')';
+      const changed = new RegExp('(?:^|[^\\w.])' + ref + '(?:' + MUT + '|\\s*[,)])|^del\\s+' + ref + '\\b' + (prefixes.size ? '|(?:^|[^\\w.])(?:' + Array.from(prefixes).map((x) => esc(x).replace(/\\\./g, '\\s*\\.\\s*')).join('|') + ')\\s*\\.\\s*' + esc(name) + '\\s*=(?!=)' : ''));
+      if (L.some((l) => { const tx = l.text.trim(); return !/^(from|import)\s/.test(tx) && changed.test(tx); })) return true;
+    }
+    return false;
+  }
   function pyLinesOf(text) {
     const lines = text.split('\n'); const up = new Int32Array(lines.length).fill(-1); const ind = new Int32Array(lines.length); const st = [];
     lines.forEach((l, q) => {
@@ -3036,6 +3191,8 @@
     const mods = moduleConsts(readable, consts, sdkFor);
     const pyConsts = pyGlobalConsts(readable); const pyRegs = pyRegistrars(readable); const mounts = pyMounts(readable); const pyTpl = pyToolTemplates(readable);
     const bases = toolBases(readable);
+    const pyChangedMemo = new Map();
+    const pyChanged = (p, name) => { const k = p + '\u0000' + name; if (!pyChangedMemo.has(k)) pyChangedMemo.set(k, pyListChangedElsewhere(readable, p, name)); return pyChangedMemo.get(k); };
     const found = []; const byName = new Set(); const firstPath = new Map();
     const dupes = []; const unresolved = []; const overBudget = [];
     const hostPlugins = [];
@@ -3043,7 +3200,7 @@
       let ts = [];
       const js = /\.(ts|mts|cts|js|mjs|cjs)$/.test(p);
       try {
-        ts = extractFromFile(p, t, js ? { sdk: sdkFor(p), consts: mods.seedFor(p), tokens: mods.tokens(p), wrappers: mods.importedWrappers(p), frozenImports: mods.frozenImports(p), classTools: bases, workBudget: opts.workBudget } : { sdk, pyConsts, pyRegistrars: pyRegs, pyTemplates: pyTpl });
+        ts = extractFromFile(p, t, js ? { sdk: sdkFor(p), consts: mods.seedFor(p), tokens: mods.tokens(p), wrappers: mods.importedWrappers(p), frozenImport: (name) => mods.frozenImport(p, name), classTools: bases, workBudget: opts.workBudget } : { sdk, pyConsts, pyRegistrars: pyRegs, pyTemplates: pyTpl, pyChangedElsewhere: (name) => pyChanged(p, name) });
       } catch (e) { ts = []; ts.unresolved = [{ line: null }]; } // a file the reader fails on counts as one unread registration
       // another agent host's plugin: named, never listed (R-RD-05)
       const host = js ? hostPluginModule(t) : null;
