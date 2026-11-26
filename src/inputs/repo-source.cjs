@@ -146,6 +146,11 @@
   // what they collected and hand it on whenever they are used again. publicTools turns it into unreadable.text.
   const LOST = { cur: null };
   function lose(x) { if (LOST.cur && x && (typeof x === 'string' ? x.trim() : x.length)) LOST.cur.push(x); }
+  // Like collecting, but what fn leaves is not handed on: the caller passes it on (lose) only if it uses the result.
+  function quietly(fn) {
+    const prev = LOST.cur; const mine = []; LOST.cur = mine;
+    try { return [fn(), mine]; } finally { LOST.cur = prev; }
+  }
   function collecting(fn) {
     const prev = LOST.cur; const mine = []; LOST.cur = mine;
     try { return [fn(), mine]; } finally { LOST.cur = prev; if (prev && mine.length) prev.push(mine); }
@@ -174,6 +179,9 @@
     return { text: parts.size ? Array.from(parts).join(' … ') : '', over };
   }
   // The value of a constant or a property path into one (TOOLS.SEARCH, config.name), or null.
+  // A number is taken from a constant only when it cannot change: a `let` or `var` can be assigned again (M = 10, in a
+  // function or another statement), so a number read from one is not a bound, an operand or text.
+  const fixedNum = (c) => !c || !c.decl || c.decl === 'const';
   function chainValue(ctx, ids) {
     if (!ctx || !ctx.consts || !hasOwn(ctx.consts, ids[0])) return null;
     const c = ctx.consts[ids[0]]; let v = c.value; if (c.lost) lose(c.lost);
@@ -191,11 +199,50 @@
     let out = tok.parts[0]; let exact = true;
     tok.exprs.forEach((e, k) => {
       const r = /^[A-Za-z_$][\w$]*(\s*\??\.\s*[A-Za-z_$][\w$]*)*$/.test(e) ? chainValue(ctx, e.split(/\s*\??\.\s*/)) : null;
-      if (r && (typeof r.value === 'string' || typeof r.value === 'number')) out += String(r.value); else { out += '…'; exact = false; }
+      if (r && (typeof r.value === 'string' || (typeof r.value === 'number' && fixedNum(r.c)))) out += String(r.value); else { out += '…'; exact = false; }
       out += tok.parts[k + 1];
       if (out.length > MAX_STR) { lose(out.slice(MAX_STR)); out = out.slice(0, MAX_STR); exact = false; }
     });
     return capStr({ value: out, exact, partial: !exact });
+  }
+  // A numeric expression of literals and literal constants: 2 * 1024 * 1024, MAX_BYTES / 1048576, SECTIONS.length,
+  // (A + 1) * B. Operands are number literals, constants holding a number, and .length of a constant array or string
+  // read whole (no element left out). With `mulOnly`, a "+" or "-" ends it (in a string chain "+" joins strings).
+  // Returns { value, end, ops } (ops: operators and .length read) or null when an operand is anything else.
+  function numExpr(t, i, ctx, mulOnly, depth) {
+    depth = depth || 0; if (depth > 16) return null;
+    let ops = 0;
+    const primary = (k) => {
+      const tok = t[k]; if (!tok) return null;
+      if (tok.type === 'num') return { value: tok.value, end: k + 1 };
+      if (isP(tok, '-') && t[k + 1] && (t[k + 1].type === 'num' || t[k + 1].type === 'id')) { const r = primary(k + 1); return r ? { value: -r.value, end: r.end } : null; }
+      if (isP(tok, '(')) { const r = numExpr(t, k + 1, ctx, false, depth + 1); if (!r || !isP(t[r.end], ')')) return null; ops += r.ops; return { value: r.value, end: r.end + 1 }; }
+      if (tok.type !== 'id' || !ctx || !ctx.consts || !hasOwn(ctx.consts, tok.value) || !fixedNum(ctx.consts[tok.value])) return null;
+      const ch = idChain(t, k); if (isP(t[ch.end], '(')) return null;
+      if (ch.ids.length > 1 && ch.ids[ch.ids.length - 1] === 'length') {
+        const r = chainValue(ctx, ch.ids.slice(0, -1)); const c = r && r.c;
+        if (!r || c.exact === false || c.partial || c.holes) return null;
+        if (Array.isArray(r.value) || typeof r.value === 'string') { ops++; return { value: r.value.length, end: ch.end }; }
+        return null;
+      }
+      const r = chainValue(ctx, ch.ids);
+      return r && typeof r.value === 'number' && r.c.exact !== false ? { value: r.value, end: ch.end } : null;
+    };
+    const opAt = (k, set) => t[k] && t[k].type === 'p' && set.includes(t[k].value) && !isP(t[k + 1], '=');
+    const term = (k) => {
+      let a = primary(k); if (!a) return null;
+      while (opAt(a.end, ['*', '/', '%'])) {
+        const op = t[a.end].value; const b = primary(a.end + 1); if (!b) return null;
+        a = { value: op === '*' ? a.value * b.value : op === '/' ? a.value / b.value : a.value % b.value, end: b.end }; ops++;
+      }
+      return a;
+    };
+    let a = term(i); if (!a) return null;
+    while (!mulOnly && opAt(a.end, ['+', '-'])) {
+      const op = t[a.end].value; const b = term(a.end + 1); if (!b) return null;
+      a = { value: op === '+' ? a.value + b.value : a.value - b.value, end: b.end }; ops++;
+    }
+    return Number.isFinite(a.value) ? { value: a.value, end: a.end, ops } : null;
   }
   // A string expression: string and template literals and string constants joined by "+" ('a' + NAME + `b${X}`).
   // Returns null unless at least one operand is a string; an operand that cannot be read makes the value partial.
@@ -204,14 +251,16 @@
     for (;;) {
       const tok = t[j]; let v = null; let end = j + 1;
       if (!tok) return null;
-      if (tok.type === 'str') { v = tok.value; any = true; }
+      const ne = tok.type === 'num' || tok.type === 'id' ? numExpr(t, j, ctx, true) : null; // 'Limit ' + MAX_BYTES / 1048576 + ' MiB'
+      if (ne && ne.ops) { v = String(ne.value); end = ne.end; }
+      else if (tok.type === 'str') { v = tok.value; any = true; }
       else if (tok.type === 'tpl') { const r = tplValue(tok, ctx); v = r.value; if (!r.exact) exact = false; any = true; }
       else if (tok.type === 'num') v = String(tok.value);
       else if (tok.type === 'id') {
         const ch = idChain(t, j); end = ch.end;
         if (isP(t[end], '(')) return null;
         const r = chainValue(ctx, ch.ids);
-        if (r && typeof r.value === 'string') { v = r.value; any = true; if (ch.ids.length === 1 && r.c.partial) exact = false; } else if (r && typeof r.value === 'number') v = String(r.value); else { v = '…'; exact = false; }
+        if (r && typeof r.value === 'string') { v = r.value; any = true; if (ch.ids.length === 1 && r.c.partial) exact = false; } else if (r && typeof r.value === 'number' && fixedNum(r.c)) v = String(r.value); else { v = '…'; exact = false; }
       } else return null;
       if (out.length >= MAX_STR) { lose(v); exact = false; } else { out += v; if (out.length > MAX_STR) { lose(out.slice(MAX_STR)); out = out.slice(0, MAX_STR); exact = false; } }
       j = end;
@@ -225,7 +274,10 @@
     const tok = t[i];
     if (!tok) return { value: SKIP, end: i, exact: false };
     let r = null;
-    if (tok.type === 'str' || tok.type === 'tpl') {
+    // a numeric expression of literals and literal constants (2 * 1024 * 1024, SECTIONS.length)
+    const ne = tok.type === 'num' || isP(tok, '-') || (tok.type === 'id' && ctx && ctx.consts && hasOwn(ctx.consts, tok.value)) ? numExpr(t, i, ctx, false) : null;
+    if (ne && (ne.ops || ne.end > i + 1)) r = { value: ne.value, end: ne.end, exact: true };
+    else if (tok.type === 'str' || tok.type === 'tpl') {
       r = stringExpr(t, i, ctx);
     } else if (tok.type === 'num') r = { value: tok.value, end: i + 1, exact: true };
     else if (isP(tok, '-') && t[i + 1] && t[i + 1].type === 'num') r = { value: -t[i + 1].value, end: i + 2, exact: true };
@@ -240,10 +292,20 @@
       // Object.freeze({...}): the object itself
       const v = parseValue(t, i + 4, ctx);
       if (v.value !== SKIP && isP(t[v.end], ')')) r = Object.assign({}, v, { end: v.end + 1 });
+    } else if (tok.type === 'id' && isP(t[i + 1], '(') && ctx && ctx.consts && hasOwn(ctx.consts, FN + tok.value)) {
+      // id('Project id'), ymd().optional(): a schema factory of this file or a direct import, read with its arguments
+      const call = callFactory(t, i, ctx);
+      if (call && call.r.zod) {
+        lose(call.lost); const nx = call.end;
+        if (isP(t[nx], '.') && t[nx + 1] && t[nx + 1].type === 'id' && isP(t[nx + 2], '(')) { const z = parseZod(t, i, ctx, { value: call.r.value, exact: call.r.exact, optional: call.r.optional }, nx); if (z) r = z; }
+        else r = { value: call.r.value, end: nx, exact: call.r.exact, zod: true, optional: call.r.optional };
+      }
     } else if (tok.type === 'id' && ctx && ctx.consts && hasOwn(ctx.consts, tok.value) && isP(t[i + 1], '.') && t[i + 2] && t[i + 2].type === 'id' && t[i + 2].value === 'shape' && !isP(t[i + 3], '(') && !isP(t[i + 3], '.')) {
       // Schema.shape of a zod object constant: the raw shape, with the optional flags the object schema kept.
       const c = ctx.consts[tok.value]; const sch = c.value;
-      if (c.zod && sch && sch.type === 'object' && sch.properties) { const req = new Set(sch.required || []); r = { value: sch.properties, end: i + 3, exact: c.exact, rawShape: true, optionalKeys: new Set(Object.keys(sch.properties).filter((k) => !req.has(k))) }; }
+      // The optional keys also go with the shape object itself (OPTIONAL_OF), so they are kept when the shape is read
+      // back through a registry entry (tool.inputShape in a loop over tool objects, R-RD-35).
+      if (c.zod && sch && sch.type === 'object' && sch.properties) { const req = new Set(sch.required || []); const opt = new Set(Object.keys(sch.properties).filter((k) => !req.has(k))); if (opt.size && !OPTIONAL_OF.has(sch.properties)) OPTIONAL_OF.set(sch.properties, opt); r = { value: sch.properties, end: i + 3, exact: c.exact, rawShape: true, optionalKeys: opt }; }
     } else if (tok.type === 'id' && ctx && ctx.consts && hasOwn(ctx.consts, tok.value)) {
       const c = ctx.consts[tok.value]; if (c.lost) lose(c.lost);
       const ch = idChain(t, i);
@@ -251,7 +313,7 @@
         // a zod constant with more calls: Param.optional().describe('…')
         const z = parseZod(t, i, ctx, c);
         if (z) r = z;
-      } else if (!isP(t[ch.end], '(')) {
+      } else if (!isP(t[ch.end], '(') && !(typeof c.value === 'number' && !fixedNum(c))) {
         if (ch.ids.length === 1) {
           const s = typeof c.value === 'string' ? stringExpr(t, i, ctx) : null;
           r = s && (s.end > i + 1 || s.partial) ? s : { value: c.value, end: i + 1, exact: c.exact, optional: c.optional, zod: c.zod, optionalKeys: c.optionalKeys };
@@ -278,6 +340,17 @@
       if (v === '<' || v === '(' || v === '[' || v === '{') d++;
       else if (v === '>' || v === ')' || v === ']' || v === '}') { if (d === 0) return j; d--; }
       else if ((v === ',' || v === ';') && d === 0) return j;
+    }
+    return j;
+  }
+  // A TS type annotation after `const name:`, up to the "=" that starts the value (skipType does not stop at "=").
+  function skipAnnotation(t, j) {
+    let d = 0;
+    for (let n = 0; j < t.length && n < 400; j++, n++) {
+      const v = t[j].type === 'p' ? t[j].value : null;
+      if (v === '<' || v === '(' || v === '[' || v === '{') d++;
+      else if (v === '>' || v === ')' || v === ']' || v === '}') { if (d === 0) return j; d--; }
+      else if ((v === '=' || v === ',' || v === ';') && d === 0) return j;
     }
     return j;
   }
@@ -331,7 +404,7 @@
       if (isP(k, '...')) {
         // {...NAME} / {...NAME.member}: a constant holding a plain object (this file's, an imported one, or another file's) is merged in.
         const nx = t[i + 1]; let c = null; let end = i + 2;
-        if (nx && nx.type === 'id' && ctx && ctx.consts) { const ch = idChain(t, i + 1); const v = chainValue(ctx, ch.ids); if (v) { c = ch.ids.length === 1 ? v.c : { value: v.value, exact: v.c.exact, zod: false }; end = ch.end; } }
+        if (nx && nx.type === 'id' && ctx && ctx.consts) { const ch = idChain(t, i + 1); const v = chainValue(ctx, ch.ids); if (v) { c = ch.ids.length === 1 ? v.c : { value: v.value, exact: v.c.exact, zod: false }; end = ch.end; } else { const sp = spreadExpr(t, i + 1, ctx); if (sp) { c = sp; end = sp.end; } } }
         if (c && !c.zod && c.value && typeof c.value === 'object' && !Array.isArray(c.value) && (isP(t[end], ',') || isP(t[end], '}'))) {
           Object.assign(o, c.value); exact = exact && c.exact !== false; if (c.optionalKeys) c.optionalKeys.forEach((x) => optionalKeys.add(x));
           i = isP(t[end], ',') ? end + 1 : end; continue;
@@ -430,11 +503,162 @@
     return c < 0 ? t.length - 1 : c;
   }
 
+  // ------------------------------------------------------------ schema factories
+  // A top-level function of a file that returns a value the reader can read, and a direct import of one:
+  //   const id = (description: string) => z.union([z.string(), z.number()]).describe(description);
+  //   const rangeArgs = (defaultText) => ({ from: ymd().optional().describe(`First date. ${defaultText}`) });
+  //   function ymd() { return z.string().regex(/^\d{4}-\d{2}-\d{2}$/); }
+  // It is kept in the constants under FN + name (so no lookup of a plain constant sees it) as { t, params, at, ctx,
+  // consts }: the parameters (names, and the token of each default), the token where the returned expression starts,
+  // and the definition's own file context. A call is read with the parameters bound to the arguments read at the call
+  // site; an argument that cannot be read leaves its parameter unknown (so text built from it is partial, never
+  // guessed). Only a zod result is a value (callFactory in parseValue), and a plain object only when spread into a
+  // shape (spreadCall). Factories may call factories, FN_DEPTH deep.
+  const FN = '\u0000fn:';
+  const FN_DEPTH = 4;
+  // The parameters of a function from the "(" at k: [{ name, def }] (def: token of a default value, or -1), or null
+  // when one is a pattern or a rest parameter.
+  function fnParams(t, k) {
+    const close = matchClose(t, k); const out = []; let m = k + 1;
+    while (m < close) {
+      const nm = t[m]; if (!nm || nm.type !== 'id' || nm.value === 'this') return null;
+      let n = m + 1; if (isP(t[n], '?')) n++;
+      if (isP(t[n], ':')) n = skipType(t, n + 1);
+      let def = -1; if (isP(t[n], '=')) { def = n + 1; n = skipExpr(t, n + 1); }
+      out.push({ name: nm.value, def });
+      if (isP(t[n], ',')) m = n + 1; else if (n === close) m = close; else return null;
+    }
+    return { params: out, close };
+  }
+  // The start of the returned expression of a function body at k: an expression body, `({ … })`, or a block whose only
+  // statement is `return …`. { at, paren } or null.
+  function fnReturn(t, k) {
+    if (isP(t[k], '{')) {
+      const close = matchClose(t, k);
+      if (!(t[k + 1] && t[k + 1].type === 'id' && t[k + 1].value === 'return')) return null;
+      const e = skipExpr(t, k + 2); const after = isP(t[e], ';') ? e + 1 : e;
+      return after === close ? { at: k + 2, stop: e } : null;
+    }
+    return { at: k, stop: -1 };
+  }
+  // A function definition at a `const NAME =` (value at j) or `function NAME(` (name at j - 1): the record, or null.
+  function fnAt(t, j, ctx, consts, isDecl) {
+    let k = j; let ps;
+    if (isDecl) { if (!isP(t[k], '(')) return null; ps = fnParams(t, k); if (!ps) return null; k = ps.close + 1; if (isP(t[k], ':')) k = skipType(t, k + 1); }
+    else if (t[k] && t[k].type === 'id' && isP(t[k + 1], '=>')) { ps = { params: [{ name: t[k].value, def: -1 }] }; k += 2; }
+    else if (isP(t[k], '(')) { ps = fnParams(t, k); if (!ps) return null; k = ps.close + 1; if (isP(t[k], ':')) k = skipType(t, k + 1); if (!isP(t[k], '=>')) return null; k++; }
+    else if (t[k] && t[k].type === 'id' && t[k].value === 'function' && isP(t[k + 1], '(')) return fnAt(t, k + 1, ctx, consts, true);
+    else return null;
+    if (isDecl && !isP(t[k], '{')) return null;
+    const ret = fnReturn(t, k); if (!ret) return null;
+    return { t, params: ps.params, at: ret.at, stop: ret.stop, ctx, consts };
+  }
+  // A call of a factory at token i (the name; "(" at i + 1): { r, end } with r the value read from its returned
+  // expression, or null.
+  // The text the call left unread is returned as `lost`, for the caller to pass on if it uses the value.
+  function callFactory(t, i, ctx) {
+    const fn = ctx.consts[FN + t[i].value]; const depth = ctx.fnDepth || 0;
+    if (!fn || depth >= FN_DEPTH) return null;
+    const [res, lost] = quietly(() => readCall(fn, t, i, ctx, depth));
+    return res && Object.assign(res, { lost });
+  }
+  function readCall(fn, t, i, ctx, depth) {
+    const close = matchClose(t, i + 1); const args = []; let k = i + 2;
+    while (k < close) {
+      const v = parseValue(t, k, ctx); args.push(v);
+      if (v.value === SKIP) lose(literalsArr(t, k, v.end)); // an argument it cannot read: its text is still scanned
+      k = v.end; if (isP(t[k], ',')) k++; else break;
+    }
+    if (k !== close) return null;
+    // The parameters are bound in the definition's own table for the time of the read and restored after it (a copy
+    // of the table per call would cost its size on every call).
+    const consts = fn.consts; const saved = [];
+    const bind = (k, v) => { saved.push([k, hasOwn(consts, k), consts[k]]); if (v === undefined) delete consts[k]; else consts[k] = v; };
+    const fctx = Object.assign({}, fn.ctx, { consts, fnDepth: depth + 1 });
+    const ft = fn.t; let r;
+    try {
+      fn.params.forEach((p, n) => {
+        let v = args[n]; if (!v && p.def >= 0) v = parseValue(fn.t, p.def, fctx);
+        bind(p.name, v && v.value !== SKIP && v.value !== undefined ? { value: v.value, exact: v.exact !== false, optional: !!v.optional, zod: !!v.zod, optionalKeys: v.optionalKeys || null, top: false, partial: !!v.partial, lost: null, holes: (v.holes || 0) + (v.unknownKeys ? v.unknownKeys.size : 0) + (v.spreadUnknown ? 1 : 0) } : undefined);
+        bind(FN + p.name, undefined);
+      });
+      const endOk = (e) => (fn.stop >= 0 ? e === fn.stop : !ft[e] || isP(ft[e], ';') || isP(ft[e], ',') || isP(ft[e], ')') || isP(ft[e], '}') || !!ft[e].nl);
+      if (isP(ft[fn.at], '(')) { // => ({ … }), return (…)
+        const pc = matchClose(ft, fn.at); r = parseValue(ft, fn.at + 1, fctx);
+        if (r.value === SKIP || r.end !== pc || !endOk(pc + 1)) return null;
+      } else {
+        r = parseValue(ft, fn.at, fctx);
+        if (r.value === SKIP || (fn.stop >= 0 && r.end !== fn.stop)) return null;
+      }
+    } finally {
+      for (let n = saved.length - 1; n >= 0; n--) { const [k, had, old] = saved[n]; if (had) consts[k] = old; else delete consts[k]; }
+    }
+    return { r, end: close + 1 };
+  }
+  // A spread in a shape that is not a plain constant: a factory call, or a constant object filtered by key.
+  function spreadExpr(t, k, ctx) {
+    const sp = spreadCall(t, k, ctx); if (sp) return sp;
+    const [fe, lost] = quietly(() => filteredEntries(t, k, ctx)); if (fe) lose(lost);
+    return fe;
+  }
+  // Object.fromEntries(Object.entries(FIELDS).filter(([key]) => key !== 'title')): the constant object FIELDS (read
+  // whole) without the keys the test rejects. The test may compare the key with string literals (=== !== == !=), test
+  // it with [..].includes(key) or a constant array's .includes(key), negate with !, and join with && and ||; anything
+  // else, and a constant with a part the reader could not read, is not read.
+  function filteredEntries(t, k, ctx) {
+    const at = (n, ...vals) => vals.every((v, m) => { const x = t[n + m]; return x && (v === null ? x.type === 'id' : x.value === v && (x.type === 'p' || x.type === 'id')); });
+    if (!at(k, 'Object', '.', 'fromEntries', '(', 'Object', '.', 'entries', '(', null, ')', '.', 'filter', '(', '(', '[', null)) return null;
+    const outerClose = matchClose(t, k + 3); const filterClose = matchClose(t, k + 12);
+    const name = t[k + 8].value; const key = t[k + 15].value;
+    const c = ctx && ctx.consts && hasOwn(ctx.consts, name) ? ctx.consts[name] : null;
+    if (!c || c.zod || !c.value || typeof c.value !== 'object' || Array.isArray(c.value) || c.exact === false || c.holes) return null;
+    let j = k + 16; if (isP(t[j], ',') && t[j + 1] && t[j + 1].type === 'id') j += 2;
+    if (!isP(t[j], ']') || !isP(t[j + 1], ')') || !isP(t[j + 2], '=>')) return null;
+    if (filterClose + (isP(t[filterClose + 1], ',') ? 2 : 1) !== outerClose || !isP(t[outerClose], ')')) return null; // a trailing comma is allowed
+    const strs = (n) => { // a string array literal or constant: [values, end]
+      if (isP(t[n], '[')) { const v = parseValue(t, n, ctx); return Array.isArray(v.value) && v.value.every((x) => typeof x === 'string') && !v.holes ? [v.value, v.end] : null; }
+      if (t[n] && t[n].type === 'id' && hasOwn(ctx.consts, t[n].value)) { const v = ctx.consts[t[n].value]; return Array.isArray(v.value) && v.value.every((x) => typeof x === 'string') && !v.holes && v.exact !== false ? [v.value, n + 1] : null; }
+      return null;
+    };
+    // a recursive descent over the test: or := and (|| and)*, and := unary (&& unary)*, unary := !unary | (or) | atom
+    let n = j + 3;
+    const atom = () => {
+      if (t[n] && t[n].type === 'id' && t[n].value === key && t[n + 1] && /^(===|!==|==|!=)$/.test(t[n + 1].value) && t[n + 2] && t[n + 2].type === 'str') { const op = t[n + 1].value; const lit = t[n + 2].value; n += 3; return (x) => (op[0] === '=' ? x === lit : x !== lit); }
+      if (t[n] && t[n].type === 'str' && t[n + 1] && /^(===|!==|==|!=)$/.test(t[n + 1].value) && t[n + 2] && t[n + 2].type === 'id' && t[n + 2].value === key) { const op = t[n + 1].value; const lit = t[n].value; n += 3; return (x) => (op[0] === '=' ? x === lit : x !== lit); }
+      const a = strs(n);
+      if (a && at(a[1], '.', 'includes', '(', key, ')')) { n = a[1] + 5; const set = a[0]; return (x) => set.includes(x); }
+      return null;
+    };
+    const unary = () => {
+      if (isP(t[n], '!')) { n++; const f = unary(); return f && ((x) => !f(x)); }
+      if (isP(t[n], '(')) { n++; const f = or(); if (!f || !isP(t[n], ')')) return null; n++; return f; }
+      return atom();
+    };
+    const and = () => { let f = unary(); while (f && isP(t[n], '&&')) { n++; const g = unary(); if (!g) return null; const a = f; f = (x) => a(x) && g(x); } return f; };
+    const or = () => { let f = and(); while (f && isP(t[n], '||')) { n++; const g = and(); if (!g) return null; const a = f; f = (x) => a(x) || g(x); } return f; };
+    const test = or();
+    if (test && isP(t[n], ',') && n + 1 === filterClose) n++;
+    if (!test || n !== filterClose) return null;
+    const value = {}; Object.keys(c.value).forEach((x) => { if (test(x)) value[x] = c.value[x]; });
+    const optionalKeys = c.optionalKeys ? new Set(Array.from(c.optionalKeys).filter((x) => hasOwn(value, x))) : null;
+    if (c.lost) lose(c.lost);
+    return { value, exact: true, optionalKeys, zod: false, end: outerClose + 1 };
+  }
+  // ...factory(args) in a shape: the plain object it returns (its optional keys kept), with end past the call.
+  function spreadCall(t, k, ctx) {
+    if (!t[k] || t[k].type !== 'id' || !isP(t[k + 1], '(') || !ctx || !ctx.consts || !hasOwn(ctx.consts, FN + t[k].value)) return null;
+    const call = callFactory(t, k, ctx); const v = call && call.r.value;
+    if (!call || call.r.zod || !v || typeof v !== 'object' || Array.isArray(v)) return null;
+    lose(call.lost);
+    return { value: v, exact: call.r.exact, optionalKeys: call.r.optionalKeys || OPTIONAL_OF.get(v) || null, zod: false, end: call.end };
+  }
+
   // ------------------------------------------------------------ zod -> JSON Schema (the common subset)
   // z.string().min(1).describe('x').optional() and friends. Unknown parts make the result inexact, not wrong.
-  function parseZod(t, i, ctx, base) {
-    // collect chain: z . name ( args ) . name ( args ) ...  With `base` (a zod constant), every call modifies it.
-    let j = i + 1; const calls = base ? [{ name: '__const', args: [], base }] : [];
+  function parseZod(t, i, ctx, base, chainAt) {
+    // collect chain: z . name ( args ) . name ( args ) ...  With `base` (a zod constant, or what a schema factory
+    // returned when the chain starts at `chainAt`, after the factory call), every call modifies it.
+    let j = chainAt || i + 1; const calls = base ? [{ name: '__const', args: [], base }] : [];
     while (isP(t[j], '.') && t[j + 1] && t[j + 1].type === 'id') {
       const name = t[j + 1].value; j += 2;
       let args = [];
@@ -442,7 +666,11 @@
         const close = matchClose(t, j); let k = j + 1;
         // the properties of z.object({...}) that cannot be read keep their name (an empty schema) rather than vanish
         const actx = /^(object|strictObject|looseObject)$/.test(name) && !calls.length ? Object.assign({}, ctx, { placeholder: true }) : ctx;
-        while (k < close) { const v = parseValue(t, k, actx); args.push(v); k = v.end; if (isP(t[k], ',')) k++; else break; }
+        while (k < close) {
+          // .regex(/…/flags): the literal itself (a value the literal parser does not read)
+          const v = name === 'regex' && t[k].type === 'regex' && (isP(t[k + 1], ',') || isP(t[k + 1], ')')) ? { value: { regexLiteral: t[k].value }, end: k + 1, exact: true } : parseValue(t, k, actx);
+          args.push(v); k = v.end; if (isP(t[k], ',')) k++; else break;
+        }
         j = close + 1;
       }
       calls.push({ name, args });
@@ -454,12 +682,15 @@
   }
   function zodToSchema(calls, ctx) {
     let s = {}; let exact = true; let optional = false;
+    const fl = ctx && ctx.fl; const zod3 = !fl || !(fl.zod >= 4);
+    // What wraps the schema the chain builds (see WRAPPED_OF): null, 'wrapped' or 'optional'.
+    let wrap = null; const wrapAs = (w) => { if (wrap !== 'optional') wrap = w; };
     const base = calls[0]; const argv = (k) => (base.args[k] ? base.args[k].value : undefined);
     switch (base.name) {
-      case '__const': s = JSON.parse(JSON.stringify(base.base.value || {})); exact = base.base.exact !== false; optional = !!base.base.optional; break;
+      case '__const': s = JSON.parse(JSON.stringify(base.base.value || {})); exact = base.base.exact !== false; optional = !!base.base.optional; wrap = (base.base.value && typeof base.base.value === 'object' && WRAPPED_OF.get(base.base.value)) || null; break;
       case 'toJSONSchema': { const a = argv(0); if (a && a !== SKIP && typeof a === 'object') s = a; else exact = false; break; }
       case 'preprocess': { const a = argv(1); if (a && a !== SKIP && typeof a === 'object') { s = a; optional = !!(base.args[1] && base.args[1].optional); } else exact = false; break; }
-      case 'optional': case 'nullish': { const a = argv(0); if (a && a !== SKIP && typeof a === 'object') s = a; else exact = false; optional = true; break; }
+      case 'optional': case 'nullish': { const a = argv(0); if (a && a !== SKIP && typeof a === 'object') s = JSON.parse(JSON.stringify(a)); else exact = false; optional = true; wrap = 'optional'; break; }
       case 'discriminatedUnion': { const a = argv(1); s = Array.isArray(a) ? { anyOf: a } : {}; if (!Array.isArray(a)) exact = false; break; }
       case 'string': s = { type: 'string' }; break;
       case 'number': s = { type: 'number' }; break;
@@ -473,7 +704,12 @@
       case 'array': { const it = argv(0); s = { type: 'array', items: it && it !== SKIP ? it : {} }; if (!it || it === SKIP || base.args[0].exact === false) exact = false; break; }
       case 'object': case 'strictObject': case 'looseObject': { const sh = argv(0); const r = shapeToSchema(sh && sh !== SKIP ? sh : {}, base.args[0] ? base.args[0].optionalKeys : null, ctx && ctx.fl); if (base.name === 'strictObject') r.schema.additionalProperties = false; s = r.schema; if (!sh || sh === SKIP || base.args[0].exact === false) exact = false; break; }
       case 'record': { const v = base.args.length > 1 ? argv(1) : argv(0); s = { type: 'object', additionalProperties: v && v !== SKIP ? v : {} }; if (ctx && ctx.fl && ctx.fl.zod >= 4) { const kk = base.args.length > 1 ? argv(0) : { type: 'string' }; s = { type: 'object', propertyNames: kk && kk !== SKIP ? kk : { type: 'string' }, additionalProperties: s.additionalProperties }; } break; }
-      case 'union': { const a = argv(0); s = Array.isArray(a) ? { anyOf: a } : {}; if (!Array.isArray(a)) exact = false; break; }
+      case 'union': {
+        const a = argv(0);
+        if (!Array.isArray(a)) { s = {}; exact = false; } else if (!zod3) s = { anyOf: a };
+        else { const u = zod3Union(a); s = u.schema; if (!u.exact) exact = false; }
+        break;
+      }
       case 'url': s = { type: 'string', format: 'uri' }; break;
       case 'email': s = { type: 'string', format: 'email' }; break;
       case 'uuid': s = { type: 'string', format: 'uuid' }; break;
@@ -483,35 +719,95 @@
       const a0 = c.args[0] ? c.args[0].value : undefined;
       switch (c.name) {
         case 'describe': if (typeof a0 === 'string') s.description = a0; else exact = false; break;
-        case 'optional': case 'nullish': optional = true; break;
-        case 'nullable': s = s.type ? Object.assign({}, s, { type: [].concat(s.type, 'null') }) : s; break;
-        case 'default': optional = true; if (a0 !== SKIP && a0 !== undefined) s.default = a0; break;
+        case 'optional': case 'nullish': optional = true; wrapAs('optional'); break;
+        case 'nullable': { const n = nullableOf(withIntBounds(s, fl), zod3, wrap); s = n.schema; if (!n.exact) exact = false; wrap = null; break; }
+        case 'default': optional = true; wrapAs('wrapped'); if (a0 !== SKIP && a0 !== undefined) s.default = a0; break;
         case 'int': s.type = 'integer'; break;
-        case 'min': if (typeof a0 === 'number') s[s.type === 'string' ? 'minLength' : s.type === 'array' ? 'minItems' : 'minimum'] = a0; break;
-        case 'max': if (typeof a0 === 'number') s[s.type === 'string' ? 'maxLength' : s.type === 'array' ? 'maxItems' : 'maximum'] = a0; break;
-        case 'length': if (typeof a0 === 'number') { s.minLength = a0; s.maxLength = a0; } break;
+        case 'min': if (typeof a0 === 'number') s[s.type === 'string' ? 'minLength' : s.type === 'array' ? 'minItems' : 'minimum'] = a0; else exact = false; break;
+        case 'max': if (typeof a0 === 'number') s[s.type === 'string' ? 'maxLength' : s.type === 'array' ? 'maxItems' : 'maximum'] = a0; else exact = false; break;
+        case 'length': if (typeof a0 === 'number') { s[s.type === 'array' ? 'minItems' : 'minLength'] = a0; s[s.type === 'array' ? 'maxItems' : 'maxLength'] = a0; } else exact = false; break;
         case 'positive': s.exclusiveMinimum = 0; break;
         case 'nonnegative': s.minimum = 0; break;
         case 'url': s.format = 'uri'; break;
         case 'email': s.format = 'email'; break;
         case 'uuid': s.format = 'uuid'; break;
         case 'datetime': s.format = 'date-time'; break;
-        case 'regex': exact = false; break;
-        case 'refine': case 'superRefine': case 'transform': case 'brand': case 'readonly': case 'catch': case 'pipe': break;
-        case 'array': s = { type: 'array', items: s }; break;
+        case 'regex': { // JSON Schema pattern: the RegExp's source, as zod 4 and zod-to-json-schema write it (flags are not
+          // carried). A second .regex() moves both into allOf, and a pattern the reader cannot read is left out.
+          const src = a0 && typeof a0 === 'object' && typeof a0.regexLiteral === 'string' ? regexSource(a0.regexLiteral) : null;
+          if (src === null || s.pattern !== undefined || calls.filter((d) => d.name === 'regex').length > 1) { delete s.pattern; exact = false; } else s.pattern = src;
+          break;
+        }
+        case 'refine': case 'superRefine': case 'transform': case 'brand': case 'readonly': case 'catch': case 'pipe': wrapAs('wrapped'); break;
+        case 'array': s = { type: 'array', items: s }; wrap = null; break;
         case 'strict': s.additionalProperties = false; break;
         case 'passthrough': case 'catchall': delete s.additionalProperties; break;
         case 'meta': if (a0 && typeof a0 === 'object' && typeof a0.description === 'string') s.description = a0.description; break;
-        case 'trim': case 'toLowerCase': case 'toUpperCase': case 'finite': case 'safe': case 'nonempty': if (c.name === 'nonempty') s[s.type === 'array' ? 'minItems' : 'minLength'] = 1; break;
+        case 'trim': case 'toLowerCase': case 'toUpperCase': case 'finite': case 'safe': case 'nonempty':
+          if (c.name === 'nonempty') s[s.type === 'array' ? 'minItems' : 'minLength'] = 1;
+          wrapAs('wrapped'); // a check the JSON Schema does not show: the option is no longer a bare primitive to zod-to-json-schema
+          break;
         default: exact = false;
       }
     }
-    const fl = ctx && ctx.fl;
+    s = withIntBounds(s, fl);
+    if (fl && fl.compactUnions) compactTypeUnion(s);
+    if (wrap && s && typeof s === 'object') WRAPPED_OF.set(s, wrap);
+    return { schema: s, exact, optional };
+  }
+  function withIntBounds(s, fl) {
     if (fl && fl.intBounds && s.type === 'integer') { // zod 4 gives an integer the safe-integer range unless the schema narrows it
       if (s.minimum === undefined && s.exclusiveMinimum === undefined) s.minimum = -SAFE_INT;
       if (s.maximum === undefined && s.exclusiveMaximum === undefined) s.maximum = SAFE_INT;
     }
-    return { schema: s, exact, optional };
+    return s;
+  }
+  // How the SDK's converters write unions and .nullable() (checked against SDK 1.29 and 1.32 with zod 3.25.76,
+  // 4.3.6 and 4.6.7):
+  //   zod 3 (zod-to-json-schema): a union whose options are all bare string/number/boolean/null schemas (no checks;
+  //     a description of an option is dropped) is a type, or a type array; .nullable() of such a bare schema is a
+  //     type array with "null", and of anything else anyOf [schema, {type: null}], the description repeated outside.
+  //   zod 4: .nullable() is always anyOf [schema, {type: null}]; from 4.5.0 an anyOf of bare types becomes a type array.
+  //   A schema whose JSON Schema looks bare but that zod wraps (.optional(), .refine(), .transform(), .default(), …) or
+  //   that carries a check the JSON Schema does not show (.trim()) is not a primitive to zod-to-json-schema: a union
+  //   with such an option, and .nullable() of it, are anyOf. An .optional()/.nullish() option is written there as
+  //   anyOf [{not: {}}, schema] by zod-to-json-schema, a form the reader does not build, so that union is inexact.
+  const ZOD3_PRIMITIVE = new Set(['string', 'number', 'boolean', 'null']);
+  // schema object -> 'wrapped' | 'optional': set by zodToSchema for a chain with a wrapper or a hidden check.
+  const WRAPPED_OF = new WeakMap();
+  const wrappedOf = (o) => (o && typeof o === 'object' ? WRAPPED_OF.get(o) || null : null);
+  const bareZod3 = (o, withDescription) => !!o && typeof o === 'object' && !WRAPPED_OF.has(o) && typeof o.type === 'string' && ZOD3_PRIMITIVE.has(o.type) && Object.keys(o).every((k) => k === 'type' || (withDescription && k === 'description'));
+  function zod3Union(options) {
+    const exact = !options.some((o) => wrappedOf(o) === 'optional');
+    if (!options.length || !options.every((o) => bareZod3(o, true))) return { schema: { anyOf: options }, exact };
+    const types = []; options.forEach((o) => { if (!types.includes(o.type)) types.push(o.type); });
+    return { schema: { type: types.length === 1 ? types[0] : types }, exact };
+  }
+  function nullableOf(s, zod3, wrap) {
+    if (zod3 && !wrap && bareZod3(s, true)) return { schema: Object.assign({}, s, { type: [s.type, 'null'] }), exact: true };
+    const out = { anyOf: [s, { type: 'null' }] };
+    if (zod3 && typeof s.description === 'string') out.description = s.description;
+    return { schema: out, exact: !(zod3 && wrap === 'optional') };
+  }
+  // zod 4.5+'s compactTypeUnion: anyOf of options that are only { type } (nested ones first) -> type (array).
+  function compactTypeUnion(schema) {
+    const options = schema.anyOf;
+    if (!Array.isArray(options) || !options.length || schema.type !== undefined) return;
+    const types = [];
+    for (const o of options) {
+      if (!o || typeof o !== 'object') return;
+      compactTypeUnion(o);
+      const keys = Object.keys(o); if (keys.length !== 1 || keys[0] !== 'type') return;
+      for (const m of [].concat(o.type)) { if (typeof m !== 'string') return; if (!types.includes(m)) types.push(m); }
+    }
+    delete schema.anyOf;
+    schema.type = types.length === 1 ? types[0] : types;
+  }
+  // The source of a regular expression literal (/^[a-z]+$/i -> ^[a-z]+$), as RegExp.prototype.source gives it; null when
+  // the literal is not one the engine accepts.
+  function regexSource(lit) {
+    const m = /^\/([\s\S]*)\/([a-z]*)$/.exec(lit); if (!m) return null;
+    try { return new RegExp(m[1], m[2]).source; } catch (e) { return null; }
   }
   // A zod raw shape { a: z.string(), b: z.number().optional() } -> object schema the way the TS SDK emits it.
   // What the TS SDK lists for a zod schema depends on the SDK major and the zod major (see tsFlavour):
@@ -540,7 +836,7 @@
     const f = fl || FL_DEFAULT;
     const shaped = { type: 'object', properties: props };
     const req = Object.keys(props).filter((k) => !(optionalKeys && optionalKeys.has(k))); if (req.length) shaped.required = req;
-    if (f.closed) shaped.additionalProperties = false;
+    if (f.closed && !(f.emptyShapeOpen && !Object.keys(props).length)) shaped.additionalProperties = false;
     if (DIALECT[f.dialect]) shaped.$schema = DIALECT[f.dialect];
     return shaped;
   }
@@ -622,6 +918,65 @@
     [stem].concat(JS_EXT.map((e) => stem + e), JS_EXT.map((e) => stem + '/index' + e)).forEach((c) => (suffixIndex(c) || []).forEach((p) => hits.add(p)));
     return hits.size === 1 ? Array.from(hits)[0] : null;
   }
+  // A top-level constant of a file that nothing in that file changes: declared once, with const, and every other use a
+  // read (no assignment, ++/--, delete, push/splice/set/… on it or a member, not handed to a call other than
+  // Object.entries / keys / values / freeze, and not copied into another variable by `= NAME`). Used for a registry
+  // another module imports (R-RD-33), together with importersReadOnly for the modules that import it.
+  const FROZEN_MUTATORS = /^(push|pop|shift|unshift|splice|sort|reverse|fill|copyWithin|set|delete|clear|add)$/;
+  // Whether the use of a name whose tokens run from k0 to k (NAME, or ns . NAME for a namespace import) may change it.
+  function useMayChange(t, k0, k) {
+    const pv = t[k0 - 1];
+    if (pv && ((pv.type === 'id' && pv.value === 'delete') || isP(pv, '++') || isP(pv, '--'))) return true;
+    let m = k + 1;
+    for (let n = 0; n < 64; n++) {
+      if ((isP(t[m], '.') || isP(t[m], '?.')) && t[m + 1] && t[m + 1].type === 'id') { if (FROZEN_MUTATORS.test(t[m + 1].value) && isP(t[m + 2], '(')) return true; m += 2; }
+      else if (isP(t[m], '[')) m = matchClose(t, m) + 1;
+      else break;
+    }
+    if (isP(t[m], '=') || isP(t[m], '++') || isP(t[m], '--') || (t[m] && t[m].type === 'p' && /^([-+*/%|&^]|\?\?|\|\||&&|\*\*|<<|>>)$/.test(t[m].value) && isP(t[m + 1], '='))) return true;
+    if (m === k + 1 && isP(pv, '=')) return true; // const list = NAME: an alias the reader does not follow
+    if (m === k + 1 && (isP(pv, '(') || isP(pv, ',') || isP(pv, '...'))) {
+      // an argument: only Object.entries / keys / values / freeze(NAME) read it
+      let o = k0 - 1; let d = 0; for (; o >= 0; o--) { if (isP(t[o], ')') || isP(t[o], ']') || isP(t[o], '}')) d++; else if (isP(t[o], '(') || isP(t[o], '[') || isP(t[o], '{')) { if (!d) break; d--; } }
+      if (o >= 0 && isP(t[o], '(') && t[o - 1] && t[o - 1].type === 'id' && !(/^(entries|keys|values|freeze)$/.test(t[o - 1].value) && isP(t[o - 2], '.') && t[o - 3] && t[o - 3].value === 'Object') && !/^(if|while|switch|return|for)$/.test(t[o - 1].value)) return true;
+    }
+    return false;
+  }
+  function constFrozenIn(t, name) {
+    let decls = 0;
+    for (let k = 0; k < t.length; k++) {
+      const x = t[k]; if (x.type !== 'id' || x.value !== name || isP(t[k - 1], '.') || isP(t[k - 1], '?.')) continue;
+      const pv = t[k - 1];
+      if (pv && pv.type === 'id' && /^(const|let|var|function|class)$/.test(pv.value)) { decls++; if (pv.value !== 'const') return false; continue; }
+      if (isP(t[k + 1], ':') && (isP(pv, '{') || isP(pv, ','))) continue; // a key of an object literal
+      if (useMayChange(t, k, k)) return false;
+    }
+    return decls === 1;
+  }
+  // Whether a module that imports the constant uses it only to read it: `locals` are the names it is bound to there
+  // (import { TOOLS as T }), `namespaces` the names of namespace imports of a module that exports it (ns.TOOLS). A
+  // declaration of the same name, or a namespace used other than as ns.member, counts as a change (not followed).
+  function importerReadOnly(t, locals, namespaces, name) {
+    for (let k = 0; k < t.length; k++) {
+      const x = t[k]; if (x.type !== 'id' || isP(t[k - 1], '.') || isP(t[k - 1], '?.')) continue;
+      const pv = t[k - 1]; const declared = pv && pv.type === 'id' && /^(const|let|var|function|class)$/.test(pv.value);
+      if (locals.has(x.value)) {
+        if (isP(t[k + 1], ':') && (isP(pv, '{') || isP(pv, ','))) continue;
+        if (pv && pv.type === 'id' && (pv.value === 'import' || pv.value === 'as' || pv.value === 'type')) continue;
+        if (isP(pv, '{') || isP(pv, ',')) { // inside the import's own braces
+          let o = k - 1; while (o >= 0 && !isP(t[o], '{') && !isP(t[o], ';')) o--;
+          if (o >= 0 && isP(t[o], '{') && t[o - 1] && t[o - 1].type === 'id' && t[o - 1].value === 'import') continue;
+        }
+        if (declared || useMayChange(t, k, k)) return false;
+      } else if (namespaces.has(x.value)) {
+        if (pv && pv.type === 'id' && pv.value === 'as') continue; // import * as ns
+        if (declared) return false;
+        if ((isP(t[k + 1], '.') || isP(t[k + 1], '?.')) && t[k + 2] && t[k + 2].type === 'id') { if (t[k + 2].value === name && useMayChange(t, k, k + 2)) return false; continue; }
+        return false; // the namespace object itself handed on
+      }
+    }
+    return true;
+  }
   // Constants each file sees: its own, the ones it imports (followed through re-exports), and for imported names that
   // cannot be followed, a constant of that name defined once in the repository (globals).
   function moduleConsts(files, globals, sdk) {
@@ -667,6 +1022,10 @@
         if (!v && globals && imp.imported !== '*' && imp.imported !== 'default' && hasOwn(globals, imp.imported)) v = globals[imp.imported];
         if (!v && globals && imp.imported === 'default' && hasOwn(globals, imp.local)) v = globals[imp.local];
         if (v) seed[imp.local] = v; else delete seed[imp.local];
+        // a schema factory exported by name from the imported file itself (no re-export followed)
+        const fx = target && imp.imported !== '*' ? mod(target).exports.names.get(imp.imported) : null;
+        const tb = typeof fx === 'string' ? tableFor(target, depth + 1) : null;
+        if (tb && hasOwn(tb, FN + fx)) seed[FN + imp.local] = tb[FN + fx]; else delete seed[FN + imp.local];
       });
       return seed;
     };
@@ -679,7 +1038,89 @@
       busy.delete(p); memo.set(p, consts);
       return consts;
     }
-    return { seedFor: (p) => seedFor(p, 0), tokens: toks, tableFor: (p) => tableFor(p, 0), module: mod };
+    // Register helpers a file imports from a module of the repository (R-RD-32): one relative import, to the file that
+    // defines the helper (a re-export from a further module is not followed). Map(local name -> spec).
+    const wrapMemo = new Map();
+    const wrappersOf = (p) => { if (!wrapMemo.has(p)) { let w; try { w = registerWrappers(toks(p)); } catch (e) { w = new Map(); } wrapMemo.set(p, w); } return wrapMemo.get(p); };
+    const importedWrappers = (p) => {
+      const out = new Map();
+      mod(p).imports.forEach((imp) => {
+        if (!imp.spec.startsWith('.') || imp.imported === '*') return;
+        const target = resolveSpec(p, imp.spec, paths, suffixIndex); if (!target || target === p) return;
+        const ex = mod(target).exports;
+        const local = imp.imported === 'default' ? ex.defaultLocal : ex.names.get(imp.imported);
+        if (typeof local !== 'string') return;
+        const w = wrappersOf(target).get(local); if (w) out.set(imp.local, w);
+      });
+      return out;
+    };
+    // Whether a name file p imports (one relative import, from the file that declares it) is a constant nothing changes
+    // (R-RD-33), so a registry there can be unrolled where it is iterated: the declaring file only reads it after its
+    // one const declaration, and so does every file of the repository that imports it, by any name, directly or
+    // through re-exports. A file that loads the declaring module some other way (require, import()) makes it unknown.
+    // Asked only where a loop needs it, and kept per (declaring file, name).
+    const frozenMemo = new Map();
+    const frozenImport = (p, localName) => {
+      const imp = mod(p).imports.find((x) => x.local === localName);
+      if (!imp || !imp.spec.startsWith('.') || imp.imported === '*' || imp.imported === 'default') return false;
+      const target = resolveSpec(p, imp.spec, paths, suffixIndex); if (!target || target === p) return false;
+      const local = mod(target).exports.names.get(imp.imported);
+      if (typeof local !== 'string') return false;
+      const key = target + '\u0000' + local;
+      if (!frozenMemo.has(key)) { let r = false; try { r = constFrozenIn(toks(target), local) && importersReadOnly(target, local); } catch (e) { r = false; } frozenMemo.set(key, r); }
+      return frozenMemo.get(key);
+    };
+    // Every other file that imports `local` of `target` (followed through re-exports) uses it only to read it.
+    const importersReadOnly = (target, local) => {
+      // the (file, exported name) pairs that stand for the constant: its own exports, then re-exports of them
+      const alias = new Set(); const key = (f, n) => f + '\u0000' + n;
+      mod(target).exports.names.forEach((v, k) => { if (v === local) alias.add(key(target, k)); });
+      if (mod(target).exports.defaultLocal === local) alias.add(key(target, 'default'));
+      const nsOf = new Set([target]); // files whose namespace object holds the constant as a member
+      const files = Array.from(paths);
+      for (let round = 0, grew = true; grew && round < 8; round++) {
+        grew = false;
+        for (const q of files) {
+          const ex = mod(q).exports;
+          // import { TOOLS } from './registry'; export { TOOLS as LIST } / export default TOOLS: q passes it on too
+          const imported = (n) => { const imp = mod(q).imports.find((x) => x.local === n && x.imported !== '*'); const f = imp && resolveSpec(q, imp.spec, paths, suffixIndex); return !!f && alias.has(key(f, imp.imported)); };
+          if (ex.defaultLocal && !alias.has(key(q, 'default')) && imported(ex.defaultLocal)) { alias.add(key(q, 'default')); grew = true; }
+          ex.names.forEach((v, k) => {
+            if (typeof v === 'string') { if (!alias.has(key(q, k)) && imported(v)) { alias.add(key(q, k)); grew = true; } return; }
+            if (!v || alias.has(key(q, k))) return;
+            const f = resolveSpec(q, v.spec, paths, suffixIndex); if (!f) return;
+            if (v.imported === '*' ? nsOf.has(f) : alias.has(key(f, v.imported))) { if (v.imported === '*') nsOf.add(q); alias.add(key(q, k)); grew = true; }
+          });
+          ex.stars.forEach((sp) => {
+            const f = resolveSpec(q, sp, paths, suffixIndex); if (!f) return;
+            alias.forEach((a) => { const [af, an] = a.split('\u0000'); if (af === f && an !== 'default' && !alias.has(key(q, an))) { alias.add(key(q, an)); nsOf.add(q); grew = true; } });
+          });
+        }
+      }
+      const holders = new Set(Array.from(alias).map((a) => a.split('\u0000')[0]));
+      for (const q of files) {
+        if (q === target) continue;
+        const locals = new Set(); const namespaces = new Set(); let loads = false;
+        mod(q).imports.forEach((imp) => {
+          const f = resolveSpec(q, imp.spec, paths, suffixIndex); if (!f) return;
+          if (imp.imported === '*') { if (nsOf.has(f) || holders.has(f)) namespaces.add(imp.local); }
+          else if (alias.has(key(f, imp.imported))) locals.add(imp.local);
+          // a re-exported namespace (export * as reg from './registry') imported by name: ns.TOOLS through it
+          else { const e = mod(f).exports.names.get(imp.imported); if (e && typeof e === 'object' && e.imported === '*') { const g = resolveSpec(f, e.spec, paths, suffixIndex); if (g && (nsOf.has(g) || holders.has(g))) namespaces.add(imp.local); } }
+        });
+        // a CommonJS require or a dynamic import of a file that holds it: not followed
+        const t = toks(q);
+        for (let k = 0; k + 2 < t.length && !loads; k++) {
+          if (t[k].type === 'id' && (t[k].value === 'require' || t[k].value === 'import') && isP(t[k + 1], '(') && t[k + 2].type === 'str' && !isP(t[k - 1], '.')) {
+            const f = resolveSpec(q, t[k + 2].value, paths, suffixIndex); if (f && holders.has(f)) loads = true;
+          }
+        }
+        if (loads) return false;
+        if ((locals.size || namespaces.size) && !importerReadOnly(t, locals, namespaces, local)) return false;
+      }
+      return true;
+    };
+    return { seedFor: (p) => seedFor(p, 0), tokens: toks, tableFor: (p) => tableFor(p, 0), module: mod, importedWrappers, frozenImport };
   }
 
   // ------------------------------------------------------------ JS/TS extraction
@@ -716,7 +1157,7 @@
       if (tk.type !== 'id') continue;
       if ((tk.value === 'const' || tk.value === 'let' || tk.value === 'var') && t[i + 1].type === 'id' && !isP(t[i - 1], '.')) {
         let j = i + 2;
-        if (isP(t[j], ':')) j = skipType(t, j + 1);
+        if (isP(t[j], ':')) j = skipAnnotation(t, j + 1); // const fooTool: ToolDefinition<typeof P> = { … } (R-RD-33)
         if (!isP(t[j], '=')) continue;
         let v; let lost = [];
         try { [v, lost] = collecting(() => parseValue(t, j + 1, Object.assign({}, ctx, { consts }))); } catch (e) { v = { value: SKIP }; }
@@ -725,7 +1166,10 @@
           const ch = idChain(t, j + 1);
           if ((isP(t[ch.end], '||') || isP(t[ch.end], '??')) && t[ch.end + 1] && t[ch.end + 1].type === 'str' && (isP(t[ch.end + 2], ';') || isP(t[ch.end + 2], ',') || (t[ch.end + 2] && t[ch.end + 2].nl) || !t[ch.end + 2])) v = { value: t[ch.end + 1].value, exact: false, fallback: true };
         }
-        if (v.value !== SKIP) consts[t[i + 1].value] = { value: v.value, exact: v.exact, optional: !!v.optional, zod: !!v.zod, optionalKeys: v.optionalKeys || null, top: d === 0 && !v.fallback, partial: !!v.partial, lost: lost.length ? lost : null, holes: (v.holes || 0) + (v.unknownKeys ? v.unknownKeys.size : 0) + (v.spreadUnknown ? 1 : 0) };
+        if (v.value === SKIP && d === 0) { const f = fnAt(t, j + 1, ctx, consts, false); if (f) { consts[FN + t[i + 1].value] = f; continue; } }
+        if (v.value !== SKIP) consts[t[i + 1].value] = { value: v.value, exact: v.exact, optional: !!v.optional, zod: !!v.zod, optionalKeys: v.optionalKeys || null, top: d === 0 && !v.fallback, partial: !!v.partial, lost: lost.length ? lost : null, holes: (v.holes || 0) + (v.unknownKeys ? v.unknownKeys.size : 0) + (v.spreadUnknown ? 1 : 0), decl: tk.value };
+      } else if (tk.value === 'function' && d === 0 && t[i + 1].type === 'id' && isP(t[i + 2], '(') && !isP(t[i - 1], '.') && !(t[i - 1] && t[i - 1].value === 'async')) {
+        const f = fnAt(t, i + 2, ctx, consts, true); if (f) consts[FN + t[i + 1].value] = f;
       } else if (tk.value === 'enum' && t[i + 1].type === 'id' && isP(t[i + 2], '{')) {
         const close = matchClose(t, i + 2); const o = {}; let k = i + 3; let n = 0;
         while (k < close) {
@@ -745,7 +1189,9 @@
       const optionalKeys = new Set(); const props = {}; let exact = true; let j = i + 1;
       while (j < t.length && !isP(t[j], '}')) {
         if (isP(t[j], '...')) { // {...SHARED, a: z.string()}
-          const nx = t[j + 1]; const c = nx && nx.type === 'id' && ctx.consts && Object.prototype.hasOwnProperty.call(ctx.consts, nx.value) ? ctx.consts[nx.value] : null;
+          const nx = t[j + 1]; let c = nx && nx.type === 'id' && ctx.consts && Object.prototype.hasOwnProperty.call(ctx.consts, nx.value) ? ctx.consts[nx.value] : null;
+          const sp = c ? null : spreadExpr(t, j + 1, ctx); // ...rangeArgs('Defaults to today.'), ...Object.fromEntries(…)
+          if (sp && (isP(t[sp.end], ',') || isP(t[sp.end], '}'))) { Object.assign(props, sp.value); exact = exact && sp.exact !== false; if (sp.optionalKeys) sp.optionalKeys.forEach((x) => optionalKeys.add(x)); j = isP(t[sp.end], ',') ? sp.end + 1 : sp.end; continue; }
           if (c && !c.zod && c.value && typeof c.value === 'object' && !Array.isArray(c.value) && (isP(t[j + 2], ',') || isP(t[j + 2], '}'))) { Object.assign(props, c.value); exact = exact && c.exact !== false; if (c.optionalKeys) c.optionalKeys.forEach((x) => optionalKeys.add(x)); j += isP(t[j + 2], ',') ? 3 : 2; continue; }
           exact = false; j = skipExpr(t, j + 1); if (isP(t[j], ',')) j++; continue;
         }
@@ -784,8 +1230,16 @@
     const v = semver(sdk.version);
     const sameKind = !sdk.kind || sdk.kind === kind;
     const execution = kind === 'v1' && sameKind && !!v && v[0] === 1 && (v[1] >= 24);
-    if (sdk.customList) return { kind, zod, dialect: null, closed: zod < 4, intBounds: zod >= 4, execution: sdk.customList === 'wrap' && execution, customList: sdk.customList };
-    return { kind, zod, dialect: kind === 'v2' ? '2020-12' : 'draft-07', closed: zod < 4, intBounds: zod >= 4, execution };
+    // zod 4.5.0 and later rewrite an anyOf of bare types as a type array (compactTypeUnion in its to-json-schema), for
+    // the zod package itself only (zod/v4 inside zod 3.25 has no such pass); the lowest version the dependency allows
+    // must have it.
+    const zv = semver(sdk.zodVersion);
+    const compactUnions = zod >= 4 && !!zv && zv[0] === 4 && zv[1] >= 5;
+    // SDK 1.23.0 and later build an empty raw shape ({}) as a zod 4 mini object, which has no additionalProperties
+    // whatever zod the server uses (objectFromShape in its zod-compat).
+    const emptyShapeOpen = kind === 'v1' && sameKind && !!v && v[0] === 1 && v[1] >= 23;
+    if (sdk.customList) return { kind, zod, dialect: null, closed: zod < 4, intBounds: zod >= 4, compactUnions, emptyShapeOpen, execution: sdk.customList === 'wrap' && execution, customList: sdk.customList };
+    return { kind, zod, dialect: kind === 'v2' ? '2020-12' : 'draft-07', closed: zod < 4, intBounds: zod >= 4, compactUnions, emptyShapeOpen, execution };
   }
   // A TypeScript or JavaScript file that builds an McpServer and sets its own tools/list handler on it
   // (mcpServer.server.setRequestHandler(ListToolsRequestSchema, …) under SDK 1.x, (…, 'tools/list', …) under 2.x): the
@@ -939,7 +1393,9 @@
           }
         }
       }
-      const r = ok && decls === 1; frozenMemo.set(name, r); return r;
+      // declared here once, or imported from a module of the repository that declares it once with const, where nothing
+      // in the repository changes it (opts.frozenImport, R-RD-33)
+      const r = ok && (decls === 1 || (decls === 0 && !!opts.frozenImport && opts.frozenImport(name))); frozenMemo.set(name, r); return r;
     };
     // Registrations inside a loop over a collection the reader knows (R-RD-15, R-RD-16):
     //   for (const x of LIST) / for (const [name, def] of Object.entries(TABLE)) / LIST.forEach((x) => …)
@@ -1060,6 +1516,86 @@
       made.forEach((tool) => add(tool, 'derived', at, { unrolled: true }));
       return true;
     };
+    // A call of a register helper (see registerWrappers), read with the constants of c: the tool, PARAM when its name
+    // is a parameter of the function around the call, or null when it cannot be read.
+    const PARAM = { param: true };
+    const viaWrapper = (w, args, c, ps) => {
+      const slots = w.kind === 'registerTool' ? [w.name, w.cfg] : [w.name, w.desc, w.shape];
+      if (slots.some((x) => args[x.p] === undefined) && w.kind === 'registerTool') return null;
+      if (slots[0].key !== undefined) {
+        // tool.name, tool.description, …: properties of one argument, read from its value
+        const v = parseValue(t, args[slots[0].p], c);
+        if (v.value === SKIP || !v.value || typeof v.value !== 'object' || Array.isArray(v.value)) return null;
+        const o = v.value; const get = (x) => (hasOwn(o, x.key) ? o[x.key] : undefined);
+        const unknown = (x) => !hasOwn(o, x.key) && v.exact === false; // left out because it could not be read
+        const name = get(slots[0]); if (typeof name !== 'string' || !name) return null;
+        if (w.kind === 'registerTool') {
+          const cv = get(slots[1]); if (!cv || typeof cv !== 'object' || Array.isArray(cv)) return null;
+          return toolFromConfig(name, { value: cv, exact: v.exact, unknownKeys: new Set(), partialKeys: new Set() });
+        }
+        const tool = { name }; const un = [];
+        const d = get(slots[1]); if (typeof d === 'string') tool.description = d; else if (unknown(slots[1])) un.push('description');
+        const sh = get(slots[2]);
+        if (sh && typeof sh === 'object' && !Array.isArray(sh) && isRawShape(sh)) tool.inputSchema = rootSchema(sh, undefined, c.fl);
+        else if (sh && typeof sh === 'object' && isSchemaObj(sh) && sh.type === 'object') tool.inputSchema = sh;
+        else if (sh === undefined && !unknown(slots[2])) tool.inputSchema = { type: 'object', properties: {} };
+        else { tool.inputSchema = { type: 'object' }; un.push('inputSchema'); }
+        if (c.fl.execution) tool.execution = { taskSupport: 'forbidden' };
+        tool._unreadable = un;
+        return tool;
+      }
+      const nm = resolveName(t, args[slots[0].p], c, ps);
+      if (nm && nm.param) return PARAM;
+      if (!nm || !nm.name) return null;
+      if (w.kind === 'registerTool') { const cfg = configAt(args[slots[1].p], c); return cfg ? toolFromConfig(nm.name, cfg) : null; }
+      // tool(name, [description], [shape], cb): a description is a string; a shape in the description's place (an
+      // object literal or a zod expression) is the shape, as the SDK reads it. An argument there that is neither and
+      // cannot be read (getDesc()) leaves the description unread, and the shape is the shape argument: if that one is
+      // missing or a function (the callback), the shape is unread too.
+      const tool = { name: nm.name }; const un = [];
+      let j = args[slots[1].p];
+      const strAt = (k) => t[k] && (t[k].type === 'str' || t[k].type === 'tpl' || (t[k].type === 'id' && (() => { const r = chainValue(c, idChain(t, k).ids); return r && typeof r.value === 'string'; })()));
+      const shapeAt = (k) => isP(t[k], '{') || (t[k] && t[k].type === 'id' && (c.zodNames.has(t[k].value) || (() => { const r = chainValue(c, idChain(t, k).ids); return !!r && !!r.value && typeof r.value === 'object' && !Array.isArray(r.value); })()));
+      const fnAt = (k) => t[k] && ((t[k].type === 'id' && /^(async|function)$/.test(t[k].value)) || (isP(t[k], '(') && isP(t[matchClose(t, k) + 1], '=>')) || (t[k].type === 'id' && isP(t[k + 1], '=>')));
+      if (j !== undefined && strAt(j)) { const d = parseValue(t, j, c); if (typeof d.value === 'string') tool.description = d.value; if (d.partial || typeof d.value !== 'string') un.push('description'); j = args[slots[2].p]; }
+      else if (j !== undefined && !shapeAt(j)) {
+        un.push('description'); j = args[slots[2].p];
+        if (j === undefined || fnAt(j)) { tool.inputSchema = { type: 'object' }; un.push('inputSchema'); j = null; }
+      }
+      if (j === null) { /* unread above */ } else if (j === undefined) tool.inputSchema = { type: 'object', properties: {} };
+      else if (isP(t[j], '{') || (t[j] && t[j].type === 'id' && c.zodNames.has(t[j].value))) {
+        const shape = zodShapeAt(t, j, c);
+        if (shape.schema && isZodShapeLike(shape.schema)) tool.inputSchema = shape.schema; else { tool.inputSchema = { type: 'object' }; un.push('inputSchema'); }
+      } else {
+        const v = parseValue(t, j, c);
+        if (v.value !== SKIP && v.value && typeof v.value === 'object' && !Array.isArray(v.value)) tool.inputSchema = v.rawShape || (!isSchemaObj(v.value) && !v.zod) ? rootSchema(v.value, v.optionalKeys, c.fl) : v.value;
+        else { tool.inputSchema = { type: 'object' }; un.push('inputSchema'); }
+      }
+      if (c.fl.execution) tool.execution = { taskSupport: 'forbidden' };
+      tool._unreadable = un;
+      return tool;
+    };
+    // A register helper's call in a loop over a known collection: read once per element (as unrollAt does for the SDK's
+    // own calls). false when there is no such loop or some element does not give a tool.
+    const unrollWrapper = (i, at, w, args, params) => {
+      const loops = loopsAround(i); if (!loops.length || !loops[0].envs) return false;
+      const loop = loops[0];
+      if (loop.body) for (let m = loop.body[0] + 1; m < i; m++) if (t[m].type === 'id' && EXITS.test(t[m].value)) return false;
+      const hide = new Set(params); loops.slice(1).forEach((l) => l.vars.forEach((x) => hide.add(x)));
+      loop.vars.forEach((x) => hide.delete(x));
+      const ps = new Set(Array.from(hide));
+      const span = Math.max(1, matchClose(t, i + 1) - i);
+      const made = [];
+      for (const env of loop.envs) {
+        budget -= span; if (budget < 0) { overBudget.push({ line: lineOf(at) }); return true; }
+        const set = {}; Object.keys(env).forEach((k) => { set[k] = { value: env[k], exact: true, holes: 0 }; });
+        const lctx = Object.assign({}, ctx, { consts: overlay(set, hide) });
+        const tool = viaWrapper(w, args, lctx, ps); if (!tool || tool === PARAM) return false;
+        made.push(tool);
+      }
+      made.forEach((tool) => add(tool, 'derived', at, { unrolled: true }));
+      return true;
+    };
     // What could not be read in a config object: its keys with unknown or partial values, and keys that a spread
     // it could not read may have set.
     const unreadableOf = (o, keys) => {
@@ -1171,6 +1707,7 @@
     const prepass = (c) => { LOST.cur = null; for (let k = t.length - 1; k >= 0; k--) { try { if (isP(t[k], '{')) parseObject(t, k, c); else if (isP(t[k], '[')) parseArray(t, k, c); } catch (e) { /* read again in the loop */ } } };
     prepass(ctx); if (/\baddTool\b/.test(src)) prepass(fastCtx);
     const wrappers = registerWrappers(t);
+    if (opts.wrappers) opts.wrappers.forEach((w, k) => { if (!wrappers.has(k)) wrappers.set(k, w); }); // imported helpers (R-RD-32)
     // Functions of this file that build a tool object from their parameters (R-RD-12): a call is read with the
     // parameters bound to its arguments, so the literal parts (a schema, annotations) are kept and the parts built from
     // something unknown are marked unreadable.
@@ -1235,12 +1772,21 @@
       const tok = t[i];
       const iterLost = []; LOST.cur = iterLost; const toolsBefore = tools.length; const unresBefore = unresolved.length;
       try { // one registration that cannot be read never drops the others: it is counted instead
-      // 0. A function of this file that forwards two of its parameters to X.registerTool(name, config, ...):
-      //    register(server, 'name', { description, inputSchema }, handler) is read as registerTool('name', {...}).
-      if (tok.type === 'id' && wrappers.has(tok.value) && isP(t[i + 1], '(') && !(t[i - 1] && (isP(t[i - 1], '.') || isDecl(i)))) {
-        const w = wrappers.get(tok.value); const args = argStarts(t, i + 1);
-        const nm = args[w.nameIdx] !== undefined ? resolveName(t, args[w.nameIdx], ctx, paramsAround(t, blocks, i)) : null; const ct = args[w.cfgIdx];
-        if (nm && nm.name && ct !== undefined) { const cfg = configAt(ct); if (cfg) add(toolFromConfig(nm.name, cfg), 'derived', tok.start); }
+      // 0. A function that forwards its parameters to X.registerTool(name, config, …) or X.tool(name, description,
+      //    shape, …), defined in this file or imported from a module of the repository (one relative import, R-RD-32):
+      //    register(server, 'name', { description, inputSchema }, handler) is read as registerTool('name', {...}), and
+      //    registerTool(server, tool) as tool(tool.name, tool.description, tool.params). Inside a loop over a collection
+      //    the reader knows, it is read once per element; anything else is counted as unresolved, never guessed.
+      if (tok.type === 'id' && wrappers.has(tok.value) && isP(t[i + 1], '(') && !(t[i - 1] && (isP(t[i - 1], '.') || isP(t[i - 1], '?.') || isDecl(i)))) {
+        if (isMethodDef(i + 1)) continue;
+        const w = wrappers.get(tok.value); const args = argStarts(t, i + 1); const ps = paramsAround(t, blocks, i);
+        const r = viaWrapper(w, args, ctx, ps);
+        if (r === PARAM) continue; // inside another helper: its callers name the tools
+        if (r) { add(r, 'derived', tok.start); continue; }
+        if (unrollWrapper(i, tok.start, w, args, ps)) continue;
+        const txt = {}; const ds = w.kind === 'tool' ? w.desc : null;
+        if (ds && ds.key === undefined && args[ds.p] !== undefined) { try { const d = parseValue(t, args[ds.p], ctx); if (typeof d.value === 'string') txt.description = d.value; } catch (e) { /* no text */ } }
+        unresolved.push(Object.assign({ line: lineOf(tok.start) }, txt));
         continue;
       }
       const member = isP(tok, '.') && t[i + 1] && t[i + 1].type === 'id' && isP(t[i + 2], '(');
@@ -1413,48 +1959,100 @@
     while (k < close) { out.push(k); k = skipExpr(t, k); if (isP(t[k], ',')) k++; else break; }
     return out;
   }
-  // Functions of one file that pass two of their own parameters on as the name and config of X.registerTool(...):
+  // Functions of one file that pass their own parameters on to X.registerTool(...) or X.tool(...):
   //   function register(server, name, config, fn) { server.registerTool(name, config, wrap(fn)); }
   //   const reg = (name, config, cb) => server.registerTool(name, config, cb);
-  // Returns Map(function name -> { nameIdx, cfgIdx }), the parameter positions.
+  //   export function registerTool<T>(server, name, config, cb) { return server.registerTool(name, config as never, …); }
+  //   function registerTool(server, name, description, params, cb) { server.tool(name, description, params, …); }
+  //   const registerTool = (server, tool) => { server.tool(tool.name, tool.description, tool.params, tool.handler); };
+  // Returns Map(function name -> spec): spec.kind is 'registerTool' (slots name, cfg) or 'tool' (slots name, desc,
+  // shape); each slot is { p: the parameter's position, key: a property of that parameter or undefined }. A helper may
+  // be named like the SDK method it wraps (registerTool): only its declaration makes it a helper.
+  function skipTypeParams(t, k) { // the token after a TS type parameter list <…> at k (k itself when there is none)
+    if (!isP(t[k], '<')) return k;
+    let d = 0;
+    for (let m = k; m < t.length && m < k + 400; m++) {
+      if (isP(t[m], '<')) d++;
+      else if (isP(t[m], '>')) { d--; if (!d) return m + 1; }
+      else if (isP(t[m], '{') || isP(t[m], '(') || isP(t[m], '[')) m = matchClose(t, m);
+    }
+    return k;
+  }
   function registerWrappers(t) {
     const out = new Map();
     const params = (open) => { // simple identifiers, with optional TS types and defaults; null if anything else
       const ps = []; for (const a of argStarts(t, open)) { const x = t[a]; if (!x || x.type !== 'id') return null; ps.push(x.value); } return ps;
     };
+    // parameters typed as the SDK's server (server: McpServer), which make X.tool(…) on them the SDK's method
+    const serverParams = (open) => {
+      const out = new Set();
+      argStarts(t, open).forEach((a) => {
+        if (!t[a] || !isP(t[a + 1], ':')) return;
+        for (let m = a + 2, d = 0; m < t.length; m++) {
+          if (isP(t[m], '<') || isP(t[m], '(') || isP(t[m], '[') || isP(t[m], '{')) d++;
+          else if (isP(t[m], '>') || isP(t[m], ')') || isP(t[m], ']') || isP(t[m], '}')) { if (!d) break; d--; }
+          else if (!d && (isP(t[m], ',') || isP(t[m], '='))) break;
+          else if (t[m].type === 'id' && t[m].value === 'McpServer') { out.add(t[a].value); break; }
+        }
+      });
+      return out;
+    };
+    // X.tool(…) is the SDK's tool() only in a file that imports the MCP SDK, or on a parameter typed McpServer: a
+    // .tool() method of another library (a CLI builder, an AI SDK) is not a register helper.
+    const sdkFile = t.some((x) => x.type === 'str' && /^@modelcontextprotocol\//.test(x.value));
     // the functions that could be helpers: name, parameters and body range
     const fns = [];
     for (let i = 0; i < t.length - 3; i++) {
       let name = null; let open = -1;
-      if (t[i].type === 'id' && t[i].value === 'function' && t[i + 1] && t[i + 1].type === 'id' && isP(t[i + 2], '(')) { name = t[i + 1].value; open = i + 2; }
+      if (t[i].type === 'id' && t[i].value === 'function' && t[i + 1] && t[i + 1].type === 'id') { const k = skipTypeParams(t, i + 2); if (isP(t[k], '(')) { name = t[i + 1].value; open = k; } }
       else if (t[i].type === 'id' && /^(const|let|var)$/.test(t[i].value) && t[i + 1] && t[i + 1].type === 'id' && isP(t[i + 2], '=')) {
         let k = i + 3; if (t[k] && t[k].type === 'id' && t[k].value === 'async') k++;
+        k = skipTypeParams(t, k);
         if (isP(t[k], '(') && isP(t[matchClose(t, k) + 1], '=>')) { name = t[i + 1].value; open = k; }
       }
-      if (!name || SDK_CALLS.has(name)) continue;
+      if (!name) continue;
       const ps = params(open); if (!ps || ps.length < 2) continue;
       // the body: from the closing ")" to the end of the block or the arrow's expression
       let b = matchClose(t, open) + 1; if (isP(t[b], '=>')) b++;
       while (t[b] && !isP(t[b], '{') && !(t[b].type === 'id' || isP(t[b], '('))) b++; // skip a TS return type
       const end = isP(t[b], '{') ? matchClose(t, b) : skipExpr(t, b);
-      fns.push({ name, ps, b, end });
+      fns.push({ name, ps, b, end, open });
     }
     if (!fns.length) return out;
     // nested ranges: each function's parent, so a call finds the functions around it by a search and a short walk up
     fns.sort((x, y) => x.b - y.b); const stack = [];
     fns.forEach((f) => { while (stack.length && stack[stack.length - 1].end < f.b) stack.pop(); f.parent = stack.length ? stack[stack.length - 1] : null; stack.push(f); });
+    // an argument that is a parameter, or a property of one (tool.name), with an optional `as T` cast after it: the
+    // parameter's name and the property, or null
+    const fwd = (a) => {
+      const x = t[a]; if (!x || x.type !== 'id') return null;
+      let k = a + 1; let key;
+      if (isP(t[k], '.') && t[k + 1] && t[k + 1].type === 'id') { key = t[k + 1].value; k += 2; }
+      while (t[k] && t[k].type === 'id' && (t[k].value === 'as' || t[k].value === 'satisfies')) k = skipType(t, k + 1);
+      if (!(isP(t[k], ',') || isP(t[k], ')'))) return null;
+      return { id: x.value, key };
+    };
     for (let k = 0; k < t.length - 2; k++) {
-      if (!(isP(t[k], '.') && t[k + 1].type === 'id' && t[k + 1].value === 'registerTool' && isP(t[k + 2], '('))) continue;
+      if (!(isP(t[k], '.') && t[k + 1].type === 'id' && (t[k + 1].value === 'registerTool' || t[k + 1].value === 'tool') && isP(t[k + 2], '('))) continue;
+      const kind = t[k + 1].value;
       const as = argStarts(t, k + 2);
-      const a0 = t[as[0]]; const a1 = t[as[1]];
-      if (!a0 || !a1 || a0.type !== 'id' || a1.type !== 'id' || !isP(t[as[0] + 1], ',') || !(isP(t[as[1] + 1], ',') || isP(t[as[1] + 1], ')'))) continue;
+      const want = kind === 'registerTool' ? 2 : 3;
+      if (as.length < want + (kind === 'tool' ? 1 : 0)) continue; // server.tool(name, description, shape, cb)
+      const slots = as.slice(0, want).map(fwd);
+      if (slots.some((x) => !x)) continue;
+      // one parameter's properties (tool.name, tool.description, …) or the parameters themselves, not a mix
+      const keyed = slots.filter((x) => x.key !== undefined).length;
+      if (keyed && (keyed !== slots.length || slots.some((x) => x.id !== slots[0].id))) continue;
       let lo = 0; let hi = fns.length; while (lo < hi) { const mid = (lo + hi) >> 1; if (fns[mid].b <= k) lo = mid + 1; else hi = mid; }
       for (let f = lo > 0 ? fns[lo - 1] : null, n = 0; f && n < 64; f = f.parent) {
         if (f.end < k) continue;
         n++;
         if (out.has(f.name)) continue;
-        const ni = f.ps.indexOf(a0.value); const ci = f.ps.indexOf(a1.value);
-        if (ni >= 0 && ci >= 0) out.set(f.name, { nameIdx: ni, cfgIdx: ci });
+        const pos = slots.map((x) => f.ps.indexOf(x.id));
+        if (pos.some((x) => x < 0)) continue;
+        if (kind === 'tool' && !sdkFile && !(t[k - 1] && t[k - 1].type === 'id' && serverParams(f.open).has(t[k - 1].value))) continue;
+        const sl = slots.map((x, m) => ({ p: pos[m], key: x.key }));
+        out.set(f.name, kind === 'registerTool' ? { kind, name: sl[0], cfg: sl[1], nameIdx: sl[0].p, cfgIdx: sl[1].p } : { kind, name: sl[0], desc: sl[1], shape: sl[2] });
       }
     }
     return out;
@@ -1865,6 +2463,53 @@
     // every def of the file: name -> { index of its logical line }
     const defs = new Map();
     L.forEach((l, k) => { const m = /^(?:async\s+)?def\s+(\w+)\s*\(/.exec(l.text); if (m && !defs.has(m[1])) defs.set(m[1], k); });
+    // The loop that binds name v around logical line k (for v in ITEMS: at the same function level), with ITEMS read as a
+    // list of this file's functions: { items: [names] }, { items: null } when the loop is there but its items cannot be
+    // known (not a literal list or tuple of names, a list changed after it is built, a name that is not a def of this
+    // file, a registration under an if or after a continue/break/return/raise), or null when v is not a loop variable.
+    const pyLoopOver = (k, v) => {
+      const FOR = /^(?:async\s+)?for\s+([A-Za-z_]\w*)\s+in\s+([\s\S]+?)\s*:\s*([\s\S]*)$/;
+      const fnScope = (q) => { // the def around logical line q: [first line, end) or [0, L.length) at module level
+        let ind = L[q].indent; for (let r = q - 1; r >= 0; r--) { if (L[r].indent >= ind) continue; if (/^(?:async\s+)?(def|class)\s/.test(L[r].text.trim())) { let e = r + 1; while (e < L.length && L[e].indent > L[r].indent) e++; return [r + 1, e]; } ind = L[r].indent; }
+        return [0, L.length];
+      };
+      const listOf = (expr, q) => {
+        const ids = (txt) => { const m = /^[[(]([\s\S]*)[\])]$/.exec(txt.trim()); if (!m) return null; const parts = m[1].split(',').map((x) => x.trim()).filter(Boolean); return parts.length && parts.every((x) => /^[A-Za-z_]\w*$/.test(x)) ? parts : null; };
+        let items = ids(expr);
+        if (!items && /^[A-Za-z_]\w*$/.test(expr.trim())) {
+          const name = expr.trim();
+          const asg = new RegExp('^' + name + '\\s*(?::[^=]+)?=(?!=)\\s*([\\s\\S]+)$');
+          const changed = new RegExp('(?:^|[^\\w.])' + name + '\\s*(?:\\.\\s*(?:append|extend|insert|remove|pop|clear|sort|reverse)\\s*\\(|\\[[^\\]]*\\]\\s*=(?!=)|[-+*|]=)|^del\\s+' + name + '\\b|^(?:global|nonlocal)\\s[^\\n]*\\b' + name + '\\b');
+          // a change anywhere in the range (a function of the file appending to a module list included); assignments
+          // only at the top level when topOnly
+          const look = (a, b, topOnly) => { const hits = []; for (let r = a; r < b; r++) { const tx = L[r].text.trim(); if (changed.test(tx)) return null; if (topOnly && L[r].indent !== 0) continue; const m = asg.exec(tx); if (m) hits.push(m[1]); } return hits; };
+          const [a, b] = fnScope(q);
+          let hits = look(a, b, false); let moduleList = a === 0;
+          if (hits && !hits.length && a > 0) { hits = look(0, L.length, true); moduleList = true; }
+          if (!hits || hits.length !== 1) return null;
+          // a module-level list another module of the repository may change (from server import tools; tools.append(f))
+          if (moduleList && opts.pyChangedElsewhere && opts.pyChangedElsewhere(name)) return null;
+          items = ids(hits[0]);
+        }
+        if (!items || items.some((x) => !defs.has(x))) return null;
+        return items;
+      };
+      const here = FOR.exec(L[k].text.trim());
+      if (here && here[1] === v && here[3]) return { items: listOf(here[2], k) }; // for v in X: mcp.add_tool(v)
+      let ind = L[k].indent;
+      for (let q = k - 1; q >= 0; q--) {
+        const x = L[q]; if (x.indent >= ind) continue;
+        const tx = x.text.trim(); const m = FOR.exec(tx);
+        if (m && m[1] === v && !m[3]) {
+          if (L[k].indent !== L[q + 1].indent) return { items: null }; // under an if or another block of the loop
+          for (let r = q + 1; r < k; r++) if (/^(continue|break|return|raise)\b/.test(L[r].text.trim())) return { items: null };
+          return { items: listOf(m[2], q) };
+        }
+        if (/^(?:async\s+)?(def|class)\s/.test(tx)) return null;
+        ind = x.indent;
+      }
+      return null;
+    };
     const exprVal = (text) => { const t = pyTokenize(text); const v = pyValue(t, 0, ctx); return v.value !== PY_SKIP && v.end >= t.length ? v : null; };
     // the name of a tool from its expression: a string, or a prefix variable + literal (namespace_prefix + "read" -> "read")
     const nameOf = (text) => {
@@ -2199,7 +2844,15 @@
         }
         if (given.nameUnknown) { unresolved.push(unresolvedText(l.line, given)); continue; }
         const dk = defs.get(fnRef);
-        if (dk === undefined && given.name === undefined) continue; // a parameter or a function from elsewhere, named nowhere here
+        if (dk === undefined && given.name === undefined) {
+          // for tool in tools: mcp.add_tool(tool), over a list of this file's functions, is read once per function
+          // (R-RD-34); a loop over anything else is counted as unresolved, never guessed
+          const loop = pyLoopOver(k, fnRef);
+          if (loop === null) continue; // a parameter or a function from elsewhere, named nowhere here
+          if (!loop.items) { unresolved.push(unresolvedText(l.line, given)); i = a.close; continue; }
+          loop.items.forEach((nm) => { const r = fromDef(defs.get(nm), Object.assign({}, given)); if (r) add(r.tool, l.line, { exactTypes: r.exactTypes, server: dotted && fn !== 'from_function' ? owner : null, fn: nm, unrolled: true }); });
+          i = a.close; continue;
+        }
         if (dk !== undefined) {
           if (/ToolDefinition$/.test(fn)) { given.annotationsUnknown = given.annotations === undefined; given.fastmcpTags = false; }
           const r = fromDef(dk, given);
@@ -2508,7 +3161,7 @@
     });
     const sv = pick('server', server, lock['@modelcontextprotocol/server']); const kv = pick('sdk', sdk, lock['@modelcontextprotocol/sdk']); const zv = pick('zod', zod, lock.zod);
     if (sv) { out.kind = 'v2'; out.version = semver(sv) ? semver(sv).join('.') : null; } else if (kv) { const v = semver(kv); out.kind = v && v[0] >= 2 ? 'v2' : 'v1'; out.version = v ? v.join('.') : null; }
-    const zm = semver(zv); if (zm) out.zod = zm[0];
+    const zm = semver(zv); if (zm) { out.zod = zm[0]; out.zodVersion = zm.join('.'); }
     // Python: the standalone fastmcp package, or the SDK's own FastMCP.
     let fast = false; let mcp = false;
     entries.forEach(([p, text]) => {
@@ -2600,6 +3253,44 @@
     return { fn: fn ? fn.name : null, guards: encl.slice(fnIdx + 1).filter((b) => b.kind === 'if' || b.kind === 'else').map((b) => ({ kind: b.kind, cond: b.cond })) };
   }
   // lines: the file's lines, with `up` (the nearest earlier code line with less indentation, from one pass, R-RD-23)
+  // Whether a Python file other than `path` may change the module-level name `name` of `path` (R-RD-34): it imports
+  // the name (from server import tools [as t], from server import *) or the module (import pkg.server [as s], from pkg
+  // import server [as s]) and then appends to it, changes an item, extends it in place, deletes it, rebinds the module
+  // attribute (server.tools = …), or hands it to a call. The module is matched by its dotted path, or by its last part
+  // when the import is relative or names a shorter path; a match that is not the same module only makes the list
+  // unknown, never invents a tool.
+  function pyListChangedElsewhere(files, path, name) {
+    const dotted = path.replace(/\.py$/, '').split('/').filter(Boolean);
+    if (dotted[dotted.length - 1] === '__init__') dotted.pop();
+    if (!dotted.length) return false;
+    const stem = dotted[dotted.length - 1];
+    const isMod = (m) => { const parts = m.replace(/^\.+/, '').split('.').filter(Boolean); if (!parts.length) return false; const tail = dotted.slice(-parts.length); return parts.join('.') === tail.join('.') || parts[parts.length - 1] === stem; };
+    const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const MUT = '\\s*(?:\\.\\s*(?:append|extend|insert|remove|pop|clear|sort|reverse)\\s*\\(|\\[[^\\]]*\\]\\s*=(?!=)|[-+*|]=)';
+    for (const [q, text] of files) {
+      if (q === path || !/\.py$/.test(q) || typeof text !== 'string' || !text.includes(name)) continue;
+      const L = pyLogicalLines(pyStripComments(text));
+      const locals = new Set(); const prefixes = new Set();
+      L.forEach((l) => {
+        const tx = l.text.trim();
+        let m = /^from\s+([.\w]+)\s+import\s+\(?([\s\S]*?)\)?\s*$/.exec(tx);
+        if (m) {
+          const items = m[2].split(',').map((x) => x.trim()).filter(Boolean);
+          if (isMod(m[1])) items.forEach((it) => { const a = /^(\*|\w+)(?:\s+as\s+(\w+))?$/.exec(it); if (a && (a[1] === name || a[1] === '*')) locals.add(a[1] === '*' ? name : a[2] || a[1]); });
+          items.forEach((it) => { const a = /^(\w+)(?:\s+as\s+(\w+))?$/.exec(it); if (a && isMod((m[1].replace(/\.$/, '') + '.' + a[1]).replace(/^\.+/, ''))) prefixes.add(a[2] || a[1]); });
+          return;
+        }
+        m = /^import\s+([\s\S]+)$/.exec(tx);
+        if (m) m[1].split(',').forEach((it) => { const a = /^([\w.]+)(?:\s+as\s+(\w+))?$/.exec(it.trim()); if (a && isMod(a[1])) prefixes.add(a[2] || a[1]); });
+      });
+      if (!locals.size && !prefixes.size) continue;
+      const refs = Array.from(locals).map(esc).concat(Array.from(prefixes).map((x) => esc(x).replace(/\\\./g, '\\s*\\.\\s*') + '\\s*\\.\\s*' + esc(name)));
+      const ref = '(?:' + refs.join('|') + ')';
+      const changed = new RegExp('(?:^|[^\\w.])' + ref + '(?:' + MUT + '|\\s*[,)])|^del\\s+' + ref + '\\b' + (prefixes.size ? '|(?:^|[^\\w.])(?:' + Array.from(prefixes).map((x) => esc(x).replace(/\\\./g, '\\s*\\.\\s*')).join('|') + ')\\s*\\.\\s*' + esc(name) + '\\s*=(?!=)' : ''));
+      if (L.some((l) => { const tx = l.text.trim(); return !/^(from|import)\s/.test(tx) && changed.test(tx); })) return true;
+    }
+    return false;
+  }
   function pyLinesOf(text) {
     const lines = text.split('\n'); const up = new Int32Array(lines.length).fill(-1); const ind = new Int32Array(lines.length); const st = [];
     lines.forEach((l, q) => {
@@ -3298,6 +3989,8 @@
     const mods = moduleConsts(readable, consts, sdkFor);
     const pyConsts = pyGlobalConsts(readable); const pyRegs = pyRegistrars(readable); const mounts = pyMounts(readable); const pyTpl = pyToolTemplates(readable);
     const bases = toolBases(readable);
+    const pyChangedMemo = new Map();
+    const pyChanged = (p, name) => { const k = p + '\u0000' + name; if (!pyChangedMemo.has(k)) pyChangedMemo.set(k, pyListChangedElsewhere(readable, p, name)); return pyChangedMemo.get(k); };
     const found = []; const byName = new Set(); const firstPath = new Map();
     const dupes = []; const unresolved = []; const overBudget = [];
     const hostPlugins = [];
@@ -3305,7 +3998,7 @@
       let ts = [];
       const js = /\.(ts|mts|cts|js|mjs|cjs)$/.test(p);
       try {
-        ts = extractFromFile(p, t, js ? { sdk: sdkFor(p), consts: mods.seedFor(p), tokens: mods.tokens(p), classTools: bases, workBudget: opts.workBudget } : { sdk, pyConsts, pyRegistrars: pyRegs, pyTemplates: pyTpl });
+        ts = extractFromFile(p, t, js ? { sdk: sdkFor(p), consts: mods.seedFor(p), tokens: mods.tokens(p), wrappers: mods.importedWrappers(p), frozenImport: (name) => mods.frozenImport(p, name), classTools: bases, workBudget: opts.workBudget } : { sdk, pyConsts, pyRegistrars: pyRegs, pyTemplates: pyTpl, pyChangedElsewhere: (name) => pyChanged(p, name) });
       } catch (e) { ts = []; ts.unresolved = [{ line: null }]; } // a file the reader fails on counts as one unread registration
       // another agent host's plugin: named, never listed (R-RD-05)
       const host = js ? hostPluginModule(t) : null;
