@@ -329,3 +329,42 @@ test('R-RD-34: a list with a function from elsewhere, a list changed after it is
     assert.equal(an.unresolved, 1, loop.join(' / '));
   });
 });
+
+// ---------------------------------------------------------------- R-RD-35: .shape read back through a registry entry
+// Trimmed from thuupx/memory-mcp-lite @ 9786819f6b4d53595510038d48b0299cc6034cc1 (apps/server/src/server.ts:21-64,
+// apps/server/src/mcp/tools/get-project-summary.ts:13-50), found by the re-scan of the prevalence sample.
+test('R-RD-35: an input shape written as Schema.shape keeps its optional keys when it is read back through a registry entry (tool.inputShape)', () => {
+  const an = read({
+    'package.json': PKG('1.20.0'),
+    'src/tools/get-project-summary.ts': [
+      "import { z } from 'zod';",
+      'export const getProjectSummaryInput = z.object({',
+      '  workspace_path: z.string().optional().describe("Absolute path to the workspace root"),',
+      '  project_id: z.string().describe("Project id"),',
+      '});',
+      'export const getProjectSummaryTool = {',
+      '  name: "get_project_summary" as const,',
+      '  title: "Get project memory summary",',
+      '  description: "Return the concise summary for the current project.",',
+      '  inputShape: getProjectSummaryInput.shape,',
+      '  handler: async () => ({ content: [] }),',
+      '};',
+    ].join('\n'),
+    'src/server.ts': [
+      SERVER,
+      "import type { ZodRawShape } from 'zod';",
+      "import { getProjectSummaryTool } from './tools/get-project-summary.js';",
+      'interface RegisterableTool { name: string; title: string; description: string; inputShape: ZodRawShape; handler: any }',
+      'const TOOLS: RegisterableTool[] = [',
+      '  getProjectSummaryTool,',
+      '];',
+      'for (const tool of TOOLS) {',
+      '  server.registerTool(tool.name, { title: tool.title, description: tool.description, inputSchema: tool.inputShape }, tool.handler);',
+      '}',
+    ].join('\n'),
+  });
+  assert.deepEqual(names(an), ['get_project_summary']);
+  const t = tool(an, 'get_project_summary');
+  assert.deepEqual(Object.keys(t.inputSchema.properties), ['workspace_path', 'project_id']);
+  assert.deepEqual(t.inputSchema.required, ['project_id']);
+});
