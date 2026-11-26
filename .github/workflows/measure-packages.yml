@@ -25,6 +25,7 @@ env:
   # The package types measured, and how many subjects a job takes.
   MEASURE_TYPES: 'mcpb'
   PER_JOB: '6'
+  MAX_SHARDS: '1'
 
 jobs:
   sandbox:
@@ -62,7 +63,8 @@ jobs:
             const seed = JSON.parse(require("fs").readFileSync("tool-qa/history/seed-v1.json", "utf8"));
             const ids = seed.subjects.filter((s) => { const r = new Set((s.packages || []).map((p) => p.registry)); return r.size && [...r].every((x) => types.includes(x)); }).map((s) => s.id).sort();
             const shards = [];
-            for (let i = 0; i < ids.length; i += per) shards.push({ n: shards.length, items: JSON.stringify(ids.slice(i, i + per).map((subject, k) => ({ subject, run_key: (i + k + 1).toString(16).padStart(64, "0"), fence: i + k + 1 }))) });
+            const max = Number(process.env.MAX_SHARDS || 1000);
+            for (let i = 0; i < ids.length && shards.length < max; i += per) shards.push({ n: shards.length, items: JSON.stringify(ids.slice(i, i + per).map((subject, k) => ({ subject, run_key: (i + k + 1).toString(16).padStart(64, "0"), fence: i + k + 1 }))) });
             require("fs").appendFileSync(process.env.GITHUB_OUTPUT, "shards=" + JSON.stringify(shards) + "\n");
             console.log(ids.length + " subjects in " + shards.length + " jobs");
           '
@@ -154,8 +156,8 @@ jobs:
               try { r = JSON.parse(fs.readFileSync(path.join(w, "out", String(it.index), "bundle", "results", "live-probe.json"), "utf8")); } catch {}
               let rec = null;
               try { rec = JSON.parse(fs.readFileSync(path.join(w, it.target && it.target.launch.kind === "cargo" ? "driver-builds" : "driver-subjects", it.target_id || "none", "record.json"), "utf8")); } catch {}
-              const steps = rec && rec.install && Array.isArray(rec.install.steps) ? rec.install.steps.map((s) => ({ name: s.name, exit: s.exit, ms: s.ms, timed_out: s.timed_out, error: s.result && s.result.error || null })) : null;
-              return { subject: it.subject, kind: it.target ? it.target.launch.kind : null, type: it.resolution.choice ? it.resolution.choice.type : null, plan_detail: it.resolution.detail, status: r ? r.status : null, detail: r ? r.detail : null, skip_reason: r ? r.skip_reason : null, fault: r ? r.fault : null, tool_count: r && r.live ? r.live.tool_count : null, install_steps: steps, timing: r ? r.timing : null };
+              const steps = rec && rec.install && Array.isArray(rec.install.steps) ? rec.install.steps.map((s) => ({ name: s.name, exit: s.exit, ms: s.ms, timed_out: s.timed_out, error: s.result && s.result.error || null, result: s.result && s.result.error ? s.result : null })) : null;
+              return { subject: it.subject, kind: it.target ? it.target.launch.kind : null, type: it.resolution.choice ? it.resolution.choice.type : null, plan_detail: it.resolution.detail, status: r ? r.status : null, detail: r ? r.detail : null, skip_reason: r ? r.skip_reason : null, fault: r ? r.fault : null, tool_count: r && r.live ? r.live.tool_count : null, install_steps: steps, egress: rec && rec.install && Array.isArray(rec.install.egress) ? rec.install.egress.slice(0, 20).map((e) => ({ host: e.host, allowed: e.allowed, error: e.error || null, up: e.up, down: e.down })) : null, timing: r ? r.timing : null };
             });
             fs.writeFileSync(process.env.RUNNER_TEMP + "/measure/shard-" + process.env.N + ".json", JSON.stringify(rows, null, 1));
             for (const x of rows) console.log(JSON.stringify(x));
