@@ -737,7 +737,7 @@
     const f = fl || FL_DEFAULT;
     const shaped = { type: 'object', properties: props };
     const req = Object.keys(props).filter((k) => !(optionalKeys && optionalKeys.has(k))); if (req.length) shaped.required = req;
-    if (f.closed) shaped.additionalProperties = false;
+    if (f.closed && !(f.emptyShapeOpen && !Object.keys(props).length)) shaped.additionalProperties = false;
     if (DIALECT[f.dialect]) shaped.$schema = DIALECT[f.dialect];
     return shaped;
   }
@@ -995,8 +995,11 @@
     // must have it.
     const zv = semver(sdk.zodVersion);
     const compactUnions = zod >= 4 && !!zv && zv[0] === 4 && zv[1] >= 5;
-    if (sdk.customList) return { kind, zod, dialect: null, closed: zod < 4, intBounds: zod >= 4, compactUnions, execution: sdk.customList === 'wrap' && execution, customList: sdk.customList };
-    return { kind, zod, dialect: kind === 'v2' ? '2020-12' : 'draft-07', closed: zod < 4, intBounds: zod >= 4, compactUnions, execution };
+    // SDK 1.23.0 and later build an empty raw shape ({}) as a zod 4 mini object, which has no additionalProperties
+    // whatever zod the server uses (objectFromShape in its zod-compat).
+    const emptyShapeOpen = kind === 'v1' && sameKind && !!v && v[0] === 1 && v[1] >= 23;
+    if (sdk.customList) return { kind, zod, dialect: null, closed: zod < 4, intBounds: zod >= 4, compactUnions, emptyShapeOpen, execution: sdk.customList === 'wrap' && execution, customList: sdk.customList };
+    return { kind, zod, dialect: kind === 'v2' ? '2020-12' : 'draft-07', closed: zod < 4, intBounds: zod >= 4, compactUnions, emptyShapeOpen, execution };
   }
   // A TypeScript or JavaScript file that builds an McpServer and sets its own tools/list handler on it
   // (mcpServer.server.setRequestHandler(ListToolsRequestSchema, …) under SDK 1.x, (…, 'tools/list', …) under 2.x): the
