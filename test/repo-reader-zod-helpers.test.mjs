@@ -240,3 +240,74 @@ test('R-RD-27: many factory calls next to many constants are read in linear time
   assert.equal(tool(an, 't2999').inputSchema.properties.a.description, 'A 2999');
   assert.ok(ms < 3000, 'took ' + Math.round(ms) + ' ms');
 });
+
+// ---------------------------------------------------------------- R-RD-28: unions and .nullable() per zod major
+// Trimmed from CruGlobal/flightdeck-mcp-server 3a4f362dbf0b4723cd67cccb40704adf4d1c2259 src/tools.ts (workItemFields,
+// zod 3.25.76 under SDK 1.29.0). estimate_point's .int() and the slug field are added. Expected values are what that
+// SDK lists for these expressions.
+test('R-RD-28: zod 3 writes a union of bare primitives as a type array, and .nullable() of anything else as anyOf with null', () => {
+  const an = read({ 'package.json': ZOD3, 'src/tools.ts': [
+    'import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";',
+    'import { z } from "zod";',
+    'const id = (description: string) => z.union([z.string(), z.number()]).describe(description);',
+    'export function registerTools(server: McpServer): void {',
+    '  server.registerTool("update_work_item", { title: "Update a work item", description: "Update a work item by id.", inputSchema: {',
+    '    work_item_id: id("Work item id"),',
+    '    cycle_id: z',
+    '      .union([z.string(), z.number()])',
+    '      .nullable()',
+    '      .optional()',
+    '      .describe("Cycle id (same project), or null to remove the item from its cycle"),',
+    '    assignee_ids: z',
+    '      .array(z.union([z.string(), z.number()]))',
+    '      .optional()',
+    '      .describe("User ids to assign; must be members of the workspace"),',
+    '    start_date: z.string().nullable().optional().describe("ISO 8601 date (YYYY-MM-DD), or null to clear"),',
+    '    estimate_point: z.number().int().nullable().optional(),',
+    '    slug: z.string().min(1).describe("Short name").nullable(),',
+    '  } }, async () => ({ content: [] }));',
+    '}',
+  ].join('\n') });
+  const p = tool(an, 'update_work_item').inputSchema.properties;
+  assert.deepEqual(p.work_item_id, { type: ['string', 'number'], description: 'Work item id' });
+  assert.deepEqual(p.cycle_id, { anyOf: [{ type: ['string', 'number'] }, { type: 'null' }], description: 'Cycle id (same project), or null to remove the item from its cycle' });
+  assert.deepEqual(p.assignee_ids, { type: 'array', items: { type: ['string', 'number'] }, description: 'User ids to assign; must be members of the workspace' });
+  assert.deepEqual(p.start_date, { type: ['string', 'null'], description: 'ISO 8601 date (YYYY-MM-DD), or null to clear' });
+  assert.deepEqual(p.estimate_point, { anyOf: [{ type: 'integer' }, { type: 'null' }] }, 'z.number().int() has a check, so it is not a bare type');
+  assert.deepEqual(p.slug, { anyOf: [{ type: 'string', minLength: 1, description: 'Short name' }, { type: 'null' }], description: 'Short name' });
+});
+
+// Trimmed from barzoj/somtoday-mcp 51b0d5f334d6971a9c800fdf14dde84508fdb8ef src/server.ts (textOrNumber, numericId,
+// study_material; zod 4.6.7 under SDK 1.32.2). The nullable fields and the zod 4.3.6 run of the same source are added;
+// expected values are what SDK 1.32.2 lists with each zod version.
+test('R-RD-28: zod 4 writes .nullable() as anyOf with null, and from zod 4.5.0 compacts an anyOf of bare types to a type array', () => {
+  const src = (zod) => ({ 'package.json': '{"dependencies": {"@modelcontextprotocol/sdk": "1.32.2", "zod": "' + zod + '"}}', 'src/server.ts': [
+    'import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";',
+    'import { z } from "zod";',
+    '/** Free-text or numeric reference (subject name/abbreviation/uuid, page slug). */',
+    'const textOrNumber = () => z.union([z.string(), z.number()]).transform(String);',
+    'const numericId = () => z.union([z.number().int().nonnegative(), z.string().regex(/^\\d+$/)]).transform(String);',
+    'const server = new McpServer({ name: "somtoday", version: "1.0.0" });',
+    'server.registerTool("study_material", { title: "Study material", description: "Study material per subject.", inputSchema: {',
+    '  vak: textOrNumber().describe("Subject name, abbreviation or uuid."),',
+    '  leerlingId: numericId().optional(),',
+    '  note: z.string().nullable(),',
+    '  count: z.number().int().nullable(),',
+    '  either: z.union([z.string(), z.number()]).nullable().optional().describe("d"),',
+    '} }, async () => ({ content: [] }));',
+  ].join('\n') });
+  const LEERLING = { anyOf: [{ type: 'integer', minimum: 0, maximum: SAFE }, { type: 'string', pattern: '^\\d+$' }] };
+  const COUNT = { anyOf: [{ type: 'integer', minimum: -SAFE, maximum: SAFE }, { type: 'null' }] };
+  const p46 = tool(read(src('4.6.7')), 'study_material').inputSchema.properties;
+  assert.deepEqual(p46, {
+    vak: { type: ['string', 'number'], description: 'Subject name, abbreviation or uuid.' },
+    leerlingId: LEERLING, note: { type: ['string', 'null'] }, count: COUNT,
+    either: { type: ['string', 'number', 'null'], description: 'd' },
+  });
+  const p43 = tool(read(src('4.3.6')), 'study_material').inputSchema.properties;
+  assert.deepEqual(p43, {
+    vak: { anyOf: [{ type: 'string' }, { type: 'number' }], description: 'Subject name, abbreviation or uuid.' },
+    leerlingId: LEERLING, note: { anyOf: [{ type: 'string' }, { type: 'null' }] }, count: COUNT,
+    either: { anyOf: [{ anyOf: [{ type: 'string' }, { type: 'number' }] }, { type: 'null' }], description: 'd' },
+  });
+});
