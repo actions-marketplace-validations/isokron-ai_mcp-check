@@ -1078,7 +1078,7 @@
         else if (m.key === 'required') o.required = true;
         else if (m.key === 'with' && !m.nested) { const v = val(); if (typeof v === 'string') o.with = v; }
         else if (m.key === 'schema_with') o.schemaWith = true;
-        else if (m.key === 'transform' && !m.nested) { const ids = []; let ok = true; for (let k = m.a; k < m.b; k++) { const x = f.t[k]; if (isId(x)) ids.push(x.v); else if (!isP(x, '::')) ok = false; } (o.transforms = o.transforms || []).push(ok && ids.length ? ids[ids.length - 1] : null); }
+        else if (m.key === 'transform' && !m.nested) { const ids = []; let ok = true; for (let k = m.a; k < m.b; k++) { const x = f.t[k]; if (isId(x)) ids.push(x.v); else if (!isP(x, '::')) ok = false; } (o.transforms = o.transforms || []).push(ok && ids.length ? ids.join('::') : null); } // the path as written (other_mod::f)
         else if ((m.key === 'length' || m.key === 'range') && m.nested) { m.nested.forEach((x) => { const v = this.ev(f, x.a, x.b, null, 0); if (typeof v === 'number') (o[m.key] = o[m.key] || {})[x.key] = v; else if (x.key === 'equal' && typeof v === 'number') (o[m.key] = o[m.key] || {}).equal = v; }); }
         else if ((m.key === 'regex' || m.key === 'pattern') && m.nested) { const p = meta(m.nested, 'pattern'); if (p) { const v = this.ev(f, p.a, p.b, null, 0); if (typeof v === 'string') o.pattern = v; } }
         else if (m.key === 'regex' && !m.nested) { /* a path to a regex: not readable */ }
@@ -1261,9 +1261,35 @@
     const cr = this.crateOf(f.path); const inCrate = ds.filter((d) => this.crateOf(d.f.path) === cr);
     return inCrate.length === 1 ? inCrate[0] : null;
   };
+  // A free function named by a path (other_mod::f, crate::tools::f, self::f) from file f: the one definition whose file
+  // is that module of f's crate (src/other_mod.rs or src/other_mod/mod.rs; crate:: from the crate root), or null. A
+  // same-file function of the same name is not taken for it, and super:: and paths that match no file or several
+  // are declined.
+  Repo.prototype.fnByPath = function (name, f) {
+    const segs = name.split('::'); const last = segs.pop();
+    if (segs[0] === 'self') { segs.shift(); if (!segs.length) { const d = this.fns.find((x) => x.name === last && x.body && !x.impl && x.f === f); return d || null; } }
+    if (!segs.length) return this.fnByName(last, f);
+    if (segs.includes('super') || segs.includes('self')) return null;
+    const cr = this.crateOf(f.path);
+    const modOf = (p) => { // the module path of a file under its crate's src/: [] for main.rs / lib.rs
+      const m = /(?:^|\/)src\/(.+)\.rs$/.exec(p); if (!m) return null;
+      const parts = m[1].split('/');
+      if (parts.length === 1 && /^(main|lib)$/.test(parts[0])) return [];
+      if (parts[parts.length - 1] === 'mod') parts.pop();
+      return parts;
+    };
+    const want = segs[0] === 'crate' ? segs.slice(1) : segs;
+    const ds = this.fns.filter((d) => {
+      if (d.name !== last || !d.body || d.impl || this.crateOf(d.f.path) !== cr) return false;
+      const mp = modOf(d.f.path); if (!mp) return false;
+      if (segs[0] === 'crate') return mp.join('/') === want.join('/');
+      return mp.length >= want.length && mp.slice(mp.length - want.length).join('/') === want.join('/');
+    });
+    return ds.length === 1 ? ds[0] : null;
+  };
   // The effect of transform function `name` (as named in the attribute, in file f): a function of a schema, or null.
   Repo.prototype.transformOf = function (name, f) {
-    const fn = this.fnByName(name, f); if (!fn) return null;
+    const fn = name.includes('::') ? this.fnByPath(name, f) : this.fnByName(name, f); if (!fn) return null;
     if (fn.__transform !== undefined) return fn.__transform;
     fn.__transform = null;
     const toks = (d) => { const t = d.f.t; let a = d.s; while (a < d.body[0] && !isId(t[a], 'fn')) a++; return fnTokens(t, a, d.body[1] + 1); };

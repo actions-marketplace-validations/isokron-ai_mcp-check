@@ -2882,7 +2882,78 @@
     }
     return out;
   }
-  function pyFastapiTools(readable) {
+  // The FastMCP versions the fixtures of R-RD-37 were checked against: tool names (operation id cut at "__", slugified,
+  // 56 characters) are listed as these versions write them; for any other version, or none pinned, the names are marked
+  // as not certain. Unmatched routes default to TOOL from FastMCP 2.8.0 (before it, DEFAULT_ROUTE_MAPPINGS made GET
+  // routes resources and resource templates, src/fastmcp/server/openapi.py at v2.7.1); a dependency range whose lowest
+  // version is older leaves out GET routes no route map decides.
+  const FA_VERIFIED = ['2.14.5', '4.1.6', '4.1.7'];
+  const FA_TOOL_DEFAULT_FROM = [2, 8, 0];
+  const verCmp = (a, b) => { for (let i = 0; i < 3; i++) { const d = (a[i] || 0) - (b[i] || 0); if (d) return d; } return 0; };
+  // The fastmcp version of a package: { pinned: 'x.y.z' | null, lowest: [x, y, z] | null } from uv.lock (exact), then an
+  // exact pin (==) or the lowest version of a range (>=, ~=, >, ^) in requirements or pyproject.
+  function faVersion(entries) {
+    let pinned = null; let lowest = null;
+    entries.forEach(([p, t]) => {
+      if (typeof t !== 'string') return;
+      let m;
+      if (/(^|\/)uv\.lock$/.test(p) && (m = /\[\[package\]\]\s*\nname\s*=\s*"fastmcp(?:-slim)?"\s*\nversion\s*=\s*"(\d+)\.(\d+)\.(\d+)[^"]*"/.exec(t))) { pinned = m[1] + '.' + m[2] + '.' + m[3]; lowest = [+m[1], +m[2], +m[3]]; }
+    });
+    if (pinned) return { pinned, lowest };
+    entries.forEach(([p, t]) => {
+      if (typeof t !== 'string' || lowest || !/(^|\/)(requirements[^/]*\.txt|pyproject\.toml)$/.test(p)) return;
+      const m = /\bfastmcp(?:-slim)?\s*(?:\[[^\]]*\])?\s*(===?|~=|>=|>|\^)\s*v?(\d+)(?:\.(\d+))?(?:\.(\d+))?/.exec(t);
+      if (!m) return;
+      lowest = [+m[2], +(m[3] || 0), +(m[4] || 0)];
+      if (/^==/.test(m[1]) && m[3] !== undefined && m[4] !== undefined) pinned = lowest.join('.');
+    });
+    return { pinned, lowest };
+  }
+  // A route map pattern (Python re, searched in the path) as a JavaScript RegExp, or null when JavaScript would read it
+  // differently or it may backtrack without end: escapes other than \d \D \w \W \s \S \b \B \n \r \t \f \v and
+  // punctuation (\A, \Z, \z, \u…, backreferences), groups other than (?:…) (?=…) (?!…) (?<=…) (?<!…) (?<name>…) and
+  // (?P<name>…) (inline flags, (?P=name), comments, conditionals), possessive quantifiers, {,n}, and a quantified group
+  // holding a quantifier ((a+)+). Longer than FA_MAX_PATTERN characters is not read.
+  const FA_MAX_PATTERN = 200;
+  function faPattern(src) {
+    if (typeof src !== 'string' || src.length > FA_MAX_PATTERN) return null;
+    let out = ''; const groups = []; let inClass = false;
+    for (let i = 0; i < src.length; i++) {
+      const ch = src[i];
+      if (ch === '\\') {
+        const nx = src[i + 1]; if (nx === undefined) return null;
+        if (/[A-Za-z0-9]/.test(nx) && !/[dDwWsSbBnrtfv]/.test(nx)) return null;
+        out += ch + nx; i++; continue;
+      }
+      if (inClass) { if (ch === ']') inClass = false; out += ch; continue; }
+      if (ch === '[') { inClass = true; out += ch; if (src[i + 1] === '^') { out += '^'; i++; } if (src[i + 1] === ']') { out += '\\]'; i++; } continue; }
+      if (ch === '(') {
+        if (src[i + 1] === '?') {
+          const rest = src.slice(i + 2);
+          if (/^P<[A-Za-z_]\w*>/.test(rest)) { out += '(?<'; i += 3; groups.push(false); continue; }
+          if (!/^(?::|=|!|<=|<!|<[A-Za-z_]\w*>)/.test(rest)) return null;
+        }
+        groups.push(false); out += ch; continue;
+      }
+      if (ch === ')') {
+        if (!groups.length) return null;
+        const quantInside = groups.pop();
+        const q = src[i + 1];
+        if (quantInside && (q === '+' || q === '*' || (q === '{' && /^\{\d*,/.test(src.slice(i + 1))))) return null;
+        if (groups.length && (quantInside || q === '+' || q === '*' || q === '{')) groups[groups.length - 1] = true;
+        out += ch; continue;
+      }
+      if (ch === '*' || ch === '+' || ch === '?' || ch === '}') {
+        if (src[i + 1] === '+') return null; // possessive (Python 3.11+)
+        if (groups.length && ch !== '?') groups[groups.length - 1] = true;
+      }
+      if (ch === '{' && /^\{,/.test(src.slice(i))) return null; // {,n}: Python's {0,n}, a literal to JavaScript
+      out += ch;
+    }
+    if (inClass || groups.length) return null;
+    try { return new RegExp(out); } catch (e) { return null; }
+  }
+  function pyFastapiTools(readable, allText) {
     const out = { found: [], notes: [] };
     const pyFiles = readable.filter(([p]) => /\.py$/.test(p));
     const servers = pyFiles.filter(([, t]) => /\bfrom_fastapi\s*\(/.test(t));
@@ -2891,17 +2962,20 @@
     // module name -> file: every dotted suffix of a .py path (src layouts, packages read from a subfolder)
     const mods = new Map();
     pyFiles.forEach(([p]) => { const segs = p.replace(/\.py$/, '').split('/'); if (segs[segs.length - 1] === '__init__') segs.pop(); for (let i = 0; i < segs.length; i++) { const k = segs.slice(i).join('.'); if (!mods.has(k)) mods.set(k, []); mods.get(k).push(p); } });
+    // Imports resolve only to modules under the server file's package root (the nearest folder above it with a
+    // pyproject.toml, setup.py or setup.cfg; the repository when there is none), so a module of another package of a
+    // monorepo with the same dotted name is never taken for the server's.
+    const all = allText instanceof Map ? Array.from(allText.entries()) : readable;
+    const pkgDirs = all.map(([p]) => p).filter((p) => /(^|\/)(pyproject\.toml|setup\.py|setup\.cfg)$/.test(p)).map((p) => (p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : ''));
+    const rootOf = (p) => { let best = ''; pkgDirs.forEach((d) => { if ((d === '' || p.startsWith(d + '/')) && d.length > best.length) best = d; }); return best; };
+    const under = (root, p) => root === '' || p.startsWith(root + '/');
+    let pkgRoot = '';
     const modFile = (F, mod) => {
-      if (/^\./.test(mod)) { const dots = /^\.+/.exec(mod)[0].length; const base = F.path.split('/').slice(0, -dots); const rest = mod.slice(dots); const stem = base.concat(rest ? rest.split('.') : []).join('/'); return [stem + '.py', stem + '/__init__.py'].find((x) => fileOf(x)) || null; }
-      const c = mods.get(mod); return c && c.length === 1 ? c[0] : null;
+      if (/^\./.test(mod)) { const dots = /^\.+/.exec(mod)[0].length; const base = F.path.split('/').slice(0, -dots); const rest = mod.slice(dots); const stem = base.concat(rest ? rest.split('.') : []).join('/'); return [stem + '.py', stem + '/__init__.py'].find((x) => under(pkgRoot, x) && fileOf(x)) || null; }
+      const c = (mods.get(mod) || []).filter((p) => under(pkgRoot, p)); return c.length === 1 ? c[0] : null;
     };
-    // pinned fastmcp version (uv.lock, requirements, pyproject): its major
-    let major = null;
-    readable.forEach(([p, t]) => {
-      let m;
-      if (/(^|\/)uv\.lock$/.test(p) && (m = /\[\[package\]\]\s*\nname\s*=\s*"fastmcp(?:-slim)?"\s*\nversion\s*=\s*"(\d+)\./.exec(t))) major = +m[1];
-      else if (major === null && /(^|\/)(requirements[^/]*\.txt|pyproject\.toml)$/.test(p) && (m = /\bfastmcp(?:-slim)?\s*(?:\[[^\]]*\])?\s*(?:==|~=|>=)\s*(\d+)\./.exec(t))) major = +m[1];
-    });
+    // the fastmcp version of the server's package (set per server below)
+    let ver = { pinned: null, lowest: null }; let major = null;
     // a decorator below the route decorator: kept only when it is a repository function that uses functools.wraps
     const wrapsOk = new Map();
     const decoratorKeeps = (name) => {
@@ -3029,6 +3103,11 @@
     };
     for (const [sp] of servers) {
       const S = fileOf(sp); if (!S) continue;
+      pkgRoot = rootOf(sp);
+      ver = faVersion(all.filter(([p]) => under(pkgRoot, p)));
+      major = ver.lowest ? ver.lowest[0] : null;
+      const namesSure = !!ver.pinned && FA_VERIFIED.includes(ver.pinned);
+      const oldDefault = !!ver.lowest && verCmp(ver.lowest, FA_TOOL_DEFAULT_FROM) < 0;
       S.lines.forEach((l, k) => {
         const at = l.text.search(/\bFastMCP\.from_fastapi\s*\(/); if (at < 0) return;
         const where = sp + ':' + l.line;
@@ -3050,7 +3129,7 @@
             for (const kn of Object.keys(rc.kw)) {
               const v = faVal(rc.kw[kn], S.consts);
               if (kn === 'methods') { if (v === '*' || (Array.isArray(v) && v.every((y) => typeof y === 'string'))) o.methods = v === '*' ? '*' : v.map((y) => y.toUpperCase()); else return null; }
-              else if (kn === 'pattern') { if (typeof v !== 'string') return null; try { o.pattern = new RegExp(v.replace(/\(\?P</g, '(?<')); } catch (e) { return null; } }
+              else if (kn === 'pattern') { if (typeof v !== 'string') return null; o.pattern = faPattern(v); if (!o.pattern) return null; }
               else if (kn === 'tags') { if (!Array.isArray(v)) return null; o.tags = v; }
               else if (kn === 'mcp_type') { if (!v || !v.mcpType) return null; o.type = v.mcpType; }
               else if (kn === 'mcp_tags') { /* tags given to the component: not part of the tool list */ }
@@ -3107,7 +3186,7 @@
         }
         routes.push(...routesOf(S, app, '', [], 0, why, false, true).filter((r) => r.k > start && r.k < k));
         if (why.length) out.notes.push('FastMCP.from_fastapi at ' + where + ': routes not listed because the reader could not resolve ' + Array.from(new Set(why)).slice(0, 4).join('; ') + (why.length > 4 ? ' and more' : ''));
-        const seen = new Set();
+        const seen = new Set(); let unsure = 0; let oldGets = 0;
         routes.forEach((r) => {
           const F = r.F; const dl = F.lines[r.k]; const dc = r.call || { pos: [], kw: {} };
           const un = [];
@@ -3125,8 +3204,10 @@
           // the route map
           const method = r.method.toUpperCase();
           const hit = maps.find((m) => (m.methods === '*' || m.methods.includes(method)) && (!m.pattern || m.pattern.test(full)) && m.tags.every((t) => allTags.includes(t)));
+          // before FastMCP 2.8.0 a GET route no map decides is a resource (template), from 2.8.0 a tool
+          if (!hit && !mapFn && oldDefault && method === 'GET') { oldGets++; return; }
           let type = hit ? hit.type : 'TOOL';
-          if (mapFn) type = mapFn({ operationId: opId, path: full, method }, type);
+          if (mapFn) { if (!hit && oldDefault && method === 'GET') { oldGets++; return; } type = mapFn({ operationId: opId, path: full, method }, type); }
           if (type !== 'TOOL') return;
           const name = faSlug(opId.split('__')[0]).slice(0, 56);
           if (seen.has(name)) { out.notes.push('a second route named ' + name + ' at ' + F.path + ':' + r.deco.line + ' (FastMCP renames it); not listed'); return; }
@@ -3170,7 +3251,7 @@
             pyConstraints(tgt, kwv);
             s.title = kw.alias !== undefined ? pname : faPyTitle(p.name.replace(/_/g, ' '));
             if (kw.description !== undefined) { const y = v(kw.description); if (typeof y === 'string') s.description = y; else un.push('inputSchema'); }
-            if (loc === 'path' && kw.description !== undefined && major !== null && major < 3) un.push('description'); // 2.x lists described path parameters in the description
+            if (loc === 'path' && kw.description !== undefined && (major === null || major < 3)) un.push('description'); // 2.x lists described path parameters in the description; with no version known, either may hold
             const required = loc === 'path' || def === undefined || def.trim() === '...';
             if (!required) { const y = v(def); if (y === undefined || (y && typeof y === 'object')) un.push('inputSchema'); else if (y !== null) s.default = y; }
             if (props[pname]) un.push('inputSchema');
@@ -3181,12 +3262,16 @@
             Object.keys(body.schema.properties).forEach((n) => { if (props[n]) un.push('inputSchema'); props[n] = body.schema.properties[n]; });
             if (bodyReq) required.push(...body.schema.required);
           }
+          if (!namesSure) { un.push('name'); unsure++; }
           const tool = { name };
           if (description) tool.description = description;
           tool.inputSchema = { type: 'object', properties: props, required };
           if (un.length) tool._unreadable = Array.from(new Set(un));
           out.found.push({ path: F.path, line: dl.line, tool, fidelity: 'derived', marks: [] });
         });
+        const vtext = ver.pinned ? 'pins fastmcp ' + ver.pinned : ver.lowest ? 'allows fastmcp from ' + ver.lowest.join('.') : 'pins no fastmcp version';
+        if (unsure) out.notes.push('FastMCP.from_fastapi at ' + where + ': tool names are written as FastMCP ' + FA_VERIFIED.join(', ') + ' write them; the package ' + vtext + ', so ' + unsure + ' tool name' + (unsure === 1 ? '' : 's') + ' may differ');
+        if (oldGets) out.notes.push('FastMCP.from_fastapi at ' + where + ': ' + oldGets + ' GET route' + (oldGets === 1 ? '' : 's') + ' no route map decides not listed: the package ' + vtext + ', and before 2.8.0 FastMCP made those resources, not tools');
       });
     }
     return out;
@@ -3245,7 +3330,7 @@
     });
     // FastMCP.from_fastapi: tools from the FastAPI app's routes (R-RD-37)
     let fastapiNotes = [];
-    try { const fa = pyFastapiTools(readable); fastapiNotes = fa.notes; fa.found.forEach((x) => { if (!byName.has(x.tool.name)) { byName.add(x.tool.name); found.push(x); } else dupes.push({ path: x.path, name: x.tool.name }); }); } catch (e) { if (e && e.name === 'RangeError') throw e; fastapiNotes = ['FastMCP.from_fastapi: the reader failed on the FastAPI app, so its routes are not listed']; }
+    try { const fa = pyFastapiTools(readable, text); fastapiNotes = fa.notes; fa.found.forEach((x) => { if (!byName.has(x.tool.name)) { byName.add(x.tool.name); found.push(x); } else dupes.push({ path: x.path, name: x.tool.name }); }); } catch (e) { if (e && e.name === 'RangeError') throw e; fastapiNotes = ['FastMCP.from_fastapi: the reader failed on the FastAPI app, so its routes are not listed']; }
     const marks = markConditionals(found, srcList, dupes, readable);
     found.forEach((f) => { f.marks = marks.get(f); f.excluded = f.marks.some((m) => m.exclude); });
     // Never return an empty list because of exclusions: the marks stay, the exclusion does not apply.

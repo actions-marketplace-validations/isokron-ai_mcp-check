@@ -114,7 +114,7 @@ test('R-RD-36: a transform the reader cannot follow keeps the tool, marks its in
     // an insert whose value is computed at run time
     ['#[schemars(transform = stamp)]', 'fn stamp(schema: &mut schemars::Schema) { schema.insert("default".into(), std::env::var("LIMIT").unwrap().into()); }', 'stamp'],
     // a function that is not in the repository
-    ['#[schemars(transform = other_crate::tighten)]', '', 'tighten'],
+    ['#[schemars(transform = other_crate::tighten)]', '', 'other_crate::tighten'],
     // an expression, not a function path
     ['#[schemars(transform = RecursiveTransform(drop_null))]', '', 'an expression'],
   ];
@@ -129,6 +129,40 @@ test('R-RD-36: a transform the reader cannot follow keeps the tool, marks its in
   const cont = ARGS('', 'fn shrink(schema: &mut schemars::Schema) { schema.remove("properties"); }');
   cont['src/lib.rs'] = cont['src/lib.rs'].replace('pub struct Req {', '#[schemars(transform = shrink)]\npub struct Req {');
   assert.deepEqual(byName(read(cont)).list_files.tool._unreadable, ['inputSchema']);
+});
+
+// Synthetic, with the docling drop_null body: a transform named by a path (other_mod::f) is the function of that module,
+// never a same-file function of the same name; a path that names no module file, or super::, is declined.
+test('R-RD-36: a transform named by a module path is that module\'s function, not a same-file one of the same name', () => {
+  const DROP = `fn drop_null(schema: &mut schemars::Schema) {
+    if let Some(serde_json::Value::Array(types)) = schema.get("type").cloned() {
+        let kept: Vec<_> = types.into_iter().filter(|t| t != "null").collect();
+        if let [single] = kept.as_slice() { schema.insert("type".into(), single.clone()); }
+    }
+    if schema.get("default") == Some(&serde_json::Value::Null) { schema.remove("default"); }
+}`;
+  const WIDEN = 'fn drop_null(schema: &mut schemars::Schema) { for k in ["minimum", "maximum"] { schema.remove(k); } }';
+  // other_mod::drop_null is a function the reader cannot follow; the same-file drop_null is the known one
+  const a = ARGS('#[schemars(transform = other_mod::drop_null)]', DROP);
+  a['src/other_mod.rs'] = WIDEN;
+  const ra = byName(read(a)).list_files;
+  assert.deepEqual(ra.tool._unreadable, ['inputSchema'], 'the same-file drop_null is not taken for other_mod::drop_null');
+  assert.deepEqual(ra.marks.map((m) => m.reason), ['schema-transform (other_mod::drop_null)']);
+  // the module's own function is followed (src/other_mod.rs, src/helpers/mod.rs, crate::helpers::…)
+  for (const [attr, file] of [['other_mod::drop_null', 'src/other_mod.rs'], ['helpers::drop_null', 'src/helpers/mod.rs'], ['crate::helpers::drop_null', 'src/helpers/mod.rs']]) {
+    const b = ARGS('#[schemars(transform = ' + attr + ')]', WIDEN);
+    b[file] = DROP;
+    const rb = byName(read(b)).list_files;
+    assert.equal(rb.tool.inputSchema.properties.limit.type, 'integer', attr);
+    assert.equal(rb.tool._unreadable, undefined, attr);
+  }
+  // no file for the module, and super::, are declined even with a known same-file function
+  for (const attr of ['missing::drop_null', 'super::drop_null']) {
+    const rc = byName(read(ARGS('#[schemars(transform = ' + attr + ')]', DROP))).list_files;
+    assert.deepEqual(rc.tool._unreadable, ['inputSchema'], attr);
+  }
+  // self:: is this file
+  assert.equal(byName(read(ARGS('#[schemars(transform = self::drop_null)]', DROP))).list_files.tool._unreadable, undefined);
 });
 
 test('R-RD-36: --repo-dir says which tools have a transform it does not follow, and grades the rest', () => {

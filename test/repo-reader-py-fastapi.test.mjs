@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BIN = join(HERE, '..', 'bin', 'mcp-check.js');
@@ -148,4 +149,90 @@ test('R-RD-37: a route map by tag and method decides per route; a router the rea
   const m = run(server({ 'app.py': missing, 'routes.py': ROUTES, 'pyproject.toml': '[project]\nname = "x"\n' }));
   assert.deepEqual(Object.keys(m.tools).sort(), ['tool_a', 'tool_b']);
   assert.match(m.stderr, /routes not listed because the reader could not resolve router admin_router imported from admin\.views, not found in the repository/);
+});
+
+// ---------------------------------------------------------------- second review: versions, patterns, package roots
+// Synthetic, in the shape of the Tavily fixture (a described path parameter, a POST route) with the FastMCP pin varied.
+const ANALYSE = createRequire(import.meta.url)('../src/inputs/repo-source.cjs').analyseRepo;
+const scan = (files) => { const an = ANALYSE(new Map(Object.entries(files))); return { tools: Object.fromEntries(an.tools.map((x) => [x.tool.name, x.tool])), notes: an.notes || [] }; };
+const VAPP = (maps) => `from fastapi import FastAPI, Path
+from fastmcp import FastMCP
+from fastmcp.server.openapi import RouteMap, MCPType
+app = FastAPI()
+
+@app.get("/items/{item_id}")
+def read_item(item_id: int = Path(description="The item id")):
+    """Read one item."""
+    return {}
+
+@app.post("/internal")
+def reindex():
+    """Rebuild the index."""
+    return {}
+
+mcp = FastMCP.from_fastapi(app=app${maps ? ', route_maps=[' + maps + ']' : ''})
+`;
+const pin = (dep, extra) => Object.assign({ 'pyproject.toml': '[project]\nname = "x"\ndependencies = ["fastapi", ' + JSON.stringify(dep) + ']\n', 'server.py': VAPP() }, extra || {});
+
+test('R-RD-37: tool names are certain only under the FastMCP versions the fixtures checked; otherwise they are marked and the reason noted', () => {
+  for (const v of ['2.14.5', '4.1.6', '4.1.7']) {
+    const r = scan(pin('fastmcp==' + v));
+    assert.deepEqual(Object.keys(r.tools).sort(), ['read_item_items', 'reindex_internal_post'], v);
+    assert.equal((r.tools.reindex_internal_post._unreadable || []).includes('name'), false, v);
+    assert.equal(r.notes.some((n) => /may differ/.test(n)), false, v);
+  }
+  for (const [dep, says] of [['fastmcp', 'pins no fastmcp version'], ['fastmcp==4.2.0', 'pins fastmcp 4.2.0'], ['fastmcp>=2.14', 'allows fastmcp from 2.14.0']]) {
+    const r = scan(pin(dep));
+    assert.deepEqual(Object.keys(r.tools).sort(), ['read_item_items', 'reindex_internal_post'], dep);
+    assert.ok(r.tools.reindex_internal_post._unreadable.includes('name'), dep);
+    assert.ok(r.notes.some((n) => n.includes(says) && /2 tool names may differ/.test(n)), dep + ': ' + r.notes.join(' | '));
+  }
+});
+
+test('R-RD-37: with no FastMCP version known, a described path parameter leaves the description unread (2.x adds it to the description)', () => {
+  const none = scan(pin('fastmcp'));
+  assert.ok(none.tools.read_item_items._unreadable.includes('description'));
+  assert.equal(none.tools.read_item_items.inputSchema.properties.item_id.description, 'The item id');
+  const v4 = scan(pin('fastmcp==4.1.7'));
+  assert.equal(v4.tools.read_item_items._unreadable, undefined, '4.x lists the parameter description in the schema only');
+  const v2 = scan(pin('fastmcp==2.14.5'));
+  assert.deepEqual(v2.tools.read_item_items._unreadable, ['description']);
+});
+
+test('R-RD-37: a range that allows FastMCP before 2.8.0 leaves out GET routes no route map decides (resources there), and says so', () => {
+  const r = scan(pin('fastmcp>=2.3'));
+  assert.deepEqual(Object.keys(r.tools), ['reindex_internal_post']);
+  assert.ok(r.notes.some((n) => /1 GET route no route map decides not listed: the package allows fastmcp from 2\.3\.0, and before 2\.8\.0/.test(n)), r.notes.join(' | '));
+  // a map that decides the GET route decides it in every version
+  const m = scan(pin('fastmcp>=2.3', { 'server.py': VAPP('RouteMap(methods=["GET"], mcp_type=MCPType.TOOL)') }));
+  assert.deepEqual(Object.keys(m.tools).sort(), ['read_item_items', 'reindex_internal_post']);
+  assert.deepEqual(Object.keys(scan(pin('fastmcp>=2.8')).tools).sort(), ['read_item_items', 'reindex_internal_post']);
+});
+
+test('R-RD-37: a route map pattern JavaScript would read differently, or that may backtrack without end, leaves the routes out; a plain one is applied', () => {
+  for (const p of ['^/internal\\Z', '\\A/internal', '(?i)^/INTERNAL', '(?P<x>a)(?P=x)', '^/inter++nal', '^/a{,3}', '(a+)+$', '(?#note)/internal', 'x'.repeat(201)]) {
+    const r = scan(pin('fastmcp==4.1.7', { 'server.py': VAPP('RouteMap(pattern=r"' + p + '", mcp_type=MCPType.EXCLUDE)') }));
+    assert.deepEqual(r.tools, {}, p);
+    assert.ok(r.notes.some((n) => /route_maps not read/.test(n)), p);
+  }
+  for (const [p, want] of [['^/internal$', ['read_item_items']], ['^/(?P<area>internal)$', ['read_item_items']], ['^/items/\\d*', ['reindex_internal_post']], ['^/(?:v\\d+/)?internal', ['read_item_items']]]) {
+    const r = scan(pin('fastmcp==4.1.7', { 'server.py': VAPP('RouteMap(pattern=r"' + p + '", mcp_type=MCPType.EXCLUDE)') }));
+    assert.deepEqual(Object.keys(r.tools), want, p);
+  }
+});
+
+test('R-RD-37: imports resolve only inside the server\'s own package: a module of another package with the same name is not followed', () => {
+  const APPR = 'from fastapi import FastAPI\nfrom fastmcp import FastMCP\nfrom routes import router\napp = FastAPI()\napp.include_router(router)\nmcp = FastMCP.from_fastapi(app=app)\n';
+  const files = {
+    'servers/a/pyproject.toml': '[project]\nname = "a"\ndependencies = ["fastmcp==4.1.7"]\n',
+    'servers/a/server.py': APPR,
+    'servers/b/pyproject.toml': '[project]\nname = "b"\ndependencies = ["fastmcp==4.1.7"]\n',
+    'servers/b/routes.py': ROUTES,
+  };
+  const r = scan(files);
+  assert.deepEqual(r.tools, {});
+  assert.ok(r.notes.some((n) => /router router imported from routes, not found in the repository/.test(n)), r.notes.join(' | '));
+  // the same layout with routes.py in the server's own package is read
+  const own = scan(Object.assign({}, files, { 'servers/a/routes.py': ROUTES }));
+  assert.deepEqual(Object.keys(own.tools).sort(), ['tool_a', 'tool_b']);
 });
