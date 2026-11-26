@@ -79,6 +79,11 @@ test('R-LP-59: of the 26 Nov PyPI start_failed results, only the crash in the se
   assert.equal(detail(STRATEVO, py('stratevo', '6.0.3', 'stratevo', STRATEVO_DEPS)), 'start_failed');
   assert.equal(detail(STRATEVO, py('stratevo', '6.0.3', 'stratevo')), 'start_failed', 'without the wheel facts, a module named like the package is its own');
   assert.equal(detail(DUP_TOOL, { launch: { kind: 'npm', package: 'mcp-registry-mcp' }, argsUnfilled: 0 }), 'start_failed', 'a real crash in its own code');
+  // A declared variable does not turn a crash of its own into needs_credentials, nor a quiet exit into a crash.
+  const declared = rec({ env: { names: { registry: ['STRATEVO_KEY'] }, secret_named: ['STRATEVO_KEY'] } });
+  assert.equal(detail(STRATEVO, py('stratevo', '6.0.3', 'stratevo', STRATEVO_DEPS), declared), 'start_failed');
+  assert.equal(detail('', py('stratevo', '6.0.3', 'stratevo', STRATEVO_DEPS), declared), 'needs_credentials');
+  assert.equal(detail(tb('    raise RuntimeError(msg)', 'RuntimeError: STRATEVO_KEY is not set'), py('stratevo', '6.0.3', 'stratevo', STRATEVO_DEPS), declared), 'needs_credentials');
   // The other guards still hold for a crash of its own.
   assert.equal(LP.failureDetail(rec(), exit1(STRATEVO, LP.START_QUICK_MS), null, py('stratevo', '6.0.3', 'stratevo', STRATEVO_DEPS)), 'start_env_limited', 'a late exit');
 });
@@ -94,6 +99,15 @@ test('R-LP-60: a read-only root, a refused write, a missing shared library or ex
   for (const s of ['Error: spawn git ENOENT\n    at ChildProcess._handle.onexit (node:internal/child_process:285:19)', "FileNotFoundError: [Errno 2] No such file or directory: 'uvx'", '/bin/sh: 1: java: not found', 'exec: "docker": executable file not found in $PATH']) {
     assert.equal(detail(s, py('x-mcp', '1.0.0', 'x-mcp')), 'start_env_limited', s);
   }
+  // Go and glibc print these in lower case; GitPython without git; a native addon that was never built.
+  for (const s of ['panic: open /app/data.db: read-only file system\n\ngoroutine 1 [running]:', 'panic: mkdir /home/app: permission denied\n\ngoroutine 1 [running]:',
+    tb('ImportError: Bad git executable.'), 'Error: Could not locate the bindings file. Tried:\n    at bindings (/work/pkg/node_modules/bindings/bindings.js:126:9)']) {
+    assert.equal(detail(s, py('x-mcp', '1.0.0', 'x-mcp')), 'start_env_limited', s);
+  }
+  // CommonJS: a bare dependency that is not installed is not ours to tell; the package's own file is its own.
+  const npmCtx = { launch: { kind: 'npm', package: 'x-mcp' }, argsUnfilled: 0 };
+  assert.equal(detail("Error: Cannot find module 'sharp'\nRequire stack:\n- /work/pkg/node_modules/x-mcp/dist/index.js", npmCtx), 'start_env_limited');
+  assert.equal(detail("Error: Cannot find module '/work/pkg/node_modules/x-mcp/dist/tools.js'\n    at Module._resolveFilename (node:internal/modules/cjs/loader:1249:15)", npmCtx), 'start_failed');
   // A declared env var does not turn our environment into the server's needs_credentials.
   assert.equal(detail(RO_FS, py('midos-mcp', '2026.2.23.1', 'midos-mcp'), rec({ env: { names: { registry: ['API_KEY'] }, secret_named: ['API_KEY'] } })), 'start_env_limited');
   // A file path or a data file is not an executable.
@@ -113,6 +127,16 @@ test('R-LP-61: a module only an extra brings, or a server naming the extra to in
   assert.deepEqual(deps, { top: ['deadsimple', 'helper'], base: ['httpx', 'pydantic', 'anyio', 'rich'], uncapped: ['httpx', 'rich'], extra_only: ['mcp', 'typer'], extras: ['mcp', 'cli'] });
   assert.deepEqual(requirementOf('Foo_Bar[x] ==1.*; python_version < "3.12"'), { name: 'foo-bar', extra: null, capped: true });
   assert.equal(pypiDeps(null, null).top, null, 'no wheel read: own modules unknown');
+  // A namespace folder (no __init__.py) is shared with other distributions: google.auth is not the server's module.
+  const ns = pypiDeps({ requires_dist: ['google-auth>=2'] }, ['google/cloud_x/__init__.py', 'x_mcp/__init__.py']);
+  assert.deepEqual(ns.top, ['x-mcp']);
+  assert.equal(detail(tb("ModuleNotFoundError: No module named 'google.auth'"), py('x-mcp', '1', 'x-mcp', ns)), 'start_env_limited');
+  // Without the wheel, only a module named exactly like the package is its own: mcp-server-docker's `docker` is a library.
+  assert.equal(detail(tb("ModuleNotFoundError: No module named 'docker'"), py('mcp-server-docker', '1', 'mcp-server-docker')), 'start_env_limited');
+  // PEP 508 corners: a direct reference is one exact artifact; a reversed extra marker; junk entries.
+  assert.equal(requirementOf('foo @ https://example.com/foo-1.0.whl').capped, true);
+  assert.equal(requirementOf('foo>=1; "mcp" == extra').extra, 'mcp');
+  assert.deepEqual(pypiDeps({ requires_dist: [null, 7, 'a>=1'] }).base, ['a']);
 });
 
 test('R-LP-62: a dependency that changed after the release is start_dependency_drift, and a macOS- or Windows-only server is unsupported_platform (both tool)', () => {
@@ -128,6 +152,7 @@ test('R-LP-62: a dependency that changed after the release is start_dependency_d
   const esm = "file:///work/pkg/dist/index.js:1\nimport { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';\n         ^^^^^^^^^\nSyntaxError: The requested module '@modelcontextprotocol/sdk/server/mcp.js' does not provide an export named 'McpServer'\n    at ModuleJob._instantiate (node:internal/modules/esm/module_job:180:21)";
   assert.equal(detail(esm, { launch: { kind: 'npm', package: 'x-mcp' }, argsUnfilled: 0 }), 'start_dependency_drift');
   assert.equal(detail("SyntaxError: The requested module './tools.js' does not provide an export named 'x'\n    at ModuleJob._instantiate (node:internal/modules/esm/module_job:180:21)", { launch: { kind: 'npm', package: 'x-mcp' }, argsUnfilled: 0 }), 'start_failed', 'its own module');
+  assert.equal(detail("SyntaxError: The requested module 'file:///work/pkg/dist/x.js' does not provide an export named 'a'\n    at ModuleJob._instantiate (node:internal/modules/esm/module_job:180:21)", { launch: { kind: 'npm', package: 'x-mcp' }, argsUnfilled: 0 }), 'start_failed', 'a file: URL is its own module');
   // Platform: the server says so, or needs an executable only macOS or Windows has.
   assert.equal(detail('Error: ExcelMcp is Windows only\n    at main (/work/pkg/dist/index.js:4:9)', { launch: { kind: 'npm', package: 'excel-mcp' }, argsUnfilled: 0 }), 'unsupported_platform');
   assert.equal(detail(XCRUN, py('mcpbridge-wrapper', '0.1.6', 'mcpbridge-wrapper')), 'unsupported_platform');
@@ -136,7 +161,9 @@ test('R-LP-62: a dependency that changed after the release is start_dependency_d
 });
 
 test('R-LP-63: configuration requests the first patterns missed are start_needs_config (tool), traceback or not', () => {
-  const msgs = ['Missing required setting(s): OITC_APIKEY', 'Configuration error: AXE_API_KEY, AXE_URL', '{"error":{"code":"configuration_path_required"}}', 'Pass --project <path>', 'Error: Factory is not configured', 'No Telegram credentials configured', 'Run the pipeline first', 'Invalid configuration', SNOWFLAKE];
+  const msgs = ['Missing required setting(s): OITC_APIKEY', 'Configuration error: AXE_API_KEY, AXE_URL', '{"error":{"code":"configuration_path_required"}}', 'Pass --project <path>', 'Error: Factory is not configured', 'No Telegram credentials configured', 'Run the pipeline first', 'Invalid configuration', SNOWFLAKE,
+    // mcp-hydrolix: a configuration request raised with a traceback, with a variable declared.
+    tb('    raise ValueError(', 'ValueError: User/password authentication is only partially configured: set both HYDROLIX_USER and HYDROLIX_PASSWORD')];
   for (const s of msgs) {
     assert.match(s, LP.CONFIG_TEXT, s);
     assert.equal(detail(s, { launch: { kind: 'npm', package: 'x' }, argsUnfilled: 0 }), 'start_needs_config', s);
@@ -152,6 +179,13 @@ test('R-LP-64: a server that went to the network is start_needs_network whether 
     assert.match(s, LP.NETWORK_TEXT, s);
     assert.equal(detail(s, py('x-mcp', '1', 'x-mcp')), 'start_needs_network', s);
   }
+  for (const s of ['panic: dial tcp: lookup api.x.com on 127.0.0.11:53: no such host\n\ngoroutine 1 [running]:', 'panic: dial tcp 127.0.0.1:5432: connect: connection refused\n\ngoroutine 1 [running]:',
+    tb('socket.gaierror: [Errno -3] Temporary failure in name resolution'), 'TypeError: fetch failed\n    at node:internal/deps/undici/undici:13510:13']) {
+    assert.equal(detail(s, py('x-mcp', '1', 'x-mcp')), 'start_needs_network', s);
+  }
+  // With a declared variable too: the network is the cause, never needs_credentials.
+  const declared = rec({ env: { names: { registry: ['API_KEY'] }, secret_named: ['API_KEY'] } });
+  assert.equal(detail('Error: getaddrinfo ENOTFOUND api.github.com\n    at GetAddrInfoReqWrap.onlookup (node:dns:120:26)', py('x-mcp', '1', 'x-mcp'), declared), 'start_needs_network');
   assert.equal(LP.DETAILS.start_needs_network[3], 'tool');
 });
 

@@ -1248,7 +1248,7 @@ test('R-LP-45: start_failed needs a crash signature on stderr; an early exit wit
     traceback: 'Traceback (most recent call last):\n  File "server.py", line 3, in <module>\nKeyError: 1',
     uncaught: 'node:internal/process:1\n  throw err;\nUncaught Exception: boom',
     unhandled: 'Unhandled promise rejection: Error: x',
-    missing_module: "Error: Cannot find module 'zod'",
+    missing_module: "Error: Cannot find module '/work/pkg/node_modules/x/dist/server.js'",
     go_panic: 'panic: runtime error: invalid memory address',
     segv: 'Segmentation fault (core dumped)',
   };
@@ -1256,6 +1256,9 @@ test('R-LP-45: start_failed needs a crash signature on stderr; an early exit wit
     assert.match(stderr, LP.CRASH_TEXT, name);
     assert.equal(LP.failureDetail(lpRec(), { ...probeExit(1), stderr }, null, OK), 'start_failed', name);
   }
+  // A bare dependency npm did not install is not ours to tell (R-LP-60): an optional or native one, or an undeclared one.
+  assert.match("Error: Cannot find module 'zod'", LP.CRASH_TEXT);
+  assert.equal(LP.failureDetail(lpRec(), { ...probeExit(1), stderr: "Error: Cannot find module 'zod'" }, null, OK), 'start_env_limited');
   const frame = '\n    at Object.<anonymous> (/app/index.js:3:1)';
   for (const s of ['ModuleNotFoundError: No module named x', 'ImportError: cannot import name y', 'SyntaxError: invalid syntax', 'ReferenceError: z is not defined' + frame, 'TypeError: x is not a function' + frame, 'fatal error: all goroutines are asleep - deadlock!\n\ngoroutine 1 [chan receive]:', 'RangeError: Maximum call stack size exceeded' + frame]) assert.match(s, LP.CRASH_TEXT, s);
   // Config text wins over crash text.

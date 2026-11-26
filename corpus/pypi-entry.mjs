@@ -179,8 +179,9 @@ export function requirementOf(s) {
   const name = normName(m[1]);
   if (!DIST.test(name)) return null;
   const spec = m[2].replace(/[()\s]/g, '');
-  const ex = /\bextra\s*==\s*["']([^"']+)["']/.exec(m[3] || '');
-  return { name, extra: ex ? normName(ex[1]) : null, capped: /<|~=|(?:^|,)===?/.test(spec) };
+  const ex = /\bextra\s*==\s*["']([^"']+)["']|["']([^"']+)["']\s*==\s*extra\b/.exec(m[3] || '');
+  // A direct reference (`name @ https://...`) is one exact artifact: capped.
+  return { name, extra: ex ? normName(ex[1] || ex[2]) : null, capped: /<|~=|(?:^|,)===?|^@/.test(spec) };
 }
 
 /**
@@ -193,6 +194,7 @@ export function pypiDeps(info, memberNames = null) {
   const base = new Set(); const uncapped = new Set(); const inExtra = new Set(); const extras = new Set();
   const reqs = info && Array.isArray(info.requires_dist) ? info.requires_dist.slice(0, 300) : [];
   for (const s of reqs) {
+    if (typeof s !== 'string') continue;
     const r = requirementOf(s);
     if (!r) continue;
     if (r.extra) { inExtra.add(r.name); if (EXTRA.test(r.extra)) extras.add(r.extra); continue; }
@@ -203,9 +205,11 @@ export function pypiDeps(info, memberNames = null) {
   let top = null;
   if (Array.isArray(memberNames)) {
     const t = new Set();
+    // A package with its own __init__.py, or a top-level module file: a namespace folder (google/, azure/) is shared
+    // with other distributions, so a module under it is not the server's own.
     for (const n of memberNames) {
-      const m = /^([A-Za-z_][A-Za-z0-9_]*)(?:\/|\.py$)/.exec(n);
-      if (m && !/\.(?:dist-info|data)\//.test(n)) t.add(normName(m[1]));
+      const m = /^([A-Za-z_][A-Za-z0-9_]*)(?:\/__init__\.py|\.py)$/.exec(n);
+      if (m) t.add(normName(m[1]));
       if (t.size >= 50) break;
     }
     top = [...t];

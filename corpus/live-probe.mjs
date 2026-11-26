@@ -1049,7 +1049,7 @@ const CONFIG_BASE = [
 const CONFIG_MORE = [
   String.raw`\bmissing\s+required\s+(?:[a-z]+\s+){0,2}?(?:settings?|credentials?|parameters?|keys?|values?|fields?)\b`,
   String.raw`\bconfiguration[\s_-]*(?:path[\s_-]*)?(?:error|required)\b`, String.raw`\binvalid\s+config(?:uration)?\b`,
-  String.raw`\b(?:is|are)\s+not\s+configured\b`, String.raw`\bno\s+(?:[A-Za-z]+\s+){0,2}?(?:credentials?|api[\s_-]?keys?|tokens?)\s+(?:configured|found|supplied|provided|set)\b`,
+  String.raw`\b(?:not|partially|incompletely)\s+configured\b`, String.raw`\bno\s+(?:[A-Za-z]+\s+){0,2}?(?:credentials?|api[\s_-]?keys?|tokens?)\s+(?:configured|found|supplied|provided|set)\b`,
   String.raw`\b(?:pass|provide|specify)\s+--[a-z][a-z0-9-]{1,40}\b`, String.raw`\b(?:run|initiali[sz]e|configure)\s+[^\n]{1,40}?\s+first\b`,
 ];
 export const CONFIG_TEXT = new RegExp([...CONFIG_BASE, ...CONFIG_MORE].join('|'), 'i');
@@ -1103,7 +1103,10 @@ export const ENV_TEXT = new RegExp([
   String.raw`cannot open shared object file`, String.raw`error while loading shared libraries`, String.raw`version \x60GLIBC_[0-9.]+' not found`,
   String.raw`Exec format error`,
   String.raw`Cannot find module '/tmp/`, String.raw`can't open file '/tmp/`,
-].join('|'));
+  // A library that needs an executable or a native build our images lack (GitPython without git, a missing .node file).
+  String.raw`Bad git executable`, String.raw`Could not locate the bindings file`,
+// Case-insensitive: Go and glibc print these in lower case (`open /data/x.db: read-only file system`).
+].join('|'), 'i');
 /** An executable the server tried to run that is not in our image: [whole match, name]. */
 const MISSING_BIN = [
   /FileNotFoundError: \[Errno 2\] No such file or directory: '([A-Za-z0-9_+-]+(?:\.exe)?)'/,
@@ -1126,7 +1129,9 @@ export const NETWORK_TEXT = new RegExp([
   String.raw`\bgetaddrinfo\s+(?:ENOTFOUND|EAI_AGAIN)\b`, String.raw`Temporary failure in name resolution`, String.raw`Name or service not known`,
   String.raw`\b(?:ENETUNREACH|EHOSTUNREACH|ECONNREFUSED|ECONNRESET|ETIMEDOUT)\b`, String.raw`Network is unreachable`, String.raw`Failed to establish a new connection`,
   String.raw`Could not resolve host`, String.raw`(?:^|\n)(?:[\w.]+\.)?(?:ConnectError|ConnectionError|ConnectTimeout|NameResolutionError): `,
-].join('|'));
+  // Go's resolver and dialer, Python's socket.gaierror, Node's fetch.
+  String.raw`\bno such host\b`, String.raw`\bconnection refused\b`, String.raw`\bgaierror\b`, String.raw`\[Errno -[23]\]`, String.raw`(?:^|\n)TypeError: fetch failed\b`,
+].join('|'), 'i');
 /** A server telling us to install one of its extras: `pip install 'pkg[extra]'` (R-LP-61). */
 const EXTRA_HINT = /pip install\s+["']?[A-Za-z0-9._-]+\[[A-Za-z0-9_.,-]+\]/;
 /** Import names whose distribution is named otherwise (PEP 503), for the common ones. */
@@ -1147,7 +1152,10 @@ export function failedImport(err) {
   }
   if (last) return last;
   const esm = /(?:^|\n)SyntaxError: The requested module '([^'\s]{1,200})' does not provide an export named /.exec(err) || /\[ERR_PACKAGE_PATH_NOT_EXPORTED\]: Package subpath '[^']{1,200}' is not defined by "exports" in [^\n]*?node_modules\/((?:@[^/\s]+\/)?[^/\s]+)\/package\.json/.exec(err);
-  if (esm && !/^[./]/.test(esm[1])) return { module: esm[1], kind: 'api', runtime: 'node' };
+  if (esm && !/^(?:[./]|file:|node:)/.test(esm[1])) return { module: esm[1], kind: 'api', runtime: 'node' };
+  // CommonJS: a bare package that is not installed (a path is the package's own file, or our /tmp, ENV_TEXT).
+  const cjs = /(?:^|\n)Error: Cannot find module '([^'\s]{1,200})'/.exec(err);
+  if (cjs && !/^(?:[./]|file:|node:)/.test(cjs[1])) return { module: cjs[1], kind: 'missing', runtime: 'node' };
   return null;
 }
 
@@ -1159,13 +1167,15 @@ export function importCause(imp, { pydeps = null, pkg = null } = {}) {
   if (!imp) return null;
   if (imp.runtime === 'node') {
     const name = imp.module.startsWith('@') ? imp.module.split('/').slice(0, 2).join('/') : imp.module.split('/')[0];
-    return pkg && name === pkg ? 'own' : 'drift';
+    if (pkg && name === pkg) return 'own';
+    // A dependency npm did not install (an optional or native one, or one never declared) is not ours to tell.
+    return imp.kind === 'missing' ? 'env' : 'drift';
   }
   const top = normDist(imp.module.split('.')[0]);
   const ownTops = isObj(pydeps) && Array.isArray(pydeps.top) ? pydeps.top.map(normDist) : null;
   const pkgName = pkg ? normDist(pkg) : null;
   // With the wheel read, only its own top-level modules are the server's; without it, only one named like the package.
-  const own = ownTops && ownTops.length ? ownTops.includes(top) : !!pkgName && (pkgName === top || pkgName.replace(/^mcp-(?:server-)?|-mcp(?:-server)?$|-server$/g, '') === top);
+  const own = ownTops && ownTops.length ? ownTops.includes(top) : !!pkgName && pkgName === top;
   if (own) return 'own';
   const dist = IMPORT_DIST[top] || top;
   const has = (k) => isObj(pydeps) && Array.isArray(pydeps[k]) && (pydeps[k].includes(dist) || pydeps[k].includes(top));
@@ -1292,7 +1302,9 @@ export function failureDetail(rec, bare, envp, { deadlineHit = false, records = 
   if (on('extra') && (EXTRA_HINT.test(err) || imp === 'extra')) return 'start_needs_extra';
   if (on('drift') && imp === 'drift') return 'start_dependency_drift';
   if (on('import') && imp === 'env') return 'start_env_limited';
-  if (needsEnv) return sound ? 'needs_credentials' : 'start_env_limited';
+  // A declared variable makes a quiet own exit needs_credentials; a crash that asks for no configuration is a crash.
+  if (needsEnv && !sound) return 'start_env_limited';
+  if (needsEnv && !(CRASH_TEXT.test(err) && !CONFIG_TEXT.test(err) && !ENV_NAME_TEXT.test(err))) return 'needs_credentials';
   // The probe's own duration, not the record's total (which holds the install and the analysis too, R-LP-40).
   const ms = probeMs(rec, p, p === envp ? 'env' : 'bare');
   // The server's own exit and its stderr: it said it needs configuration we did not give it (R-LP-44), which is no defect.
