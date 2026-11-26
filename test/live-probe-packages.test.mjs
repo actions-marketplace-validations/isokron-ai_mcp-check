@@ -200,6 +200,7 @@ test('R-LP-58: a .NET tool\'s failed install is the package\'s only on the CLI\'
   const entry = (error) => [...install(0), { name: 'entry', exit: 1, result: { error } }];
   assert.equal(nfd(nugetRec(entry('no_tool_settings')), ''), 'package_not_runnable');
   assert.equal(nfd(nugetRec(entry('no_linux_build')), ''), 'platform_unsupported');
+  assert.equal(nfd(nugetRec(entry('runtime_too_new')), ''), 'platform_unsupported', 'a tool for .NET 11 on our .NET 10');
   assert.equal(nfd(nugetRec(entry('several_commands')), ''), 'entry_ambiguous');
   assert.equal(nfd(nugetRec(entry('no_command')), ''), 'install_build_failed');
   assert.deepEqual(LP.DETAILS.platform_unsupported, ['no_runnable_artifact', false, 'install', 'tool']);
