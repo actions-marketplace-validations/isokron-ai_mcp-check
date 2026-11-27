@@ -178,6 +178,16 @@ syscall trace summarised and removed. Nothing of a target runs on the runner. No
    `readOnlyHint` and `idempotentHint` out, so a list re-marshalled from it is the SDK's view, not the catalog. Its
    typed parse still decides the outcome (`typed_tool_count`); a list it could report only from the typed structs
    (`tools_source: typed`) is compared on names, never on its catalog (`catalog_vs_reader: sdk_typed_only`).
+   **The MCP Inspector** (`@modelcontextprotocol/inspector` 2.16.0, in the same npm lockfile), in its documented
+   CLI mode, `--cli --method tools/list -- <server command>`, is a fifth client beside the SDKs (R-ORC-13, owner
+   decision of 27 Nov): its result has the clients' format (`client: inspector`, in `sdk_client_results`), and its
+   disagreements are fed to `oracle_disagreements` as the SDK clients' are. Its answer has no stage and no protocol,
+   so the server command runs behind our pass-through (`corpus/oracles/inspector-client.mjs --pipe`), which matches
+   our initialize and tools/list ids to the answers (bytes unchanged) to tell a refused initialize from a refused
+   list. The Inspector reports the tools its own parse keeps, so its catalog is compared on the specification's Tool
+   and ToolAnnotations keys only (`catalog_vs_reader: same_spec_fields`, pins.json `catalog: spec_fields`). Like every
+   oracle, an Inspector-only failure is a lead about our tools or the oracles, never a finding against the server:
+   the oracle stage adds no skip and no fault.
 2. **The official conformance suite** (`@modelcontextprotocol/conformance` 0.2.0-alpha.12, built from git commit
    f44482b, pinned by npm integrity), against both frozen requirement sets it ships: 2025-11-25 (the stateful wire)
    and 2026-07-28 (stateless). The stage refuses to run when the installed sets do not hash as pinned. Of each set's

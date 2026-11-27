@@ -56,6 +56,27 @@ export function withoutDefaults(tools) {
   });
 }
 
+/**
+ * The specification's Tool keys and ToolAnnotations keys (2025-11-25 and 2026-07-28). A client that reports only what
+ * its own parse keeps (the MCP Inspector, R-ORC-13) is compared on these: a key outside them is not a difference.
+ */
+export const SPEC_TOOL_KEYS = Object.freeze(['name', 'title', 'description', 'inputSchema', 'outputSchema', 'annotations', 'icons', 'execution', '_meta']);
+export const SPEC_ANNOTATION_KEYS = Object.freeze(['title', 'readOnlyHint', 'destructiveHint', 'idempotentHint', 'openWorldHint']);
+export function specFields(tools) {
+  return tools.map((t) => {
+    if (!isObj(t)) return t;
+    const o = Object.fromEntries(Object.entries(t).filter(([k]) => SPEC_TOOL_KEYS.includes(k)));
+    if (isObj(o.annotations)) o.annotations = Object.fromEntries(Object.entries(o.annotations).filter(([k]) => SPEC_ANNOTATION_KEYS.includes(k)));
+    return o;
+  });
+}
+/** The catalog hash of a list on the specification's fields only, annotation defaults left out; or null. */
+export function specHash(tools) {
+  if (!Array.isArray(tools)) return null;
+  const h = engineHash(withoutDefaults(specFields(tools)));
+  return h ? h.catalogHash : null;
+}
+
 function engineHash(tools) {
   try { const p = M.parseInput(JSON.stringify({ tools })); if (p.error) return null; return M.analyse(p).input; } catch { return null; }
 }
@@ -112,6 +133,10 @@ export function judgeOracles(rec, { reader, pins, baseline = null }) {
   out.status = 'ran';
   const names = new Map();
   const lossy = new Set();
+  // R-ORC-13: clients compared on the specification's fields only (pins.json `catalog: spec_fields`), and the hash of
+  // every listed client's list on those fields, for comparisons that involve one of them.
+  const specOnly = new Set((pins.clients || []).filter((x) => x.catalog === 'spec_fields').map((x) => x.id));
+  const specSha = new Map();
   for (const c of Array.isArray(rec.clients) ? rec.clients : []) {
     const pc = (pins.clients || []).find((x) => x.id === c.id);
     if (!pc) continue;
@@ -119,6 +144,7 @@ export function judgeOracles(rec, { reader, pins, baseline = null }) {
     if (typedOnly) lossy.add(c.id);
     out.clients.push(entry);
     if (n) names.set(c.id, n);
+    if (entry.outcome === 'listed' && specOnly.size) specSha.set(c.id, specHash(c.result && c.result.tools));
     if (entry.outcome !== 'unavailable' && entry.outcome !== 'skipped') out.components.push({ name: pc.sdk, version: entry.sdk_version || pc.version });
   }
   // Conformance.
@@ -171,8 +197,10 @@ export function judgeOracles(rec, { reader, pins, baseline = null }) {
     if (c.outcome !== 'listed' || !reader || !reader.listed) continue;
     if (lossy.has(c.client)) { c.catalog_vs_reader = 'sdk_typed_only'; continue; }
     c.catalog_vs_reader = c.catalog_sha256 === reader.catalog_hash ? 'same' : rd && c.catalog_defaults_sha256 && c.catalog_defaults_sha256 === rd.catalog_defaults_sha256 ? 'same_but_annotation_defaults' : 'different';
+    if (c.catalog_vs_reader === 'different' && specOnly.has(c.client) && specSha.get(c.client) && specSha.get(c.client) === specHash(reader.tools)) c.catalog_vs_reader = 'same_spec_fields';
   }
-  out.disagreements = disagreements(out, names, reader, rd, lossy);
+  const spec = specOnly.size ? { only: specOnly, sha: specSha, reader: reader && reader.listed ? specHash(reader.tools) : null } : null;
+  out.disagreements = disagreements(out, names, reader, rd, lossy, spec);
   return out;
 }
 
@@ -188,8 +216,10 @@ export function noToolsAgrees(reader, c) {
 const crashClass = (outcome) => (outcome === 'timeout' || outcome === 'client_error' ? 'D12' : 'D6');
 
 /** The disagreements between our reader, the clients and the suite (DESIGN-v3 §7 classes). */
-export function disagreements(j, names, reader, readerCatalog = null, lossy = new Set()) {
+export function disagreements(j, names, reader, readerCatalog = null, lossy = new Set(), spec = null) {
   const d = [];
+  // R-ORC-13: two lists the same on the specification's fields, where one side reports only those (the Inspector).
+  const specSame = (a, b, sa, sb) => !!(spec && (spec.only.has(a) || spec.only.has(b)) && sa && sa === sb);
   // A client that agrees there are no tools to list (R-LP-75) takes part in no comparison.
   const clients = j.clients.filter((c) => !noToolsAgrees(reader, c));
   const listedClients = clients.filter((c) => c.outcome === 'listed');
@@ -204,17 +234,17 @@ export function disagreements(j, names, reader, readerCatalog = null, lossy = ne
     else if (!readerListed && c.outcome === 'listed') d.push({ class: 'D6', oracle_a: 'reader', oracle_b: b, kind: 'outcome', detail: { a: 'not_listed', b: 'listed' } });
     else if (readerListed && c.outcome === 'listed') {
       if (c.names_sha256 !== namesSha(reader.names)) d.push({ class: 'D6', oracle_a: 'reader', oracle_b: b, kind: 'tool_names', detail: { ...diffNames(reader.names, names.get(c.client)), count_a: int(reader.tool_count), count_b: c.tool_count } });
-      else if (!lossy.has(c.client) && c.catalog_sha256 !== reader.catalog_hash && !(readerCatalog && c.catalog_defaults_sha256 && c.catalog_defaults_sha256 === readerCatalog.catalog_defaults_sha256)) d.push({ class: 'D4', oracle_a: 'reader', oracle_b: b, kind: 'catalog', detail: { count_a: int(reader.tool_count), count_b: c.tool_count } });
+      else if (!lossy.has(c.client) && c.catalog_sha256 !== reader.catalog_hash && !(readerCatalog && c.catalog_defaults_sha256 && c.catalog_defaults_sha256 === readerCatalog.catalog_defaults_sha256) && !specSame(c.client, 'reader', spec && spec.sha.get(c.client), spec && spec.reader)) d.push({ class: 'D4', oracle_a: 'reader', oracle_b: b, kind: 'catalog', detail: { count_a: int(reader.tool_count), count_b: c.tool_count } });
     }
   }
   // Clients against each other: the first listed client is the reference, one whose catalog is comparable if any is
   // (a typed-only list, R-ORC-11, is a reference for names only).
-  const ref = listedClients.find((c) => !lossy.has(c.client)) || listedClients[0];
+  const ref = listedClients.find((c) => !lossy.has(c.client) && !(spec && spec.only.has(c.client))) || listedClients.find((c) => !lossy.has(c.client)) || listedClients[0];
   if (ref) {
     for (const c of listedClients.filter((x) => x !== ref)) {
       if (c.names_sha256 !== ref.names_sha256) d.push({ class: 'D6', oracle_a: `client:${ref.client}`, oracle_b: `client:${c.client}`, kind: 'tool_names', detail: { ...diffNames(names.get(ref.client), names.get(c.client)), count_a: ref.tool_count, count_b: c.tool_count } });
       else if (lossy.has(c.client) || lossy.has(ref.client)) continue;
-      else if (c.catalog_sha256 !== ref.catalog_sha256 && c.catalog_defaults_sha256 !== ref.catalog_defaults_sha256) d.push({ class: 'D4', oracle_a: `client:${ref.client}`, oracle_b: `client:${c.client}`, kind: 'catalog', detail: { count_a: ref.tool_count, count_b: c.tool_count } });
+      else if (c.catalog_sha256 !== ref.catalog_sha256 && c.catalog_defaults_sha256 !== ref.catalog_defaults_sha256 && !specSame(c.client, ref.client, spec && spec.sha.get(c.client), spec && spec.sha.get(ref.client))) d.push({ class: 'D4', oracle_a: `client:${ref.client}`, oracle_b: `client:${c.client}`, kind: 'catalog', detail: { count_a: ref.tool_count, count_b: c.tool_count } });
     }
     for (const c of failedClients) d.push({ class: crashClass(c.outcome), oracle_a: `client:${ref.client}`, oracle_b: `client:${c.client}`, kind: 'outcome', detail: { a: 'listed', b: c.outcome } });
   }
