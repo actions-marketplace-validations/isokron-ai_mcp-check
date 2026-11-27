@@ -809,15 +809,50 @@ export function packageEnv(list) {
   return { env, names: names.slice(0, 100) };
 }
 
-/** The transport block for the sandbox target list, or a detail code. */
-export function transportOf(t) {
+/**
+ * The transport block for the sandbox target list, or { detail: 'unsupported_transport', why } (R-LP-86). A streamable
+ * HTTP URL may name the package's own variables (`http://localhost:{port}/mcp`): each is filled from `vars`, the
+ * declared defaults and values of its env names and arguments, never a value we invent. why: sse (the legacy transport,
+ * which the sandbox's probe does not speak), other (another type), no_url, url_variable (a variable nothing declares),
+ * not_local (a host that is not the server's own loopback), no_port or port_range (none, or one under 1024).
+ */
+export function transportOf(t, vars = {}) {
   const type = isObj(t) && typeof t.type === 'string' ? t.type : 'stdio';
   if (type === 'stdio') return { transport: 'stdio' };
-  if (type !== 'streamable-http') return { detail: 'unsupported_transport' };
-  const m = /^https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::\])(?::([0-9]{2,5}))?(\/[A-Za-z0-9._~/-]{0,200})?$/.exec(String(t.url || ''));
-  const port = m && m[1] ? Number(m[1]) : null;
-  if (!m || !port || port < 1024 || port > 65535) return { detail: 'unsupported_transport' };
+  if (type === 'sse') return { detail: 'unsupported_transport', why: 'sse' };
+  if (type !== 'streamable-http') return { detail: 'unsupported_transport', why: 'other' };
+  const raw = typeof t.url === 'string' ? t.url.slice(0, 300) : '';
+  if (!raw) return { detail: 'unsupported_transport', why: 'no_url' };
+  let unknown = false;
+  const url = raw.replace(/\{([A-Za-z_][A-Za-z0-9_-]{0,80})\}/g, (all, n) => {
+    const v = Object.prototype.hasOwnProperty.call(vars, n) ? vars[n] : null;
+    if (typeof v === 'string' && /^[A-Za-z0-9._~-]{1,100}$/.test(v)) return v;
+    unknown = true; return all;
+  });
+  if (unknown) return { detail: 'unsupported_transport', why: 'url_variable' };
+  const m = /^https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::\])(?::([0-9]{2,5}))?(\/[A-Za-z0-9._~/-]{0,200})?$/.exec(url);
+  if (!m) return { detail: 'unsupported_transport', why: 'not_local' };
+  const port = m[1] ? Number(m[1]) : null;
+  if (!port) return { detail: 'unsupported_transport', why: 'no_port' };
+  if (port < 1024 || port > 65535) return { detail: 'unsupported_transport', why: 'port_range' };
   return { transport: 'http', http: { port, path: m[2] || '/mcp' } };
+}
+
+/**
+ * The variables a transport URL may name: a package's declared env names and named arguments (`--port` is `port`),
+ * each with its declared value or default; nothing else.
+ */
+export function transportVars(pkg) {
+  const vars = {};
+  const put = (n, v) => { if (typeof n === 'string' && typeof v === 'string' && !Object.prototype.hasOwnProperty.call(vars, n)) vars[n] = v; };
+  for (const e of Array.isArray(pkg.environmentVariables) ? pkg.environmentVariables.slice(0, 100) : []) if (isObj(e) && !e.isSecret) put(e.name, typeof e.value === 'string' ? e.value : e.default);
+  for (const a of Array.isArray(pkg.packageArguments) ? pkg.packageArguments.slice(0, 40) : []) {
+    if (!isObj(a)) continue;
+    const v = typeof a.value === 'string' ? a.value : a.default;
+    if (a.type === 'named' && typeof a.name === 'string') put(a.name.replace(/^-{1,2}|=$/g, ''), v);
+    if (typeof a.valueHint === 'string') put(a.valueHint, v);
+  }
+  return vars;
 }
 
 /** A package URL for the chosen package (purl spec), or null. */
@@ -840,7 +875,7 @@ export async function launchFor(pkg, { fetch: fetchImpl = globalThis.fetch } = {
   if (!['npm', 'pypi', 'oci', 'cargo', 'nuget', 'mcpb'].includes(type)) return { detail: 'unsupported_package' };
   const base = typeof pkg.registryBaseUrl === 'string' ? pkg.registryBaseUrl : null;
   if (base && type !== 'oci' && type !== 'mcpb' && !DEFAULT_BASE[type].includes(base)) return { detail: 'private_registry' };
-  const tr = transportOf(pkg.transport);
+  const tr = transportOf(pkg.transport, transportVars(pkg));
   if (tr.detail) return tr;
   const { args, unfilled } = packageArgs(pkg.packageArguments);
   const { env, names } = packageEnv(pkg.environmentVariables);
@@ -870,7 +905,7 @@ export async function launchFor(pkg, { fetch: fetchImpl = globalThis.fetch } = {
   if (type === 'mcpb') {
     // R-LP-72: the bundle is read here as data (corpus/mcpb.mjs) and unpacked in the sandbox (mcp-surface-corpus launchPlan,
     // kind mcpb) from exactly the bytes read, its sha256 pinned; it runs in the image its runtime needs.
-    if (tr.transport !== 'stdio') return { detail: 'unsupported_transport' };
+    if (tr.transport !== 'stdio') return { detail: 'unsupported_transport', why: 'mcpb_http' };
     const { launch, info } = await mcpbLaunch(pkg, { fetch: fetchImpl, transportArgs: args, env });
     choice.version = typeof pkg.version === 'string' && SAFE_VERSION.test(pkg.version) ? pkg.version : 'latest';
     choice.mcpb = info;
@@ -962,6 +997,8 @@ export async function resolveSubject(item, { seed = new Map(), fetch: fetchImpl 
         // subject's (its namespace). Anyone can publish an entry naming someone else's repository with a dead bundle URL.
         if (SUBJECT_RESOLVE_DETAILS.includes(r.detail) && !(c.entry && c.entry.namespace)) details.push(c.entry && !c.entry.seed ? 'unverified_registry_entry' : 'bundle_unowned');
         else details.push(r.detail);
+        // Which transport we could not run, and why (R-LP-86): kept in raw/resolution.json.
+        if (r.detail === 'unsupported_transport') out.transport_refused = [...(out.transport_refused || []), { identifier: String(c.pkg.identifier || '').slice(0, 200), type: String((c.pkg.transport && c.pkg.transport.type) || 'stdio').slice(0, 30), why: r.why || null }].slice(0, 8);
         continue;
       }
       // An entry that matched on its repository URL alone is anyone's claim: its package must point back to the repo.
@@ -1268,6 +1305,8 @@ export function packageInstallEvidence(kind, text, { launch = null, owned = fals
   }
   return 'install_build_failed';
 }
+/** npm's own refusal of a package for another platform (EBADPLATFORM, `notsup`). */
+const NPM_PLATFORM = /\bEBADPLATFORM\b|\bnotsup\b[^\n]{0,40}\b(?:Unsupported platform|Valid (?:os|cpu|libc))\b/;
 /**
  * Stderr that says the server needs configuration (R-LP-44): a config file missing or unreadable, a kubeconfig or
  * current-context, --config, a usage block, a missing or required argument, option, flag or environment variable, or
@@ -1707,6 +1746,9 @@ export function failureDetail(rec, bare, envp, { deadlineHit = false, records = 
     const text = installText(inst, stepsLog);
     if (failed.some((s) => s.exit === 137 || s.exit === 124) || OOM_TEXT.test(text)) return 'install_resource_limit';
     if (refusedCount(inst) > 0) return 'install_blocked';
+    // R-LP-86: npm refused a package built for another OS, CPU or libc (package.json `os`/`cpu`/`libc`): we run Linux on
+    // amd64 only; that is no fault of the package.
+    if (inst.kind === 'npm' && NPM_PLATFORM.test(text)) return 'unsupported_platform';
     if (inst.kind === 'cargo') {
       // Only cargo's own words before any build, or our entry helper's answer, can be the crate's (R-LP-54).
       const entry = failed.find((s) => s.name === 'entry');
@@ -2166,7 +2208,7 @@ export function buildItem(item, ctx) {
     lines.push(...resolutionObs(r));
     result.install = r.choice ? { method: r.choice.type, matched_by: safeText(r.choice.matched_by, /^[a-z+-]{1,40}$/), verified_by: safeText(r.choice.verified_by, /^[a-z_]{1,20}$/), provenance_signer: safeText(r.choice.provenance_signer, /^[a-z_]{1,40}$/), oci_bytes: int(r.choice.oci_bytes), transport: r.choice.transport, version_requested: safeText(r.choice.version, SAFE_VERSION), args: r.choice.args_n, args_unfilled: r.choice.args_unfilled, env_declared: r.choice.env_names.length, registry_entries: r.registry ? r.registry.entries : 0, entry_source: safeText(r.choice.entry_source, /^[a-z_]{1,30}$/) } : null;
     if (Array.isArray(r.unverified)) result.unverified = r.unverified.map((u) => safeText(u.why, /^[a-z_]{1,40}$/));
-    files['raw/resolution.json'] = json({ registry: r.registry, choice: r.choice, candidates: r.candidates, launch: r.launch, subdir: r.subdir, seed_packages: r.seed_packages, invalid: r.invalid ?? null, unverified: r.unverified ?? null, ...(r.error_class ? { error_class: safeText(r.error_class, /^[A-Za-z]{1,40}$/) } : {}) });
+    files['raw/resolution.json'] = json({ registry: r.registry, choice: r.choice, candidates: r.candidates, launch: r.launch, subdir: r.subdir, seed_packages: r.seed_packages, invalid: r.invalid ?? null, unverified: r.unverified ?? null, transport_refused: r.transport_refused ?? null, ...(r.error_class ? { error_class: safeText(r.error_class, /^[A-Za-z]{1,40}$/) } : {}) });
   }
   let detail = null; let subjectSha = null; let deadlineHit = ctx.deadlineHit;
   let oracle = { lines: [], raw: [], summary: null, components: [] };
