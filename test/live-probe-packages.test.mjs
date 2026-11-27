@@ -232,15 +232,28 @@ test('R-LP-58 mutation check: without the network guard or the same-id check, a 
 });
 
 test('R-LP-58: a .NET tool built for an older runtime runs rolled forward, so its crash is no evidence against it', async () => {
-  const rec = (tfm) => ({ install: { kind: 'nuget', ok: true, steps: [{ name: 'install', exit: 0 }, { name: 'entry', exit: 0, result: { script: '/work/pkg/x.dll', runner: 'dotnet', tfm } }] }, env: { names: { registry: [] }, secret_named: [] }, timing: { total_ms: 60000 }, timed_out: false });
+  const rec = (tfm, names = []) => ({ install: { kind: 'nuget', ok: true, steps: [{ name: 'install', exit: 0 }, { name: 'entry', exit: 0, result: { script: '/work/pkg/x.dll', runner: 'dotnet', ...(tfm === undefined ? {} : { tfm }) } }] }, env: { names: { registry: names }, secret_named: [] }, timing: { total_ms: 60000 }, timed_out: false });
   const crash = { initialize_error: 'the server exited (exit 2, signal null)', lists: {}, transport: { exit: 2, signal: null }, timing: { total_ms: 2000 }, stderr: 'Unhandled exception. System.TypeLoadException: Could not load type\n   at Program.Main()\nSegmentation fault (core dumped)\n' };
+  const quiet = { initialize_error: 'the server exited (exit 1, signal null)', lists: {}, transport: { exit: 1, signal: null }, timing: { total_ms: 2000 }, stderr: '' };
   assert.equal(LP.rolledForward(rec('net8.0').install), true);
   assert.equal(LP.rolledForward(rec('net10.0').install), false);
+  assert.equal(LP.rolledForward(rec('net11.0').install), false);
+  // Only a framework the sandbox's runtime is shown to be is "as shipped": the older .NET Core and .NET Standard names, a
+  // platform-suffixed or unreadable framework, or none recorded, all ran on a runtime the tool may not have been built for.
+  for (const tfm of ['netcoreapp3.1', 'netcoreapp2.1', 'netstandard2.0', 'net8.0-windows', 'net48', '', undefined]) assert.equal(LP.rolledForward(rec(tfm).install), true, String(tfm));
   assert.equal(LP.failureDetail(rec('net8.0'), crash, null, { launch: NLAUNCH, argsUnfilled: 0, owned: true }), 'start_env_limited');
-  // Mutation check: without the rule the same crash could be the server's.
-  const M = await mutant("  if (rolledForward(inst)) return 'start_env_limited';\n", '');
+  assert.equal(LP.failureDetail(rec('netcoreapp3.1'), crash, null, { launch: NLAUNCH, argsUnfilled: 0, owned: true }), 'start_env_limited', 'netcoreapp3.1 rolled forward too');
+  // A quiet exit with a declared variable is no more the server's than a crash, rolled forward.
+  assert.equal(LP.failureDetail(rec('net10.0', ['API_KEY']), quiet, null, { launch: NLAUNCH, argsUnfilled: 0, owned: true }), 'needs_credentials', 'as shipped, the declared variable');
+  assert.equal(LP.failureDetail(rec('net8.0', ['API_KEY']), quiet, null, { launch: NLAUNCH, argsUnfilled: 0, owned: true }), 'start_env_limited', 'rolled forward: no evidence');
   assert.equal(LP.failureDetail(rec('net10.0'), crash, null, { launch: NLAUNCH, argsUnfilled: 0, owned: true }), 'start_failed', 'on the runtime it was built for, a crash is a crash');
+  // Mutation checks: without the rule the rolled-forward crash and quiet exit are the server's; without the fallback a
+  // netcoreapp3.1 tool's crash is.
+  const M = await mutant('  const noEvidence = rolledForward(inst)', '  const noEvidence = false');
   assert.equal(M.failureDetail(rec('net8.0'), crash, null, { launch: NLAUNCH, argsUnfilled: 0, owned: true }), 'start_failed', 'without the rule the rolled-forward crash is the server\'s');
+  assert.equal(M.failureDetail(rec('net8.0', ['API_KEY']), quiet, null, { launch: NLAUNCH, argsUnfilled: 0, owned: true }), 'needs_credentials', 'without the rule the quiet exit is the server\'s');
+  const F = await mutant('  return !m || Number(m[1])', '  return !!m && Number(m[1])');
+  assert.equal(F.failureDetail(rec('netcoreapp3.1'), crash, null, { launch: NLAUNCH, argsUnfilled: 0, owned: true }), 'start_failed', 'without the fallback a netcoreapp3.1 crash is the server\'s');
 });
 
 // ------------------------------------------------------------------ MCP bundles (.mcpb)
@@ -393,6 +406,11 @@ test('R-LP-74: a bundle that does not run here as shipped (no linux in its manif
   const crash = { initialize: null, era: null, error: null, initialize_error: 'the server exited (exit 1, signal null)', lists: {}, transport: { exit: 1, signal: null }, timing: { total_ms: 3000 }, stderr: 'Segmentation fault (core dumped)\n' };
   assert.equal(LP.failureDetail(rec, crash, null, { launch: MLAUNCH, argsUnfilled: 0 }), 'start_failed');
   assert.equal(LP.failureDetail(rec, crash, null, { launch: MLAUNCH, argsUnfilled: 0, crashNotEvidence: true }), 'start_env_limited');
+  // A quiet exit with a declared variable is no more the bundle's than a crash, when it does not run as shipped (27 Nov).
+  const withKey = { ...rec, env: { names: { registry: ['API_KEY'] }, secret_named: [] } };
+  const quiet = { ...crash, stderr: '' };
+  assert.equal(LP.failureDetail(withKey, quiet, null, { launch: MLAUNCH, argsUnfilled: 0 }), 'needs_credentials', 'as shipped, the declared variable');
+  assert.equal(LP.failureDetail(withKey, quiet, null, { launch: MLAUNCH, argsUnfilled: 0, crashNotEvidence: true }), 'start_env_limited');
   // Links the sandbox left out when it unpacked the bundle (a file the server may need): its crash is no evidence either.
   assert.equal(LP.crashNotEvidenceOf({ mcpb: { crash_not_evidence: false } }, { install: { kind: 'mcpb', steps: [{ name: 'fetch', exit: 0, result: { ok: true, links_skipped: 3 } }] } }), true);
   assert.equal(LP.crashNotEvidenceOf({ mcpb: { crash_not_evidence: false } }, { install: { kind: 'mcpb', steps: [{ name: 'fetch', exit: 0, result: { ok: true, links_skipped: 0 } }] } }), false);
@@ -401,8 +419,10 @@ test('R-LP-74: a bundle that does not run here as shipped (no linux in its manif
 test('R-LP-74 mutation check: without the platform guard a darwin-only bundle\'s crash would be its fault', async () => {
   const rec = { install: { kind: 'mcpb', ok: true, steps: [] }, env: { names: { registry: [] }, secret_named: [] }, timing: { total_ms: 60000 }, timed_out: false };
   const crash = { initialize_error: 'the server exited (exit 1, signal null)', lists: {}, transport: { exit: 1, signal: null }, timing: { total_ms: 3000 }, stderr: 'Segmentation fault (core dumped)\n' };
-  const M = await mutant('  return sound && !crashNotEvidence && ms !== null', '  return sound && ms !== null');
+  const M = await mutant('  const noEvidence = rolledForward(inst) || crashNotEvidence;', '  const noEvidence = rolledForward(inst);');
   assert.equal(M.failureDetail(rec, crash, null, { launch: MLAUNCH, argsUnfilled: 0, crashNotEvidence: true }), 'start_failed');
+  const withKey = { ...rec, env: { names: { registry: ['API_KEY'] }, secret_named: [] } };
+  assert.equal(M.failureDetail(withKey, { ...crash, stderr: '' }, null, { launch: MLAUNCH, argsUnfilled: 0, crashNotEvidence: true }), 'needs_credentials', 'without the guard the quiet exit is the bundle\'s');
 });
 
 test('R-LP-72: a bundle\'s own failure is the subject\'s only for an entry in its namespace: a third-party entry naming the repository with a dead bundle is unverified, a seed-only one ours; a bare launcher is never the bundle\'s', async () => {
