@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { FIXTURES, fixtureIds, getFixture, launch } from '../corpus/fuzz/calls/fixtures.mjs';
 import { generate, OVERSIZE_BYTES, valid } from '../corpus/fuzz/calls/gen.mjs';
 import { judgeCall } from '../corpus/fuzz/calls/invariants.mjs';
-import { build, controls, runMatrix, verdict, SUBJECT_ID } from '../corpus/fuzz/calls/matrix.mjs';
+import { build, controls, incompleteVerdicts, runMatrix, verdict, SUBJECT_ID } from '../corpus/fuzz/calls/matrix.mjs';
 import { fuzzFixture, MAX_RESTARTS } from '../corpus/fuzz/calls/run.mjs';
 import { validate } from '../corpus/fuzz/calls/schema.mjs';
 
@@ -191,7 +191,23 @@ test('R-FC-08: the fuzz-calls worker: dispatch only, kill switch first, fixtures
   assert.match(y, /TINY_TRACKER_REF: '[0-9a-f]{40}'/);
   for (const m of y.matchAll(/uses: (\S+)@(\S+)/g)) assert.match(m[2], /^[0-9a-f]{40}$/, `${m[1]} is pinned to a full commit`);
   const manifest = y.slice(y.indexOf('\n  t0-manifest:'));
-  assert.doesNotMatch(manifest, /matrix\.mjs|npm |checkout/, 'the sealing job runs none of the fixtures and checks nothing out');
+  assert.doesNotMatch(manifest, /npm |matrix\.mjs(?! --incomplete)/, 'the sealing job runs none of the fixtures');
   assert.match(manifest, /worker-kit@[0-9a-f]{40}/);
   assert.doesNotMatch(y, /\$\{\{\s*secrets\./);
+});
+
+test('R-FC-09: when our own stage crashes, t0-manifest still runs and seals an incomplete bundle (both controls incomplete, so ingest rejects it as control_failed), never a quiet gap', () => {
+  const y = readFileSync(join(ROOT, '.github', 'workflows', 'fuzz-calls.yml'), 'utf8');
+  const manifest = y.slice(y.indexOf('\n  t0-manifest:'));
+  assert.match(manifest, /if: \$\{\{ always\(\) && needs\.t0-start\.outputs\.go == 'true' \}\}/, 'runs whatever the fuzz job did, but not with the kill switch off');
+  assert.doesNotMatch(manifest, /needs\.fuzz\.result == 'success' \}\}/, 'not only when the fuzz job succeeded');
+  assert.match(manifest, /if: needs\.fuzz\.result != 'success'\n\s+env:\n\s+FUZZ_RESULT: \$\{\{ needs\.fuzz\.result \}\}\n\s+run: node corpus\/fuzz\/calls\/matrix\.mjs --incomplete/);
+  const v = incompleteVerdicts('failure');
+  assert.equal(v.length, fixtureIds().length);
+  assert.ok(v.every((x) => x.status === 'incomplete' && x.reason === 'stage_failure'));
+  assert.deepEqual(controls(v).map((c) => c.observed), ['incomplete', 'incomplete']);
+  assert.equal(incompleteVerdicts('x y; rm')[0].reason, 'stage_unknown', 'the reason is a plain word or unknown');
+  const b = build({ verdicts: v });
+  assert.notEqual(b.meta.controls[0].observed, b.meta.controls[0].expected);
+  assert.equal(b.report.missed.length, v.length);
 });

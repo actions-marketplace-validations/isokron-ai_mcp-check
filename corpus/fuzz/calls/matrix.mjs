@@ -42,6 +42,12 @@ export async function runMatrix({ ids = fixtureIds(), tinyDir, requestMs } = {})
   return out;
 }
 
+/** Verdicts for a run that never finished: every fixture incomplete, with the fuzz job's result as the reason. */
+export function incompleteVerdicts(fuzzResult) {
+  const why = /^[a-z_]{1,20}$/.test(String(fuzzResult ?? '')) ? `stage_${fuzzResult}` : 'stage_unknown';
+  return fixtureIds().map((id) => ({ id, status: 'incomplete', reason: why, expect: [...getFixture(id).expect].sort(), found: [], missed: [], unexpected: [] }));
+}
+
 /** The two controls from the verdicts. */
 export function controls(verdicts) {
   const incomplete = verdicts.some((v) => v.status === 'incomplete');
@@ -74,9 +80,13 @@ export function build({ verdicts, env = process.env, now = new Date() }) {
 if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href) {
   const arg = (n) => { const i = process.argv.indexOf(n); return i > 0 ? process.argv[i + 1] : undefined; };
   const out = arg('--out');
-  if (!out) { process.stderr.write('usage: matrix.mjs --out <dir> [--only id,id]\n'); process.exit(2); }
+  if (!out) { process.stderr.write('usage: matrix.mjs --out <dir> [--only id,id | --incomplete]\n'); process.exit(2); }
   const only = arg('--only');
-  const verdicts = await runMatrix({ ids: only ? only.split(',') : undefined, tinyDir: process.env.TINY_TRACKER_DIR });
+  // --incomplete: our own stage crashed (the fuzz job did not finish): a bundle whose controls are incomplete, so tool-qa's
+  // ingest rejects it as control_failed, a lead against OUR stage, never a quiet gap (R-FC-09).
+  const verdicts = process.argv.includes('--incomplete')
+    ? incompleteVerdicts(process.env.FUZZ_RESULT)
+    : await runMatrix({ ids: only ? only.split(',') : undefined, tinyDir: process.env.TINY_TRACKER_DIR });
   const { report, meta } = build({ verdicts });
   mkdirSync(join(out, 'bundle', 'results'), { recursive: true });
   writeFileSync(join(out, 'bundle', 'results', 'fuzz-calls.json'), `${JSON.stringify(report, null, 2)}\n`);

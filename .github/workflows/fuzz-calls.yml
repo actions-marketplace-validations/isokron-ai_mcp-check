@@ -124,17 +124,28 @@ jobs:
 
   t0-manifest:
     needs: [t0-start, fuzz]
-    if: ${{ always() && needs.t0-start.outputs.go == 'true' && needs.fuzz.result == 'success' }}
+    # Runs whatever the fuzz job did: when our own stage crashed or was cancelled it seals an `incomplete` bundle, which
+    # tool-qa's ingest rejects as control_failed (a lead against our stage), instead of leaving a quiet gap.
+    if: ${{ always() && needs.t0-start.outputs.go == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
-    # Runs none of the fixtures' code: it only seals the bundle the fuzz job wrote.
+    # Runs none of the fixtures: it only seals the bundle the fuzz job wrote, or writes the incomplete one.
     permissions:
       contents: read
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        if: needs.fuzz.result == 'success'
         with:
           name: t0fuzz-${{ needs.t0-start.outputs.attempt_id }}
           path: ${{ runner.temp }}/out
+      - name: The stage did not finish: an incomplete bundle
+        if: needs.fuzz.result != 'success'
+        env:
+          FUZZ_RESULT: ${{ needs.fuzz.result }}
+        run: node corpus/fuzz/calls/matrix.mjs --incomplete --out "$RUNNER_TEMP/out"
       - uses: isokron-ai/tool-qa/worker-kit@b04b7c65c244de48c32f93c7ea9b9ac933ca1efe # tool-qa main, 27 Nov 2026
         with:
           bundle-dir: ${{ runner.temp }}/out/bundle
