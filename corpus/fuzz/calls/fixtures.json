@@ -1,0 +1,182 @@
+{
+  "about": "The only servers the tools/call fuzz stage may run: our own seeded protocol-fault servers (fixtures/seeded-server.mjs) and our own tiny-tracker builds (isokron-ai/mcp-write-safety examples/tiny-tracker, a checkout at TINY_TRACKER_DIR). `expect` lists the invariants a build is known to break (empty: none). A known fault the stage does not find, or a finding on a build that expects none, is a defect of OUR stage or of our fixture, never of a third-party server: no third-party server is ever in this file (R-FC-01).",
+  "version": 1,
+  "fixtures": [
+    {
+      "id": "seeded-clean",
+      "kind": "seeded",
+      "fault": null,
+      "expect": []
+    },
+    {
+      "id": "seeded-error-shape",
+      "kind": "seeded",
+      "fault": "error-shape",
+      "expect": [
+        "ERR-1"
+      ]
+    },
+    {
+      "id": "seeded-unknown-tool-ok",
+      "kind": "seeded",
+      "fault": "unknown-tool-ok",
+      "expect": [
+        "ERR-2"
+      ]
+    },
+    {
+      "id": "seeded-crash-oversize",
+      "kind": "seeded",
+      "fault": "crash-oversize",
+      "expect": [
+        "LIFE-1"
+      ]
+    },
+    {
+      "id": "seeded-hang-boundary",
+      "kind": "seeded",
+      "fault": "hang-boundary",
+      "expect": [
+        "LIFE-2"
+      ]
+    },
+    {
+      "id": "seeded-output-mismatch",
+      "kind": "seeded",
+      "fault": "output-mismatch",
+      "expect": [
+        "OUT-1"
+      ]
+    },
+    {
+      "id": "seeded-iserror-string",
+      "kind": "seeded",
+      "fault": "iserror-string",
+      "expect": [
+        "ISERR-1"
+      ]
+    },
+    {
+      "id": "seeded-missing-required-ok",
+      "kind": "seeded",
+      "fault": "missing-required-ok",
+      "expect": [
+        "ISERR-2"
+      ]
+    },
+    {
+      "id": "seeded-no-content",
+      "kind": "seeded",
+      "fault": "no-content",
+      "expect": [
+        "RES-1"
+      ]
+    },
+    {
+      "id": "tiny-tracker-correct",
+      "kind": "tiny-tracker",
+      "defects": [],
+      "backend_defects": [],
+      "expect": []
+    },
+    {
+      "id": "tiny-tracker-idempotency-key-dropped",
+      "kind": "tiny-tracker",
+      "defects": [
+        "idempotency-key-dropped"
+      ],
+      "backend_defects": [],
+      "expect": []
+    },
+    {
+      "id": "tiny-tracker-idempotency-key-ignores-args",
+      "kind": "tiny-tracker",
+      "defects": [
+        "idempotency-key-ignores-args"
+      ],
+      "backend_defects": [],
+      "expect": []
+    },
+    {
+      "id": "tiny-tracker-lookup-reexecutes",
+      "kind": "tiny-tracker",
+      "defects": [
+        "lookup-reexecutes"
+      ],
+      "backend_defects": [],
+      "expect": []
+    },
+    {
+      "id": "tiny-tracker-in-progress-reported-not-applied",
+      "kind": "tiny-tracker",
+      "defects": [
+        "in-progress-reported-not-applied"
+      ],
+      "backend_defects": [],
+      "expect": []
+    },
+    {
+      "id": "tiny-tracker-settle-miss-reported-not-applied",
+      "kind": "tiny-tracker",
+      "defects": [
+        "settle-miss-reported-not-applied"
+      ],
+      "backend_defects": [],
+      "expect": []
+    },
+    {
+      "id": "tiny-tracker-backend-digest-of-current-state",
+      "kind": "tiny-tracker",
+      "defects": [],
+      "backend_defects": [
+        "digest-of-current-state"
+      ],
+      "expect": []
+    },
+    {
+      "id": "tiny-tracker-backend-replay-digest-mismatch",
+      "kind": "tiny-tracker",
+      "defects": [],
+      "backend_defects": [
+        "replay-digest-mismatch"
+      ],
+      "expect": []
+    },
+    {
+      "id": "tiny-tracker-backend-digest-not-canonical",
+      "kind": "tiny-tracker",
+      "defects": [],
+      "backend_defects": [
+        "digest-not-canonical"
+      ],
+      "expect": []
+    },
+    {
+      "id": "tiny-tracker-backend-lookup-wrong-record",
+      "kind": "tiny-tracker",
+      "defects": [],
+      "backend_defects": [
+        "lookup-wrong-record"
+      ],
+      "expect": []
+    },
+    {
+      "id": "tiny-tracker-backend-lookup-unscoped",
+      "kind": "tiny-tracker",
+      "defects": [],
+      "backend_defects": [
+        "lookup-unscoped"
+      ],
+      "expect": []
+    },
+    {
+      "id": "tiny-tracker-backend-key-expires-early",
+      "kind": "tiny-tracker",
+      "defects": [],
+      "backend_defects": [
+        "key-expires-early"
+      ],
+      "expect": []
+    }
+  ]
+}
