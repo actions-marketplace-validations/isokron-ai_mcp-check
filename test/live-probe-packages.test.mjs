@@ -14,7 +14,7 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 const NODE24 = 'docker.io/library/node:24-bookworm-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23fceb061c54';
 
 function res(status, body) {
-  const buf = Buffer.from(typeof body === 'string' ? body : JSON.stringify(body));
+  const buf = Buffer.isBuffer(body) ? body : Buffer.from(typeof body === 'string' ? body : JSON.stringify(body));
   return { status, ok: status >= 200 && status < 300, headers: { get: (k) => (k.toLowerCase() === 'content-length' ? String(buf.length) : null) }, arrayBuffer: async () => buf };
 }
 /** The official registry, answering searches from a list of servers; nothing else is reachable. */
@@ -249,9 +249,331 @@ test('R-LP-58: a .NET tool built for an older runtime runs rolled forward, so it
   assert.equal(LP.failureDetail(rec('net10.0'), crash, null, { launch: NLAUNCH, argsUnfilled: 0, owned: true }), 'start_failed', 'on the runtime it was built for, a crash is a crash');
   // Mutation checks: without the rule the rolled-forward crash and quiet exit are the server's; without the fallback a
   // netcoreapp3.1 tool's crash is.
-  const M = await mutant('  const noEvidence = rolledForward(inst);\n', '  const noEvidence = false;\n');
+  const M = await mutant('  const noEvidence = rolledForward(inst)', '  const noEvidence = false');
   assert.equal(M.failureDetail(rec('net8.0'), crash, null, { launch: NLAUNCH, argsUnfilled: 0, owned: true }), 'start_failed', 'without the rule the rolled-forward crash is the server\'s');
   assert.equal(M.failureDetail(rec('net8.0', ['API_KEY']), quiet, null, { launch: NLAUNCH, argsUnfilled: 0, owned: true }), 'needs_credentials', 'without the rule the quiet exit is the server\'s');
   const F = await mutant('  return !m || Number(m[1])', '  return !!m && Number(m[1])');
   assert.equal(F.failureDetail(rec('netcoreapp3.1'), crash, null, { launch: NLAUNCH, argsUnfilled: 0, owned: true }), 'start_failed', 'without the fallback a netcoreapp3.1 crash is the server\'s');
+});
+
+// ------------------------------------------------------------------ MCP bundles (.mcpb)
+
+import { createHash } from 'node:crypto';
+import { crc32, deflateRawSync } from 'node:zlib';
+import * as MB from '../corpus/mcpb.mjs';
+MB.RETRY.ms = 0;
+
+/** A zip archive of { name: data } (deflated), as a bundle tool writes it. */
+function zip(files) {
+  const locals = []; const central = []; let off = 0;
+  for (const [n, d] of Object.entries(files)) {
+    const data = Buffer.isBuffer(d) ? d : Buffer.from(typeof d === 'string' ? d : JSON.stringify(d));
+    const body = deflateRawSync(data); const name = Buffer.from(n); const crc = crc32(data) >>> 0;
+    const lh = Buffer.alloc(30); lh.writeUInt32LE(0x04034b50, 0); lh.writeUInt16LE(20, 4); lh.writeUInt16LE(8, 8); lh.writeUInt32LE(crc, 14); lh.writeUInt32LE(body.length, 18); lh.writeUInt32LE(data.length, 22); lh.writeUInt16LE(name.length, 26);
+    locals.push(lh, name, body);
+    const ch = Buffer.alloc(46); ch.writeUInt32LE(0x02014b50, 0); ch.writeUInt16LE(0x0314, 4); ch.writeUInt16LE(20, 6); ch.writeUInt16LE(8, 10); ch.writeUInt32LE(crc, 16); ch.writeUInt32LE(body.length, 20); ch.writeUInt32LE(data.length, 24); ch.writeUInt16LE(name.length, 28); ch.writeUInt32LE((0o100755 << 16) >>> 0, 38); ch.writeUInt32LE(off, 42);
+    central.push(ch, name); off += 30 + name.length + body.length;
+  }
+  const cd = Buffer.concat(central); const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0); end.writeUInt16LE(central.length / 2, 8); end.writeUInt16LE(central.length / 2, 10); end.writeUInt32LE(cd.length, 12); end.writeUInt32LE(off, 16);
+  return Buffer.concat([...locals, cd, end]);
+}
+const ELF64 = (machine = 0x3e) => { const b = Buffer.alloc(64); b.write('\x7fELF', 0, 'latin1'); b[4] = 2; b[5] = 1; b.writeUInt16LE(2, 16); b.writeUInt16LE(machine, 18); return b; };
+const URL1 = 'https://github.com/acme/bundle/releases/download/v1.0.0/acme.mcpb';
+const ASSET = 'https://release-assets.githubusercontent.com/github-production-release-asset/1/abc?sig=x';
+const sha = (b) => createHash('sha256').update(b).digest('hex');
+/** github.com redirecting to the release-asset host, which serves the bytes; every request recorded. */
+function releases(map, calls = []) {
+  return async (url) => {
+    calls.push(String(url));
+    const u = new URL(url);
+    if (u.hostname === 'registry.modelcontextprotocol.io') return res(200, { servers: [] });
+    if (u.hostname === 'github.com') { const x = map[String(url)]; if (!x) return res(404, 'Not Found'); return { status: 302, ok: false, headers: { get: (h) => (h === 'location' ? x.location ?? ASSET + '&f=' + encodeURIComponent(String(url)) : null) } }; }
+    if (u.hostname === 'release-assets.githubusercontent.com') { const k = decodeURIComponent(u.searchParams.get('f') || ''); return map[k] ? res(200, map[k].body) : res(404, ''); }
+    throw new Error('unexpected fetch ' + url);
+  };
+}
+const mcpbPkg = (identifier = URL1, extra = {}) => ({ registryType: 'mcpb', identifier, version: '1.0.0', transport: { type: 'stdio' }, ...extra });
+const manifest = (server, extra = {}) => ({ manifest_version: '0.3', name: 'acme', version: '1.0.0', server, ...extra });
+const nodeBundle = (m = manifest({ type: 'node', entry_point: 'server/index.js', mcp_config: { command: 'node', args: ['${__dirname}/server/index.js'] } }), more = {}) => zip({ 'manifest.json': m, 'server/index.js': 'console.log(1)', ...more });
+const launchOf = async (bundle, pkg = mcpbPkg()) => { try { return await MB.mcpbLaunch(pkg, { fetch: releases({ [URL1]: { body: bundle } }) }); } catch (e) { return { detail: e.detail, why: e.why }; } };
+
+test('R-LP-72: a bundle is read on the planner as data from its GitHub release asset only, and launched as its manifest says: runtime, args, env and user_config filled the way a client would, the sha256 pinned for the sandbox', async () => {
+  const b = nodeBundle();
+  let r = await launchOf(b);
+  assert.deepEqual(r.launch, { kind: 'mcpb', url: URL1, sha256: sha(b), workdir: '.', runtime: 'node', args: ['/work/pkg/server/index.js'] });
+  assert.deepEqual([r.info.server_type, r.info.platform_unlisted, r.info.sha256_from], ['node', false, 'planner']);
+  // The registry's fileSha256 is the one the bytes must have; then it is the pin.
+  assert.equal((await launchOf(b, mcpbPkg(URL1, { fileSha256: sha(b) }))).info.sha256_from, 'registry');
+  assert.equal((await launchOf(b, mcpbPkg(URL1, { fileSha256: 'f'.repeat(64) }))).detail, 'bundle_hash_mismatch');
+  // user_config: a default is used (variables inside it too), an optional value with none is left out with its flag, a required one with none is configuration we do not have.
+  const uc = { root: { type: 'directory', default: '${HOME}/notes' }, vault: { type: 'string' }, key: { type: 'string', sensitive: true, required: true }, many: { type: 'directory', multiple: true, default: ['/a', '/b'] } };
+  let m = manifest({ type: 'node', entry_point: 'server/index.js', mcp_config: { command: 'node', args: ['${__dirname}/server/index.js', '--root', '${user_config.root}', '--vault', '${user_config.vault}', '${user_config.many}'], env: { MODE: 'stdio', N: 3, OPT: '${user_config.vault}', PATH: '/evil', NODE_OPTIONS: '--require /x' } } }, { user_config: { ...uc, key: { ...uc.key, required: false } } });
+  r = await launchOf(nodeBundle(m));
+  assert.deepEqual(r.launch.args, ['/work/pkg/server/index.js', '--root', '/tmp/home/notes', '/a', '/b']);
+  assert.deepEqual(r.launch.env, { MODE: 'stdio', N: '3' }, 'names the sandbox owns are never passed');
+  m = manifest({ type: 'node', entry_point: 'server/index.js', mcp_config: { command: 'node', args: ['${__dirname}/server/index.js'], env: { API_KEY: '${user_config.key}' } } }, { user_config: uc });
+  assert.equal((await launchOf(nodeBundle(m))).detail, 'start_needs_config', 'a required value is never guessed');
+  // A linux override; python with PYTHONPATH inside the bundle; uv run as uv would; a linux/amd64 binary.
+  m = manifest({ type: 'node', entry_point: 'server/index.js', mcp_config: { command: 'node', args: ['${__dirname}/server/mac.js'], platform_overrides: { linux: { args: ['${__dirname}/server/index.js', '--linux'] } } } });
+  assert.deepEqual((await launchOf(nodeBundle(m))).launch.args, ['/work/pkg/server/index.js', '--linux']);
+  m = manifest({ type: 'python', entry_point: 'server/main.py', mcp_config: { command: 'python3', args: ['${__dirname}/server/main.py'], env: { PYTHONPATH: '${__dirname}/server/lib:${__dirname}' } } });
+  r = await launchOf(zip({ 'manifest.json': m, 'server/main.py': 'x' }));
+  assert.deepEqual([r.launch.runtime, r.launch.args, r.launch.pythonpath], ['python', ['/work/pkg/server/main.py'], ['server/lib', '.']]);
+  m = manifest({ type: 'python', entry_point: 'server/main.py', mcp_config: { command: 'python', args: ['${__dirname}/server/main.py'], env: { PYTHONPATH: '/usr/lib/evil' } } });
+  assert.equal((await launchOf(zip({ 'manifest.json': m, 'server/main.py': 'x' }))).detail, 'launch_invalid', 'a PYTHONPATH outside the bundle');
+  m = manifest({ type: 'uv', entry_point: 'mcp_entry.py', mcp_config: { command: 'uv', args: ['run', '--frozen', '--no-dev', '--extra', 'mcp', '--project', '${__dirname}', '${__dirname}/mcp_entry.py', 'serve'] } });
+  r = await launchOf(zip({ 'manifest.json': m, 'mcp_entry.py': 'x', 'pyproject.toml': '[project]\nname="x"\n' }));
+  assert.deepEqual([r.launch.runtime, r.launch.args, r.launch.extras, r.launch.console], ['uv', ['/work/pkg/mcp_entry.py', 'serve'], ['mcp'], undefined]);
+  m = manifest({ type: 'uv', entry_point: 'src/x/server.py', mcp_config: { command: 'uv', args: ['run', '--directory', '${__dirname}', 'x-mcp'] } });
+  assert.equal((await launchOf(zip({ 'manifest.json': m, 'pyproject.toml': '[project]\nname="x"\n' }))).launch.console, 'x-mcp');
+  m = manifest({ type: 'uv', entry_point: 'server.py' });
+  assert.deepEqual((await launchOf(zip({ 'manifest.json': m, 'server.py': 'x', 'pyproject.toml': '[project]\nname="x"\n' }))).launch.args, ['/work/pkg/server.py'], 'a uv bundle with no mcp_config: uv run <entry_point>');
+  m = manifest({ type: 'binary', entry_point: 'server/srv', mcp_config: { command: '${__dirname}/server/srv', args: ['--stdio'] } });
+  r = await launchOf(zip({ 'manifest.json': m, 'server/srv': ELF64() }));
+  assert.deepEqual([r.launch.runtime, r.launch.entry, r.launch.args], ['binary', 'server/srv', ['--stdio']]);
+});
+
+test('R-LP-72: a bundle is the subject\'s fault only for its own evidence (the release page\'s 404, other bytes than its registry entry names, no archive, a path outside itself, nothing to run); our limits and platforms are ours', async () => {
+  assert.equal((await MB.mcpbLaunch(mcpbPkg('https://github.com/acme/bundle/releases/download/v1/gone.mcpb'), { fetch: releases({}) }).catch((e) => e)).detail, 'bundle_unavailable');
+  assert.equal((await launchOf(Buffer.from('#!/bin/sh\necho no archive\n'))).detail, 'bundle_invalid');
+  assert.equal((await launchOf(zip({ 'manifest.json': manifest({ type: 'node', mcp_config: { command: 'node', args: ['x'] } }), '../../evil': 'x' }))).detail, 'bundle_invalid');
+  assert.equal((await launchOf(zip({ 'server/index.js': 'x' }))).detail, 'package_not_runnable', 'no manifest');
+  assert.equal((await launchOf(zip({ 'manifest.json': '{not json' }))).detail, 'package_not_runnable');
+  assert.equal((await launchOf(zip({ 'manifest.json': manifest(undefined) }))).detail, 'package_not_runnable', 'no server');
+  assert.equal((await launchOf(nodeBundle(manifest({ type: 'node', entry_point: 'server/gone.js', mcp_config: { command: 'node', args: ['${__dirname}/server/gone.js'] } })))).detail, 'package_not_runnable', 'the script is not in the bundle');
+  // Ours: the host, our size cap, a server type or a launcher we do not start, a binary for another platform.
+  assert.equal((await MB.mcpbLaunch(mcpbPkg('https://example.com/acme.mcpb'), { fetch: releases({}) }).catch((e) => e)).detail, 'bundle_host_not_allowed');
+  assert.equal((await MB.mcpbLaunch(mcpbPkg(), { fetch: releases({ [URL1]: { location: 'https://evil.example/x', body: nodeBundle() } }) }).catch((e) => e)).detail, 'bundle_host_not_allowed', 'a redirect off the release-asset hosts');
+  assert.equal((await MB.fetchBundle(URL1, { fetch: releases({ [URL1]: { body: Buffer.alloc(2000) } }), cap: 1000 }).catch((e) => e)).detail, 'bundle_too_large');
+  assert.equal((await launchOf(nodeBundle(manifest({ type: 'deno', mcp_config: { command: 'deno', args: [] } })))).detail, 'bundle_runtime_unsupported');
+  assert.equal((await launchOf(zip({ 'manifest.json': manifest({ type: 'binary', mcp_config: { command: '/bin/sh', args: ['${__dirname}/server/launch.sh'] } }), 'server/launch.sh': 'x' }))).detail, 'bundle_runtime_unsupported');
+  assert.equal((await launchOf(zip({ 'manifest.json': manifest({ type: 'binary', entry_point: 'server/srv', mcp_config: { command: '${__dirname}/server/srv' } }, { compatibility: { platforms: ['darwin'] } }), 'server/srv': ELF64() }))).detail, 'platform_unsupported');
+  assert.equal((await launchOf(zip({ 'manifest.json': manifest({ type: 'binary', entry_point: 'server/srv', mcp_config: { command: '${__dirname}/server/srv' } }), 'server/srv': ELF64(0xb7) }))).detail, 'platform_unsupported', 'an arm64 binary');
+  assert.equal((await launchOf(zip({ 'manifest.json': manifest({ type: 'binary', entry_point: 'server/srv', mcp_config: { command: '${__dirname}/server/srv' } }), 'server/srv': Buffer.from([0xcf, 0xfa, 0xed, 0xfe, 7, 0, 0, 1]) }))).detail, 'platform_unsupported', 'a Mach-O binary');
+  for (const [d, fault] of [['bundle_unavailable', 'subject'], ['bundle_hash_mismatch', 'subject'], ['bundle_invalid', 'subject'], ['package_not_runnable', 'subject'], ['bundle_host_not_allowed', 'tool'], ['bundle_too_large', 'tool'], ['bundle_runtime_unsupported', 'tool'], ['bundle_unreadable', 'tool'], ['platform_unsupported', 'tool'], ['start_needs_config', 'tool']]) assert.equal(LP.DETAILS[d][3], fault, d);
+  // Through the lane's resolver: one subject's bundles are tried in turn (a darwin build first, then the linux one).
+  const mac = zip({ 'manifest.json': manifest({ type: 'binary', entry_point: 'server/srv', mcp_config: { command: '${__dirname}/server/srv' } }, { compatibility: { platforms: ['darwin'] } }), 'server/srv': ELF64() });
+  const lin = zip({ 'manifest.json': manifest({ type: 'binary', entry_point: 'server/srv', mcp_config: { command: '${__dirname}/server/srv' } }, { compatibility: { platforms: ['linux'] } }), 'server/srv': ELF64() });
+  const U2 = URL1.replace('acme.mcpb', 'acme-linux.mcpb');
+  const seed = new Map([['acme/bundle', [{ registry: 'mcpb', identifier: URL1 }, { registry: 'mcpb', identifier: U2 }]]]);
+  const r = await LP.resolveSubject({ subject: 'acme/bundle', repo: 'acme/bundle' }, { seed, fetch: releases({ [URL1]: { body: mac }, [U2]: { body: lin } }) });
+  assert.deepEqual([r.status, r.launch.url, r.choice.type, r.choice.mcpb.runtime], ['runnable', U2, 'mcpb', 'binary']);
+  const none = await LP.resolveSubject({ subject: 'acme/bundle', repo: 'acme/bundle' }, { seed, fetch: releases({ [URL1]: { body: mac } }) });
+  assert.equal(none.detail, 'platform_unsupported', 'our limit for one bundle comes before the other\'s 404');
+});
+
+test('R-LP-72: a path the bundle\'s runtime would resolve (an extension node adds, a folder, a name in another case, a Windows .exe) is never the bundle\'s missing file; uv with no project is a launcher', async () => {
+  const nodeM = (arg) => manifest({ type: 'node', mcp_config: { command: 'node', args: ['${__dirname}/' + arg] } });
+  // node adds .js and takes a folder's index.js; python runs a folder's __main__.py.
+  assert.ok((await launchOf(zip({ 'manifest.json': nodeM('server/index'), 'server/index.js': 'x' }))).launch, 'node adds .js');
+  assert.ok((await launchOf(zip({ 'manifest.json': nodeM('server'), 'server/index.js': 'x' }))).launch, 'node takes the folder');
+  assert.ok((await launchOf(zip({ 'manifest.json': manifest({ type: 'python', mcp_config: { command: 'python', args: ['${__dirname}/app'] } }), 'app/__main__.py': 'x' }))).launch, 'python runs the folder');
+  // A name in another case runs on macOS and Windows only: ours (platform_unsupported), never package_not_runnable.
+  assert.equal((await launchOf(zip({ 'manifest.json': nodeM('Server/Index.js'), 'server/index.js': 'x' }))).detail, 'platform_unsupported');
+  // A binary named without its .exe, or in another case: a build for another platform.
+  const bin = (cmd, files) => zip({ 'manifest.json': manifest({ type: 'binary', mcp_config: { command: '${__dirname}/' + cmd } }), ...files });
+  assert.equal((await launchOf(bin('server/srv', { 'server/srv.exe': 'MZ' }))).detail, 'platform_unsupported', 'srv.exe only');
+  assert.equal((await launchOf(bin('server/SRV', { 'server/srv': ELF64() }))).detail, 'platform_unsupported', 'another case');
+  // Still the bundle's own: a path that names nothing it holds.
+  assert.equal((await launchOf(zip({ 'manifest.json': nodeM('server/gone.js'), 'server/index.js': 'x' }))).detail, 'package_not_runnable');
+  assert.equal((await launchOf(bin('server/srv', { 'server/other': ELF64() }))).detail, 'package_not_runnable');
+  // `uv run <command>` with no pyproject runs a command of the user's environment: a launcher, not a fault of the bundle.
+  assert.equal((await launchOf(zip({ 'manifest.json': manifest({ type: 'uv', mcp_config: { command: 'uv', args: ['run', 'x-mcp'] } }) }))).detail, 'bundle_runtime_unsupported');
+  // Mutation checks: without the resolution rule node's extension, and without the case rule another case, is the bundle's
+  // missing file; without the uv rule a launcher is.
+  const src = readFileSync(join(root, 'corpus', 'mcpb.mjs'), 'utf8');
+  const mutate = async (from, to) => {
+    assert.ok(src.includes(from), from.slice(0, 60));
+    const file = join(root, 'corpus', '.mutant-mcpb-' + process.pid + '-' + Math.random().toString(16).slice(2) + '.mjs');
+    writeFileSync(file, src.replace(from, to));
+    try { return await import(pathToFileURL(file).href); } finally { rmSync(file, { force: true }); }
+  };
+  const go = async (M, bundle) => { try { return await M.mcpbLaunch(mcpbPkg(), { fetch: releases({ [URL1]: { body: bundle } }) }); } catch (e) { return { detail: e.detail }; } };
+  let M = await mutate("set.has(r) || [...set].some((n) => n.startsWith(r + '/') || n.startsWith(r + '.'))", 'set.has(r)');
+  assert.equal((await go(M, zip({ 'manifest.json': nodeM('server/index'), 'server/index.js': 'x' }))).detail, 'package_not_runnable', 'without the rule node\'s .js is a missing file');
+  assert.equal((await go(M, bin('server/srv', { 'server/srv.exe': 'MZ' }))).detail, 'package_not_runnable', 'without the rule srv.exe is a missing file');
+  M = await mutate("throw fail(holds(rel, lower, rel.toLowerCase()) ? 'platform_unsupported' : 'package_not_runnable', { why });", "throw fail('package_not_runnable', { why });");
+  assert.equal((await go(M, zip({ 'manifest.json': nodeM('Server/Index.js'), 'server/index.js': 'x' }))).detail, 'package_not_runnable', 'without the case rule');
+  M = await mutate("throw fail('bundle_runtime_unsupported', { why: 'uv_no_project' })", "throw fail('package_not_runnable', { why: 'no_pyproject' })");
+  assert.equal((await go(M, zip({ 'manifest.json': manifest({ type: 'uv', mcp_config: { command: 'uv', args: ['run', 'x-mcp'] } }) }))).detail, 'package_not_runnable', 'without the uv rule');
+});
+
+test('R-LP-72: a node or python script outside the bundle (an absolute path of the author\'s machine, one that climbs out, a relative one the bundle does not hold) is never the bundle\'s crash: bundle_runtime_unsupported', async () => {
+  const nodeArgs = (args) => zip({ 'manifest.json': manifest({ type: 'node', mcp_config: { command: 'node', args } }), 'server/index.js': 'x' });
+  const pyArgs = (args) => zip({ 'manifest.json': manifest({ type: 'python', mcp_config: { command: 'python3', args } }), 'server/main.py': 'x' });
+  for (const args of [['/Users/dev/app/server.js'], ['--no-warnings', '/opt/app/index.js'], ['${__dirname}/../outside.js'], ['../app/server.js'], ['dist/index.js'], ['-r', 'dotenv/config', '/home/me/srv.js']]) {
+    const r = await launchOf(nodeArgs(args));
+    assert.deepEqual([r.detail, r.why], ['bundle_runtime_unsupported', args.some((a) => a.startsWith('/') || a.includes('..')) ? 'script_outside' : 'script_relative'], JSON.stringify(args));
+  }
+  for (const args of [['C:\\dev\\server.py'], ['/Users/dev/main.py'], ['-u', '/srv/main.py']]) assert.equal((await launchOf(pyArgs(args))).detail, 'bundle_runtime_unsupported', JSON.stringify(args));
+  // Started as before: a file of the bundle (by ${__dirname} or relative), after options; inline code or a module is not a path.
+  for (const args of [['${__dirname}/server/index.js'], ['server/index.js'], ['./server/index.js'], ['--no-warnings', '-r', 'dotenv/config', '${__dirname}/server/index.js'], ['-e', 'require("x")']]) assert.ok((await launchOf(nodeArgs(args))).launch, JSON.stringify(args));
+  for (const args of [['${__dirname}/server/main.py'], ['-u', 'server/main.py'], ['-m', 'server.main']]) assert.ok((await launchOf(pyArgs(args))).launch, JSON.stringify(args));
+  // The bundle's own: a path inside it that names nothing it holds, found after the options too.
+  assert.equal((await launchOf(nodeArgs(['--no-warnings', '${__dirname}/server/gone.js']))).detail, 'package_not_runnable');
+  // Mutation check: without the outside check the absolute path is started, and its crash would be the bundle's.
+  const src = readFileSync(join(root, 'corpus', 'mcpb.mjs'), 'utf8');
+  const from = "  const checkPath = (p, what, { optional = false } = {}) => {\n";
+  assert.ok(src.includes(from), 'the mutation text is in corpus/mcpb.mjs');
+  const file = join(root, 'corpus', '.mutant-mcpb-' + process.pid + '-' + Math.random().toString(16).slice(2) + '.mjs');
+  writeFileSync(file, src.replace(from, from + "    if (what === 'script') return;\n"));
+  let M; try { M = await import(pathToFileURL(file).href); } finally { rmSync(file, { force: true }); }
+  const got = await M.mcpbLaunch(mcpbPkg(), { fetch: releases({ [URL1]: { body: nodeArgs(['/Users/dev/app/server.js']) } }) }).catch((e) => ({ detail: e.detail }));
+  assert.ok(got.launch, 'without the check the author\'s absolute path would be started');
+  assert.equal(got.info.crash_not_evidence, false, '...as a node bundle whose crash counts');
+});
+
+test('R-LP-72: a file a node option loads before the script (-r, --require, --import, --loader, --experimental-loader, --env-file) is checked like the script; a package name stays allowed; value options and grouped python flags are read as the runtime reads them', async () => {
+  const nodeArgs = (args) => zip({ 'manifest.json': manifest({ type: 'node', mcp_config: { command: 'node', args } }), 'server/index.js': 'x', 'server/pre.js': 'x' });
+  const pyArgs = (args) => zip({ 'manifest.json': manifest({ type: 'python', mcp_config: { command: 'python3', args } }), 'server/main.py': 'x' });
+  const S = '${__dirname}/server/index.js';
+  // A file of the author's machine, one that climbs out, or a relative one the bundle does not hold: ours, never started.
+  for (const [args, why] of [
+    [['-r', '/Users/x/h.js', 'server/index.js'], 'option_outside'], [['--require=/Users/x/h.js', S], 'option_outside'],
+    [['--import', 'file:///Users/x/h.mjs', S], 'option_outside'], [['--loader', '../hooks.mjs', S], 'option_outside'],
+    [['--experimental-loader=./gone.mjs', S], 'option_relative'], [['--env-file', '/Users/dev/.env', 'server/index.js'], 'option_outside'],
+    [['--env-file=.env', S], 'option_relative'], [['--env-file', '${__dirname}/config/app.env', S], 'option_missing'], [['--env-file', '${__dirname}/.env', S], 'option_unreadable'],
+    [['${__dirname}/my server(1).js'], 'script_unreadable'],
+  ]) {
+    const r = await launchOf(nodeArgs(args));
+    assert.deepEqual([r.detail, r.why], ['bundle_runtime_unsupported', why], JSON.stringify(args));
+  }
+  // Started: a package name, a file of the bundle, node: and data: specifiers; a value option's value is not the script.
+  for (const args of [['-r', 'dotenv/config', S], ['--import', '@scope/pkg/register', S], ['-r', '${__dirname}/server/pre.js', S], ['--require=./server/pre.js', 'server/index.js'],
+    ['--import', 'data:text/javascript,1', S], ['--disable-warning', 'ExperimentalWarning', 'server/index.js'], ['--title', 'srv', S], ['--max-old-space-size=512', S]]) assert.ok((await launchOf(nodeArgs(args))).launch, JSON.stringify(args));
+  // A file in the bundle that an option names but the bundle lacks is its own, as for the script.
+  assert.equal((await launchOf(nodeArgs(['-r', '${__dirname}/server/gone.js', S]))).detail, 'package_not_runnable');
+  // python: an attached -W or -X value (-Wmodule) and a grouped flag (-uW ignore) do not hide the script; a long option's value is not it.
+  for (const args of [['-Wmodule', '/Users/dev/main.py'], ['-uW', 'ignore', '/srv/main.py'], ['--check-hash-based-pycs', 'never', '/srv/main.py'], ['-Xutf8', '-B', '/srv/main.py']]) assert.equal((await launchOf(pyArgs(args))).detail, 'bundle_runtime_unsupported', JSON.stringify(args));
+  for (const args of [['-Wignore', '${__dirname}/server/main.py'], ['-uB', 'server/main.py'], ['-um', 'server.main'], ['-c', 'import x']]) assert.ok((await launchOf(pyArgs(args))).launch, JSON.stringify(args));
+  // Mutation checks.
+  const src = readFileSync(join(root, 'corpus', 'mcpb.mjs'), 'utf8');
+  const mutate = async (from, to) => {
+    assert.ok(src.includes(from), from.slice(0, 60));
+    const file = join(root, 'corpus', '.mutant-mcpb-' + process.pid + '-' + Math.random().toString(16).slice(2) + '.mjs');
+    writeFileSync(file, src.replace(from, to));
+    try { return await import(pathToFileURL(file).href); } finally { rmSync(file, { force: true }); }
+  };
+  const go = async (M, bundle) => { try { return await M.mcpbLaunch(mcpbPkg(), { fetch: releases({ [URL1]: { body: bundle } }) }); } catch (e) { return { detail: e.detail, why: e.why }; } };
+  let M = await mutate('    for (const l of loads) {', '    for (const l of []) {');
+  assert.ok((await go(M, nodeArgs(['--env-file', '/Users/dev/.env', 'server/index.js']))).launch, 'without the option check the author\'s .env would be loaded and the crash counted');
+  assert.ok((await go(M, nodeArgs(['-r', '/Users/x/h.js', 'server/index.js']))).launch, 'without the option check -r /Users/x/h.js would be started');
+  M = await mutate("      if (ch === 'c' || ch === 'm') return out(null);", "      if (/[cm]/.test(a.slice(k))) return out(null);");
+  assert.ok((await go(M, pyArgs(['-Wmodule', '/Users/dev/main.py']))).launch, 'with the unanchored pattern -Wmodule hides the script');
+  M = await mutate("'--title', '--input-type', '--inspect-port', '--debug-port', '--disable-warning',", "'--title', '--input-type', '--inspect-port', '--debug-port',");
+  assert.equal((await go(M, nodeArgs(['--disable-warning', 'ExperimentalWarning', 'server/index.js']))).why, 'script_relative', 'without --disable-warning its value is read as the script');
+  M = await mutate("    if (p.startsWith(BUNDLE_DIR + '/') && !segs.includes('..')) throw fail('bundle_runtime_unsupported', { why: `${what}_unreadable` });\n", '');
+  assert.equal((await go(M, nodeArgs(['${__dirname}/my server(1).js']))).why, 'script_outside', 'without the rule a bundle path we do not read is called outside');
+});
+
+test('R-LP-72 mutation check: without the sha256 check, the entry-name check, the redirect host check, the required-config check or the ELF check, the fixture gets through', async () => {
+  const src = readFileSync(join(root, 'corpus', 'mcpb.mjs'), 'utf8');
+  const mutate = async (from, to) => {
+    assert.ok(src.includes(from), from.slice(0, 60));
+    const file = join(root, 'corpus', '.mutant-mcpb-' + process.pid + '-' + Math.random().toString(16).slice(2) + '.mjs');
+    writeFileSync(file, src.replace(from, to));
+    try { return await import(pathToFileURL(file).href); } finally { rmSync(file, { force: true }); }
+  };
+  const go = async (M, bundle, pkg = mcpbPkg(), map = null) => { try { return await M.mcpbLaunch(pkg, { fetch: releases(map || { [URL1]: { body: bundle } }) }); } catch (e) { return { detail: e.detail }; } };
+  const b = nodeBundle();
+  let M = await mutate("  if (want && want !== sha256) throw fail('bundle_hash_mismatch');", '');
+  assert.ok((await go(M, b, mcpbPkg(URL1, { fileSha256: 'f'.repeat(64) }))).launch, 'other bytes than the registry names');
+  M = await mutate('    if (!n) {\n      // Only a name', '    if (false) {\n      // Only a name');
+  assert.ok((await go(M, nodeBundle(undefined, { '../../evil': 'x' }))).launch, 'a path outside the bundle');
+  M = await mutate("      u = allowedUrl(next.href);\n      if (!u) throw fail('bundle_host_not_allowed');", '      u = next;');
+  assert.ok((await go(M, null, mcpbPkg(), { [URL1]: { location: 'https://release-assets.githubusercontent.com.evil.example/x', body: b } })).detail !== 'bundle_host_not_allowed', 'a redirect elsewhere is followed');
+  M = await mutate("    if (r.missing === 'required') throw fail('start_needs_config', { why: 'user_config' });\n    if (r.missing) continue;", '    if (r.missing) continue;');
+  const needKey = nodeBundle(manifest({ type: 'node', entry_point: 'server/index.js', mcp_config: { command: 'node', args: ['${__dirname}/server/index.js'], env: { API_KEY: '${user_config.key}' } } }, { user_config: { key: { type: 'string', required: true } } }));
+  assert.ok((await go(M, needKey)).launch, 'a required value would be left out and the server started');
+  M = await mutate("    if (!m || !isLinuxAmd64(buf, m)) throw fail('platform_unsupported', { why: 'not_linux_amd64' });", '');
+  assert.ok((await go(M, zip({ 'manifest.json': manifest({ type: 'binary', entry_point: 'server/srv', mcp_config: { command: '${__dirname}/server/srv' } }), 'server/srv': ELF64(0xb7) }))).launch, 'an arm64 binary would be started');
+});
+
+const mcpbRec = (steps) => ({ install: { kind: 'mcpb', ok: false, steps, egress_refused: 0 }, env: { names: { registry: [] }, secret_named: [] }, timing: { total_ms: 60000 }, timed_out: false });
+const MLAUNCH = { kind: 'mcpb', url: URL1, sha256: 'a'.repeat(64), runtime: 'node' };
+
+test('R-LP-73: what goes wrong with a bundle in the sandbox is ours: the planner read and judged those very bytes', () => {
+  const fd2 = (rec, log = '') => LP.failureDetail(rec, null, null, { stepsLog: log, launch: MLAUNCH, argsUnfilled: 0 });
+  for (const error of ['not_found', 'sha256_mismatch', 'unsafe_path', 'zip_unreadable', 'fetch_failed', 'redirect_refused', 'no_manifest']) assert.equal(fd2(mcpbRec([{ name: 'fetch', exit: 1, result: { error } }])), 'install_build_failed', error);
+  for (const error of ['too_large', 'too_many_files', 'too_big_unpacked']) assert.equal(fd2(mcpbRec([{ name: 'fetch', exit: 1, result: { error } }])), 'install_resource_limit', error);
+  // A uv bundle's pip install: its dependencies' builds run, so their words are no evidence.
+  assert.equal(fd2(mcpbRec([{ name: 'fetch', exit: 0 }, { name: 'venv', exit: 0 }, { name: 'requirements', exit: 0 }, { name: 'install', exit: 1 }]), 'ERROR: No matching distribution found for acme\n'), 'install_build_failed');
+});
+
+test('R-LP-74: a bundle that does not run here as shipped (no linux in its manifest, or python or uv on an environment we rebuilt) runs anyway, and its crash is never its fault', async () => {
+  const m = manifest({ type: 'python', entry_point: 'server/main.py', mcp_config: { command: 'python', args: ['${__dirname}/server/main.py'] } });
+  assert.equal((await launchOf(zip({ 'manifest.json': m, 'server/main.py': 'x' }))).info.crash_not_evidence, true);
+  assert.equal((await launchOf(nodeBundle())).info.crash_not_evidence, false, 'a node bundle runs as shipped');
+  assert.equal((await launchOf(nodeBundle(manifest({ type: 'node', entry_point: 'server/index.js', mcp_config: { command: 'node', args: ['${__dirname}/server/index.js'] } }, { compatibility: { platforms: ['darwin'] } })))).info.crash_not_evidence, true);
+  const rec = { install: { kind: 'mcpb', ok: true, steps: [{ name: 'fetch', exit: 0 }] }, env: { names: { registry: [] }, secret_named: [] }, timing: { total_ms: 60000 }, timed_out: false };
+  const crash = { initialize: null, era: null, error: null, initialize_error: 'the server exited (exit 1, signal null)', lists: {}, transport: { exit: 1, signal: null }, timing: { total_ms: 3000 }, stderr: 'Segmentation fault (core dumped)\n' };
+  assert.equal(LP.failureDetail(rec, crash, null, { launch: MLAUNCH, argsUnfilled: 0 }), 'start_failed');
+  assert.equal(LP.failureDetail(rec, crash, null, { launch: MLAUNCH, argsUnfilled: 0, crashNotEvidence: true }), 'start_env_limited');
+  // A quiet exit with a declared variable is no more the bundle's than a crash, when it does not run as shipped (27 Nov).
+  const withKey = { ...rec, env: { names: { registry: ['API_KEY'] }, secret_named: [] } };
+  const quiet = { ...crash, stderr: '' };
+  assert.equal(LP.failureDetail(withKey, quiet, null, { launch: MLAUNCH, argsUnfilled: 0 }), 'needs_credentials', 'as shipped, the declared variable');
+  assert.equal(LP.failureDetail(withKey, quiet, null, { launch: MLAUNCH, argsUnfilled: 0, crashNotEvidence: true }), 'start_env_limited');
+  // Links the sandbox left out when it unpacked the bundle (a file the server may need): its crash is no evidence either.
+  assert.equal(LP.crashNotEvidenceOf({ mcpb: { crash_not_evidence: false } }, { install: { kind: 'mcpb', steps: [{ name: 'fetch', exit: 0, result: { ok: true, links_skipped: 3 } }] } }), true);
+  assert.equal(LP.crashNotEvidenceOf({ mcpb: { crash_not_evidence: false } }, { install: { kind: 'mcpb', steps: [{ name: 'fetch', exit: 0, result: { ok: true, links_skipped: 0 } }] } }), false);
+});
+
+test('R-LP-74 mutation check: without the platform guard a darwin-only bundle\'s crash would be its fault', async () => {
+  const rec = { install: { kind: 'mcpb', ok: true, steps: [] }, env: { names: { registry: [] }, secret_named: [] }, timing: { total_ms: 60000 }, timed_out: false };
+  const crash = { initialize_error: 'the server exited (exit 1, signal null)', lists: {}, transport: { exit: 1, signal: null }, timing: { total_ms: 3000 }, stderr: 'Segmentation fault (core dumped)\n' };
+  const M = await mutant('  const noEvidence = rolledForward(inst) || crashNotEvidence;', '  const noEvidence = rolledForward(inst);');
+  assert.equal(M.failureDetail(rec, crash, null, { launch: MLAUNCH, argsUnfilled: 0, crashNotEvidence: true }), 'start_failed');
+  const withKey = { ...rec, env: { names: { registry: ['API_KEY'] }, secret_named: [] } };
+  assert.equal(M.failureDetail(withKey, { ...crash, stderr: '' }, null, { launch: MLAUNCH, argsUnfilled: 0, crashNotEvidence: true }), 'needs_credentials', 'without the guard the quiet exit is the bundle\'s');
+});
+
+test('R-LP-72: a bundle\'s own failure is the subject\'s only for an entry in its namespace: a third-party entry naming the repository with a dead bundle is unverified, a seed-only one ours; a bare launcher is never the bundle\'s', async () => {
+  const dead = 'https://github.com/victim/repo/releases/download/v1/gone.mcpb';
+  const entry = (name, repo) => ({ name, version: '1.0.0', repository: { url: 'https://github.com/' + repo, source: 'github' }, packages: [mcpbPkg(dead)] });
+  const reg = (servers) => async (url) => {
+    const u = new URL(url);
+    if (u.hostname === 'registry.modelcontextprotocol.io') { const q = (u.searchParams.get('search') || '').toLowerCase(); return res(200, { servers: servers.filter((s) => s.name.toLowerCase().includes(q)).map((server) => ({ server })) }); }
+    if (u.hostname === 'github.com') return res(404, 'Not Found');
+    throw new Error('unexpected fetch ' + url);
+  };
+  const r = (servers, seed = new Map()) => LP.resolveSubject({ subject: 'victim/repo', repo: 'victim/repo' }, { fetch: reg(servers), seed });
+  assert.equal((await r([entry('io.github.mallory/repo', 'victim/repo')])).detail, 'unverified_registry_entry', 'anyone\'s claim on the repository');
+  assert.equal((await r([], new Map([['victim/repo', [{ registry: 'mcpb', identifier: dead }]]]))).detail, 'bundle_unowned', 'seed-only: not shown to be theirs');
+  assert.equal((await r([entry('io.github.victim/repo', 'victim/repo')])).detail, 'bundle_unavailable', 'their own namespace: theirs');
+  for (const d of LP.SUBJECT_RESOLVE_DETAILS) assert.equal(LP.DETAILS[d][3], 'subject', d);
+  assert.deepEqual(LP.DETAILS.bundle_unowned, ['install_failed_registry', false, 'resolve', 'tool']);
+  // The release page's 404 is asked once more before it counts.
+  let n = 0;
+  const flaky = async (url) => { const u = new URL(url); if (u.hostname === 'github.com') return n++ === 0 ? res(404, '') : { status: 302, ok: false, headers: { get: (h) => (h === 'location' ? ASSET + '&f=x' : null) } }; return res(200, nodeBundle()); };
+  assert.equal((await MB.mcpbLaunch(mcpbPkg(URL1), { fetch: flaky, retryMs: 0 })).launch.runtime, 'node');
+  // A launcher on the user's machine is not a file of the bundle: ours, never package_not_runnable; a shell even when shipped.
+  for (const command of ['npx', 'sh', 'bash', 'bun', 'deno', 'docker', 'uvx', 'server/sh']) {
+    const b = zip({ 'manifest.json': manifest({ type: 'binary', entry_point: 'server/x', mcp_config: { command, args: ['x'] } }), 'server/x': ELF64(), ...(command === 'server/sh' ? { 'server/sh': ELF64() } : {}) });
+    assert.equal((await launchOf(b)).detail, 'bundle_runtime_unsupported', command);
+  }
+  // An entry name our rules do not take is ours; only one that leaves the bundle is its fault.
+  assert.equal((await launchOf(nodeBundle(undefined, { 'a\\b.js': 'x' }))).detail, 'bundle_unreadable');
+  assert.equal((await launchOf(nodeBundle(undefined, { 'a/../../b.js': 'x' }))).detail, 'bundle_invalid');
+  assert.equal((await launchOf(nodeBundle(undefined, { ['a/'.repeat(70) + 'x']: 'x' }))).detail, 'bundle_unreadable', 'our depth limit');
+});
+
+test('R-LP-72 mutation check: without the ownership gate a stranger\'s dead bundle is the victim\'s fault; without the launcher check npx is package_not_runnable', async () => {
+  const dead = 'https://github.com/victim/repo/releases/download/v1/gone.mcpb';
+  const reg = async (url) => { const u = new URL(url); if (u.hostname === 'registry.modelcontextprotocol.io') return res(200, { servers: [{ server: { name: 'io.github.mallory/repo', version: '1', repository: { url: 'https://github.com/victim/repo' }, packages: [mcpbPkg(dead)] } }] }); return res(404, ''); };
+  const M = await mutant("        if (SUBJECT_RESOLVE_DETAILS.includes(r.detail) && !(c.entry && c.entry.namespace))", '        if (false)');
+  M.RETRY && (M.RETRY.ms = 0);
+  assert.equal((await M.resolveSubject({ subject: 'victim/repo', repo: 'victim/repo' }, { fetch: reg })).detail, 'bundle_unavailable');
+  const src = readFileSync(join(root, 'corpus', 'mcpb.mjs'), 'utf8');
+  const from = "    if (LAUNCHERS.has(c.split('/').pop()) || (!c.includes('/') && !names.has(c))) throw fail('bundle_runtime_unsupported', { why: 'launcher' });\n";
+  assert.ok(src.includes(from));
+  const file = join(root, 'corpus', '.mutant-mcpb-' + process.pid + '-l.mjs');
+  writeFileSync(file, src.replace(from, ''));
+  try {
+    const X = await import(pathToFileURL(file).href);
+    const b = zip({ 'manifest.json': manifest({ type: 'binary', entry_point: 'server/x', mcp_config: { command: 'npx', args: ['x'] } }), 'server/x': ELF64() });
+    const out = await X.mcpbLaunch(mcpbPkg(), { fetch: releases({ [URL1]: { body: b } }), retryMs: 0 }).catch((e) => e);
+    assert.equal(out.detail, 'package_not_runnable', 'without the check the user\'s launcher is the bundle\'s missing binary');
+  } finally { rmSync(file, { force: true }); }
 });
