@@ -1565,6 +1565,10 @@ export function failureDetail(rec, bare, envp, { deadlineHit = false, records = 
   // A PyPI launch with no entry runs venv/bin/<package name>, a guess: the console script often has another name.
   const guess = !isObj(launch) || !launch.kind || (launch.kind === 'pypi' && !launch.entry);
   const sound = own && argsUnfilled === 0 && !guess;
+  // R-LP-58: a .NET tool built for an older runtime ran rolled forward onto the sandbox's .NET 10: its exit may be ours, so
+  // nothing below counts it against the server (a crash, a module it lacks, a quiet exit with a declared variable).
+  const noEvidence = rolledForward(inst);
+  const blamable = sound && !noEvidence;
   const err = typeof p.stderr === 'string' ? p.stderr : '';
   // What stopped the start before the server's own code could fail, in our words (R-LP-60..64), ahead of any
   // finding against the server: another operating system, the network, our sandbox's limits.
@@ -1580,10 +1584,10 @@ export function failureDetail(rec, bare, envp, { deadlineHit = false, records = 
   if (on('import') && imp === 'env') return 'start_env_limited';
   // The server's own packaging (R-LP-68): its wheel lacks a module of its own package, or its own code imports a module
   // the release neither ships nor declares, and that is not installed. Only with the release's facts in hand.
-  if (imp === 'own_missing' && sound) return 'missing_own_module';
-  if (imp === 'undeclared' && sound) return 'undeclared_dependency';
+  if (imp === 'own_missing' && blamable) return 'missing_own_module';
+  if (imp === 'undeclared' && blamable) return 'undeclared_dependency';
   // A declared variable makes a quiet own exit needs_credentials; a crash that asks for no configuration is a crash.
-  if (needsEnv && !sound) return 'start_env_limited';
+  if (needsEnv && !blamable) return 'start_env_limited';
   if (needsEnv && !(CRASH_TEXT.test(err) && !CONFIG_TEXT.test(err) && !CONFIG_CASE_RE.test(err) && !ENV_NAME_TEXT.test(err))) return 'needs_credentials';
   // The probe's own duration, not the record's total (which holds the install and the analysis too, R-LP-40).
   const ms = probeMs(rec, p, p === envp ? 'env' : 'bare');
@@ -1593,17 +1597,20 @@ export function failureDetail(rec, bare, envp, { deadlineHit = false, records = 
   // does not support, a bug of its own) is not the server's code failing (R-LP-69).
   if (on('frame') && frameInDependency(err, { pydeps, pkg: isObj(launch) ? launch.package : null })) return 'start_env_limited';
   // A crash signature is the evidence; an early exit with no telling stderr is not (R-LP-45).
-  // R-LP-58: a .NET tool built for an older runtime ran rolled forward onto the sandbox's .NET 10: its crash may be ours.
-  if (rolledForward(inst)) return 'start_env_limited';
-  return sound && ms !== null && ms < START_QUICK_MS && CRASH_TEXT.test(err) ? 'start_failed' : 'start_env_limited';
+  return blamable && ms !== null && ms < START_QUICK_MS && CRASH_TEXT.test(err) ? 'start_failed' : 'start_env_limited';
 }
 
-/** Whether a .NET tool ran on a newer runtime than it was built for (its entry's target framework below net10.0). */
+/**
+ * Whether a .NET tool ran on another runtime than it was built for: its entry's target framework is not net10.0 or newer
+ * (net8.0, netcoreapp3.1, netstandard2.0, a platform-suffixed or unreadable one, or none recorded). Only a tool built for
+ * the sandbox's own runtime runs as shipped (R-LP-58).
+ */
 export function rolledForward(inst) {
   if (!isObj(inst) || inst.kind !== 'nuget') return false;
   const e = (Array.isArray(inst.steps) ? inst.steps : []).find((x) => x && x.name === 'entry');
-  const m = e && isObj(e.result) && typeof e.result.tfm === 'string' ? /^net([0-9]{1,2})\.([0-9])$/.exec(e.result.tfm) : null;
-  return !!m && Number(m[1]) * 10 + Number(m[2]) < 100;
+  const tfm = e && isObj(e.result) && typeof e.result.tfm === 'string' ? e.result.tfm : '';
+  const m = /^net([0-9]{1,2})\.([0-9])$/.exec(tfm);
+  return !m || Number(m[1]) * 10 + Number(m[2]) < 100;
 }
 
 // ------------------------------------------------------------------ observations
