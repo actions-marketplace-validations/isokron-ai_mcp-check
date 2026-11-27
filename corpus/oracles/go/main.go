@@ -4,6 +4,11 @@
 // here), connects with the SDK's default negotiation, lists every page of tools/list, and prints one JSON line. No
 // tool is ever called.
 //
+// `tools` is what the server sent, page by page, as raw JSON (R-ORC-11): the SDK's typed mcp.Tool cannot hold every
+// field (v1.8.0 has no `execution`, drops annotation keys it does not know and an empty annotations title, and writes
+// readOnlyHint and idempotentHint out), so a list re-marshalled from it is the SDK's view, not the server's catalog.
+// The typed parse still decides the outcome (the SDK accepted every page) and its count is kept (`typed_tool_count`).
+//
 //	oracle-go <time limit ms> -- <command...>
 package main
 
@@ -16,8 +21,10 @@ import (
 	"os/exec"
 	"runtime/debug"
 	"strconv"
+	"sync"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -39,8 +46,80 @@ type result struct {
 	Protocol   *string     `json:"protocol"`
 	ServerInfo *serverInfo `json:"server_info"`
 	Pages      int         `json:"pages"`
-	Tools      []*mcp.Tool `json:"tools"`
-	MS         *int64      `json:"ms"`
+	// The tools as the server sent them (every tools/list result, in order), never re-marshalled.
+	Tools []json.RawMessage `json:"tools"`
+	// "wire" (from the tap below), else "typed" (the SDK's structs, lossy) when no raw page was seen.
+	ToolsSource *string `json:"tools_source"`
+	TypedCount  *int    `json:"typed_tool_count"`
+	MS          *int64  `json:"ms"`
+}
+
+// tap keeps the raw result of every tools/list response the connection reads, matched to the request ids it wrote.
+// Nothing else changes: each message passes on as it came.
+type tap struct {
+	mcp.Connection
+	mu    sync.Mutex
+	ids   map[string]bool
+	pages []json.RawMessage
+}
+
+func idKey(id jsonrpc.ID) string { return fmt.Sprintf("%T:%v", id.Raw(), id.Raw()) }
+
+func (t *tap) Write(ctx context.Context, m jsonrpc.Message) error {
+	if r, ok := m.(*jsonrpc.Request); ok && r.Method == "tools/list" && r.ID.IsValid() {
+		t.mu.Lock()
+		t.ids[idKey(r.ID)] = true
+		t.mu.Unlock()
+	}
+	return t.Connection.Write(ctx, m)
+}
+
+func (t *tap) Read(ctx context.Context) (jsonrpc.Message, error) {
+	m, err := t.Connection.Read(ctx)
+	if r, ok := m.(*jsonrpc.Response); ok && err == nil && r.Error == nil && r.ID.IsValid() {
+		t.mu.Lock()
+		if k := idKey(r.ID); t.ids[k] {
+			delete(t.ids, k)
+			t.pages = append(t.pages, append(json.RawMessage(nil), r.Result...))
+		}
+		t.mu.Unlock()
+	}
+	return m, err
+}
+
+func (t *tap) rawPages() []json.RawMessage {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return append([]json.RawMessage(nil), t.pages...)
+}
+
+type tapTransport struct {
+	inner mcp.Transport
+	tap   *tap
+}
+
+func (t *tapTransport) Connect(ctx context.Context) (mcp.Connection, error) {
+	c, err := t.inner.Connect(ctx)
+	if err != nil {
+		return nil, err
+	}
+	t.tap.Connection = c
+	return t.tap, nil
+}
+
+// wireTools: the tools of each raw page, in order, each exactly as sent; ok is false when a page has no tools array.
+func wireTools(pages []json.RawMessage) ([]json.RawMessage, bool) {
+	tools := []json.RawMessage{}
+	for _, p := range pages {
+		var page struct {
+			Tools []json.RawMessage `json:"tools"`
+		}
+		if err := json.Unmarshal(p, &page); err != nil || page.Tools == nil {
+			return nil, false
+		}
+		tools = append(tools, page.Tools...)
+	}
+	return tools, true
 }
 
 func str(s string) *string { return &s }
@@ -74,7 +153,8 @@ func run(ms int, command []string, out *result) {
 	cmd := exec.Command(command[0], command[1:]...)
 	cmd.Env = os.Environ()
 	out.Stage = str("connect")
-	cs, err := client.Connect(ctx, &mcp.CommandTransport{Command: cmd, TerminateDuration: 2 * time.Second}, nil)
+	tp := &tap{ids: map[string]bool{}}
+	cs, err := client.Connect(ctx, &tapTransport{inner: &mcp.CommandTransport{Command: cmd, TerminateDuration: 2 * time.Second}, tap: tp}, nil)
 	if err != nil {
 		fail(ctx, out, "init_failed", err)
 		return
@@ -114,7 +194,23 @@ func run(ms int, command []string, out *result) {
 		}
 		cursor = r.NextCursor
 	}
-	out.Tools = tools
+	n := len(tools)
+	out.TypedCount = &n
+	if raw, ok := wireTools(tp.rawPages()); ok && len(tp.rawPages()) == out.Pages {
+		out.Tools = raw
+		out.ToolsSource = str("wire")
+	} else {
+		out.Tools = []json.RawMessage{}
+		for _, t := range tools {
+			b, err := json.Marshal(t)
+			if err != nil {
+				fail(ctx, out, "client_error", err)
+				return
+			}
+			out.Tools = append(out.Tools, b)
+		}
+		out.ToolsSource = str("typed")
+	}
 	out.Outcome = str("listed")
 }
 

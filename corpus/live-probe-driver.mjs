@@ -57,6 +57,11 @@ export function targetOf(command) {
   return m ? m[1] : null;
 }
 
+/** Whether a probe got an answer from the server: an initialize result, or a 2026-07-28 server's refusal of it. */
+export function answered(p) {
+  return !!p && typeof p === 'object' && ((!!p.initialize && typeof p.initialize === 'object') || p.era === 'modern');
+}
+
 /** The value of one run-shard option. */
 const optionOf = (args, flag) => { const i = args.indexOf(flag); return i >= 0 ? args[i + 1] : null; };
 
@@ -73,8 +78,15 @@ export function oracleProbe({ probe, listed, out, install, pins, starts, limits,
     if (!install || !id || full.has(id)) return p;
     const got = listed(p);
     if (!got && unlisted.has(id)) return p;
-    (got ? full : unlisted).add(id);
     const file = join(out, id, got ? 'oracles.json' : 'oracles-unlisted.json');
+    // R-ORC-12: with no list, the clients run only on a server that answered (an initialize result, or the 2026-07-28
+    // refusal of it): one that never started fails initialize for every client too, at about a minute an item. The skip
+    // is recorded, and a later probe of the target (the env one) that gets an answer still runs them.
+    if (!got && !answered(p)) {
+      try { mkdirSync(join(out, id), { recursive: true }); write(file, { format: 'isokron-live-probe-oracles/1', mode: 'skipped', why: 'not_started', probe_listed: false }); } catch (e) { log(`${id}: oracle stage error: ${String(e && e.message).slice(0, 300)}`); }
+      return p;
+    }
+    (got ? full : unlisted).add(id);
     try {
       const start = starts.get(id) ?? now();
       const limit = (limits.get(id) ?? 0) * 1000;
