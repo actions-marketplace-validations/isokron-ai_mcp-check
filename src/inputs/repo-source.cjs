@@ -2594,7 +2594,7 @@
         } else if (rt.exact && !(rt.schema.type === 'object')) tool.outputSchema = { properties: { result: Object.assign({}, rt.schema, { title: 'Result' }) }, required: ['result'], title: fname + 'Output', type: 'object' };
         else if (!rt.exact) exact = false;
       }
-      if (given.annotations !== undefined) { if (given.annotations) tool.annotations = given.annotations; else { exact = false; un.push('annotations'); } }
+      if (given.annotations !== undefined) { if (given.annotations) tool.annotations = given.annotations; if (!given.annotations || given.annotationsPartial) { exact = false; un.push('annotations'); } }
       else if (given.annotationsUnknown) un.push('annotations');
       if (fmcp && given.fastmcpTags !== false) { if (given.fastmcpTags === undefined) tool._meta = { fastmcp: { tags: [] } }; else exact = false; }
       tool._unreadable = un;
@@ -2606,20 +2606,32 @@
       if (kw.name !== undefined) { const n = nameOf(kw.name); g.name = n; if (!n) g.nameUnknown = true; }
       if (kw.title !== undefined) { const v = exprVal(kw.title); if (v && typeof v.value === 'string') g.title = v.value; }
       if (kw.description !== undefined) { const v = exprVal(kw.description); if (v && typeof v.value === 'string') { g.description = v.value; if (v.partial) g.descriptionPartial = true; } else { g.description = null; g.descriptionLiterals = pyLiterals(kw.description); lose(g.descriptionLiterals); } }
-      if (kw.annotations !== undefined) { const a = pyAnnotationsValue(kw.annotations); g.annotations = a; }
+      if (kw.annotations !== undefined) { const a = pyAnnotationsValue(kw.annotations); g.annotations = a && a.value; if (a && a.partial) g.annotationsPartial = true; }
       else if (['read_only_hint', 'destructive_hint', 'idempotent_hint', 'open_world_hint'].some((k) => kw[k] !== undefined)) g.annotationsUnknown = true;
       if (kw.structured_output !== undefined && /^False$/.test(kw.structured_output.trim())) g.structured = false;
       if (kw.tags !== undefined) g.fastmcpTags = null;
       return g;
     };
-    // keys as written under SDK 1.x, which keeps snake_case kwargs as extra fields; SDK 2.x lists them in camelCase
-    const camel = opts.sdk && opts.sdk.pyMajor >= 2;
+    // The keys as the installed SDK serialises them (R-RD-40): 1.x keeps snake_case kwargs as extra fields, as written;
+    // 2.x lists its snake_case fields under their camelCase aliases and drops unknown keys. With the major unknown, a
+    // snake_case hint has no knowable wire key: it is left out and the tool's annotations are marked not readable.
+    // Without a major from the repository's manifests, the file's own SDK imports decide when they can (pySdkImports).
+    const pyMajor = opts.sdk && Number.isInteger(opts.sdk.pyMajor) ? opts.sdk.pyMajor : pySdkImports(src);
     const unresolvedText = (line, g) => { const o = { line }; const d = typeof g.description === 'string' ? g.description : g.descriptionLiterals; if (d) o.description = d; if (typeof g.title === 'string') o.title = g.title; return o; };
+    const PY_HINT_SNAKE = /^(read_only|destructive|idempotent|open_world)_hint$/;
+    const PY_ANNOTATION_KEYS = ['title', 'readOnlyHint', 'destructiveHint', 'idempotentHint', 'openWorldHint'];
     const pyAnnotationsValue = (text) => {
       const v = exprVal(text);
-      let a = v && v.value && typeof v.value === 'object' && !Array.isArray(v.value) ? v.value : pyAnnotations(text);
-      if (a && camel) { const o = {}; Object.keys(a).forEach((k) => { o[/^(read_only|destructive|idempotent|open_world)_hint$/.test(k) ? k.replace(/_(\w)/g, (x, c) => c.toUpperCase()) : k] = a[k]; }); a = o; }
-      return a || null;
+      const a = v && v.value && typeof v.value === 'object' && !Array.isArray(v.value) ? v.value : pyAnnotations(text);
+      if (!a) return null;
+      if (pyMajor === 1) return { value: a, partial: false };
+      const o = {}; let partial = false;
+      Object.keys(a).forEach((k) => {
+        if (PY_HINT_SNAKE.test(k)) { if (pyMajor === null) { if (!partial && opts.pyStats) opts.pyStats.snakeHintsUnknown++; partial = true; return; } o[k.replace(/_(\w)/g, (x, c) => c.toUpperCase())] = a[k]; return; }
+        if (pyMajor !== null && !PY_ANNOTATION_KEYS.includes(k)) return;
+        o[k] = a[k];
+      });
+      return { value: Object.keys(o).length ? o : null, partial };
     };
     // Tool dicts in one logical line (R-RD-01): a dict whose own keys include "name" (a string the reader can work out) and
     // "inputSchema" is a tool as a hand-rolled server lists it, wherever it stands (a TOOLS list, a return value, a
@@ -2818,7 +2830,7 @@
           if (sv && sv.value !== PY_SKIP && sv.value && typeof sv.value === 'object' && !Array.isArray(sv.value)) tool.inputSchema = sv.value;
           else { tool.inputSchema = { type: 'object' }; un.push('inputSchema'); }
           if (a.kw.outputSchema !== undefined) { const ov = pyValue(t, a.kw.outputSchema, ctx); if (ov.value && ov.value !== PY_SKIP && typeof ov.value === 'object') tool.outputSchema = ov.value; }
-          if (g.annotations !== undefined) { if (g.annotations) tool.annotations = g.annotations; else un.push('annotations'); }
+          if (g.annotations !== undefined) { if (g.annotations) tool.annotations = g.annotations; if (!g.annotations || g.annotationsPartial) un.push('annotations'); }
           tool._unreadable = un;
           // NAME = Tool(...) at module level is a declaration: kept when something refers to NAME (markConditionals)
           const bm = l.indent === 0 ? /^([A-Za-z_]\w*)\s*(?::[^=]+)?=\s*(?:[\w.]+\.)?Tool\s*\(/.exec(l.text) : null;
@@ -2861,7 +2873,7 @@
           const name = given.name || fnRef;
           const tool = { name, inputSchema: { type: 'object' } }; const un = ['inputSchema'];
           if (typeof given.description === 'string') tool.description = given.description; else { if (given.descriptionLiterals) tool.description = given.descriptionLiterals.slice(0, MAX_STR); un.push('description'); }
-          if (given.annotations) tool.annotations = given.annotations; else un.push('annotations');
+          if (given.annotations) tool.annotations = given.annotations; if (!given.annotations || given.annotationsPartial) un.push('annotations');
           tool._unreadable = un;
           add(tool, l.line, { server: dotted && fn !== 'from_function' ? owner : null, fn: fnRef });
         }
@@ -3135,6 +3147,118 @@
 
   // ------------------------------------------------------------ SDK detection, shared constants, whole-repository analysis
   const META_FILE = /(^|\/)(package\.json|package-lock\.json|pyproject\.toml|requirements[^/]*\.txt|uv\.lock)$/;
+  // The Python SDK (mcp) majors released, and the one an unbounded requirement installs today (2.3.0, November 2026).
+  // ToolAnnotations under 1.x has camelCase fields and keeps other keyword arguments as extra fields, as written: a
+  // snake_case read_only_hint stays read_only_hint on the wire. Under 2.x the fields are snake_case with camelCase
+  // aliases (serialised camelCase) and unknown keys are ignored. fastmcp 4.x needs mcp 2.x; fastmcp 1.x to 3.x need 1.x.
+  const PY_MCP_MAJORS = [1, 2];
+  const PY_FASTMCP_MAJORS = [1, 2, 3, 4];
+  const pyMcpOfFastmcp = (m) => (m >= 4 ? 2 : 1);
+  // The majors a version specifier allows, of `majors`: PEP 440 (">=1.9,<2", "~=1.9", "==2.*", "!=1.10") and Poetry
+  // ("^1.9", "~1.9", "1.9.*", "*"). An empty specifier allows every major. null when the specifier cannot be read.
+  function specMajors(spec, majors) {
+    let allowed = majors.slice();
+    const s = String(spec == null ? '' : spec).replace(/^\(|\)$/g, '').replace(/\s+/g, '');
+    if (!s || s === '*') return allowed;
+    for (const part of s.split(',')) {
+      if (!part) continue;
+      const m = /^(===|==|~=|!=|<=|>=|<|>|\^|~|=)?v?(\d+)(?:\.(\d+|\*))?(?:\.(\d+|\*))?(?:[.\w+!-]*)$/.exec(part);
+      if (!m) return null;
+      const op = m[1] || '=='; const M = Number(m[2]);
+      const zeroRest = (m[3] === undefined || m[3] === '0') && (m[4] === undefined || m[4] === '0');
+      const ok = op === '!=' ? () => true : op === '>=' || op === '>' ? (x) => x >= M : op === '<' ? (x) => (zeroRest ? x < M : x <= M) : op === '<=' ? (x) => x <= M : (x) => x === M;
+      allowed = allowed.filter(ok);
+    }
+    return allowed;
+  }
+  // The requirement specifiers of one distribution in a pyproject.toml (PEP 621 dependencies and optional-dependencies,
+  // PEP 735 dependency-groups, Poetry dependency tables) or a requirements file: [spec], "" for no specifier. Keywords,
+  // classifiers and other arrays are not requirements.
+  const pyDistName = (n) => String(n).toLowerCase().replace(/[-_.]+/g, '-');
+  function pyReqSpecs(path, text, dist) {
+    const out = [];
+    const want = pyDistName(dist);
+    const req = (s) => { const m = /^\s*([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]*\])?\s*([^;@]*?)\s*(?:;.*)?$/.exec(s); if (m && pyDistName(m[1]) === want) out.push(m[2]); };
+    if (/(^|\/)requirements[^/]*\.txt$/.test(path)) { text.split('\n').forEach((l) => { const x = l.replace(/(^|\s)#.*$/, ''); if (!/^\s*-/.test(x)) req(x); }); return out; }
+    if (!/(^|\/)pyproject\.toml$/.test(path)) return out;
+    let section = '';
+    const strings = (body) => { const re = /"((?:[^"\\\n]|\\.)*)"|'([^'\n]*)'/g; let m; while ((m = re.exec(body))) req(m[1] !== undefined ? m[1] : m[2]); };
+    const lines = text.split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      const l = lines[i];
+      const h = /^\s*\[\s*([^\]]+?)\s*\]\s*(#.*)?$/.exec(l);
+      if (h && !/^\s*\[\[/.test(l)) { section = h[1].replace(/\s+/g, ''); continue; }
+      const poetry = /^tool\.poetry\.(?:(?:group\.[^.]+\.)?dependencies|dev-dependencies)$/.test(section);
+      const kv = /^\s*("?)([A-Za-z0-9][A-Za-z0-9._-]*)\1\s*=\s*(.*)$/.exec(l);
+      if (!kv) continue;
+      if (poetry) {
+        if (pyDistName(kv[2]) !== want) continue;
+        const v = /^["']([^"']*)["']/.exec(kv[3]) || /\bversion\s*=\s*["']([^"']*)["']/.exec(kv[3]);
+        if (v) out.push(v[1]); else if (/^\{/.test(kv[3])) out.push('');
+        continue;
+      }
+      const isReqArray = (section === 'project' && kv[2] === 'dependencies') || section === 'project.optional-dependencies' || section === 'dependency-groups';
+      if (!isReqArray || !/^\[/.test(kv[3].trim())) continue;
+      // the array, to its closing bracket outside a string (extras such as mcp[cli] are inside strings)
+      let body = ''; let depth = 0; let q = null; let done = false;
+      for (let j = i; j < lines.length && !done; j++) {
+        const s = j === i ? kv[3] : lines[j];
+        for (let k = 0; k < s.length; k++) {
+          const c = s[k];
+          if (q) { if (c === '\\' && q === '"') { body += c + (s[k + 1] || ''); k++; continue; } if (c === q) q = null; body += c; continue; }
+          if (c === '#') break;
+          if (c === '"' || c === "'") { q = c; body += c; continue; }
+          if (c === '[') depth++;
+          if (c === ']') { depth--; if (depth === 0) { done = true; i = j; break; } }
+          body += c;
+        }
+        body += '\n';
+      }
+      strings(body);
+    }
+    return out;
+  }
+  // SDK modules of one major only: mcp.server.mcpserver (2.x) and mcp.server.fastmcp (1.x, gone in 2.x).
+  const PY_V2_IMPORT = /^[ \t]*(?:from[ \t]+mcp\.server\.mcpserver\b|import[ \t]+mcp\.server\.mcpserver\b)/m;
+  const PY_V1_IMPORT = /^[ \t]*(?:from[ \t]+mcp\.server\.fastmcp\b|import[ \t]+mcp\.server\.fastmcp\b)/m;
+  /** The major one Python file's SDK imports imply: 1, 2, or null (neither module, or both). */
+  function pySdkImports(text) {
+    if (typeof text !== 'string') return null;
+    const v1 = PY_V1_IMPORT.test(text); const v2 = PY_V2_IMPORT.test(text);
+    return v1 === v2 ? null : v2 ? 2 : 1;
+  }
+  // The Python SDK major a repository's server runs on: { major, from } or { major: null, why }. A uv.lock entry for
+  // mcp decides; else the highest major allowed by every declared requirement on mcp and fastmcp (a resolver installs
+  // the newest version allowed), narrowed by the SDK modules the source imports (mcp.server.mcpserver exists only in
+  // 2.x, mcp.server.fastmcp only in 1.x). Nothing declared or imported, or constraints that allow no major: null.
+  function pySdkMajor(entries) {
+    const skip = (p) => /(^|\/)(node_modules|\.venv|venv|site-packages)\//.test(p);
+    for (const [p, text] of entries) {
+      if (typeof text !== 'string' || skip(p) || !/(^|\/)uv\.lock$/.test(p)) continue;
+      const m = /\[\[package\]\]\s*\nname\s*=\s*"mcp"\s*\nversion\s*=\s*"(\d+)/.exec(text);
+      if (m) return { major: Number(m[1]), from: 'lock' };
+    }
+    let allowed = PY_MCP_MAJORS.slice(); let declared = false; let unreadable = false; const from = [];
+    for (const [p, text] of entries) {
+      if (typeof text !== 'string' || skip(p) || !/(^|\/)(pyproject\.toml|requirements[^/]*\.txt)$/.test(p)) continue;
+      pyReqSpecs(p, text, 'mcp').forEach((s) => { const a = specMajors(s, PY_MCP_MAJORS); declared = true; if (!a) { unreadable = true; return; } allowed = allowed.filter((x) => a.includes(x)); from.push('mcp'); });
+      pyReqSpecs(p, text, 'fastmcp').concat(pyReqSpecs(p, text, 'fastmcp-slim')).forEach((s) => {
+        const a = specMajors(s, PY_FASTMCP_MAJORS); declared = true; if (!a) { unreadable = true; return; }
+        const via = Array.from(new Set(a.map(pyMcpOfFastmcp))); allowed = allowed.filter((x) => via.includes(x)); from.push('fastmcp');
+      });
+    }
+    let v1 = false; let v2 = false;
+    for (const [p, text] of entries) {
+      if (typeof text !== 'string' || skip(p) || !/\.py$/.test(p)) continue;
+      if (PY_V2_IMPORT.test(text)) v2 = true;
+      if (PY_V1_IMPORT.test(text)) v1 = true;
+    }
+    if (v2 && !v1) { allowed = allowed.filter((x) => x >= 2); from.push('imports'); } else if (v1 && !v2) { allowed = allowed.filter((x) => x < 2); from.push('imports'); }
+    if (unreadable) return { major: null, why: 'a requirement on mcp or fastmcp could not be read' };
+    if (!declared && v1 === v2) return { major: null, why: 'no requirement on mcp or fastmcp and no SDK module import says which Python SDK major is installed' };
+    if (!allowed.length) return { major: null, why: 'the requirements on mcp and fastmcp allow no Python SDK major together' };
+    return { major: Math.max(...allowed), from: Array.from(new Set(from)).join('+') || 'imports' };
+  }
   // Which SDK a repository builds on, from its manifests. Imports in a file win over this (see tsFlavour, pyFlavour).
   // Returns { kind: 'v1' | 'v2' | null, version, zod, py: 'sdk' | 'fastmcp' | null }. A lock file's exact version beats a range.
   function detectSdk(files) {
@@ -3170,14 +3294,11 @@
       if (/^[ \t]*["']?mcp\b/im.test(text) || /["']mcp[\s>=<~!;\[]/i.test(text)) mcp = true;
     });
     out.py = fast && !mcp ? 'fastmcp' : fast || mcp ? 'sdk' : null;
-    // The Python SDK's major version (2.x serialises snake_case ToolAnnotations fields in camelCase): uv.lock, then requirements.
-    entries.forEach(([p, text]) => {
-      if (out.pyMajor || typeof text !== 'string' || /(^|\/)(node_modules|\.venv|venv)\//.test(p)) return;
-      let m = null;
-      if (/(^|\/)uv\.lock$/.test(p)) m = /\[\[package\]\]\s*\nname\s*=\s*"mcp"\s*\nversion\s*=\s*"(\d+)/.exec(text);
-      else if (/(^|\/)(pyproject\.toml|requirements[^/]*\.txt)$/.test(p)) m = /["'\s]mcp(?:\[[^\]]*\])?\s*(?:>=|==|~=|>)\s*(\d+)/.exec('\n' + text);
-      if (m) out.pyMajor = Number(m[1]);
-    });
+    // The Python SDK's major version, which decides the wire keys of snake_case ToolAnnotations fields (R-RD-40).
+    if (entries.some(([p]) => /\.py$|(^|\/)(pyproject\.toml|requirements[^/]*\.txt|uv\.lock)$/.test(p))) {
+      const pm = pySdkMajor(entries);
+      if (pm.major) { out.pyMajor = pm.major; out.pyMajorFrom = pm.from; } else if (pm.why) out.pyMajorUnknown = pm.why;
+    }
     return out;
   }
 
@@ -3993,12 +4114,13 @@
     const pyChanged = (p, name) => { const k = p + '\u0000' + name; if (!pyChangedMemo.has(k)) pyChangedMemo.set(k, pyListChangedElsewhere(readable, p, name)); return pyChangedMemo.get(k); };
     const found = []; const byName = new Set(); const firstPath = new Map();
     const dupes = []; const unresolved = []; const overBudget = [];
+    const pyStats = { snakeHintsUnknown: 0 };
     const hostPlugins = [];
     srcList.forEach(([p, t]) => {
       let ts = [];
       const js = /\.(ts|mts|cts|js|mjs|cjs)$/.test(p);
       try {
-        ts = extractFromFile(p, t, js ? { sdk: sdkFor(p), consts: mods.seedFor(p), tokens: mods.tokens(p), wrappers: mods.importedWrappers(p), frozenImport: (name) => mods.frozenImport(p, name), classTools: bases, workBudget: opts.workBudget } : { sdk, pyConsts, pyRegistrars: pyRegs, pyTemplates: pyTpl, pyChangedElsewhere: (name) => pyChanged(p, name) });
+        ts = extractFromFile(p, t, js ? { sdk: sdkFor(p), consts: mods.seedFor(p), tokens: mods.tokens(p), wrappers: mods.importedWrappers(p), frozenImport: (name) => mods.frozenImport(p, name), classTools: bases, workBudget: opts.workBudget } : { sdk, pyConsts, pyRegistrars: pyRegs, pyTemplates: pyTpl, pyChangedElsewhere: (name) => pyChanged(p, name), pyStats });
       } catch (e) { ts = []; ts.unresolved = [{ line: null }]; } // a file the reader fails on counts as one unread registration
       // another agent host's plugin: named, never listed (R-RD-05)
       const host = js ? hostPluginModule(t) : null;
@@ -4013,6 +4135,9 @@
       (ts.unresolved || []).forEach((u) => unresolved.push(Object.assign({ path: p }, u)));
       (ts.overBudget || []).forEach((u) => overBudget.push(Object.assign({ path: p }, u)));
       ts.forEach((x) => {
+        // a name with a part the reader could not work out (shown as "…", never a character of a tool name) is not a
+        // name: the registration counts as unresolved (R-RD-41)
+        if (x.tool && typeof x.tool.name === 'string' && x.tool.name.indexOf('\u2026') >= 0) { unresolved.push({ path: p, line: x.line || null }); return; }
         // a FastMCP server mounted under a prefix lists its tools as <prefix>_<name>
         if (x.server && mounts.has(x.server)) { x.tool = Object.assign({}, x.tool, { name: mounts.get(x.server) + '_' + x.tool.name }); x.prefix = mounts.get(x.server); }
         // a class tool belongs with the code that registers it, unless it sits in test, mock or example code
@@ -4028,6 +4153,8 @@
     found.forEach((f) => { f.marks = marks.get(f); f.excluded = f.marks.some((m) => m.exclude); });
     // Never return an empty list because of exclusions: the marks stay, the exclusion does not apply.
     if (found.length && found.every((f) => f.excluded)) found.forEach((f) => { f.excluded = false; f.marks.forEach((m) => { m.exclude = false; }); });
+    // snake_case ToolAnnotations hints whose wire keys depend on an SDK major the reader could not work out (R-RD-40)
+    if (pyStats.snakeHintsUnknown) fastapiNotes = fastapiNotes.concat(['snake_case ToolAnnotations hints (read_only_hint, destructive_hint, idempotent_hint, open_world_hint) left out where they are set (' + pyStats.snakeHintsUnknown + ' place' + (pyStats.snakeHintsUnknown === 1 ? '' : 's') + ') and those annotations marked not readable: the Python SDK keeps them snake_case under 1.x and lists them camelCase under 2.x, and ' + (sdk.pyMajorUnknown || 'the installed major is not known')]);
     return { found, notes: fastapiNotes, tools: found.filter((f) => !f.excluded), excluded: found.filter((f) => f.excluded), sdk, plan, files: srcList.length, candidates: candidates.length, read: readable.length, unresolved: unresolved.length, unresolvedList: unresolved, overBudget, hostPlugins };
   }
 
@@ -4333,6 +4460,31 @@
       if (language && ctorOnly.length >= 2) candidates[candidates.length - 1].notes = [ctorOnly.length + ' ' + language + ' servers are started from ' + ctorOnly.slice(0, 4).map((d) => d || '.').join(', ') + (ctorOnly.length > 4 ? ' and more' : '') + ' and share these tools; each may register only part of them (this list is their union)'];
       if (an.notes && an.notes.length) { const cand = candidates[candidates.length - 1]; cand.notes = (cand.notes || []).concat(an.notes.slice(0, 8)); }
     }
+    // A committed list is this server's tools/list only when it lists every tool the source registers (R-RD-41). A list
+    // that leaves out registered tools (a backend catalog the server searches or calls into, a list of another program)
+    // is not graded in place of the source's list: it ranks after it, and the source candidate says why.
+    const srcCand = found.length ? candidates[candidates.length - 1] : null;
+    if (list && srcCand && srcCand.kind === 'source') {
+      const listed = new Set(list.tools.map((t) => t && t.name));
+      const missing = srcCand.tools.map((t) => t.name).filter((n) => !listed.has(n));
+      if (missing.length) {
+        list.notServerList = true;
+        const shown = missing.slice(0, 4).join(', ') + (missing.length > 4 ? ' and ' + (missing.length - 4) + ' more' : '');
+        const note = 'committed list ' + list.path + ' (' + list.tools.length + ' tools) not used: it does not list ' + missing.length + ' of the ' + srcCand.tools.length + ' tools the source registers (' + shown + '), so it is not taken for this server\'s tools/list';
+        srcCand.notes = (srcCand.notes || []).concat([note]);
+        hints.listNotUsed = { path: list.path, tools: list.tools.length, sourceTools: srcCand.tools.length, missing: missing.length };
+      }
+    }
+    // A FastMCP tool search transform (fastmcp 3.1 and later) replaces the listing: tools/list shows its search and call
+    // tools (and any always_visible ones), built by fastmcp, not the tools registered. Those cannot be read here, so the
+    // registered tools are not graded as the list (R-RD-41).
+    if (srcCand && srcCand.kind === 'source') {
+      const st = searchTransformAt(readFiles, (p) => !servers.keep || servers.keep.has(servers.rootOf(p)));
+      if (st) {
+        const prev = hints.incomplete || { candidates: 0, files: [] };
+        hints.incomplete = Object.assign({}, prev, { candidates: prev.candidates + srcCand.tools.length, files: Array.from(new Set(prev.files.concat([st.path]))), reasons: (prev.reasons || []).concat(['a FastMCP tool search transform (' + st.name + ', line ' + st.line + ') lists search tools, not these']) });
+      }
+    }
     // A snapshot counts as this repository's exact list only when it names this repository's server. A snapshot of
     // another server (one this repository uses or tests against) is never chosen over tools read from source; with
     // no such tools, a single one is used and marked foreign; several are not used at all.
@@ -4344,7 +4496,7 @@
     if (!found.length && foreign.length === 1) candidates.push(Object.assign(foreign[0], { foreign: true }));
     hints.ownNames = Array.from(own);
     const rank = { exact: 0, literal: 1, derived: 2, names: 3 };
-    candidates.sort((a, b) => (a.foreign ? 1 : 0) - (b.foreign ? 1 : 0) || rank[a.fidelity] - rank[b.fidelity] || b.tools.length - a.tools.length);
+    candidates.sort((a, b) => (a.foreign ? 1 : 0) - (b.foreign ? 1 : 0) || (a.notServerList ? 1 : 0) - (b.notServerList ? 1 : 0) || rank[a.fidelity] - rank[b.fidelity] || b.tools.length - a.tools.length);
     const langs = otherLanguages(paths);
     if (langs.length) hints.otherLanguages = langs;
     if (an.unresolved) hints.unresolvedNames = an.unresolved;
@@ -4352,6 +4504,32 @@
     if (an.overBudget && an.overBudget.length) { const prev = hints.incomplete || { candidates: 0, files: [] }; hints.incomplete = { candidates: prev.candidates + an.overBudget.length, files: Array.from(new Set(prev.files.concat(an.overBudget.map((x) => x.path)))) }; const why = Array.from(new Set(an.overBudget.map((x) => x.why).filter(Boolean))); if (why.length) hints.incomplete.reasons = why; }
     const lr = hints.languageRead || { files: 0, total: 0 };
     return { scanned: { exact: plan.exact.length, manifests: plan.manifests.length, source: an.files + lr.files, candidates: an.candidates + lr.files, read: an.read + lr.files, sourceTotal: plan.src.length + lr.total, capped: plan.src.length > maxRead || an.candidates > an.files, budgetHit: !!(o.state && o.state.budgetHit) }, candidates, best: candidates[0] || null, hints };
+  }
+
+  // The first FastMCP tool search transform a server's Python files apply: { path, line, name } or null. A class of
+  // fastmcp.server.transforms.search (RegexSearchTransform, BM25SearchTransform, SearchTransform) or of
+  // fastmcp.experimental.transforms.jev_search, or a subclass of one, given to FastMCP(transforms=[...]) or add_transform.
+  const SEARCH_TRANSFORM_MOD = /^[ \t]*from[ \t]+fastmcp\.(?:server\.transforms(?:\.search(?:\.\w+)?)?|experimental\.transforms(?:\.jev_search)?)[ \t]+import[ \t]+\(?([^)\n]*(?:\n[^)\n]*){0,20})\)?/gm;
+  function searchTransformAt(files, inServer) {
+    const classes = new Set(); const uses = [];
+    files.forEach((t, p) => {
+      if (!/\.py$/.test(p) || typeof t !== 'string' || !inServer(p) || t.indexOf('SearchTransform') < 0) return;
+      SEARCH_TRANSFORM_MOD.lastIndex = 0; let m;
+      while ((m = SEARCH_TRANSFORM_MOD.exec(t))) m[1].split(/[,\s]+/).forEach((x) => { const n = x.trim(); if (/^\w*SearchTransform$/.test(n)) classes.add(n); });
+      uses.push([p, t]);
+    });
+    if (!classes.size) return null;
+    // subclasses of a search transform class, in any of those files
+    let grew = true;
+    while (grew) { grew = false; uses.forEach(([, t]) => { const re = /^[ \t]*class[ \t]+(\w+)[ \t]*\(([^)]*)\)/gm; let m; while ((m = re.exec(t))) if (!classes.has(m[1]) && m[2].split(',').some((b) => classes.has(b.trim().split('.').pop()))) { classes.add(m[1]); grew = true; } }); }
+    for (const [p, t] of uses) {
+      if (!/\btransforms[ \t]*=|\.add_transform[ \t]*\(/.test(t)) continue;
+      for (const c of classes) {
+        const re = new RegExp('\\b' + c + '[ \\t]*\\(', 'g'); let m;
+        while ((m = re.exec(t))) { if (/^[ \t]*class[ \t]/.test(t.slice(t.lastIndexOf('\n', m.index) + 1, m.index))) continue; return { path: p, line: t.slice(0, m.index).split('\n').length, name: c }; }
+      }
+    }
+    return null;
   }
 
   // The tools as they are graded: what could not be read is taken out of each tool and listed per part

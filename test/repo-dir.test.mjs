@@ -97,7 +97,7 @@ test('fromDirectory: build output and vendor are read only when no source file d
   assert.equal(r.best.tools[0].inputSchema.additionalProperties, false, 'zod 3: closed objects, from the root package.json');
 });
 
-test('fromDirectory: exclude and skipIfContains leave out folders such as an earlier run\'s results; a committed list wins', async () => {
+test('fromDirectory: exclude and skipIfContains leave out folders such as an earlier run\'s results; a committed list wins when it lists the registered tools', async () => {
   const dir = copy('ts-zod');
   mkdirSync(join(dir, 'mcp-check-results')); mkdirSync(join(dir, 'old-results'));
   const stale = JSON.stringify({ tools: [{ name: 'stale', inputSchema: { type: 'object' } }] });
@@ -111,7 +111,12 @@ test('fromDirectory: exclude and skipIfContains leave out folders such as an ear
   assert.equal(unguarded.best.kind, 'source', 'without the guards, the two leftover tools-list.json files are several committed lists: neither is picked');
   assert.deepEqual(unguarded.hints.lists.map((x) => x.path).sort(), ['mcp-check-results/tools-list.json', 'old-results/tools-list.json']);
   writeFileSync(join(dir, 'old-results', 'tools-list.json'), '[]');
-  assert.equal((await R.fromDirectory(dir)).best.kind, 'committed', 'one committed list still ranks first');
+  const one = await R.fromDirectory(dir);
+  assert.equal(one.best.kind, 'source', 'a committed list that leaves out the registered tools is not the server\'s list (R-RD-41)');
+  assert.equal(one.candidates[1].kind, 'committed');
+  assert.equal(one.candidates[1].notServerList, true);
+  writeFileSync(join(dir, 'mcp-check-results', 'tools-list.json'), JSON.stringify({ tools: ['search_notes', 'delete_note', 'stale'].map((name) => ({ name, inputSchema: { type: 'object' } })) }));
+  assert.equal((await R.fromDirectory(dir)).best.kind, 'committed', 'one committed list that lists every registered tool still ranks first');
 });
 
 test('fromDirectory: a monorepo package reads the SDK version from the workspace root', async () => {
