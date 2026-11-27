@@ -251,7 +251,7 @@ bundle's sha256. live-probe grades it as scan-static grades a subject (`usableLi
 lanes give the same static grade for the same commit. A names-only, several-server, incomplete or empty read is not
 graded: `static_graded: false` with `static_skip` (`names_only`, `multiple_servers`, `reader_limit`, `no_tools`). An
 answer from a bundle whose sha256 is not this checkout's is not used (`reader_mismatch`, R-LP-78), nor a missing one
-(`reader_missing`). `static_reader` gives the first 12 hex digits of the bundle id.
+(`reader_missing`). `static_reader` gives the first 12 hex digits of the bundle id. The id is reported by the bundle itself, inside a container we trust: the check catches drift and a missing bundle, not tampering.
 
 Subject text (tool names and descriptions, server info, package names, host names a server looked up) is kept under
 `raw/`. Outside it, a subject's string appears only when a strict pattern shows it is plain and holds no word ingest

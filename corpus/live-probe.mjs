@@ -1090,9 +1090,9 @@ export const READER_ID = StaticRead.readerId();
 const STATIC_SKIP = { none: 'no_tools', names: 'names_only', multiple: 'multiple_servers', incomplete: 'reader_limit' };
 
 /**
- * The static side, read and graded as scan-static reads and grades a subject (R-LP-75): the scan of mcp-check's own
+ * The static side, read and graded as scan-static reads and grades a subject (R-LP-77): the scan of mcp-check's own
  * reader (static.json `reader`, from sandbox/static.mjs --reader), never the sandbox's vendored candidates; a scan from
- * another reader is not used (R-LP-76). { skip } when there is no list to grade, else { candidate, grade }.
+ * another reader is not used (R-LP-78). { skip } when there is no list to grade, else { candidate, grade }.
  */
 export function staticAnswer(stat, readerId = READER_ID) {
   const sr = stat && isObj(stat.reader) ? stat.reader : null;

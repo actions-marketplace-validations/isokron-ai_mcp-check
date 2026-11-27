@@ -135,7 +135,7 @@ export async function removeQuietly(command, opts) {
 }
 
 /**
- * mcp-check's own source reader for the sandbox's static step (corpus/static-read.cjs, R-LP-75): its files copied into
+ * mcp-check's own source reader for the sandbox's static step (corpus/static-read.cjs, R-LP-77): its files copied into
  * a fresh folder, which the sandbox driver puts in its read-only tools volume. Returns { dir, id }.
  */
 export function readerBundle(base = tmpdir()) {

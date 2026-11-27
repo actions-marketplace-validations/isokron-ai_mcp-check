@@ -8,7 +8,7 @@
  * corpus/live-probe-driver.mjs copies these files (bundleFiles) into a folder that mcp-surface-corpus's driver puts in
  * its read-only tools volume as reader/; the sandbox's static step (sandbox/static.mjs --reader) requires this file
  * inside its container (no network) and hands it every file of the archive. The answer carries reader_id, the sha256 of
- * the bundle: live-probe compares it with its own and does not grade a list another reader read (R-LP-76).
+ * the bundle: live-probe compares it with its own and does not grade a list another reader read (R-LP-78).
  *
  * The archive is served to fromGitHub as GitHub serves a commit: the recursive tree (and one tree per folder on the way
  * to a subfolder), file sizes, and raw files. Differences from GitHub itself: symbolic links are not listed, a listing
@@ -19,7 +19,7 @@ const { existsSync, readFileSync } = require('node:fs');
 const path = require('node:path');
 
 const FORMAT = 'isokron-live-probe-static/1';
-// The reader's modules: repo-source.cjs and every module it requires (test: R-LP-76 keeps this list whole).
+// The reader's modules: repo-source.cjs and every module it requires (test: R-LP-78 keeps this list whole).
 const READER_FILES = ['repo-source.cjs', 'repo-go.cjs', 'repo-rust.cjs', 'repo-csharp.cjs', 'repo-effects.cjs'];
 const SELF = 'static-read.cjs';
 const LIST_FILE_MAX = 1500000; // GitHub lists a blob of this size or more, and the reader does not read it
