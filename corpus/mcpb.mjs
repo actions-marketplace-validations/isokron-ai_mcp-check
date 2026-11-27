@@ -341,7 +341,10 @@ export function bundleLaunch({ manifest, names, members }, { url, sha256, buf, t
   }
   const c = cmd.value;
   const base = { kind: 'mcpb', url, sha256, workdir: '.', ...(Object.keys(env).length ? { env } : {}) };
-  const scriptIn = (a) => { const rel = inBundle(a); return rel && rel !== '.' ? rel : null; };
+  // A run of slashes names the same file as one (`${__dirname}/server//index.js` is server/index.js): every path below is
+  // compared with the bundle's names after it is collapsed, so a file it holds never reads as missing (R-LP-72).
+  const oneSlash = (a) => (typeof a === 'string' ? a.replace(/\/{2,}/g, '/') : a);
+  const scriptIn = (a) => { const rel = inBundle(oneSlash(a)); return rel && rel !== '.' ? rel : null; };
   // Whether the bundle holds what a path names: the file, or what a runtime resolves it to (node adds .js, .mjs, .cjs or
   // .json, or takes a folder's index or package.json main; python runs a folder's __main__.py; Windows adds .exe). A
   // name that differs only in case runs on the case-insensitive file systems of macOS and Windows: not here, and no
@@ -359,7 +362,8 @@ export function bundleLaunch({ manifest, names, members }, { url, sha256, buf, t
   // author's machine, and a relative one the bundle does not hold is resolved against a working folder the client
   // chooses: not ours to start, never the bundle's crash (R-LP-72, reviews of 27 Nov). A package name (-r dotenv/config)
   // is the bundle's own dependency, as for any import.
-  const checkPath = (p, what, { optional = false } = {}) => {
+  const checkPath = (p0, what, { optional = false } = {}) => {
+    const p = oneSlash(p0);
     if (p === BUNDLE_DIR) return;
     const rel = scriptIn(p);
     if (rel) { if (optional && !holds(rel)) throw fail('bundle_runtime_unsupported', { why: `${what}_missing` }); needFile(rel); return; }
@@ -376,9 +380,21 @@ export function bundleLaunch({ manifest, names, members }, { url, sha256, buf, t
       let v = l.value;
       if (l.module) {
         if (/^(node|data):/.test(v)) continue;
-        if (/^file:/i.test(v)) { try { v = decodeURIComponent(new URL(v).pathname); } catch { throw fail('bundle_runtime_unsupported', { why: 'option_outside' }); } }
+        // The user's home (`~/h.js`, which no shell expands here) is a file of the author's machine.
+        if (v.startsWith('~')) throw fail('bundle_runtime_unsupported', { why: 'option_outside' });
+        const drive = /^[A-Za-z]:[\\/]/.test(v);
+        if (!drive && /^file:/i.test(v)) {
+          let u;
+          try { u = new URL(v); } catch { throw fail('bundle_runtime_unsupported', { why: 'option_outside' }); }
+          // A file: URL with a host (file://host/share/h.js) names another machine; the path alone would hide it.
+          if (u.host) throw fail('bundle_runtime_unsupported', { why: 'option_outside' });
+          // An encoded slash or backslash would turn into a path separator on decoding: not a name we read as written.
+          if (/%(2f|5c)/i.test(u.pathname)) throw fail('bundle_runtime_unsupported', { why: 'option_unreadable' });
+          try { v = decodeURIComponent(u.pathname); } catch { throw fail('bundle_runtime_unsupported', { why: 'option_unreadable' }); }
+        // Any other scheme (https:, http:, jsr:, npm: ...) is fetched or resolved by a loader we do not run: ours.
+        } else if (!drive && /^[A-Za-z][A-Za-z0-9+.-]*:/.test(v)) throw fail('bundle_runtime_unsupported', { why: 'option_scheme' });
         // A package name (dotenv/config, @scope/pkg): resolved in the bundle's node_modules like any import.
-        else if (!(v.startsWith('/') || v.startsWith('./') || v.startsWith('../') || v === '.' || v === '..' || /^[A-Za-z]:[\\/]/.test(v) || v.includes('\\'))) continue;
+        else if (!(v.startsWith('/') || v.startsWith('./') || v.startsWith('../') || v === '.' || v === '..' || drive || v.includes('\\'))) continue;
       }
       // An env file is often the user's to write (`${__dirname}/.env`): one the bundle does not ship is no fault of it.
       checkPath(v, 'option', { optional: !l.module });
@@ -408,7 +424,7 @@ export function bundleLaunch({ manifest, names, members }, { url, sha256, buf, t
     // A bare name (npx, sh, bash, bun, deno, docker, uvx ...) is a launcher on the user's machine, not a file of the
     // bundle: not ours to start, and no fault of the bundle. A shell stays refused even when the bundle ships one.
     if (LAUNCHERS.has(c.split('/').pop()) || (!c.includes('/') && !names.has(c))) throw fail('bundle_runtime_unsupported', { why: 'launcher' });
-    const rel = c.startsWith('/') ? scriptIn(c) : BUNDLE_PATH.test(c) ? c : null;
+    const rel = c.startsWith('/') ? scriptIn(c) : BUNDLE_PATH.test(oneSlash(c)) ? oneSlash(c) : null;
     if (!rel) throw fail('bundle_runtime_unsupported', { why: 'command' });
     // A binary must be the very file (no runtime resolves it), but one named with an extension (server.exe) or in another
     // case is a build for another platform, and with no linux listed its absence is no fault either.
