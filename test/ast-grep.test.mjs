@@ -142,6 +142,13 @@ test('R-AG-02: registrations whose name cannot be read are unreadable and lower 
   assert.deepEqual([clean.status, clean.confidence, clean.unreadable_count], ['read', 'high', 0]);
 });
 
+test('R-AG-02: servers composed with a prefix (mount, import_server) cap the confidence at low and are not compared: a function\'s name is then not its wire name', needBinary, async () => {
+  const s = await read(join(FIXTURES, 'py-composed'));
+  assert.deepEqual([s.status, s.confidence, s.composition, s.tools.map((t) => t.name)], ['read', 'low', true, ['get_issue']]);
+  const c = compare(s, { status: 'graded', names: ['jira_get_issue'] });
+  assert.deepEqual([c.compared, c.entries, c.why], [false, [], 'oracle_composed_servers']);
+});
+
 test('R-AG-03: a call in a file that is not about MCP, in tests, or in vendored code is not a registration', needBinary, async () => {
   const s = await read(join(FIXTURES, 'ts-sdk'));
   assert.ok(!s.tools.some((t) => t.name === 'not_a_tool' || t.name === 'only_in_tests'));

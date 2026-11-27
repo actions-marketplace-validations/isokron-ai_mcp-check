@@ -21,3 +21,11 @@ id: py-tool-from-function
 language: Python
 rule:
   pattern: Tool.from_function($$$ARGS)
+---
+# Not a registration: FastMCP's mount(prefix, server) and import_server() put another server's tools under a prefix, so a
+# function's own name is then not its wire name. Seen anywhere in the repository, they cap the confidence at low.
+id: py-compose
+language: Python
+rule:
+  kind: call
+  regex: '^[A-Za-z_][\w.]*\.(?:mount|import_server)\('

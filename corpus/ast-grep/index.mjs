@@ -43,6 +43,8 @@ export function readMatches(matches, { root, read = (f) => readFileSync(f), size
     const lang = LANGUAGE_OF_RULE(m.ruleId);
     const fileText = buf.toString('utf8');
     if (!GATE[lang].test(fileText)) { stats.gated_out++; continue; }
+    // FastMCP's mount(prefix, server) and import_server() put other servers' tools under a prefix: a function's own name is then not its wire name
+    if (m.ruleId === 'py-compose') { stats.composition = true; continue; }
     const start = m.range.byteOffset.start;
     const end = m.range.byteOffset.end;
     const rec = extractMatch({
@@ -52,8 +54,6 @@ export function readMatches(matches, { root, read = (f) => readFileSync(f), size
       fileText,
     }, { constants });
     stats.files.add(rel);
-    // FastMCP's mount(prefix, server) and import_server() put other servers' tools under a prefix: a function's own name is then not its wire name
-    if (lang === 'python' && /\.(?:mount|import_server)\s*\(/.test(fileText)) stats.composition = true;
     for (const r of rec) {
       const at = { file: rel, line: m.range.start.line + 1 };
       if (r.site) { sites++; continue; }

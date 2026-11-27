@@ -23,7 +23,7 @@ const git = (cwd, args, { timeoutMs, input = null, env = {} }) => new Promise((r
 /** The source paths to check out: source files outside tests, docs and vendored code, at most `max`, those that look like a server first. */
 export function chooseFiles(listing, { prefix = '', max = MAX_FILES, exclude = EXCLUDED_PATH } = {}) {
   const ext = /\.(?:[cm]?[jt]sx?|py|go|rs|cs)$/;
-  const files = String(listing).split('\n').filter((p) => p && ext.test(p) && p.startsWith(prefix) && !exclude.test(p) && !/[*?\[\]\\\n]|^[#!]/.test(p));
+  const files = String(listing).split('\n').filter((p) => p && ext.test(p) && p.startsWith(prefix) && !exclude.test(p.slice(prefix.length)) && !/[*?\[\]\\\n]|^[#!]/.test(p));
   if (files.length <= max) return files;
   const score = (p) => (/mcp|tool|server/i.test(p) ? 0 : 1);
   return files.sort((x, y) => score(x) - score(y) || x.length - y.length || (x < y ? -1 : 1)).slice(0, max);
