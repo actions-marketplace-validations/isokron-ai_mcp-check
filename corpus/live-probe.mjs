@@ -1749,6 +1749,16 @@ export function toolsOf(rawPages) {
 }
 
 /**
+ * R-LP-87: the sha256 of the JSON array of the live list's tool names, each once, sorted by code unit: exactly the
+ * ast-grep oracle's tool_set_sha256 (corpus/ast-grep/index.mjs), so the two reads and the live list can be compared
+ * by hash (tool-qa's three-way rule). Null when the list has no named tool.
+ */
+export function toolNamesSha256(tools) {
+  const names = [...new Set((Array.isArray(tools) ? tools : []).map((t) => (isObj(t) && typeof t.name === 'string' ? t.name : null)).filter((n) => n !== null))].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  return names.length ? sha256(JSON.stringify(names)) : null;
+}
+
+/**
  * The oracle records the driver wrote for a target (corpus/live-probe-driver.mjs): the one judged (the full stage,
  * else the clients-only one), every record kept for raw/, and their time together. null when there is none.
  */
@@ -1918,7 +1928,7 @@ export function buildItem(item, ctx) {
       }
       result.timing.grade_ms = Date.now() - g0;
       if (g) {
-        result.live = { ...g.summary, config_state: primary === bare ? 'none' : 'dummy', pages: int(primary.lists['tools/list'].pages) };
+        result.live = { ...g.summary, config_state: primary === bare ? 'none' : 'dummy', pages: int(primary.lists['tools/list'].pages), tool_names_sha256: toolNamesSha256(toolsOf(primary.lists['tools/list'].raw_pages)) };
         reader = { listed: true, tool_count: g.summary.tool_count, catalog_hash: g.summary.catalog_hash, names: g.names, tools: toolsOf(primary.lists['tools/list'].raw_pages), pages: int(primary.lists['tools/list'].pages), check_ids: Object.keys(g.summary.check_counts), capabilities: isObj(primary.initialize) && isObj(primary.initialize.capabilities) ? primary.initialize.capabilities : null };
         files['raw/report.json'] = json({ findings: g.report.findings, tool_names: g.names });
         const cmp = compareStatic(g, stat);
