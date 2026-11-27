@@ -1,7 +1,8 @@
 # Loop worker (internal): the scan-static lane of isokron-ai/tool-qa. The tool-qa pump dispatches it with
 # shard_id, attempt_id and items (tool-qa docs/INTERFACES.md, "Worker dispatch"); each item is a public GitHub
-# repository, owner/name, with the run_key and fence its result must quote. corpus/scan-static.mjs reads each
-# repository's tool list from source at the head of its default branch, without running, installing or building
+# repository, owner/name, with the run_key and fence its result must quote, and optionally the commit (sha) its run_key
+# is filed under. corpus/scan-static.mjs reads each repository's tool list from source at that commit, else at the
+# head of its default branch, without running, installing or building
 # anything, and grades it as `mcp-check --repo` does. tool-qa's worker-kit then seals one bundle per item to
 # tool-qa's ingest key and uploads it as result-<attempt_id>-<i>.tar.age. Every item gets a bundle: a subject
 # that could not be graded reports a skip. corpus/README.md ("Loop worker: scan-static") says what a bundle holds.

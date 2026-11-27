@@ -328,14 +328,16 @@ export function parseInputs({ shardId, attemptId, items }) {
     shardId, attemptId,
     items: list.map((x, i) => {
       if (!isObj(x)) throw new InputProblem('bad_item', 'items[' + i + '] is not an object');
-      if (Object.keys(x).some((k) => !['subject', 'run_key', 'fence'].includes(k))) throw new InputProblem('bad_item', 'items[' + i + '] has keys other than subject, run_key and fence');
+      if (Object.keys(x).some((k) => !['subject', 'run_key', 'fence', 'sha'].includes(k))) throw new InputProblem('bad_item', 'items[' + i + '] has keys other than subject, run_key, fence and sha');
       if (typeof x.subject !== 'string' || !SUBJECT_ID_RE.test(x.subject) || /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/.test(x.subject)) throw new InputProblem('bad_subject', 'items[' + i + '].subject must be 1 to 512 characters with no space or control character');
       if (typeof x.run_key !== 'string' || !RUN_KEY_RE.test(x.run_key)) throw new InputProblem('bad_run_key', 'items[' + i + '].run_key must be 64 lower-case hex digits');
       if (!Number.isSafeInteger(x.fence) || x.fence < 1) throw new InputProblem('bad_fence', 'items[' + i + '].fence must be a positive whole number');
+      // The commit to read (tool-qa R-SHA-01): the target is pinned to it instead of the branch head.
+      if (x.sha !== undefined && (typeof x.sha !== 'string' || !/^[0-9a-f]{40}$/.test(x.sha))) throw new InputProblem('bad_sha', 'items[' + i + '].sha must be 40 lower-case hex digits');
       if (seen.has(x.run_key)) throw new InputProblem('duplicate_run_key', 'items[' + i + '] repeats the run_key of an earlier item');
       seen.add(x.run_key);
       const repo = SUBJECT_RE.test(x.subject) && !/\/\.\.?$/.test(x.subject) ? x.subject : null;
-      return { index: i, subject: x.subject, repo, run_key: x.run_key, fence: x.fence };
+      return { index: i, subject: x.subject, repo, run_key: x.run_key, fence: x.fence, ...(x.sha ? { sha: x.sha } : {}) };
     }),
   };
 }
@@ -1040,7 +1042,7 @@ export async function planShard({ inputs, seed = new Map(), fetch: fetchImpl = g
     const r = await resolveSubject(it, { seed, fetch: fetchImpl, base });
     const x = { index: it.index, subject: it.subject, repo: it.repo, run_key: it.run_key, fence: it.fence, target_id: null, target: null, resolution: r, resolve_ms: clock() - t0 };
     if (r.status === 'runnable') {
-      const target = { id: targetId(it.index), repo: it.repo, ref: 'HEAD', ...(r.subdir ? { subdir: r.subdir } : {}), ...(r.registry && REGISTRY_NAME.test(r.registry.name) ? { registry: r.registry.name } : {}), launch: r.launch };
+      const target = { id: targetId(it.index), repo: it.repo, ...(it.sha ? { commit: it.sha } : { ref: 'HEAD' }), ...(r.subdir ? { subdir: r.subdir } : {}), ...(r.registry && REGISTRY_NAME.test(r.registry.name) ? { registry: r.registry.name } : {}), launch: r.launch };
       try { validateTarget(target, it.index); x.target_id = target.id; x.target = target; } catch (e) {
         r.status = 'skipped'; r.detail = 'launch_invalid'; r.invalid = String((e && e.message) || e).slice(0, 200);
       }

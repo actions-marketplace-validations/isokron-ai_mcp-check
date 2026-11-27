@@ -41,8 +41,8 @@ function proxyFetch(url, init = {}) {
 }
 
 // No token here: the parent adds it to api.github.com requests (it holds the token; R-SS-10).
-const { subject, timeoutMs, codeEffects } = workerData;
-const out = await scanSubject(subject, { fetch: proxyFetch, token: null, timeoutMs, codeEffects: codeEffects === true });
+const { subject, timeoutMs, codeEffects, sha } = workerData;
+const out = await scanSubject(subject, { fetch: proxyFetch, token: null, timeoutMs, codeEffects: codeEffects === true, sha: typeof sha === 'string' && /^[0-9a-f]{40}$/.test(sha) ? sha : null });
 // The raw/ texts are built (and capped) here, so the uncapped value never crosses to the parent: a list that
 // expands to gigabytes would be cloned whole otherwise (R-SS-08).
 const { raw, ...rest } = out;
