@@ -21,7 +21,7 @@ const FX = join(root, 'test', 'fixtures', 'live-probe');
 const fx = (f) => readFileSync(join(FX, f), 'utf8');
 const MARKER = 'liveprobe-MARKERMARKERMARKER0000';
 /** The mcp-surface-corpus commit both workflows pin (SURFACE_CORPUS_REF, the conformance call and sandbox-guard). */
-const SANDBOX_PIN = '4504c0bba95c73ae22236e71f1ff6ca08432bff0';
+const SANDBOX_PIN = '78a7834cf028507b03e90e266b87bebeacfccd51';
 const NODE24 = 'docker.io/library/node:24-bookworm-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23fceb061c54';
 const items = (n, f = (i) => 'owner' + i + '/repo' + i) => JSON.stringify(Array.from({ length: n }, (_, i) => ({ subject: f(i), run_key: String(i + 1).repeat(64).slice(0, 64).replace(/[^0-9a-f]/g, 'a'), fence: i + 1 })));
 
@@ -433,7 +433,7 @@ test('R-LP-22: the self test judges the bundles with the ingest tool-qa runs, wh
 });
 
 test('R-LP-23: the sandbox pin includes the install-network hostile cases and the proxy positive control (mcp-surface-corpus #9, #10)', () => {
-  assert.equal(SANDBOX_PIN, '4504c0bba95c73ae22236e71f1ff6ca08432bff0');
+  assert.equal(SANDBOX_PIN, '78a7834cf028507b03e90e266b87bebeacfccd51');
   for (const f of ['live-probe.yml', 'live-probe-selftest.yml']) {
     const y = wf(f);
     assert.equal(/\n  SURFACE_CORPUS_REF: '([0-9a-f]{40})'\n/.exec(y)[1], SANDBOX_PIN, f);
@@ -507,7 +507,10 @@ function workFolder({ marker = MARKER, selftestRc = 0, items: its = null, swept 
   put('driver-subjects/_shard/telemetry.jsonl', fx('telemetry.jsonl'));
   put('driver-subjects/s001/record.json', fx('record-ok.json'));
   put('driver-subjects/s001/probe-bare.json', fx('probe-known.json'));
-  put('driver-subjects/s001/static.json', fx('static-known.json'));
+  // static.json as the sandbox writes it with mcp-check's reader handed over (R-LP-77): its answer under `reader`
+  const stat = JSON.parse(fx('static-known.json'));
+  stat.reader = { format: 'isokron-live-probe-static/1', reader_id: LP.READER_ID, repo: 'o/n', sha: 'a'.repeat(40), subdir: null, scan: { via: 'github', truncated: false, scanned: null, best_index: 0, candidates: [{ kind: 'source', fidelity: 'literal', tools: stat.static.candidates[0].tools }], hints: {} } };
+  put('driver-subjects/s001/static.json', stat);
   put('driver-subjects/s001/steps.log', 'npm install ...\n');
   // kronicle-lite: installed, then exited before answering (a native module was not built).
   const rec2 = JSON.parse(fx('record-ok.json')); rec2.layers.live = false;
