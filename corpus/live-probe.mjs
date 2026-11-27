@@ -356,11 +356,13 @@ export function loadSeed(file) {
 
 /**
  * A fetch's failure as a detail code: rate_limited (429, or 403 with a rate limit); registry_query_refused for any other
- * 4xx but 408 (the registry's answer to our request, the same on a retry: R-LP-76); else upstream_error (5xx, 408).
+ * 4xx but 403, 408 and 425 (the registry's answer to our request, the same on a retry: R-LP-76); else upstream_error
+ * (5xx, 408, 425, and a 403 with no rate-limit headers, which a CDN or firewall in front of a registry may send for a
+ * while: still tried again; the token service's own 403 is image_access_denied, below).
  */
 export function httpDetail(status, header = () => null) {
   if (status === 429 || (status === 403 && (header('x-ratelimit-remaining') === '0' || header('retry-after') != null))) return 'rate_limited';
-  if (Number.isInteger(status) && status >= 400 && status < 500 && status !== 408) return 'registry_query_refused';
+  if (Number.isInteger(status) && status >= 400 && status < 500 && ![403, 408, 425].includes(status)) return 'registry_query_refused';
   return 'upstream_error';
 }
 
@@ -937,7 +939,12 @@ export async function resolveSubject(item, { seed = new Map(), fetch: fetchImpl 
       let verifiedBy = !c.entry ? 'seed' : c.entry.seed ? 'seed' : c.entry.namespace ? 'namespace' : null;
       if (!verifiedBy) {
         const why = {};
-        verifiedBy = await packageVerifiedBy(c.pkg, item.repo, { fetch: fetchImpl, chains, out: why });
+        // R-LP-76: one candidate's provenance answer that a registry refused (a 4xx) leaves that candidate unverified; it
+        // does not end the subject (an outage or rate limit still does, and is retried).
+        try { verifiedBy = await packageVerifiedBy(c.pkg, item.repo, { fetch: fetchImpl, chains, out: why }); } catch (e) {
+          if (!(e && e.detail === 'registry_query_refused')) throw e;
+          verifiedBy = null; why.why = 'provenance_refused';
+        }
         if (!verifiedBy) { details.push('unverified_registry_entry'); out.unverified = [...(out.unverified || []), { identifier: String(c.pkg.identifier || '').slice(0, 200), why: why.why || null }].slice(0, 8); continue; }
         // Install exactly the version whose provenance was checked (R-LP-17).
         if (why.version && (r.launch.kind === 'npm' || r.launch.kind === 'pypi')) {
@@ -1563,7 +1570,9 @@ function probeMs(rec, p, tag) {
 export function noToolsCapability(p) {
   if (!isObj(p) || !isObj(p.initialize)) return false;
   const caps = p.initialize.capabilities;
-  const declared = isObj(caps) && caps.tools !== undefined && caps.tools !== null && caps.tools !== false;
+  // A capabilities object is required: an initialize answer without one is malformed, not a statement of no tools.
+  if (!isObj(caps)) return false;
+  const declared = caps.tools !== undefined && caps.tools !== null && caps.tools !== false;
   const L = isObj(p.lists) ? p.lists['tools/list'] : null;
   return !declared && isObj(L) && L.error_code === -32601;
 }

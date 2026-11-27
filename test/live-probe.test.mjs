@@ -1307,7 +1307,8 @@ const promptsOnly = (caps = { prompts: {} }, code = -32601, error = 'Method not 
 
 test('R-LP-75: a server that declared no tools capability and answered tools/list "method not found" is nothing to grade and nobody\'s fault, never list_failed', () => {
   assert.equal(LP.noToolsCapability(promptsOnly()), true);
-  assert.equal(LP.noToolsCapability(promptsOnly({})), true, 'no capability at all is no tools capability');
+  assert.equal(LP.noToolsCapability(promptsOnly({})), true, 'an empty capabilities object declares no tools');
+  assert.equal(LP.noToolsCapability({ ...promptsOnly(), initialize: { protocolVersion: '2025-11-25' } }), false, 'no capabilities object is a malformed answer, not no tools');
   assert.equal(LP.noToolsCapability(promptsOnly({ tools: {} })), false, 'a server that declared tools must list them');
   assert.equal(LP.noToolsCapability(promptsOnly({ prompts: {} }, -32603, 'Internal error')), false, 'another error is still the server\'s');
   assert.equal(LP.noToolsCapability({ ...promptsOnly(), initialize: null, era: 'modern' }), false, 'no initialize answer: nothing declared that we read');
@@ -1343,10 +1344,12 @@ test('R-LP-75: a server that declared no tools capability and answered tools/lis
 test('R-LP-76: a registry 4xx is our refused query (tool, not retried), a denied pull token is image_access_denied (tool), a 2-character search is never sent, and a bug in the resolver is never an outage', async () => {
   assert.equal(LP.httpDetail(422), 'registry_query_refused');
   assert.equal(LP.httpDetail(400), 'registry_query_refused');
-  assert.equal(LP.httpDetail(403, () => null), 'registry_query_refused');
+  // A 403 without rate-limit headers (a CDN or firewall in front of a registry), 408 and 425 stay retryable.
+  for (const s of [403, 408, 425]) assert.equal(LP.httpDetail(s, () => null), 'upstream_error', String(s));
+  assert.equal(LP.httpDetail(401), 'registry_query_refused');
   assert.equal(LP.httpDetail(429), 'rate_limited');
   assert.equal(LP.httpDetail(403, (k) => (k === 'x-ratelimit-remaining' ? '0' : null)), 'rate_limited');
-  for (const s of [500, 502, 503, 408]) assert.equal(LP.httpDetail(s), 'upstream_error', String(s));
+  for (const s of [500, 502, 503]) assert.equal(LP.httpDetail(s), 'upstream_error', String(s));
   assert.deepEqual(LP.DETAILS.registry_query_refused, ['tool_error', false, 'resolve', 'tool']);
   assert.deepEqual(LP.DETAILS.image_access_denied, ['install_failed_registry', false, 'resolve', 'tool']);
   assert.deepEqual(LP.DETAILS.resolver_error, ['tool_error', false, 'resolve', 'tool']);
@@ -1370,6 +1373,14 @@ test('R-LP-76: a registry 4xx is our refused query (tool, not retried), a denied
   const limited = async (url, init = {}) => { const u = new URL(url); if (u.pathname === '/token') return res(429, ''); if (!init.headers.authorization) return res(401, '', { 'www-authenticate': 'Bearer realm="https://ghcr.io/token",service="ghcr.io"' }); return res(200, goodImage); };
   assert.equal(await ociCode(limited), 'rate_limited');
   assert.equal((await LP.resolveSubject({ subject: 'a/b', repo: 'a/b' }, { fetch: fakeFetch([], { status: 503 }) })).detail, 'upstream_error');
+  // One candidate's provenance refused (npm answers 410 for its attestations): that candidate is unverified, the next one runs.
+  // Both entries match on their repository URL only, so each package's provenance is asked; the npm one comes first.
+  const prov = fakeFetch([server('com.example/x', 'acme/prov', [npmPkg('@other/prov-x')]), server('com.example/y', 'acme/prov', [{ registryType: 'oci', identifier: 'ghcr.io/acme/prov:1', transport: { type: 'stdio' } }])], { oci: { 'ghcr.io': () => res(200, goodImage) } });
+  const provFetch = async (url, init) => (new URL(url).hostname === 'registry.npmjs.org' ? res(410, {}) : prov(url, init));
+  const pr = await LP.resolveSubject({ subject: 'acme/prov', repo: 'acme/prov' }, { fetch: provFetch });
+  assert.equal(pr.status, 'runnable', 'the refused candidate does not end the subject');
+  assert.equal(pr.launch.kind, 'docker');
+  assert.equal(pr.choice.verified_by, 'ghcr_owner');
   // An exception of ours (no detail code) is resolver_error, with its class kept.
   const bug = await LP.resolveSubject({ subject: 'acme/box', repo: 'acme/box' }, { seed: new Map([['acme/box', [{ registry: 'npm', identifier: 5 }]]]), fetch: fakeFetch([]) });
   assert.deepEqual([bug.detail, bug.error_class], ['resolver_error', 'TypeError']);

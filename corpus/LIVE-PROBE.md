@@ -324,8 +324,8 @@ and the 4x free-disk rule. An image on another host is unassessed until the list
 | `list_rejected` (the engine refused the list) | `tool_error` | tool | no |
 | `harness_error` (our driver or bundle step failed) | `tool_error` | tool | yes |
 | `rate_limited` | `rate_limited` | infra | yes |
-| `upstream_error` (a 5xx or 408, a network failure, a read cut at our cap), `shard_deadline`, `disk_low` | `upstream_unavailable` | infra | yes |
-| `registry_query_refused` (a registry's 4xx other than 404, 408, 429 or a rate-limited 403: its answer to our request, the same on a retry; a search shorter than 3 characters, which the MCP registry answers 422, is never sent, R-LP-76) | `tool_error` | tool | no |
+| `upstream_error` (a 5xx, 408, 425 or a 403 with no rate-limit headers, a network failure, a read cut at our cap), `shard_deadline`, `disk_low` | `upstream_unavailable` | infra | yes |
+| `registry_query_refused` (a registry's 4xx other than 403, 404, 408, 425 and 429: its answer to our request, the same on a retry; a 403 without rate-limit headers stays `upstream_error`, since a CDN or firewall may send it for a while; one candidate's provenance answer refused leaves that candidate unverified and the next one is tried; a search shorter than 3 characters, which the MCP registry answers 422, is never sent, R-LP-76) | `tool_error` | tool | no |
 | `image_access_denied` (the registry's token service refused a pull token, 401 or 403: ghcr's `DENIED` for a private or missing package; private and gone look alike and the request is ours, R-LP-76) | `install_failed_registry` | tool | no |
 | `resolver_error` (an exception in our resolver with no detail code: a bug of ours, never an outage; its class name is kept in `raw/resolution.json`, R-LP-76) | `tool_error` | tool | no |
 | `sandbox_evidence_missing` (no syscall trace or firewall log for it) | `trace_unavailable` | tool | yes |
