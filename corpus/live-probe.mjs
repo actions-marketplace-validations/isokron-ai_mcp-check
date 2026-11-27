@@ -1963,6 +1963,81 @@ export function configStateOf(probe, bare, rec, launch) {
   return used && used.length && used.every((n) => typeof given[n] === 'string') ? 'defaults' : 'dummy';
 }
 
+// ------------------------------------------------------------------ one retry (R-LP-81)
+
+export const RETRY_FORMAT = 'isokron-mcp-check-live-probe-retry/1';
+/** The MCP SDK's own word that a server written for 1.x got 2.x: its message, or the 1.x module 2.x no longer has. */
+const MCP2_TEXT = /\bThis is mcp 2\.x\b|No module named 'mcp\.server\.fastmcp'/;
+
+/** A launch with a retry's change applied: { constraints } added to a PyPI install. */
+export function retryLaunch(launch, change) {
+  if (!isObj(launch) || !isObj(change)) return launch;
+  const out = { ...launch };
+  if (Array.isArray(change.constraints)) out.constraints = [...(Array.isArray(launch.constraints) ? launch.constraints : []), ...change.constraints];
+  return out;
+}
+
+/**
+ * Whether a subject's first run earns one retry with a changed launch, and which: { reason, change } or null. Never a
+ * change of fault: the retry only tests whether the cause we named was the cause. mcp_drift: a PyPI server whose start
+ * failed on an import the MCP SDK's 2.x line no longer has (`mcp.server.fastmcp`, a name or attribute of `mcp`), or on
+ * the SDK's own "This is mcp 2.x" message, while its release declares `mcp` with no upper bound (pip installed today's
+ * newest, long after the release): run again with `mcp<2`. The release-date resolve (pip --uploaded-prior-to, uv
+ * --exclude-newer) needs the sandbox to take it; until then the known cap is the change.
+ */
+export function retryFor(item, { rec, bare, envp } = {}) {
+  const l = isObj(item) && isObj(item.target) ? item.target.launch : null;
+  if (!isObj(l) || l.kind !== 'pypi') return null;
+  if (listed(envp) || listed(bare) || !isObj(rec) || !isObj(rec.install) || rec.install.ok !== true) return null;
+  const err = [bare, envp].map((p) => (isObj(p) && typeof p.stderr === 'string' ? p.stderr : '')).join('\n');
+  const imp = failedImport(err);
+  const mcpApi = !!imp && imp.runtime === 'python' && imp.kind === 'api' && normDist(imp.module.split('.')[0]) === 'mcp';
+  if (!mcpApi && !MCP2_TEXT.test(err)) return null;
+  const pydeps = isObj(item.resolution) && isObj(item.resolution.choice) ? item.resolution.choice.pydeps : null;
+  // A release that caps mcp cannot have floated to 2.x; one we know nothing about may have.
+  if (isObj(pydeps) && Array.isArray(pydeps.base) && pydeps.base.includes('mcp') && !(Array.isArray(pydeps.uncapped) && pydeps.uncapped.includes('mcp'))) return null;
+  const cons = Array.isArray(l.constraints) ? l.constraints : [];
+  if (cons.length >= 10 || cons.some((c) => /^mcp\s*[<>=~!]/i.test(String(c)))) return null;
+  return { reason: 'mcp_drift', change: { constraints: ['mcp<2'] } };
+}
+
+/**
+ * Plan the retries from the subjects' first runs (driver-subjects, read as data): targets-retry.json (the same targets,
+ * the changed launch, each checked by the sandbox's own target check) and retry.json. Returns the retries.
+ */
+export function planRetries({ work, validateTarget = () => {} }) {
+  const plan = readJson(join(work, 'plan.json'));
+  if (!plan || plan.format !== PLAN_FORMAT) throw new Error('no plan in the work folder');
+  const subj = readJson(join(work, 'targets-subjects.json'));
+  const ran = new Set(isObj(subj) && Array.isArray(subj.targets) ? subj.targets.map((t) => isObj(t) && t.id) : []);
+  const targets = []; const retries = [];
+  for (const it of plan.items) {
+    if (!isObj(it.target) || !ran.has(it.target.id)) continue;
+    const dir = join(work, 'driver-subjects', it.target.id);
+    const r = retryFor(it, { rec: readJson(join(dir, 'record.json')), bare: readJson(join(dir, 'probe-bare.json')), envp: readJson(join(dir, 'probe-env.json')) });
+    if (!r) continue;
+    const target = { ...it.target, launch: retryLaunch(it.target.launch, r.change) };
+    try { validateTarget(target, targets.length); } catch { continue; }
+    targets.push(target); retries.push({ id: it.target.id, reason: r.reason, change: r.change });
+  }
+  writeFileSync(join(work, 'targets-retry.json'), json({ format: TARGETS_FORMAT, about: 'live-probe retries', defaults: { timeout_s: plan.subject_timeout_s }, targets }));
+  writeFileSync(join(work, 'retry.json'), json({ format: RETRY_FORMAT, retries }));
+  return retries;
+}
+
+/** retry.json as the bundle step trusts it: { <target id>: { reason, change } }, only well-formed entries. */
+export function retriesOf(file) {
+  const j = readJson(file);
+  const out = {};
+  if (!isObj(j) || j.format !== RETRY_FORMAT || !Array.isArray(j.retries)) return out;
+  for (const x of j.retries.slice(0, 100)) {
+    if (!isObj(x) || typeof x.id !== 'string' || !/^s[0-9]{3}$/.test(x.id) || !['mcp_drift'].includes(x.reason)) continue;
+    const c = isObj(x.change) && Array.isArray(x.change.constraints) && x.change.constraints.every((v) => typeof v === 'string' && /^[A-Za-z0-9._-]{1,60}[<>=!~]{1,2}[0-9][0-9.]{0,20}$/.test(v)) ? { constraints: x.change.constraints.slice(0, 10) } : null;
+    if (c) out[x.id] = { reason: x.reason, change: c };
+  }
+  return out;
+}
+
 // ------------------------------------------------------------------ one item
 
 /** Everything about one item: { status, detail, files, skips, subjectSha }. Never throws on subject data. */
@@ -1989,16 +2064,34 @@ export function buildItem(item, ctx) {
   } else {
     const oci = item.target && item.target.launch && item.target.launch.kind === 'docker' && ctx.ociOut;
     const build = !oci && item.target && isBuild(item.target.launch) && ctx.buildsOut;
-    const dir = oci ? join(ctx.ociOut, item.target_id, item.target_id) : build ? join(ctx.buildsOut, item.target_id) : join(ctx.subjectsOut, item.target_id);
-    const telemetryFile = oci ? join(ctx.ociOut, item.target_id, '_shard', 'telemetry.jsonl') : build ? ctx.buildsTelemetry : ctx.subjectsTelemetry;
+    let dir = oci ? join(ctx.ociOut, item.target_id, item.target_id) : build ? join(ctx.buildsOut, item.target_id) : join(ctx.subjectsOut, item.target_id);
+    let telemetryFile = oci ? join(ctx.ociOut, item.target_id, '_shard', 'telemetry.jsonl') : build ? ctx.buildsTelemetry : ctx.subjectsTelemetry;
     const ociRun = oci ? (ctx.ociRuns || {})[item.target_id] : null;
     if (oci) deadlineHit = !ociRun || ociRun.outcome === 'deadline' || ociRun.rc === 124 || ociRun.rc === 137;
     // The builds ran after the subjects (or did not, when the deadline came first: builds_rc stays -1).
     if (build) deadlineHit = !Number.isInteger(ctx.state.builds_rc) || ctx.state.builds_rc < 0 || ctx.state.builds_rc === 124 || ctx.state.builds_rc === 137;
-    const rec = readJson(join(dir, 'record.json'));
-    const bare = readJson(join(dir, 'probe-bare.json'));
-    const envp = readJson(join(dir, 'probe-env.json'));
-    const stat = readJson(join(dir, 'static.json'));
+    let rec = readJson(join(dir, 'record.json'));
+    let bare = readJson(join(dir, 'probe-bare.json'));
+    let envp = readJson(join(dir, 'probe-env.json'));
+    let stat = readJson(join(dir, 'static.json'));
+    // R-LP-81: the one retry with a changed launch (`retry` planned it from this first run; retry.json). When it lists
+    // tools, its run is the item's; when it does not (or never ran), the first run's cause stands with its fault. Both
+    // runs are kept: the other one's record, probes and steps under raw/first/ or raw/retry/.
+    const retry = !oci && !build && !listed(envp) && !listed(bare) && isObj(ctx.retries) ? ctx.retries[item.target_id] : null;
+    let other = null;
+    if (retry) {
+      const rdir = join(ctx.retryOut, item.target_id);
+      const r2 = { rec: readJson(join(rdir, 'record.json')), bare: readJson(join(rdir, 'probe-bare.json')), envp: readJson(join(rdir, 'probe-env.json')) };
+      const won = listed(r2.envp) || listed(r2.bare);
+      result.retry = { reason: retry.reason, change: retry.change, ran: !!r2.rec, listed: won, detail: null };
+      if (won) {
+        other = { prefix: 'raw/first/', dir, rec, bare, envp };
+        dir = rdir; rec = r2.rec; bare = r2.bare; envp = r2.envp; stat = readJson(join(rdir, 'static.json')) || stat; telemetryFile = ctx.retryTelemetry;
+      } else {
+        other = { prefix: 'raw/retry/', dir: rdir, ...r2 };
+        if (r2.rec) result.retry.detail = failureDetail(r2.rec, r2.bare, r2.envp, { records: telemetryFor(ctx.retryTelemetry, item.target_id).records, stepsLog: readText(join(rdir, 'steps.log')), launch: retryLaunch(r.launch, retry.change), argsUnfilled: r.choice ? r.choice.args_unfilled : null, owned: ownedEntry(r.choice), pydeps: r.choice ? r.choice.pydeps : null, crashNotEvidence: crashNotEvidenceOf(r.choice, r2.rec) });
+      }
+    }
     if (rec) {
       const gh = rec.source && rec.source.github;
       subjectSha = gh && typeof gh.sha === 'string' && /^[0-9a-f]{40}$/.test(gh.sha) ? gh.sha : null;
@@ -2092,6 +2185,11 @@ export function buildItem(item, ctx) {
     for (const [k, p] of [['bare', bare], ['env', envp]]) if (p) raw.push(['raw/probe-' + k + '.json', Buffer.from(json(p))]);
     if (rec) raw.push(['raw/record.json', Buffer.from(json(rec))]);
     for (const f of ['registry.json', 'static.json', 'analysis.json', 'steps.log']) { const b = readText(join(dir, f)); if (b) raw.push(['raw/' + f.replace(/\.log$/, '.txt'), b]); }
+    if (other) {
+      for (const [k, p] of [['bare', other.bare], ['env', other.envp]]) if (p) raw.push([other.prefix + 'probe-' + k + '.json', Buffer.from(json(p))]);
+      if (other.rec) raw.push([other.prefix + 'record.json', Buffer.from(json(other.rec))]);
+      const b = readText(join(other.dir, 'steps.log')); if (b) raw.push([other.prefix + 'steps.txt', b]);
+    }
 
     if (tel.lines.length) raw.push(['raw/telemetry.jsonl', Buffer.from(tel.lines.join('\n') + '\n')]);
     lines.push(...networkEvents(tel.records).map((e) => obs('network_event', e)));
@@ -2278,6 +2376,7 @@ export function bundleShard({ work, env = process.env, now = () => new Date(), l
     deadlineHit: state.subjects_rc === 124 || state.subjects_rc === 137,
     ociOut: join(work, 'driver-oci'), ociRuns: ociRuns(join(work, 'oci-runs.jsonl')),
     buildsOut: join(work, 'driver-builds'), buildsTelemetry: join(work, 'driver-builds', '_shard', 'telemetry.jsonl'),
+    retryOut: join(work, 'driver-retry'), retryTelemetry: join(work, 'driver-retry', '_shard', 'telemetry.jsonl'), retries: retriesOf(join(work, 'retry.json')),
     runnerEnv: runner ? { os: safeText(runner.os, /^[a-z]{1,10}$/), arch: safeText(runner.arch, /^[a-z0-9_]{1,10}$/), kernel: safeText(runner.kernel, /^[A-Za-z0-9._+-]{1,60}$/), node: safeText(runner.node, /^v[0-9.]{1,20}$/), docker: safeText(runner.docker, /^[0-9][0-9A-Za-z.+-]{0,30}$/), container_platform: safeText(runner.container_platform, /^[a-z0-9/]{1,30}$/) } : null,
     toolVersions: { mcp_check: VERSION, rubric: M.RUBRIC_VERSION, spec: M.SPEC_VERSION, surface_corpus: mscCommit, worker_kit: safeText(state.worker_kit_ref, /^[0-9a-f]{40}$/), gvisor: safeText(state.gvisor_release, /^[0-9.a-z-]{1,40}$/) },
     sandboxSummary: { runtime: 'runsc', selftest: state.selftest_check_rc === 0 ? 'passed' : 'failed', controls_rc: int(state.controls_rc), subjects_rc: int(state.subjects_rc), swept: state.swept === true },
@@ -2447,6 +2546,12 @@ export async function main(argv, { env = process.env, stdout = process.stdout, s
     output(env, lines, stdout);
     for (const it of plan.items) say('item ' + it.index + ': ' + (it.target ? 'runnable (' + it.resolution.choice.type + ', ' + it.resolution.choice.transport + ')' : 'skipped (' + it.resolution.detail + ')'));
     say(plan.runnable + ' of ' + plan.items.length + ' subjects runnable; each has ' + plan.subject_timeout_s + ' s');
+    return 0;
+  }
+  if (cmd === 'retry' && rest.length === 3 && rest[1] === '--msc') {
+    const { validateTarget } = await import(pathToFileURL(join(resolve(rest[2]), 'src', 'targets.mjs')).href);
+    const retries = planRetries({ work: rest[0], validateTarget });
+    say(retries.length + ' retr' + (retries.length === 1 ? 'y' : 'ies') + (retries.length ? ': ' + retries.map((x) => x.id + ' ' + x.reason).join(', ') : ''));
     return 0;
   }
   if (cmd === 'bundle' && rest.length === 1) {
