@@ -176,3 +176,83 @@ test('R-RD-40: under SDK 2.x a ToolAnnotations keyword that is not a field is dr
   assert.deepEqual(R.extractPy(src, {})[0].tool.annotations, { readOnlyHint: true });
   assert.deepEqual(R.extractPy(src, { sdk: { pyMajor: 1 } })[0].tool.annotations, { read_only_hint: true, readonly: true });
 });
+
+// R-RD-44: the SDK major is the one of the file's own package; review of PR 58
+const SNAKE_SERVER = (pkg) => `from fastmcp import FastMCP\nfrom mcp.types import ToolAnnotations\nmcp = FastMCP("${pkg}")\n\n@mcp.tool(annotations=ToolAnnotations(read_only_hint=True))\ndef ${pkg}_list() -> str:\n    """List."""\n    return ""\n`;
+const lock = (v) => `version = 1\n\n[[package]]\nname = "mcp"\nversion = "${v}"\n`;
+
+test('R-RD-44: a lock or requirement counts for the package folder that holds it: one package\'s mcp 1.x lock never decides for another\'s mcp>=2', () => {
+  const files = new Map([
+    ['a/pyproject.toml', '[project]\nname = "a"\ndependencies = ["mcp"]\n'], ['a/uv.lock', lock('1.2.0')], ['a/server.py', SNAKE_SERVER('a')],
+    ['b/pyproject.toml', '[project]\nname = "b"\ndependencies = ["mcp>=2"]\n'], ['b/server.py', SNAKE_SERVER('b')],
+  ]);
+  const an = R.analyseRepo(files);
+  const t = Object.fromEntries(an.found.map((x) => [x.tool.name, x.tool]));
+  assert.deepEqual(t.a_list.annotations, { read_only_hint: true }, 'a runs on its locked 1.x: snake_case on the wire');
+  assert.deepEqual(t.b_list.annotations, { readOnlyHint: true }, 'b runs on 2.x: camelCase, whatever a locks');
+  assert.match(R.detectSdk(files).pyMajorUnknown, /declare different SDK majors/);
+  // a workspace root lock counts for its members
+  const ws = new Map([['uv.lock', lock('2.3.0')], ['packages/srv/pyproject.toml', '[project]\nname = "srv"\ndependencies = ["mcp>=1.9"]\n'], ['packages/srv/server.py', SNAKE_SERVER('srv')]]);
+  assert.deepEqual(R.analyseRepo(ws).found[0].tool.annotations, { readOnlyHint: true });
+  // poetry.lock and requirements.lock are read too
+  assert.equal(R.detectSdk(new Map([['poetry.lock', lock('1.27.0')], ['pyproject.toml', '[project]\ndependencies = ["mcp>=1.9"]\n']])).pyMajor, 1);
+  assert.equal(R.detectSdk(new Map([['requirements.lock', 'anyio==4.6.0\nmcp==1.26.0\n']])).pyMajor, 1);
+});
+
+test('R-RD-44: requirements under examples/ or docs/ never decide for the server; an environment marker that changes the major gives unknown; a major read from a range says so', () => {
+  const files = new Map([['docs/requirements.txt', 'mcp<2\n'], ['examples/requirements.txt', 'mcp==1.9.0\n'], ['pyproject.toml', '[project]\ndependencies = ["mcp>=1.9"]\n'], ['server.py', SNAKE_SERVER('srv')]]);
+  const an = R.analyseRepo(files);
+  assert.deepEqual(an.found[0].tool.annotations, { readOnlyHint: true });
+  assert.ok(an.notes.some((n) => /listed camelCase: SDK 2\.x inferred from mcp>=1\.9 in pyproject\.toml: no lock file/.test(n)), an.notes.join('\n'));
+  // with no manifest of its own, the server is not read on an example's requirements
+  const only = R.analyseRepo(new Map([['examples/requirements.txt', 'mcp==1.9.0\n'], ['server.py', SNAKE_SERVER('srv')]]));
+  assert.equal(only.found[0].tool.annotations, undefined);
+  const marked = new Map([['requirements.txt', 'mcp>=2 ; python_version >= "3.10"\nmcp<2 ; python_version < "3.10"\n'], ['server.py', SNAKE_SERVER('srv')]]);
+  const am = R.analyseRepo(marked);
+  assert.equal(am.found[0].tool.annotations, undefined, 'no key the server could list is invented');
+  assert.ok(am.notes.some((n) => /depends on environment markers/.test(n)), am.notes.join('\n'));
+  assert.equal(R.detectSdk(new Map([['requirements.txt', 'mcp>=2 ; python_version >= "3.10"\n']])).pyMajor, 2, 'a marker that does not change the answer is no ambiguity');
+});
+
+test('R-RD-44: a search transform keeps its reason when over-budget candidates are also counted', () => {
+  const st = R.incompleteWith(null, 514, ['srv/server.py'], ['a FastMCP tool search transform (BM25SearchTransform, line 3) lists search tools, not these']);
+  const both = R.incompleteWith(st, 2, ['srv/deep.py'], ['error']);
+  assert.deepEqual(both, { candidates: 516, files: ['srv/server.py', 'srv/deep.py'], reasons: ['a FastMCP tool search transform (BM25SearchTransform, line 3) lists search tools, not these', 'error'] });
+  assert.deepEqual(R.incompleteWith(null, 1, ['a.py'], []), { candidates: 1, files: ['a.py'] });
+});
+
+test('R-RD-44: only runtime dependencies decide the SDK major; a dependency group or extra that would install another major leaves it unknown', () => {
+  const at = (pyproject, extra = {}) => R.analyseRepo(new Map([['pyproject.toml', pyproject], ['server.py', SNAKE_SERVER('srv')], ...Object.entries(extra)]));
+  for (const [what, pp] of [
+    ['dependency group', '[project]\nname = "x"\ndependencies = ["mcp>=1"]\n\n[dependency-groups]\ndev = ["mcp<2"]\n'],
+    ['optional extra', '[project]\nname = "x"\ndependencies = ["mcp>=1"]\n\n[project.optional-dependencies]\nlegacy = ["mcp<2"]\n'],
+    ['Poetry group', '[tool.poetry.dependencies]\nmcp = ">=1"\n\n[tool.poetry.group.dev.dependencies]\nmcp = "<2"\n'],
+  ]) {
+    const an = at(pp);
+    assert.equal(an.found[0].tool.annotations, undefined, what + ': no key is guessed');
+    assert.ok(an.notes.some((n) => /a dependency group or extra would install another Python SDK major/.test(n)), what + ': ' + an.notes.join('\n'));
+  }
+  const dev = at('[project]\nname = "x"\ndependencies = ["mcp>=1"]\n', { 'requirements-dev.txt': 'mcp<2\n' });
+  assert.equal(dev.found[0].tool.annotations, undefined, 'requirements-dev.txt is a group too');
+  const agree = at('[project]\nname = "x"\ndependencies = ["mcp>=2"]\n\n[dependency-groups]\ndev = ["mcp>=2.1"]\n');
+  assert.deepEqual(agree.found[0].tool.annotations, { readOnlyHint: true }, 'a group that agrees changes nothing');
+  assert.equal(R.analyseRepo(new Map([['pyproject.toml', '[project]\nname = "x"\n\n[dependency-groups]\ndev = ["mcp<2"]\n'], ['server.py', SNAKE_SERVER('srv')]])).found[0].tool.annotations, undefined, 'mcp only in a group: unknown');
+});
+
+test('R-RD-44: a lock the nearest folder\'s requirements do not allow (a parent project\'s, or stale) leaves the SDK major unknown', () => {
+  const root = R.analyseRepo(new Map([['uv.lock', lock('1.2.0')], ['pkg/pyproject.toml', '[project]\nname = "pkg"\ndependencies = ["mcp>=2"]\n'], ['pkg/server.py', SNAKE_SERVER('pkg')]]));
+  assert.equal(root.found[0].tool.annotations, undefined);
+  assert.ok(root.notes.some((n) => /uv\.lock pins mcp 1\.x, which mcp>=2 in pkg\/pyproject\.toml does not allow/.test(n)), root.notes.join('\n'));
+  const stale = R.analyseRepo(new Map([['uv.lock', lock('1.9.0')], ['pyproject.toml', '[project]\nname = "x"\ndependencies = ["mcp>=2"]\n'], ['server.py', SNAKE_SERVER('srv')]]));
+  assert.equal(stale.found[0].tool.annotations, undefined);
+  const fine = R.analyseRepo(new Map([['uv.lock', lock('2.3.0')], ['pyproject.toml', '[project]\nname = "x"\ndependencies = ["mcp>=1.9"]\n'], ['server.py', SNAKE_SERVER('srv')]]));
+  assert.deepEqual(fine.found[0].tool.annotations, { readOnlyHint: true }, 'a lock the requirements allow decides');
+});
+
+test('R-RD-44: a package whose own manifest was not read (past the reader\'s limits) is not decided by an ancestor\'s lock', async () => {
+  const r = await R.fromDirectory(repo({ 'uv.lock': lock('1.2.0'), 'pyproject.toml': '[project]\nname = "ws"\ndependencies = ["mcp<2"]\n', 'packages/servers/deep/pyproject.toml': '[project]\nname = "deep"\ndependencies = ["mcp>=2"]\n', 'packages/servers/deep/server.py': SNAKE_SERVER('deep') }));
+  const t = r.candidates.flatMap((c) => c.tools).find((x) => x.name === 'deep_list');
+  assert.ok(t, 'the tool is read');
+  assert.equal(t.annotations, undefined, 'its package manifest (depth 3) is not read, so the root lock does not decide');
+  assert.ok((r.best.notes || []).some((n) => /the package manifest in packages\/servers\/deep was not read/.test(n)), JSON.stringify(r.best.notes));
+});
