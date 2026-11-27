@@ -19,8 +19,10 @@
  * With `--fuzz on` (default off; the plan decides, corpus/FUZZ.md) the fuzz stage runs after that, once per target,
  * after the first probe that got a tool list: read-only protocol sessions (corpus/fuzz/), written to <out>/<target>/fuzz.json.
  */
-import { readFileSync, existsSync, mkdirSync, rmSync } from 'node:fs';
+import { readFileSync, existsSync, mkdirSync, rmSync, copyFileSync, mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { runOracles, writeOracles } from './oracles/run.mjs';
 import { runFuzz, FUZZ_BUDGET_MS } from './fuzz/run.mjs';
@@ -132,6 +134,17 @@ export async function removeQuietly(command, opts) {
   spawnSync('docker', ['rm', '-f', '-v', command[i + 1]], { env: (opts && opts.env) || process.env, stdio: 'ignore', timeout: 30_000 });
 }
 
+/**
+ * mcp-check's own source reader for the sandbox's static step (corpus/static-read.cjs, R-LP-75): its files copied into
+ * a fresh folder, which the sandbox driver puts in its read-only tools volume. Returns { dir, id }.
+ */
+export function readerBundle(base = tmpdir()) {
+  const SR = createRequire(import.meta.url)('./static-read.cjs');
+  const dir = mkdtempSync(join(base, 'isokron-reader-'));
+  for (const [name, from] of SR.bundleFiles()) copyFileSync(from, join(dir, name));
+  return { dir, id: SR.readerId(), entry: SR.SELF };
+}
+
 /** Each target's time limit in seconds, as the sandbox driver reads its list (its own default is 600 s). */
 export function limitsOf(list) {
   const limits = new Map();
@@ -166,7 +179,8 @@ export async function main(argv = process.argv.slice(2)) {
   const trace = (cid) => takeTrace(cfg, cid, { waitMs: 3000 });
   const withOracles = oracleProbe({ probe: probeStdio, listed, out, install, pins, starts, limits, takeTrace: trace });
   const probe = o.fuzz === 'on' ? fuzzProbe({ probe: withOracles, listed, out, enabled: true, starts, limits, takeTrace: trace }) : withOracles;
-  return runShard(o.rest, { makeDocker: (x) => new TimedDocker(x), probe, runscConfig: cfg });
+  const reader = readerBundle();
+  try { return await runShard(o.rest, { makeDocker: (x) => new TimedDocker(x), probe, runscConfig: cfg, reader }); } finally { rmSync(reader.dir, { recursive: true, force: true }); }
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {

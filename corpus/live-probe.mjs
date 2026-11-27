@@ -35,6 +35,9 @@ import M from '../src/engine.js';
 import { InputError } from '../src/limits.js';
 import { parseList } from '../src/tools.js';
 import { analyseList } from '../src/unreadable.js';
+import { usableList } from '../src/inputs/collect.js';
+import { createRequire } from 'node:module';
+import { gradeCandidate } from './scan-static.mjs';
 import { VERSION } from '../src/version.js';
 import { ranCommit } from './tool-commit.mjs';
 import { baselineProblems, judgeOracles } from './oracles/judge.mjs';
@@ -1080,20 +1083,41 @@ function catalogOf(probe) {
 /** A probe that got a whole tools/list answer. */
 export const listed = (p) => !!(p && isObj(p.lists) && isObj(p.lists['tools/list']) && p.lists['tools/list'].ok === true && Array.isArray(p.lists['tools/list'].raw_pages) && p.lists['tools/list'].raw_pages.length > 0);
 
-/** Live against static: counts and letters for results/; the names on each side for raw/. */
-export function compareStatic(live, stat) {
-  const best = stat && isObj(stat.static) && Array.isArray(stat.static.candidates) ? stat.static.candidates[0] : null;
-  if (!best || !Array.isArray(best.tools) || !best.tools.length) return { summary: { static_read: false }, raw: null };
-  let g;
-  try { g = gradeList(JSON.stringify({ tools: best.tools }), 'the tool list read from source'); } catch (e) {
-    return { summary: { static_read: true, static_graded: false, static_error: e instanceof InputError ? e.code : 'engine_error' }, raw: null };
+/** mcp-check's own reader as the sandbox ran it (corpus/static-read.cjs), and the id of this checkout's copy of it. */
+const StaticRead = createRequire(import.meta.url)('./static-read.cjs');
+export const READER_ID = StaticRead.readerId();
+/** Why a static list is not compared, in scan-static's words (usableList's problem -> its skip detail). */
+const STATIC_SKIP = { none: 'no_tools', names: 'names_only', multiple: 'multiple_servers', incomplete: 'reader_limit' };
+
+/**
+ * The static side, read and graded as scan-static reads and grades a subject (R-LP-75): the scan of mcp-check's own
+ * reader (static.json `reader`, from sandbox/static.mjs --reader), never the sandbox's vendored candidates; a scan from
+ * another reader is not used (R-LP-76). { skip } when there is no list to grade, else { candidate, grade }.
+ */
+export function staticAnswer(stat, readerId = READER_ID) {
+  const sr = stat && isObj(stat.reader) ? stat.reader : null;
+  if (!sr || sr.format !== StaticRead.FORMAT) return { skip: 'reader_missing' };
+  if (sr.reader_id !== readerId) return { skip: 'reader_mismatch' };
+  if (typeof sr.error === 'string' || !isObj(sr.scan) || !Array.isArray(sr.scan.candidates)) return { skip: 'reader_error' };
+  const scan = { ...sr.scan, best: Number.isInteger(sr.scan.best_index) && sr.scan.best_index >= 0 ? sr.scan.candidates[sr.scan.best_index] || null : null };
+  const u = usableList(scan);
+  if (u.problem) return { read: true, skip: STATIC_SKIP[u.problem] || 'reader_error' };
+  try { return { read: true, candidate: u.candidate, grade: gradeCandidate(u.candidate) }; } catch (e) {
+    return { read: true, skip: 'list_rejected', error: e instanceof InputError ? e.code : 'engine_error' };
   }
+}
+
+/** Live against static: counts and letters for results/; the names on each side for raw/. */
+export function compareStatic(live, stat, readerId = READER_ID) {
+  const a = staticAnswer(stat, readerId);
+  if (a.skip) return { summary: { static_read: !!a.read, static_graded: false, static_skip: a.skip, ...(a.error ? { static_error: a.error } : {}) }, raw: null };
+  const best = a.candidate; const g = { summary: a.grade.summary, report: a.grade.report, names: a.grade.parsed.tools.map((t) => (t && typeof t.name === 'string' ? t.name : null)) };
   const ln = new Set(live.names.filter(Boolean)); const sn = new Set(g.names.filter(Boolean));
   const onlyLive = [...ln].filter((n) => !sn.has(n)); const onlyStatic = [...sn].filter((n) => !ln.has(n));
   const differing = SECTIONS.filter((k) => live.summary.sections[k].grade !== g.summary.sections[k].grade);
   return {
     summary: {
-      static_read: true, static_graded: true,
+      static_read: true, static_graded: true, static_reader: readerId.slice(0, 12),
       static_kind: safeText(best.kind, /^[a-z][a-z0-9_-]{0,39}$/), static_fidelity: safeText(best.fidelity, /^[a-z][a-z0-9_-]{0,39}$/),
       live_tool_count: live.summary.tool_count, static_tool_count: g.summary.tool_count,
       names_in_both: [...ln].filter((n) => sn.has(n)).length, names_only_live: onlyLive.length, names_only_static: onlyStatic.length,

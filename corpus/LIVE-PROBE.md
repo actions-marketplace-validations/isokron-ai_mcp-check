@@ -242,6 +242,17 @@ and how a reproducer becomes a regression test are in [FUZZ.md](FUZZ.md).
 | `raw/` | Captured target bytes, each file at most 6 MiB (a cut is recorded in `raw_truncated`): `tools-list.json` (the tools/list answers), `probe-bare.json` and `probe-env.json` (each probe whole, with its JSON-RPC transcript), `record.json` (the sandbox's record), `registry.json`, `static.json`, `analysis.json`, `steps.txt` (install and run log), `telemetry.jsonl` (the sandbox telemetry of this subject and of the run: settings, containers, syscall trace summaries, DNS queries, connections, egress, firewall drops), `report.json` (findings with tool names and messages), `static-compare.json`, `resolution.json`, `oracles.json` (the oracle stage's record: each client's output, each scenario's checks, the bridge's transcript and counts, the sessions' trace summaries). |
 | `logs/live-probe.log` | One line: the item's outcome. |
 
+The list read from source (`static_vs_live`, and the `static_vs_live_agreement` record) is mcp-check's own reader at
+this commit, never the sandbox's vendored engine (R-LP-77). `corpus/live-probe-driver.mjs` copies
+`src/inputs/repo-source.cjs`, the modules it requires and `corpus/static-read.cjs` into a folder the sandbox puts in its
+read-only tools volume; the sandbox's static step runs it in its container (no network) over every file of the source
+archive, through `fromGitHub` as scan-static calls it, and `static.json` carries the answer as `reader` with the
+bundle's sha256. live-probe grades it as scan-static grades a subject (`usableList`, then `gradeCandidate`), so the two
+lanes give the same static grade for the same commit. A names-only, several-server, incomplete or empty read is not
+graded: `static_graded: false` with `static_skip` (`names_only`, `multiple_servers`, `reader_limit`, `no_tools`). An
+answer from a bundle whose sha256 is not this checkout's is not used (`reader_mismatch`, R-LP-78), nor a missing one
+(`reader_missing`). `static_reader` gives the first 12 hex digits of the bundle id.
+
 Subject text (tool names and descriptions, server info, package names, host names a server looked up) is kept under
 `raw/`. Outside it, a subject's string appears only when a strict pattern shows it is plain and holds no word ingest
 reads as an attempt identity; otherwise only its hash.

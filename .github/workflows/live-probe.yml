@@ -56,7 +56,7 @@ env:
   # subject's packages). Every worker-kit step below names this same commit (test/live-probe.test.mjs checks).
   WORKER_KIT_REF: '2ffcea16117ec679398f83eefe8c6fa66d38bac6'
   # The isokron-ai/mcp-surface-corpus commit whose sandbox and driver run the servers (its main).
-  SURFACE_CORPUS_REF: '4504c0bba95c73ae22236e71f1ff6ca08432bff0'
+  SURFACE_CORPUS_REF: 'fdb4465da63763a029098d3aa5c600bbd7ccb2cf'
 
 jobs:
   guard:
@@ -99,7 +99,7 @@ jobs:
     if: needs.guard.outputs.proceed == 'true'
     permissions:
       contents: read
-    uses: isokron-ai/mcp-surface-corpus/.github/workflows/sandbox-conformance.yml@4504c0bba95c73ae22236e71f1ff6ca08432bff0 # SURFACE_CORPUS_REF
+    uses: isokron-ai/mcp-surface-corpus/.github/workflows/sandbox-conformance.yml@fdb4465da63763a029098d3aa5c600bbd7ccb2cf # SURFACE_CORPUS_REF
     with:
       mutations: false
       artifact-prefix: live-probe-sandbox
@@ -192,7 +192,7 @@ jobs:
       # telemetry check), from the commit SURFACE_CORPUS_REF pins. It fails the job unless the verdict is pass.
       - id: guard
         name: Sandbox guard on this runner (mcp-surface-corpus sandbox-guard)
-        uses: isokron-ai/mcp-surface-corpus/sandbox-guard@4504c0bba95c73ae22236e71f1ff6ca08432bff0 # SURFACE_CORPUS_REF
+        uses: isokron-ai/mcp-surface-corpus/sandbox-guard@fdb4465da63763a029098d3aa5c600bbd7ccb2cf # SURFACE_CORPUS_REF
         with:
           out: ${{ runner.temp }}/live-probe/selftest
       # Registry and GitHub reads only (JSON, fixed hosts): nothing of a subject is fetched to run here.
