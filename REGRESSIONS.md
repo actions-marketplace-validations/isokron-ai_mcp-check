@@ -1,6 +1,7 @@
 # Regressions
 
 Every problem found in the loop workers (`corpus/scan-static.mjs`, rows `R-SS-`; `corpus/live-probe.mjs`, rows `R-LP-`; its oracle stage, `corpus/oracles/` and `corpus/live-probe-driver.mjs`, rows `R-ORC-`; its fuzz stage, `corpus/fuzz/`, rows `R-FZ-`; and their workflows) and in the source reader they run (`src/inputs/`, rows `R-RD-`) and in the code-derived annotation effects (`src/inputs/repo-effects.cjs`, `src/code-effects.js`, rows `R-AE-`) and in the ast-grep oracle (`corpus/ast-grep/`, rows `R-AG-`) is pinned by a named test
+Every problem found in the loop workers (`corpus/scan-static.mjs`, rows `R-SS-`; `corpus/live-probe.mjs`, rows `R-LP-`; its oracle stage, `corpus/oracles/` and `corpus/live-probe-driver.mjs`, rows `R-ORC-`; its fuzz stage, `corpus/fuzz/`, rows `R-FZ-`; its tools/call fuzz stage over our own fixtures, `corpus/fuzz/calls/`, rows `R-FC-`; and their workflows) and in the source reader they run (`src/inputs/`, rows `R-RD-`) and in the code-derived annotation effects (`src/inputs/repo-effects.cjs`, `src/code-effects.js`, rows `R-AE-`) is pinned by a named test
 that stays in the suite for good. Tests are named after their row (`R-SS-01: ...`), and
 [`test/regressions.test.mjs`](test/regressions.test.mjs) fails if a row names a test that does not exist, or if
 a test named `R-SS-...` has no row.
