@@ -104,12 +104,9 @@ async function read(dir) {
   return summarize(readMatches(found.matches, { root: dir }));
 }
 
-for (const [fixture, want] of Object.entries(EXPECTED)) {
-  test(`R-AG-04: the ${fixture} idiom gives its tool names, no more and no fewer`, needBinary, async () => {
-    const s = await read(join(FIXTURES, fixture));
-    assert.deepEqual(s.tools.map((t) => t.name), want);
-  });
-}
+test('R-AG-04: every idiom fixture (TS SDK, low-level handler, FastMCP; Python decorator and Tool type; mcp-go and go-sdk; rmcp; C#) gives its tool names, no more and no fewer', needBinary, async () => {
+  for (const [fixture, want] of Object.entries(EXPECTED)) assert.deepEqual((await read(join(FIXTURES, fixture))).tools.map((t) => t.name), want, fixture);
+});
 
 test('R-AG-04: descriptions and annotations the source writes out are read per idiom', needBinary, async () => {
   const by = async (fixture) => Object.fromEntries((await read(join(FIXTURES, fixture))).tools.map((t) => [t.name, t]));
