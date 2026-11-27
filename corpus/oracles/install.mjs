@@ -64,7 +64,7 @@ export async function install(dest, msc, { log = () => {} } = {}) {
 
   const npm = async () => {
     const dir = join(dest, 'npm'); mkdirSync(dir, { recursive: true });
-    for (const f of ['package.json', 'package-lock.json', 'ts-client.mjs']) cpSync(join(here, f), join(dir, f));
+    for (const f of ['package.json', 'package-lock.json', 'ts-client.mjs', 'inspector-client.mjs']) cpSync(join(here, f), join(dir, f));
     const r = await run('npm', ['ci', '--ignore-scripts', '--no-audit', '--no-fund', '--registry=https://registry.npmjs.org/'], { cwd: dir, timeoutMs: 6 * 60_000, env: { ...base, npm_config_cache: join(dest, 'npm-cache'), npm_config_https_proxy: proxy, npm_config_proxy: proxy, npm_config_update_notifier: 'false' } });
     log(`npm ci: exit ${r.exit} in ${r.ms} ms`);
     const ver = (p) => { try { return JSON.parse(readFileSync(join(dir, 'node_modules', ...p.split('/'), 'package.json'), 'utf8')).version; } catch { return null; } };
@@ -77,6 +77,13 @@ export async function install(dest, msc, { log = () => {} } = {}) {
       const want = pins.clients.find((c) => c.id === id).version;
       const v = r.exit === 0 ? ver(pkg) : null;
       result.clients[id] = v === want ? { ok: true, version: v, command: [process.execPath, join(dir, 'ts-client.mjs'), line] } : { ok: false, version: v, error: r.exit === 0 ? 'not the pinned version' : `npm ci failed: ${lastLine(r.out)}` };
+    }
+    // R-ORC-13: the MCP Inspector's CLI, from the same lockfile, behind our wrapper (inspector-client.mjs).
+    const iw = pins.clients.find((c) => c.id === 'inspector');
+    if (iw) {
+      const v = r.exit === 0 ? ver('@modelcontextprotocol/inspector') : null;
+      const launcher = join(dir, 'node_modules', '@modelcontextprotocol', 'inspector', 'clients', 'launcher', 'build', 'index.js');
+      result.clients.inspector = v === iw.version && existsSync(launcher) ? { ok: true, version: v, command: [process.execPath, join(dir, 'inspector-client.mjs')] } : { ok: false, version: v, error: r.exit === 0 ? (v === iw.version ? 'no CLI launcher in the package' : 'not the pinned version') : `npm ci failed: ${lastLine(r.out)}` };
     }
   };
 

@@ -26,6 +26,9 @@
      "protocol_negotiated": "2025-11-25",
      "catalog_sha256": "3b6986dcdac856b5a8baaf4836be4c726f8076da7bca547fe4e186931cf02919",
      "tool_count": 3
+    },
+    "inspector": {
+     "outcome": "listed"
     }
    },
    "expected_failures": [
@@ -64,6 +67,9 @@
      "protocol_negotiated": "2025-11-25",
      "catalog_sha256": "3b6986dcdac856b5a8baaf4836be4c726f8076da7bca547fe4e186931cf02919",
      "tool_count": 3
+    },
+    "inspector": {
+     "outcome": "listed"
     }
    },
    "expected_failures": [
@@ -92,6 +98,9 @@
     "go": {
      "outcome": "listed",
      "protocol_negotiated": "2026-07-28"
+    },
+    "inspector": {
+     "outcome": "listed"
     }
    },
    "expected_failures": [],
@@ -118,6 +127,9 @@
     "go": {
      "outcome": "listed",
      "protocol_negotiated": "2026-07-28"
+    },
+    "inspector": {
+     "outcome": "listed"
     }
    },
    "expected_failures": [],
