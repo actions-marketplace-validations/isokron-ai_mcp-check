@@ -72,19 +72,23 @@ const FIXTURES = {
   'nothing to read': repo({ 'README.md': '# not a server\n' }),
 };
 
-for (const [what, dir] of Object.entries(FIXTURES)) {
-  test(`R-LP-77: live-probe's static layer and scan-static give the same answer on the same fixture: ${what}`, async () => {
+test('R-LP-77: live-probe\'s static layer and scan-static give the same answer on the same fixture (known-answer control, TypeScript, Python, names only, two servers, nothing to read)', async () => {
+  const seen = { graded: 0, skipped: 0 };
+  for (const [what, dir] of Object.entries(FIXTURES)) {
     const ss = await scanSubject(REPO, { fetch: githubFetch(dir) });
     const a = LP.staticAnswer(await staticJson(dir));
     if (ss.status === 'graded') {
-      assert.equal(a.skip, undefined, 'live-probe grades what scan-static grades');
-      assert.deepEqual(a.grade.summary, ss.grade, 'the same grade, to every section, check count and finding');
+      seen.graded++;
+      assert.equal(a.skip, undefined, what + ': live-probe grades what scan-static grades');
+      assert.deepEqual(a.grade.summary, ss.grade, what + ': the same grade, to every section, check count and finding');
     } else {
-      assert.equal(a.skip, ss.detail, 'live-probe skips what scan-static skips, with its code');
-      assert.equal(a.grade, undefined);
+      seen.skipped++;
+      assert.equal(a.skip, ss.detail, what + ': live-probe skips what scan-static skips, with its code');
+      assert.equal(a.grade, undefined, what);
     }
-  });
-}
+  }
+  assert.deepEqual(seen, { graded: 3, skipped: 3 });
+});
 
 test('R-LP-77: a names-only, several-server or incomplete read is not graded against the live list; the summary says why (zscaler/zscaler-mcp-server shape)', async () => {
   const live = LP.gradeList(JSON.stringify({ tools: [{ name: 'zia_list_users', description: 'List users.', inputSchema: { type: 'object' } }] }));
