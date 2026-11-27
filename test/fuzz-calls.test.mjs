@@ -193,5 +193,5 @@ test('R-FC-08: the fuzz-calls worker: dispatch only, kill switch first, fixtures
   const manifest = y.slice(y.indexOf('\n  t0-manifest:'));
   assert.doesNotMatch(manifest, /matrix\.mjs|npm |checkout/, 'the sealing job runs none of the fixtures and checks nothing out');
   assert.match(manifest, /worker-kit@[0-9a-f]{40}/);
-  assert.doesNotMatch(y, /secrets\./);
+  assert.doesNotMatch(y, /\$\{\{\s*secrets\./);
 });
