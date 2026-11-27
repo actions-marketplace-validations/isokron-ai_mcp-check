@@ -24,7 +24,7 @@ function res(status, body) {
 const world = (extras) => async (url) => {
   const u = new URL(url);
   if (u.hostname === 'registry.modelcontextprotocol.io') return res(200, { servers: [{ server: { name: 'io.github.acme/arcaeon', version: '1.0.0', repository: { url: 'https://github.com/acme/arcaeon', source: 'github' }, packages: [{ registryType: 'pypi', identifier: 'arcaeon', version: '0.3.1', transport: { type: 'stdio' } }] } }] });
-  if (u.hostname === 'pypi.org') return res(200, { info: { name: 'arcaeon', version: '0.3.1', requires_dist: ['httpx>=0.27', 'mcp>=1.2; extra == "mcp"', 'pytest; extra == "dev"'], provides_extra: extras }, urls: [] });
+  if (u.hostname === 'pypi.org') return res(200, { info: { name: 'arcaeon', version: '0.3.1', requires_dist: ['httpx>=0.27', ...extras.map((x) => (x === 'dev' ? 'pytest; extra == "dev"' : `mcp>=1.2; extra == "${x}"`))], provides_extra: extras }, urls: [] });
   throw new Error('unexpected fetch ' + url);
 };
 const item = { subject: 'acme/arcaeon', repo: 'acme/arcaeon' };
