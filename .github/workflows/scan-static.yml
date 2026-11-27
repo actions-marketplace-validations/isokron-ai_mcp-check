@@ -142,6 +142,14 @@ jobs:
         with:
           node-version: 22
           package-manager-cache: false
+      # The ast-grep oracle (corpus/ast-grep/, O3 of the differential checks): off unless the repository variable
+      # LANE_SCAN_STATIC_AST_GREP is exactly "true". On, it installs the pinned ast-grep from its lockfile (no install
+      # scripts) and the scan step below also reads each subject's source at the commit it read, with rules, and adds
+      # an `oracle: ast-grep` fact beside the reader's result. It never grades and never changes the reader's output.
+      - name: Install ast-grep (pinned, lockfile, no install scripts)
+        if: ${{ vars.LANE_SCAN_STATIC_AST_GREP == 'true' }}
+        working-directory: corpus/ast-grep
+        run: npm ci --ignore-scripts --no-audit --no-fund
       # Its own limit, below the job's 45 minutes, so the upload steps still run if it is stopped: each item's outputs
       # are written as soon as its bundle is (R-SS-02). No subject starts after 32 minutes; one takes at most 90 s.
       - id: scan
@@ -152,6 +160,7 @@ jobs:
           ATTEMPT_ID: ${{ inputs.attempt_id }}
           ITEMS: ${{ inputs.items }}
           GITHUB_TOKEN: ${{ github.token }}
+          SCAN_STATIC_AST_GREP: ${{ vars.LANE_SCAN_STATIC_AST_GREP == 'true' && '1' || '' }}
           # The commit that ran, proved by the step above; each bundle reports it in manifest `tools`.
           MCP_CHECK_COMMIT: ${{ steps.tool.outputs.commit }}
         run: node corpus/scan-static.mjs run "$RUNNER_TEMP/scan-static"

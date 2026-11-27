@@ -1,0 +1,30 @@
+# Tool-registration idioms of Go MCP servers: mcp-go NewTool, the official go-sdk Tool literal and AddTool, metoro RegisterTool.
+id: go-new-tool
+language: Go
+rule:
+  kind: call_expression
+  regex: '^[\w.]+\.NewTool\('
+---
+id: go-new-tool-raw
+language: Go
+rule:
+  kind: call_expression
+  regex: '^[\w.]+\.NewToolWithRawSchema\('
+---
+id: go-tool-literal
+language: Go
+rule:
+  kind: composite_literal
+  regex: '^&?\s*\w+\.Tool\s*\{'
+---
+id: go-add-tool
+language: Go
+rule:
+  kind: call_expression
+  regex: '^[\w.]+\.AddTool\('
+---
+id: go-register-tool
+language: Go
+rule:
+  kind: call_expression
+  regex: '^[\w.]+\.RegisterTool\('

@@ -1,0 +1,2 @@
+// Files and folders that are not the server's own registrations: tests, examples, vendored and built code.
+export const EXCLUDED_PATH = /(^|\/)(node_modules|vendor|third_party|dist|build|out|target|\.git|tests?|__tests__|__mocks__|spec|e2e|fixtures?|testdata|mocks?|examples?|samples?|docs?|benchmarks?|\.venv|venv|site-packages)(\/|$)|\.(test|spec)\.[cm]?[jt]sx?$|_test\.go$|(^|\/)test_[^/]*\.py$|_test\.py$|\.d\.ts$/i;

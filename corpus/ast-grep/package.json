@@ -1,0 +1,10 @@
+{
+  "name": "mcp-check-ast-grep-oracle",
+  "private": true,
+  "description": "The ast-grep oracle (O3) of the scan-static lane (corpus/ast-grep/README.md): ast-grep, pinned, installed with npm ci --ignore-scripts from this lockfile into the runner's temp folder; never published.",
+  "type": "module",
+  "license": "MIT",
+  "dependencies": {
+    "@ast-grep/cli": "0.51.1"
+  }
+}

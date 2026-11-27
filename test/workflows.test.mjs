@@ -9,11 +9,11 @@ const dir = fileURLToPath(new URL('../.github/workflows/', import.meta.url));
 const wf = Object.fromEntries(readdirSync(dir).filter((f) => f.endsWith('.yml')).map((f) => [f, readFileSync(join(dir, f), 'utf8')]));
 
 test('workflows: every third-party action pinned by full SHA; read-only default token; no pull_request_target', () => {
-  assert.deepEqual(Object.keys(wf).sort(), ['bench-mutants.yml', 'ci.yml', 'corpus.yml', 'live-probe-selftest.yml', 'live-probe.yml', 'release.yml', 'scan-static.yml']);
+  assert.deepEqual(Object.keys(wf).sort(), ['ast-grep-validate.yml', 'bench-mutants.yml', 'ci.yml', 'corpus.yml', 'live-probe-selftest.yml', 'live-probe.yml', 'release.yml', 'scan-static.yml']);
   for (const [f, y] of Object.entries(wf)) {
     for (const m of y.replace(/^\s*#.*$/gm, '').matchAll(/uses:\s*(\S+)/g)) if (m[1] !== './') assert.match(m[1], /^[\w.-]+\/[\w./-]+@[0-9a-f]{40}$/, f + ': ' + m[1]);
     // The loop workers grant nothing at the top; each of their jobs asks for contents: read.
-    if (f === 'scan-static.yml' || /^live-probe/.test(f)) assert.match(y, /\npermissions: \{\}\n/, f + ': top-level permissions are {}');
+    if (f === 'scan-static.yml' || f === 'ast-grep-validate.yml' || /^live-probe/.test(f)) assert.match(y, /\npermissions: \{\}\n/, f + ': top-level permissions are {}');
     else assert.match(y, /\npermissions:\n  contents: read\n/, f + ': top-level permissions are contents: read');
     assert.ok(!/pull_request_target|workflow_run/.test(y.replace(/^#.*$/gm, '')), f);
     for (const m of y.matchAll(/persist-credentials:\s*(\S+)/g)) assert.equal(m[1], 'false', f);
@@ -160,4 +160,36 @@ test('R-SS-05: each of the 25 worker-kit steps seals the bundle and the meta fil
     assert.match(s, new RegExp('\\n {10}bundle-dir: \\$\\{\\{ runner\\.temp \\}\\}/scan-static/' + i + '/bundle\\n'));
     assert.match(s, new RegExp('\\n {10}meta-file: \\$\\{\\{ runner\\.temp \\}\\}/scan-static/' + i + '/meta\\.json\\n'));
   });
+});
+
+test('R-AG-09: scan-static installs ast-grep and turns the oracle on only when LANE_SCAN_STATIC_AST_GREP is exactly "true"; it is off by default', () => {
+  const y = wf['scan-static.yml'];
+  const code = y.replace(/^\s*#.*$/gm, '');
+  const steps = code.split('\n      - ');
+  const install = steps.find((s) => /^name: Install ast-grep/.test(s));
+  assert.ok(install, 'an install step');
+  assert.match(install, /\n        if: \$\{\{ vars\.LANE_SCAN_STATIC_AST_GREP == 'true' \}\}\n/);
+  assert.match(install, /\n        working-directory: corpus\/ast-grep\n/);
+  assert.match(install, /\n        run: npm ci --ignore-scripts --no-audit --no-fund\n/, 'from the lockfile, with no install scripts');
+  const scanStep = steps.find((s) => s.startsWith('id: scan\n'));
+  assert.match(scanStep, /\n          SCAN_STATIC_AST_GREP: \$\{\{ vars\.LANE_SCAN_STATIC_AST_GREP == 'true' && '1' \|\| '' \}\}\n/);
+  assert.ok(steps.indexOf(install) < steps.indexOf(scanStep), 'installed before the scan');
+  assert.ok(!/LANE_SCAN_STATIC_AST_GREP/.test(code.replace(/vars\.LANE_SCAN_STATIC_AST_GREP == 'true'/g, '')), 'the variable is read only as == "true"');
+  assert.match(readFileSync(fileURLToPath(new URL('../corpus/scan-static.mjs', import.meta.url)), 'utf8'), /astGrep: env\.SCAN_STATIC_AST_GREP === '1'/);
+  // the test job installs the pinned binary for the rule tests
+  assert.match(wf['ci.yml'], /npm ci --ignore-scripts --no-audit --no-fund --prefix corpus\/ast-grep\n      - run: npm test/);
+});
+
+test('R-AG-09: ast-grep-validate: dispatch only from main, public data only, no secret, the inputs checked whole and read through env', () => {
+  const y = wf['ast-grep-validate.yml'];
+  const code = y.replace(/^\s*#.*$/gm, '');
+  assert.match(y, /\non:\n  workflow_dispatch:\n    inputs:\n/);
+  assert.ok(!/\n  (push|schedule|pull_request|workflow_call):/.test(y));
+  assert.deepEqual([...y.matchAll(/^      ([a-z_]+):\n        description:/gm)].map((m) => m[1]), ['targets', 'label']);
+  assert.match(code, /if: github\.repository == 'isokron-ai\/mcp-check' && github\.ref == 'refs\/heads\/main'/);
+  assert.ok(!/secrets\./.test(code) && !/github\.token|GITHUB_TOKEN/.test(code), 'no secret and no token');
+  for (const m of code.matchAll(/run: \|?\n?((?:.*\n)*?)(?=      - |\n?$)/g)) assert.ok(!/\$\{\{\s*inputs\./.test(m[1]), 'an input expanded in a run: script');
+  assert.match(code, /\n    permissions:\n      contents: read\n/);
+  assert.match(code, /run: npm ci --ignore-scripts --no-audit --no-fund/);
+  assert.match(code, /TARGETS: \$\{\{ inputs\.targets \}\}\n        run: node corpus\/ast-grep\/harness\.mjs run - /);
 });

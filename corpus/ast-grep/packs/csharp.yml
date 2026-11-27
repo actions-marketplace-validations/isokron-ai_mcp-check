@@ -1,0 +1,6 @@
+# Tool-registration idiom of C# MCP servers: [McpServerTool] on a method.
+id: cs-mcp-server-tool
+language: CSharp
+rule:
+  kind: attribute
+  regex: '^McpServerTool(?:Attribute)?\b'
