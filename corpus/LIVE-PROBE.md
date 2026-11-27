@@ -35,11 +35,14 @@ The run is named `shard <shard_id>`.
    Building from source is the build-probe lane's work, not this one.
    - **Which command runs a PyPI package.** The planner reads the release's wheel (pure-Python first, at most 30 MiB,
      files.pythonhosted.org only) and launches the console script it declares in `*.dist-info/entry_points.txt`: the
-     one named like the package, else the only `<package>-mcp`-style name, else the only one with mcp in its name,
+     one the registry's first package argument names (the publisher's `<script> <rest>`; the argument is taken by the
+     entry, R-LP-82), else the one named like the package, else the only `<package>-mcp`-style name, else the only one with mcp in its name,
      else the only script if its name or target says mcp or server. A wheel with no console script but a top-level
      `<module>/__main__.py` named like the package (or a lone one whose name says mcp or server; never tests, docs,
      examples or scripts) runs as `python -m <module>`. A picked entry is no longer a guess, so it needs that signal. Otherwise (ambiguous, no wheel, unreadable, lookup failed) the run keeps the old
-     `venv/bin/<package name>` guess, which a failure never blames on the server. `install.entry_source` says which.
+     `venv/bin/<package name>` guess, which a failure never blames on the server. A package's only script with no
+     such signal is run too (`lone_script`), and like the guess its failure is never evidence against the server.
+     `install.entry_source` says which.
      The wheel is parsed as untrusted data (bounds-checked, inflation capped); no package code runs on the planner.
    - **Whose entry it is.** Anyone can publish a registry entry whose repository URL names someone else's repository,
      and the package behind it too, so what a package says about itself (npm `repository`, PyPI `project_urls`)
