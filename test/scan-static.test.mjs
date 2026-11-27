@@ -11,7 +11,7 @@ import { spawnSync } from 'node:child_process';
 import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
 import {
-  FORMAT, KNOWN_ANSWER_FILE, MARKER_RE, MAX_ITEMS, MAX_ITEMS_CHARS, PERMANENT, RESULT_PATH, SKIP_REASON, SKIPS, TRANSIENT, skipFaultFor, skipReasonFor,
+  FORMAT, SETTINGS, KNOWN_ANSWER_FILE, MARKER_RE, MAX_ITEMS, MAX_ITEMS_CHARS, PERMANENT, RESULT_PATH, SKIP_REASON, SKIPS, TRANSIENT, skipFaultFor, skipReasonFor,
   InputProblem, buildBundle, gradeError, forgeryControl, isDateTime, knownAnswerControl, knownAnswerFile, main, observationsOf,
   parseInputs, runShard, scanSubject, settingsDigest,
   RAW_FILE_CAP, READ_LANGUAGES, SERVERS_SHARE, rawFiles, resultOf, serverBreakdown, serverSkip, CALLS_PER_SUBJECT, RATE_RESERVE, SUBJECT_HEAP_MB, fixtureFetch, httpDetail, jsonUpTo, knownAnswer, notRead, rawText, readDetail, reportItem, scanInWorker, writeItem,
@@ -1081,6 +1081,13 @@ test('R-SS-15: an item that names a commit (sha) is read at exactly that commit,
   assert.ok(shardCalls.some((c) => c.url === 'https://api.github.com/repos/o/q/branches/main'));
   const meta = (i) => JSON.parse(readFileSync(join(out, String(i), 'meta.json'), 'utf8'));
   assert.deepEqual([meta(0).subject.sha, meta(1).subject.sha], [ASKED, SHA]);
+  // The log and the settings say which was read.
+  const logOf = (i) => readTree(join(out, String(i), 'bundle')).get('logs/scan.log') ?? '';
+  assert.match(logOf(0), /the commit the item names read/);
+  assert.doesNotMatch(logOf(0), /default branch head read/);
+  assert.match(logOf(1), /default branch head read/);
+  assert.match(SETTINGS.subject_ref, /items\[\]\.sha/);
+  assert.match(observationsOf({ commit: null, detail: 'commit_moved' }, { asked: ASKED }), /the commit the item names was not read \(commit_moved\)/);
   // The same in the same thread (isolate off).
   const out2 = join(tmp('sha2'), 'out');
   const calls2 = [];

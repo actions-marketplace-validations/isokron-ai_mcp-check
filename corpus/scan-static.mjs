@@ -141,7 +141,7 @@ export const SUBJECT_ID_RE = /^[^\s]{1,512}$/;
 export const SETTINGS = Object.freeze({
   lane: 'scan-static',
   format: FORMAT,
-  subject_ref: 'default branch head',
+  subject_ref: 'the commit the item names (items[].sha), else the default branch head',
   reader: 'repo-source fromGitHub, no jsDelivr fallback, default file limits',
   grading: 'parseList + analyseList, as mcp-check --repo',
   subject_timeout_ms: SUBJECT_TIMEOUT_MS,
@@ -697,9 +697,9 @@ export async function forgeryControl({ marker = newMarker(), tmp = tmpdir() } = 
 // ------------------------------------------------------------------ bundles
 
 /** The observations of one subject: commit_sha, commit_date, registration_provenance (stage "static"). */
-export function observationsOf(scan) {
+export function observationsOf(scan, { asked = null } = {}) {
   const rec = (field, value, why) => JSON.stringify(value === null || value === undefined ? { field, value: null, why, stage: STAGE } : { field, value, stage: STAGE });
-  const noCommit = 'the default branch head was not read (' + scan.detail + ')';
+  const noCommit = (asked ? 'the commit the item names was not read (' : 'the default branch head was not read (') + scan.detail + ')';
   return [
     rec('commit_sha', scan.commit ? scan.commit.sha : null, noCommit),
     rec('commit_date', scan.commit ? scan.commit.date : null, scan.commit ? 'GitHub gave no committer date for the commit' : noCommit),
@@ -866,9 +866,9 @@ export function buildBundle({ item, scan, controls, startedAt, finishedAt, diges
   }
   const files = {};
   files[RESULT_PATH] = json({ ...resultOf(item, scan, finishedAt), raw_truncated: raw.truncated });
-  files['observations/static.ndjson'] = observationsOf(scan);
+  files['observations/static.ndjson'] = observationsOf(scan, { asked: item.sha ?? null });
   const log = [logLine(startedAt, 'started; mcp-check ' + VERSION + ', rubric ' + M.RUBRIC_VERSION)];
-  if (scan.commit) log.push(logLine(finishedAt, 'default branch head read'));
+  if (scan.commit) log.push(logLine(finishedAt, item.sha ? 'the commit the item names read' : 'default branch head read'));
   if (scan.listing) log.push(logLine(finishedAt, 'listing via ' + scan.listing.via + (scan.listing.truncated ? ' (cut short by GitHub)' : '') + '; ' + scan.listing.files_read + ' of ' + scan.listing.source_files + ' source files read'));
   log.push(logLine(finishedAt, scan.status === 'graded' ? 'graded: ' + scan.grade.tool_count + ' tools' : 'skipped: ' + scan.detail + (scan.retryable ? ' (retryable)' : '')));
   if (scan.oracle) log.push(logLine(finishedAt, scan.oracle.log));
