@@ -74,6 +74,69 @@ The run is named `shard <shard_id>`.
      OCI subjects run one at a time after the others, each only when the Docker disk has about four times its
      declared size free, and its image is removed after it; when there is not enough, that subject and every later
      one are a retryable skip (`disk_low`).
+   - **Crates** (registry type `cargo`, R-LP-54..56) are built in the sandbox (mcp-surface-corpus launchPlan, kind
+     `cargo`): `cargo install --locked` in its pinned Rust image, through index.crates.io and static.crates.io only, at
+     most 15 minutes, the binary cargo recorded (the only one, else the one named for the crate, else the only one named
+     for MCP; never a guess), the build's folders removed before the server starts in the same image. The same path and
+     rules as mcp-writecheck-action's crate path (its `cargoPlan` and `cargo-entry.mjs`, now in the sandbox itself). A
+     crate comes after npm, PyPI and an image of the same entry. Crates run after the other subjects, in a list of their
+     own (`targets-builds.json`), one after another, each with `BUILD_ALLOWANCE_S` (17 minutes: the build cap and the
+     image's first pull) on top of its share; a shard with a crate gives its other subjects `BUILD_RESERVE_S` less of
+     the budget. A crate the deadline stops is `shard_deadline` (retryable). Its failed install is the crate's own only on
+     cargo's word before anything compiled and with no sign of trouble reaching crates.io ("could not find `<crate>` in
+     registry `crates-io`": `install_failed`; "nothing to install ... because it has no binaries": `package_not_runnable`),
+     and only when its registry entry is in the subject's own namespace (else `package_error_unowned`, ours). What the
+     entry helper cannot find after a successful install is `entry_unresolved` (ours); everything else, npm's and pip's
+     error words included, is ours.
+   - **.NET tools** (registry type `nuget`, R-LP-57, R-LP-58) are installed in the sandbox (mcp-surface-corpus
+     launchPlan, kind `nuget`): `dotnet tool install --tool-path` in its pinned .NET 10 SDK image with a NuGet config
+     that names nuget.org alone, through api.nuget.org and globalcdn.nuget.org only; the command is the one the
+     package's `DotnetToolSettings.xml` declares and the install made a launcher for (the linux-x64 build of a
+     RID-specific tool), run as `dotnet <entry point>` on the image's runtime with `DOTNET_ROLL_FORWARD=Major` (a tool
+     built for .NET 8 or 9 runs on 10). After npm, PyPI and an image, before a crate; it runs among the subjects with
+     `PACKAGE_ALLOWANCE_S.nuget` (180 s, the SDK image's first pull) on top of its share. Its failed install is the
+     package's own only on the .NET CLI's word about this package id with no sign of trouble reaching NuGet (NU1101 or
+     NU1102: `install_failed`; not a .NET tool: `package_not_runnable`), and only when its registry entry is in the
+     subject's own namespace (else `package_error_unowned`); a NuGet install runs no code of the package, so nothing it
+     ships can print those words. What the entry helper cannot find after a successful install is `entry_unresolved`
+     (ours); a tool built for other platforms only, or for a newer .NET, is `platform_unsupported` (tool); several
+     commands is `entry_ambiguous` (tool). A tool built for an older .NET runs rolled forward, so its crash is no evidence
+     against it (`start_env_limited`).
+   - **MCP bundles** (registry type `mcpb`, R-LP-72..74, `corpus/mcpb.mjs`). The planner downloads the bundle from the
+     GitHub release asset the registry or seed list names (github.com, then its release-asset hosts only; every
+     redirect checked; at most 200 MiB, read as a stream), checks its sha256 against the registry's `fileSha256` when
+     there is one, and reads it as data: the zip's central directory (every entry name checked as the sandbox checks
+     it), `manifest.json` (at most 1 MiB) and the first bytes of a binary; nothing of it runs on the planner. From the
+     manifest it builds the launch a client would: `server.type` node, python, binary or uv; `mcp_config` with the
+     `linux` platform override; `${__dirname}` (the bundle's folder), `${HOME}`, `${DESKTOP}`, `${DOCUMENTS}`,
+     `${DOWNLOADS}`, `${pathSeparator}` and `${user_config.*}` put in. A user_config value with a default uses it; an
+     optional one with none is left out with the flag before it; a required one with none is `start_needs_config`
+     (ours), never guessed. Names the sandbox owns are never set; a `PYTHONPATH` must stay inside the bundle. A binary
+     runs only when the manifest lists linux (or no platforms) and the file is a linux/amd64 ELF; a shell launcher is
+     not started. `uv run` is read as uv reads it (`--directory`/`--project` the bundle, `--extra`, then a script,
+     `python ...` or a console script). The sandbox (mcp-surface-corpus launchPlan, kind `mcpb`) downloads the same URL
+     through its proxy (GitHub's three hosts only, PyPI as well for uv), unpacks only bytes with the pinned sha256, with
+     its own path, link, size, count and CRC guards, and starts the server from the read-only folder: node in the node
+     image, python in the Python image with the manifest's PYTHONPATH, uv's requirements installed with pip into a venv
+     (PyPI only), a binary in the full Debian node image. A bundle whose manifest does not list linux still runs (many
+     list only the platform their author tried), but its crash here is never its fault (`start_env_limited`); nor is the
+     crash of a python or uv bundle, which runs on an environment we rebuilt (our Python, our pip install of what we
+     read from its pyproject; uv would also read a script's inline metadata). A failure that
+     would be the bundle's own (`bundle_unavailable` after one more try, `bundle_hash_mismatch`, `bundle_invalid`,
+     `package_not_runnable`) counts against the subject only for an entry in its namespace: anyone can publish an entry
+     naming someone else's repository with a dead bundle URL (repository-only: `unverified_registry_entry`; seed-only or
+     seed-matched: `bundle_unowned`, ours). A bare launcher (npx, sh, bun, docker ...) is never a file of the bundle
+     (`bundle_runtime_unsupported`; so is `uv run <command>` with no pyproject, and a node or python script outside the
+     bundle: an absolute path of the author's machine, one that climbs out, a relative one the bundle does not hold, and
+     the same for a file a node option loads first: `-r`, `--import`, `--loader`, `--env-file`; a package name is allowed,
+     a module from `~`, another scheme than `node:`/`data:` or a `file:` URL with a host is not; a run of slashes is one), and only a name that leaves the bundle
+     makes it invalid. A path the manifest names is the bundle's missing file only when it names nothing the bundle
+     holds: not one a runtime resolves (node's `.js`, a folder's index or `__main__.py`, a Windows `.exe`), nor a name
+     in another case (it runs on macOS and Windows: `platform_unsupported`). Links the sandbox left out when it
+     unpacked the bundle make its crash no evidence either, and a bundle whose crash is no evidence is no more at fault
+     for a quiet exit with a declared variable (never `needs_credentials`). What goes wrong in the sandbox is ours: the
+     planner already judged those very bytes. After npm, PyPI and an image, before a
+     .NET tool or a crate; `PACKAGE_ALLOWANCE_S.mcpb` (120 s) on top of its share.
    - **npm install scripts run**, inside the sandbox's install container: gVisor with syscall tracing, egress only
      through the allowlist proxy to the npm registry. What they did is in the bundle (the install container's trace
      summary and every proxy request in `raw/telemetry.jsonl`, the counts in `install_phase_behaviour`). A native
@@ -215,7 +278,7 @@ and the 4x free-disk rule. An image on another host is unassessed until the list
 
 | Detail | Skip reason | Fault | Retryable |
 |---|---|---|---|
-| `bad_subject` (not a GitHub owner/name), `unsupported_package` (cargo, NuGet, MCPB only), `unverified_registry_entry`, `launch_invalid` | `no_runnable_artifact` | tool | no |
+| `bad_subject` (not a GitHub owner/name), `unsupported_package` (a package type we do not run), `unverified_registry_entry`, `launch_invalid` | `no_runnable_artifact` | tool | no |
 | `oci_host_not_allowed` (the image is not on one of our six registries) | `no_runnable_artifact` | tool | no |
 | `no_package` (no registry search page came back full; having no registry package is no defect: Go and Rust binaries, other npm names and own-registry images exist) | `no_runnable_artifact` | tool | no |
 | `registry_lookup_truncated` (a registry search page came back full, 100 results with no paging: the entry may not have been fetched) | `no_runnable_artifact` | tool | no |
@@ -231,6 +294,11 @@ and the 4x free-disk rule. An image on another host is unassessed until the list
 | `install_resource_limit` (exit 137 or 124, or out of memory) | `install_failed_registry` | tool | no |
 | `install_build_failed` (a native build, a missing compiler or library, an engine mismatch, or any other install failure with no package error) | `install_failed_registry` | tool | no |
 | `install_timeout` (our install time limit) | `install_failed_registry` | tool | no |
+| `package_not_runnable` (the package declares nothing we could start, in the package manager's or its own manifest's words: cargo's "nothing to install ... because it has no binaries", a NuGet package that is no tool, a bundle with no manifest, no server or no command, or whose manifest names a file it does not hold; only for a registry entry in the subject's own namespace) | `install_failed_registry` | subject | no |
+| `package_error_unowned` (a package-level error (not in the registry, nothing to install) for a package whose registry entry is not shown to be the subject's: seed-only, seed-matched or repository-only) | `install_failed_registry` | tool | no |
+| `entry_unresolved` (the install succeeded but our entry helper found nothing it may start: its name pattern, regular-file or record checks) | `install_failed_registry` | tool | no |
+| `entry_ambiguous` (several binaries, or several tool commands, and none named for the package: we would have to guess) | `install_failed_registry` | tool | no |
+| `platform_unsupported` (the package builds for other platforms only: a .NET tool for Windows runtimes, a bundle's binary that is not linux/amd64 or whose manifest does not list linux; our platform is linux/amd64) | `no_runnable_artifact` | tool | no |
 | `needs_credentials` (the registry entry declares a required env var, no cause of ours above applies, no crash signature unless it asks for configuration, the server exited non-zero by itself (not 125, 126, 127 or 137; no signal or time limit), with every argument filled and no guessed PyPI entry, and it made no network attempt) | `start_requires_credentials` | subject | no |
 | `start_needs_network` (the server tried the network, which the run does not have: a lookup or connection in its role, a connect, looked-up name or network call in its trace, or its stderr shows a failed lookup or connection; with or without a declared env var) | `timeout_start` | tool (the contract allows only subject for `start_requires_credentials`) | no |
 | `start_needs_config` (the server exited with its own code (not 125, 126, 127 or 137; no signal) and its stderr asks for configuration: a config file not found or unreadable, a kubeconfig or current-context, `--config`, a `Usage:` block, a missing or required argument, option, flag or environment variable, "please create/set/provide/specify", a missing required setting, credential or parameter, a configuration error, "not configured", "no ... credentials configured", "pass --x", "run ... first", invalid configuration, `KeyError: 'GITHUB_TOKEN'` (an unset variable read), pydantic settings validation (`validation error for Settings`, `Field required`); checked before the crash signature, so a configuration request raised with a traceback is still this) | `timeout_start` | tool | no |
@@ -241,13 +309,25 @@ and the 4x free-disk rule. An image on another host is unassessed until the list
 | `start_dependency_drift` (an import into a dependency the release declares with no upper bound failed for a submodule, name or attribute the installed version no longer has, e.g. `mcp.server.fastmcp` under mcp 2.x; a Node import of an export a dependency no longer has. Whether drift counts against the server is an open owner decision; until then it is ours) | `timeout_start` | tool | no |
 | `start_failed` (install ok, every argument filled, the server's own non-zero exit (not 125, 126, 127 or 137; for an HTTP-mode server, its container's exit as the sandbox recorded it, only when its output was read back; an exit of 128+n is signal n, ours: 130, 137, 139, 143), the failing probe itself inside half the probe window, no network attempt, no unresolved PyPI console-script guess, none of the causes above (another platform, the network, our sandbox's limits, an extra, a changed dependency, an import we cannot place), AND stderr shows a crash signature: a panic, a traceback, an uncaught or unhandled exception or rejection, a segmentation fault, a missing module of the server's own (its wheel's top-level modules, or one named like the package), an import, syntax, reference or type error, a fatal error, a stack overflow; and no configuration text) | `timeout_start` | subject | no |
 | `start_env_limited` (any other start failure: a signal, 137, exit 0, a late exit, an unfilled argument, a guessed PyPI entry, an early exit with no crash signature on stderr, which is no evidence against the server; or stderr that shows our sandbox stopped it: a read-only file system or refused write, `unable to open database file`, a missing shared library, a binary for another CPU (`Exec format error`), a missing executable (also GitPython's `Bad git executable` and an unbuilt native addon), matched in any case (Go prints them in lower case), a file under `/tmp` (the working directory we force) the image expected under its own WORKDIR; or a failed import we cannot place: a module that is not the server's own (a namespace folder such as `google/` is not) and is neither an extra nor a dependency declared with no upper bound, or a bare npm dependency that is not installed; a missing file at an absolute path, a full disk (`[Errno 28]`), `KeyboardInterrupt` (our stop); or a Python crash whose last frame is inside an installed dependency, not the server's own package) | `timeout_start` | tool | no |
-| `list_failed` (a JSON-RPC error the server sent, or a malformed result) | `timeout_start` | subject | no |
+| `bundle_host_not_allowed` (an MCP bundle that is not a GitHub release asset, or a redirect off GitHub's release-asset hosts) | `no_runnable_artifact` | tool | no |
+| `bundle_runtime_unsupported` (a bundle launched by something we do not start: a launcher on the user's machine (npx, sh, bash, bun, deno, docker, uvx ...), a shell script, a server type the spec does not name, a uv project in a subfolder) | `no_runnable_artifact` | tool | no |
+| `bundle_unreadable` (a zip we do not read: zip64, a manifest over 1 MiB, an entry name our rules do not take though it stays inside: a backslash, a colon, a control character, our length and depth limits) | `install_failed_registry` | tool | no |
+| `bundle_too_large` (over our 200 MiB bundle cap) | `too_large` | tool | no |
+| `bundle_unavailable` (the release page's own 404 for the bundle's URL, twice, for an entry in the subject's namespace) | `install_failed_registry` | subject | no |
+| `bundle_hash_mismatch` (the bytes at the URL are not the ones the registry entry names in fileSha256) | `install_failed_registry` | subject | no |
+| `bundle_unowned` (one of the four bundle failures above, or `package_not_runnable`, for a bundle whose registry entry is not shown to be the subject's: seed-only or seed-matched; a repository-only entry is `unverified_registry_entry`) | `install_failed_registry` | tool | no |
+| `bundle_invalid` (the file is no zip archive at all, or names a path that leaves it: absolute or with a `..` segment; only for an entry in the subject's namespace, else `bundle_unowned`) | `install_failed_registry` | subject | no |
+| `list_failed` (a JSON-RPC error the server sent, or a malformed result; not "method not found" from a server that declared no tools capability) | `timeout_start` | subject | no |
+| `no_tools_capability` (the server declared no `tools` capability at initialize and answered `tools/list` with -32601 "method not found", as the specification lets it: a prompts-only or resources-only server. `buildItem` records it as status `no_tools` with no skip, so it is assessed with nothing to grade and nobody's fault; the row is the fallback if a caller still skips it, R-LP-75) | `no_tools_found` | tool | no |
 | `list_probe_limited` (our time limit, the page cap, the read cap, or an HTTP transport failure while listing) | `timeout_start` | tool | no |
 | `start_timeout` | `timeout_start` | tool (the subject's time budget also pays for the install, so a slow runner or sandbox start can run it out; it is no evidence the server hung) | no |
 | `list_rejected` (the engine refused the list) | `tool_error` | tool | no |
 | `harness_error` (our driver or bundle step failed) | `tool_error` | tool | yes |
 | `rate_limited` | `rate_limited` | infra | yes |
-| `upstream_error`, `shard_deadline`, `disk_low` | `upstream_unavailable` | infra | yes |
+| `upstream_error` (a 5xx, 408, 425 or a 403 with no rate-limit headers, a network failure, a read cut at our cap), `shard_deadline`, `disk_low` | `upstream_unavailable` | infra | yes |
+| `registry_query_refused` (a registry's 4xx other than 403, 404, 408, 425 and 429: its answer to our request, the same on a retry; a 403 without rate-limit headers stays `upstream_error`, since a CDN or firewall may send it for a while; one candidate's provenance answer refused leaves that candidate unverified and the next one is tried; a search shorter than 3 characters, which the MCP registry answers 422, is never sent, R-LP-76) | `tool_error` | tool | no |
+| `image_access_denied` (the registry's token service refused a pull token, 401 or 403: ghcr's `DENIED` for a private or missing package; private and gone look alike and the request is ours, R-LP-76) | `install_failed_registry` | tool | no |
+| `resolver_error` (an exception in our resolver with no detail code: a bug of ours, never an outage; its class name is kept in `raw/resolution.json`, R-LP-76) | `tool_error` | tool | no |
 | `sandbox_evidence_missing` (no syscall trace or firewall log for it) | `trace_unavailable` | tool | yes |
 
 ## Controls

@@ -216,3 +216,26 @@ notice, not a failure, before anything is checked out. `corpus/loop-guard.mjs` t
 `LANE_SCAN_STATIC_ENABLED` again in its first step, since they may change after the guard job. The env value `WORKER_KIT_REF` in the
 workflow must be the tool-qa commit that every worker-kit step uses. While it is the all-zero placeholder, a run
 that would proceed fails at the guard, before anything is read.
+
+### The ast-grep oracle (O3)
+
+An independent reader of the same commit, for the differential checks. Off unless the repository variable
+`LANE_SCAN_STATIC_AST_GREP` is exactly `true`; then the scan job installs the pinned ast-grep (`corpus/ast-grep/package.json` and its
+lockfile, `npm ci --ignore-scripts`) and, for each subject the reader graded (or found no list in), fetches that commit's source files
+with git (a fresh repository, no hooks, symlinks, LFS or submodules; tests, docs, examples and vendored code left out) and reads the
+tool-registration idioms of TypeScript and JavaScript (`server.tool`, `registerTool`, FastMCP `addTool`, the `ListToolsRequestSchema`
+handler), Python (`@mcp.tool`, `types.Tool(...)`, `add_tool`), Go (mcp-go `NewTool`, the go-sdk `mcp.Tool` literal, `AddTool`,
+`RegisterTool`), Rust (rmcp `#[tool]`, `#[mcp_tool]`, `Tool::new`) and C# (`[McpServerTool]`) with the rules in
+`corpus/ast-grep/packs/`. A name is taken only from a literal (or a same-package constant, or the function a decorator or attribute is
+on); a computed, looped or table-driven registration is `unreadable`, which is never a disagreement and never a fault of the subject.
+
+It adds, only when it ran: `oracle_ast_grep` in `results/scan-static.json` (status `read`, `none`, `unreadable` or `error`; confidence
+`high`, `medium` or `low`; tool and unreadable counts; idioms; whether the reader's list was compared, and how many tools each side
+lacks), `ast-grep` and its version in the manifest's `oracles`, `raw/subject/ast-grep.json` (names, descriptions, annotations, files:
+raw only), and, when the reader and ast-grep differ, an `oracle_disagreements` field record: class D1 (the reader lacks a tool ast-grep
+read) or D2 (the reader lists one ast-grep did not read; only when ast-grep read every registration), kind `tool_set`, attribution
+`tool`, with counts and a fingerprint of the shape (class, idioms, layout, size), never a name. It does not change anything the
+reader said. tool-qa's ingest sets these beside the live list (three-way agreement, `state/oracle.mjs`).
+
+`corpus/ast-grep/harness.mjs` and `.github/workflows/ast-grep-validate.yml` score the oracle against ground truth (a repository at a pinned
+commit and the tools its server registers): precision against every tool the server has, recall over its default tools, per language.

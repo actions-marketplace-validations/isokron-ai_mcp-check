@@ -39,6 +39,7 @@ import { VERSION } from '../src/version.js';
 import { ranCommit } from './tool-commit.mjs';
 import { baselineProblems, judgeOracles } from './oracles/judge.mjs';
 import { pypiEntry } from './pypi-entry.mjs';
+import { mcpbLaunch } from './mcpb.mjs';
 
 export const LANE = 'live-probe';
 export const FORMAT = 'isokron-mcp-check-live-probe/1';
@@ -88,6 +89,18 @@ export const targetId = (i) => 's' + String(i + 1).padStart(3, '0');
 
 /** Subjects: the sandbox's whole budget for them, and each one's limit within it. */
 export const SUBJECT_BUDGET_S = 26 * 60;
+/**
+ * R-LP-55: a subject built in the sandbox (a crate) runs after the others, in a list of its own
+ * (targets-builds.json), with this much more time than a subject: the sandbox's 15-minute build cap and its Rust
+ * image's first pull. When a shard has one, the other subjects share this much less of SUBJECT_BUDGET_S, so the builds
+ * still have time before the deadline.
+ */
+export const BUILD_ALLOWANCE_S = 17 * 60;
+export const BUILD_RESERVE_S = 12 * 60;
+/** R-LP-57: more time for a kind whose install image is large and pulled at its first subject (the .NET SDK image). */
+export const PACKAGE_ALLOWANCE_S = Object.freeze({ nuget: 180, mcpb: 120 });
+/** The launch kinds that build in the sandbox. */
+export const isBuild = (launch) => !!(launch && launch.kind === 'cargo');
 export const SUBJECT_TIMEOUT_MIN_S = 90;
 export const SUBJECT_TIMEOUT_MAX_S = 300;
 export const PROBE_MS = 45_000;
@@ -109,7 +122,7 @@ const REGISTRY_CAP = 4 * 1024 * 1024;
 export const DETAILS = Object.freeze({
   bad_subject: ['no_runnable_artifact', false, 'resolve', 'tool'], // not a GitHub owner/name: this lane reads GitHub only
   no_package: ['no_runnable_artifact', false, 'resolve', 'tool'], // no registry package is no defect: Go and Rust binaries, other npm names and own-registry images exist (R-LP-43)
-  unsupported_package: ['no_runnable_artifact', false, 'resolve', 'tool'], // cargo, NuGet, MCPB: we cannot run them yet
+  unsupported_package: ['no_runnable_artifact', false, 'resolve', 'tool'], // a package type we cannot run
   private_registry: ['no_runnable_artifact', false, 'resolve', 'tool'],
   unverified_registry_entry: ['no_runnable_artifact', false, 'resolve', 'tool'], // our provenance checks stop short of it
   // Our allowlist of OCI hosts (it guards the planner's own fetches and what the runner's Docker daemon pulls, outside the
@@ -131,6 +144,35 @@ export const DETAILS = Object.freeze({
   install_resource_limit: ['install_failed_registry', false, 'install', 'tool'], // killed (137, 124, out of memory) inside our limits
   install_build_failed: ['install_failed_registry', false, 'install', 'tool'], // a native build, a missing compiler or library, an engine mismatch, or an install failure with no package-level cause
   install_timeout: ['install_failed_registry', false, 'install', 'tool'], // our install time limit
+  // R-LP-56: the package declares nothing we could start, in the package manager's own words (cargo: "there is nothing to
+  // install ... because it has no binaries"), never from text the package printed, and only for a package whose registry
+  // entry is the subject's own (namespace); otherwise package_error_unowned.
+  package_not_runnable: ['install_failed_registry', false, 'install', 'subject'],
+  // R-LP-56: a package-level error (not in the registry, nothing to install) for a package whose registry entry is not
+  // shown to be the subject's (a seed-only or seed-matched package, a repository-only match): we cannot say it is theirs.
+  package_error_unowned: ['install_failed_registry', false, 'install', 'tool'],
+  // R-LP-54: several binaries (or commands) and none named for the package: we would have to guess, so it is ours.
+  entry_ambiguous: ['install_failed_registry', false, 'install', 'tool'],
+  // R-LP-57: the package has a build for other platforms only (a .NET tool for Windows runtimes): our platform, not a defect.
+  platform_unsupported: ['no_runnable_artifact', false, 'install', 'tool'],
+  // R-LP-72..74: MCP bundles (corpus/mcpb.mjs). Ours: a host we do not fetch from, a runtime or launcher we do not start
+  // (a shell script, a uv project in a subfolder, a server type the spec does not name), an archive or manifest we do not
+  // read (zip64, over 1 MiB), our size cap. The bundle's own: the release page's 404, bytes that are not the ones its
+  // registry entry names (fileSha256), a file that is no zip archive or names a path outside itself, and (as
+  // package_not_runnable) a manifest that names nothing to run or a file the bundle does not hold.
+  bundle_host_not_allowed: ['no_runnable_artifact', false, 'resolve', 'tool'],
+  bundle_runtime_unsupported: ['no_runnable_artifact', false, 'resolve', 'tool'],
+  bundle_unreadable: ['install_failed_registry', false, 'resolve', 'tool'],
+  bundle_too_large: ['too_large', false, 'resolve', 'tool'],
+  bundle_unavailable: ['install_failed_registry', false, 'resolve', 'subject'],
+  bundle_hash_mismatch: ['install_failed_registry', false, 'resolve', 'subject'],
+  bundle_invalid: ['install_failed_registry', false, 'resolve', 'subject'],
+  // R-LP-72: a failure that would be the bundle's own (above, or package_not_runnable), for a bundle whose registry entry
+  // is not shown to be the subject's (a seed-only or seed-matched package): ours to report, never the subject's.
+  bundle_unowned: ['install_failed_registry', false, 'resolve', 'tool'],
+  // R-LP-56: the install succeeded but our entry helper found nothing it may start (its name pattern, its regular-file or
+  // record checks): ours, never the package's.
+  entry_unresolved: ['install_failed_registry', false, 'install', 'tool'],
   needs_credentials: ['start_requires_credentials', false, 'start', 'subject'], // a declared required env var, and the server exited non-zero by itself with no network attempt
   start_needs_network: ['timeout_start', false, 'start', 'tool'], // the server tried the network, which the run does not have
   start_failed: ['timeout_start', false, 'start', 'subject'], // a crash signature on stderr (R-LP-45), and exited with its own non-zero code, early, with every argument filled
@@ -146,7 +188,17 @@ export const DETAILS = Object.freeze({
   list_probe_limited: ['timeout_start', false, 'list', 'tool'], // our time limit, page cap or read cap, or an HTTP transport failure
   list_rejected: ['tool_error', false, 'grade', 'tool'], // our engine refused the list it was given
   rate_limited: ['rate_limited', true, 'resolve', 'infra'],
-  upstream_error: ['upstream_unavailable', true, 'resolve', 'infra'],
+  upstream_error: ['upstream_unavailable', true, 'resolve', 'infra'], // 5xx, 408, a network failure or a cut read: tried again
+  // R-LP-76: a registry's 4xx (other than 404, 408, 429 and a rate limit) is its answer to our request and comes back the
+  // same on every retry: ours, not retried (a 2-character search is a 422).
+  registry_query_refused: ['tool_error', false, 'resolve', 'tool'],
+  // R-LP-76: the token service refused a pull token for the image (ghcr's 403 DENIED: a private or missing package). We
+  // cannot tell private from gone, and the request is ours: not the subject's, not retried.
+  image_access_denied: ['install_failed_registry', false, 'resolve', 'tool'],
+  resolver_error: ['tool_error', false, 'resolve', 'tool'], // R-LP-76: an exception of ours in the resolver, never an outage
+  // R-LP-75: a fallback only (buildItem records such a server as no_tools, with no skip): the server declared no tools
+  // capability and answered tools/list "method not found", as the specification lets it. Never the subject's.
+  no_tools_capability: ['no_tools_found', false, 'list', 'tool'],
   harness_error: ['tool_error', true, 'start', 'tool'], // our driver or bundle step failed; tried again, then accepted as a gap
   shard_deadline: ['upstream_unavailable', true, 'start', 'infra'],
   sandbox_evidence_missing: ['trace_unavailable', true, 'start', 'tool'],
@@ -302,9 +354,15 @@ export function loadSeed(file) {
   return map;
 }
 
-/** A fetch's failure as a detail code: rate_limited (429, or 403 with a rate limit), else upstream_error. */
+/**
+ * A fetch's failure as a detail code: rate_limited (429, or 403 with a rate limit); registry_query_refused for any other
+ * 4xx but 403, 408 and 425 (the registry's answer to our request, the same on a retry: R-LP-76); else upstream_error
+ * (5xx, 408, 425, and a 403 with no rate-limit headers, which a CDN or firewall in front of a registry may send for a
+ * while: still tried again; the token service's own 403 is image_access_denied, below).
+ */
 export function httpDetail(status, header = () => null) {
   if (status === 429 || (status === 403 && (header('x-ratelimit-remaining') === '0' || header('retry-after') != null))) return 'rate_limited';
+  if (Number.isInteger(status) && status >= 400 && status < 500 && ![403, 408, 425].includes(status)) return 'registry_query_refused';
   return 'upstream_error';
 }
 
@@ -346,9 +404,16 @@ export function repoOfMetadataUrl(url) {
   return m ? (m[1] + '/' + m[2]).toLowerCase() : null;
 }
 
-const TYPE_RANK = { npm: 0, pypi: 1, oci: 2 };
+// Installed packages first, then an image, then a package we build: a crate's build can take BUILD_CAP_S.
+const TYPE_RANK = { npm: 0, pypi: 1, oci: 2, mcpb: 3, nuget: 4, cargo: 5 };
 const TRANSPORT_RANK = { stdio: 0, 'streamable-http': 1 };
-const DEFAULT_BASE = { npm: ['https://registry.npmjs.org', 'https://registry.npmjs.org/'], pypi: ['https://pypi.org', 'https://pypi.org/', 'https://pypi.org/simple', 'https://pypi.org/simple/'] };
+const DEFAULT_BASE = { npm: ['https://registry.npmjs.org', 'https://registry.npmjs.org/'], pypi: ['https://pypi.org', 'https://pypi.org/', 'https://pypi.org/simple', 'https://pypi.org/simple/'], cargo: ['https://crates.io', 'https://crates.io/', 'https://index.crates.io', 'https://index.crates.io/'], nuget: ['https://api.nuget.org/v3/index.json', 'https://api.nuget.org', 'https://api.nuget.org/', 'https://www.nuget.org', 'https://www.nuget.org/'] };
+/** A NuGet package id and an exact NuGet version, as the sandbox checks them (mcp-surface-corpus src/targets.mjs). */
+const NUGET_ID = /^[A-Za-z0-9_](?:[A-Za-z0-9_.-]{0,98}[A-Za-z0-9_])?$/;
+const NUGET_VERSION = /^[0-9]+\.[0-9]+(?:\.[0-9]+){0,2}(?:-[0-9A-Za-z.-]{1,60})?(?:\+[0-9A-Za-z.-]{1,60})?$/;
+/** A crate name as crates.io takes it, and the sandbox's own check (mcp-surface-corpus src/targets.mjs CRATE). */
+const CRATE_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+const CRATE_VERSION = /^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.+-]{1,60})?$/;
 const NPM_NAME = /^(?:@[a-z0-9][a-z0-9._~-]{0,80}\/)?[a-z0-9][a-z0-9._~-]{0,120}$/;
 const PYPI_NAME = /^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,120}[A-Za-z0-9])?$/;
 const SEMVER = /^[0-9]+(?:\.[0-9A-Za-z-]+){0,3}(?:[-+.][0-9A-Za-z.+-]{1,60})?$/;
@@ -422,7 +487,13 @@ export async function resolveOciImage(ref, { fetch: fetchImpl = globalThis.fetch
       if (realm.protocol !== 'https:' || realm.port !== '' || !OCI_TOKEN_HOSTS.includes(realm.hostname)) throw fail('oci_host_not_allowed');
       if (params.service) realm.searchParams.set('service', params.service);
       realm.searchParams.set('scope', 'repository:' + ref.path + ':pull');
-      const tok = await getJson(fetchImpl, realm.href, { timeoutMs, cap: 64 * 1024 });
+      let tok;
+      try { tok = await getJson(fetchImpl, realm.href, { timeoutMs, cap: 64 * 1024 }); } catch (e) {
+        // R-LP-76: the token service's own 401 or 403 (ghcr's DENIED for a private or missing package) is its answer
+        // about the image, the same on every retry; private and gone look alike, so it is ours (tool), never infra.
+        if (e && (e.status === 401 || e.status === 403) && e.detail !== 'rate_limited') throw fail('image_access_denied', { status: e.status });
+        throw e;
+      }
       const token = tok && (typeof tok.token === 'string' ? tok.token : typeof tok.access_token === 'string' ? tok.access_token : null);
       if (!token || token.length > 16384) throw fail('image_registry_unreadable');
       auth = 'Bearer ' + token;
@@ -725,6 +796,8 @@ export function purlOf(type, id, version) {
   const v = typeof version === 'string' && version && version !== 'latest' ? '@' + encodeURIComponent(version) : '';
   if (type === 'npm') return 'pkg:npm/' + id.split('/').map(encodeURIComponent).join('/') + v;
   if (type === 'pypi') return 'pkg:pypi/' + encodeURIComponent(id.toLowerCase().replace(/[-_.]+/g, '-')) + v;
+  if (type === 'cargo') return 'pkg:cargo/' + encodeURIComponent(id) + v;
+  if (type === 'nuget') return 'pkg:nuget/' + encodeURIComponent(id) + v;
   return null;
 }
 
@@ -735,9 +808,9 @@ export function purlOf(type, id, version) {
 export async function launchFor(pkg, { fetch: fetchImpl = globalThis.fetch } = {}) {
   const type = String(pkg.registryType || pkg.registry || '').toLowerCase();
   const id = typeof pkg.identifier === 'string' ? pkg.identifier.trim() : '';
-  if (!['npm', 'pypi', 'oci'].includes(type)) return { detail: 'unsupported_package' };
+  if (!['npm', 'pypi', 'oci', 'cargo', 'nuget', 'mcpb'].includes(type)) return { detail: 'unsupported_package' };
   const base = typeof pkg.registryBaseUrl === 'string' ? pkg.registryBaseUrl : null;
-  if (base && type !== 'oci' && !DEFAULT_BASE[type].includes(base)) return { detail: 'private_registry' };
+  if (base && type !== 'oci' && type !== 'mcpb' && !DEFAULT_BASE[type].includes(base)) return { detail: 'private_registry' };
   const tr = transportOf(pkg.transport);
   if (tr.detail) return tr;
   const { args, unfilled } = packageArgs(pkg.packageArguments);
@@ -757,6 +830,32 @@ export async function launchFor(pkg, { fetch: fetchImpl = globalThis.fetch } = {
     choice.purl = purlOf('pypi', id, version);
     return { launch: { kind: 'pypi', package: id, version, ...common }, choice };
   }
+  if (type === 'cargo') {
+    // R-LP-54: built in the sandbox (mcp-surface-corpus launchPlan, kind cargo: `cargo install --locked` in its pinned
+    // Rust image, crates.io only, at most 15 minutes), so it runs after the other subjects with a time limit of its own.
+    if (!CRATE_NAME.test(id)) return { detail: 'launch_invalid' };
+    const v = version === 'latest' || CRATE_VERSION.test(version) ? version : 'latest';
+    choice.version = v; choice.purl = purlOf('cargo', id, v);
+    return { launch: { kind: 'cargo', crate: id, version: v, ...common }, choice };
+  }
+  if (type === 'mcpb') {
+    // R-LP-72: the bundle is read here as data (corpus/mcpb.mjs) and unpacked in the sandbox (mcp-surface-corpus launchPlan,
+    // kind mcpb) from exactly the bytes read, its sha256 pinned; it runs in the image its runtime needs.
+    if (tr.transport !== 'stdio') return { detail: 'unsupported_transport' };
+    const { launch, info } = await mcpbLaunch(pkg, { fetch: fetchImpl, transportArgs: args, env });
+    choice.version = typeof pkg.version === 'string' && SAFE_VERSION.test(pkg.version) ? pkg.version : 'latest';
+    choice.mcpb = info;
+    return { launch, choice };
+  }
+  if (type === 'nuget') {
+    // R-LP-57: a .NET tool package, installed in the sandbox (mcp-surface-corpus launchPlan, kind nuget: `dotnet tool
+    // install --tool-path` in its pinned .NET SDK image, NuGet's two hosts only), its command the one its
+    // DotnetToolSettings.xml declares, run on the image's runtime.
+    if (!NUGET_ID.test(id)) return { detail: 'launch_invalid' };
+    const v = version === 'latest' || NUGET_VERSION.test(version) ? version : 'latest';
+    choice.version = v; choice.purl = purlOf('nuget', id, v);
+    return { launch: { kind: 'nuget', package: id, version: v, ...common }, choice };
+  }
   const ref = parseOciRef(id);
   if (!ref) return { detail: 'launch_invalid' };
   if (!OCI_HOSTS.includes(ref.host)) return { detail: 'oci_host_not_allowed' };
@@ -773,10 +872,13 @@ export async function launchFor(pkg, { fetch: fetchImpl = globalThis.fetch } = {
  * which the registry verifies), repository (only its repository URL, free text anyone can publish).
  */
 export const REGISTRY_PAGE = 100;
+export const REGISTRY_MIN_QUERY = 3;
 export async function registryEntries(subject, seedPkgs, { fetch: fetchImpl = globalThis.fetch, base = REGISTRY_BASE, stats = null } = {}) {
   const [owner, name] = subject.split('/');
   const seedIds = new Set(seedPkgs.map((p) => String(p.registry).toLowerCase() + ':' + String(p.identifier).toLowerCase()));
-  const queries = [...new Set([name, owner + '/' + name, ...seedPkgs.filter((p) => ['npm', 'pypi'].includes(p.registry)).map((p) => p.identifier.split('/').pop())])].filter((q) => q && q.length <= 200).slice(0, 5);
+  // The registry refuses a search shorter than REGISTRY_MIN_QUERY with a 422 (getsigit/si, anderson-0/qh): such a query
+  // is never sent; owner/name is always long enough (R-LP-76).
+  const queries = [...new Set([name, owner + '/' + name, ...seedPkgs.filter((p) => ['npm', 'pypi', 'cargo', 'nuget'].includes(p.registry)).map((p) => p.identifier.split('/').pop())])].filter((q) => q && q.length >= REGISTRY_MIN_QUERY && q.length <= 200).slice(0, 5);
   const found = new Map();
   for (const q of queries) {
     const d = await getJson(fetchImpl, base + '/v0.1/servers?search=' + encodeURIComponent(q) + '&version=latest&limit=100');
@@ -795,7 +897,10 @@ export async function registryEntries(subject, seedPkgs, { fetch: fetchImpl = gl
   return [...found.values()].sort((a, b) => (b.seed - a.seed) || (b.namespace - a.namespace) || (a.server.name < b.server.name ? -1 : 1));
 }
 
-const DETAIL_ORDER = ['unverified_registry_entry', 'image_too_large', 'oci_host_not_allowed', 'unsupported_transport', 'image_registry_unreadable', 'image_unavailable', 'launch_invalid', 'private_registry', 'unsupported_package'];
+/** The resolve details that put a bundle's own failure on the subject (R-LP-72): only for an entry in its namespace. */
+export const SUBJECT_RESOLVE_DETAILS = Object.freeze(['bundle_unavailable', 'bundle_hash_mismatch', 'bundle_invalid', 'package_not_runnable']);
+// Our limits before a package's own failure: a subject is not shown at fault while any of its packages failed on our side.
+const DETAIL_ORDER = ['unverified_registry_entry', 'image_too_large', 'oci_host_not_allowed', 'unsupported_transport', 'image_registry_unreadable', 'image_access_denied', 'registry_query_refused', 'start_needs_config', 'platform_unsupported', 'bundle_runtime_unsupported', 'bundle_unreadable', 'bundle_too_large', 'bundle_host_not_allowed', 'bundle_unowned', 'image_unavailable', 'bundle_unavailable', 'bundle_hash_mismatch', 'bundle_invalid', 'package_not_runnable', 'launch_invalid', 'private_registry', 'unsupported_package'];
 
 /**
  * How to run one subject: { status: 'runnable', launch, choice, registry, subdir } or { status: 'skipped', detail }.
@@ -823,12 +928,23 @@ export async function resolveSubject(item, { seed = new Map(), fetch: fetchImpl 
         if (e && (e.detail === 'rate_limited' || e.detail === 'upstream_error')) throw e;
         r = { detail: (e && e.detail) || 'launch_invalid' };
       }
-      if (r.detail) { details.push(r.detail); continue; }
+      if (r.detail) {
+        // R-LP-72: a failure that would be the package's own counts against the subject only when the entry is the
+        // subject's (its namespace). Anyone can publish an entry naming someone else's repository with a dead bundle URL.
+        if (SUBJECT_RESOLVE_DETAILS.includes(r.detail) && !(c.entry && c.entry.namespace)) details.push(c.entry && !c.entry.seed ? 'unverified_registry_entry' : 'bundle_unowned');
+        else details.push(r.detail);
+        continue;
+      }
       // An entry that matched on its repository URL alone is anyone's claim: its package must point back to the repo.
       let verifiedBy = !c.entry ? 'seed' : c.entry.seed ? 'seed' : c.entry.namespace ? 'namespace' : null;
       if (!verifiedBy) {
         const why = {};
-        verifiedBy = await packageVerifiedBy(c.pkg, item.repo, { fetch: fetchImpl, chains, out: why });
+        // R-LP-76: one candidate's provenance answer that a registry refused (a 4xx) leaves that candidate unverified; it
+        // does not end the subject (an outage or rate limit still does, and is retried).
+        try { verifiedBy = await packageVerifiedBy(c.pkg, item.repo, { fetch: fetchImpl, chains, out: why }); } catch (e) {
+          if (!(e && e.detail === 'registry_query_refused')) throw e;
+          verifiedBy = null; why.why = 'provenance_refused';
+        }
         if (!verifiedBy) { details.push('unverified_registry_entry'); out.unverified = [...(out.unverified || []), { identifier: String(c.pkg.identifier || '').slice(0, 200), why: why.why || null }].slice(0, 8); continue; }
         // Install exactly the version whose provenance was checked (R-LP-17).
         if (why.version && (r.launch.kind === 'npm' || r.launch.kind === 'pypi')) {
@@ -868,7 +984,10 @@ export async function resolveSubject(item, { seed = new Map(), fetch: fetchImpl 
     if (own.length) out.registry = { name: own[0].server.name, version: typeof own[0].server.version === 'string' ? own[0].server.version.slice(0, 64) : null, entries: own.length, transports: [], remotes: Array.isArray(own[0].server.remotes) ? own[0].server.remotes.length : 0 };
   } catch (e) {
     out.status = 'skipped';
-    out.detail = e && (e.detail === 'rate_limited' || e.detail === 'upstream_error') ? e.detail : 'upstream_error';
+    // R-LP-76: a detail code of ours stands (an outage, a rate limit, a refused query); an exception without one is a bug
+    // of ours, never somebody else's outage: resolver_error (tool), with the error's class kept.
+    out.detail = e && typeof e.detail === 'string' && Object.hasOwn(DETAILS, e.detail) && DETAILS[e.detail][2] === 'resolve' ? e.detail : 'resolver_error';
+    if (out.detail === 'resolver_error') out.error_class = String((e && e.name) || typeof e).replace(/[^A-Za-z]/g, '').slice(0, 40) || null;
     out.launch = null; out.choice = null;
   }
   return out;
@@ -895,14 +1014,17 @@ export function targetLists(plan, { node24Image, forgery = forgeryScript() }) {
     ],
   };
   const isOci = (x) => x.target && x.target.launch.kind === 'docker';
-  const subjects = { format: TARGETS_FORMAT, about: 'live-probe subjects', defaults: { timeout_s: plan.subject_timeout_s }, targets: plan.items.filter((x) => x.target && !isOci(x)).map((x) => x.target) };
+  const built = (x) => x.target && isBuild(x.target.launch);
+  const subjects = { format: TARGETS_FORMAT, about: 'live-probe subjects', defaults: { timeout_s: plan.subject_timeout_s }, targets: plan.items.filter((x) => x.target && !isOci(x) && !built(x)).map((x) => x.target) };
+  // Crates build after the other subjects, one after another, each within its own longer limit (R-LP-55).
+  const builds = { format: TARGETS_FORMAT, about: 'live-probe subjects built in the sandbox', defaults: { timeout_s: plan.subject_timeout_s }, targets: plan.items.filter(built).map((x) => x.target) };
   // OCI subjects run one at a time after the others, each only when the disk has room for its image (corpus/live-probe-sandbox.sh).
   const oci = plan.items.filter(isOci).map((x) => ({ id: x.target.id, image: x.target.launch.image, bytes: Number.isSafeInteger(x.resolution.choice && x.resolution.choice.oci_bytes) ? x.resolution.choice.oci_bytes : OCI_MAX_BYTES, list: { format: TARGETS_FORMAT, about: 'live-probe OCI subject', defaults: { timeout_s: plan.subject_timeout_s }, targets: [x.target] } }));
-  return { controls, subjects, oci };
+  return { controls, subjects, builds, oci };
 }
 
 /** Each subject's time limit: the subject budget shared out, within bounds. */
-export const subjectTimeout = (n) => Math.max(SUBJECT_TIMEOUT_MIN_S, Math.min(SUBJECT_TIMEOUT_MAX_S, Math.floor((SUBJECT_BUDGET_S - 90) / Math.max(1, n))));
+export const subjectTimeout = (n, reserveS = 0) => Math.max(SUBJECT_TIMEOUT_MIN_S, Math.min(SUBJECT_TIMEOUT_MAX_S, Math.floor((SUBJECT_BUDGET_S - 90 - reserveS) / Math.max(1, n))));
 
 /**
  * The shard plan. validateTarget is the sandbox's own check of one target (mcp-surface-corpus src/targets.mjs): a
@@ -923,11 +1045,15 @@ export async function planShard({ inputs, seed = new Map(), fetch: fetchImpl = g
     items.push(x);
   }
   const runnable = items.filter((x) => x.target).length;
-  const timeout = subjectTimeout(runnable);
+  const builds = items.filter((x) => x.target && isBuild(x.target.launch)).length;
+  const timeout = subjectTimeout(runnable - builds, builds ? BUILD_RESERVE_S : 0);
   // The oracle stage runs only for stdio targets (corpus/live-probe-driver.mjs): only they get its allowance.
   // The fuzz stage (off unless switched on) runs for the same targets and has an allowance of its own.
   for (const x of items) if (x.target) x.target.timeout_s = timeout + ((x.target.launch.transport || 'stdio') === 'stdio' ? ORACLE_ALLOWANCE_S : 0);
   if (fuzz) for (const x of items) if (x.target && (x.target.launch.transport || 'stdio') === 'stdio') x.target.timeout_s += FUZZ_ALLOWANCE_S;
+  for (const x of items) if (x.target && PACKAGE_ALLOWANCE_S[x.target.launch.kind]) x.target.timeout_s += PACKAGE_ALLOWANCE_S[x.target.launch.kind];
+  // The sandbox's own bound is 1800 s a target (mcp-surface-corpus MAX_TIMEOUT_S).
+  for (const x of items) if (x.target && isBuild(x.target.launch)) x.target.timeout_s = Math.min(1800, x.target.timeout_s + BUILD_ALLOWANCE_S);
   return { format: PLAN_FORMAT, shard_id: inputs.shardId, attempt_id: inputs.attemptId, marker, planned_at: now().toISOString(), subject_timeout_s: timeout, runnable, ...(fuzz ? { fuzz: true } : {}), items };
 }
 
@@ -1305,6 +1431,66 @@ export function importCause(imp, { pydeps = null, pkg = null, err = '', installe
 /** A list error that is the server's own: a malformed result. (A JSON-RPC error is told by its numeric code.) */
 const MALFORMED_LIST = /^the .* result has no .* array$|^nextCursor is not a string$|^the server repeated the same cursor$|^the answer has no result object$/;
 
+/** Signs that crates.io could not be reached properly (our proxy, a name lookup, a time-out), not that the crate is missing. */
+const CARGO_NOT_THE_CRATE = /spurious network error|failed to download|failed to query|Couldn't resolve|timed out|Connection|failed to get|proxy|SSL|certificate/i;
+
+/**
+ * R-LP-54: a crate's install failed for the crate's own reason only when cargo says so before anything compiled (a build
+ * script prints what it likes once building starts) and nothing shows trouble reaching crates.io: "could not find
+ * `<the crate>` in registry `crates-io`" (no such crate, or no such version) gives install_failed, "there is nothing to
+ * install in `<the crate> ...`, because it has no binaries" gives package_not_runnable. The same evidence rule as
+ * isokron-ai/mcp-writecheck-action loop/skips.mjs (R-WC-26, R-WC-31). Returns a detail or null.
+ */
+export function cargoInstallEvidence(text, crate) {
+  const t = String(text || '');
+  if (/^\s*Compiling /m.test(t) || CARGO_NOT_THE_CRATE.test(t)) return null;
+  const same = (n) => String(n).toLowerCase().replace(/_/g, '-') === String(crate).toLowerCase().replace(/_/g, '-');
+  const missing = /^error: could not find `([A-Za-z0-9_-]{1,64})` in registry `crates-io`/m.exec(t);
+  if (missing && same(missing[1])) return 'install_failed';
+  const nothing = /^error: there is nothing to install in `([A-Za-z0-9_-]{1,64}) v[0-9][^`]{0,80}`, because it has no binaries/m.exec(t);
+  if (nothing && same(nothing[1])) return 'package_not_runnable';
+  return null;
+}
+
+/** Signs that NuGet could not be reached properly (our proxy, a name lookup, TLS, a time-out), not that the package is missing. */
+const NUGET_NOT_THE_PACKAGE = /NU1301|NU1801|NU1302|Unable to load the service index|Failed to retrieve information|Failed to download|proxy|SSL|certificate|timed out|timeout|Connection refused|Name or service not known|No such host|Resource temporarily unavailable/i;
+
+/**
+ * R-LP-57: a .NET tool's failed install is the package's own only on the .NET CLI's word, about this package id, with no
+ * sign of trouble reaching NuGet (a NuGet install runs no code of the package, so nothing it ships can print): NU1101
+ * (no package with this id) or NU1102 (no such version) gives install_failed; "is not a .NET tool" or no
+ * DotnetToolSettings.xml in the package gives package_not_runnable. Returns a detail or null.
+ */
+export function nugetInstallEvidence(text, id) {
+  const t = String(text || '');
+  if (NUGET_NOT_THE_PACKAGE.test(t)) return null;
+  const same = (n) => String(n).toLowerCase() === String(id).toLowerCase();
+  const missing = /\berror NU110[12]: Unable to find package ([A-Za-z0-9_.-]{1,100})\b/.exec(t);
+  if (missing && same(missing[1])) return 'install_failed';
+  const notTool = /\b(?:Package|The package) '?([A-Za-z0-9_.-]{1,100})'? is not a \.NET tool|Settings file 'DotnetToolSettings\.xml' was not found in the package/.exec(t);
+  if (notTool && (!notTool[1] || same(notTool[1]))) return 'package_not_runnable';
+  return null;
+}
+
+/**
+ * The answer of the install's entry helper (mcp-surface-corpus sandbox/cargo-entry.mjs, nuget-entry.mjs), as a detail
+ * (R-LP-54, R-LP-56, R-LP-58). The install itself succeeded, so whatever the helper could not find (no binary, no tool
+ * settings its store walk reached) is a limit of its own checks: never the package's.
+ */
+export function entryDetail(code) {
+  if (code === 'several_binaries' || code === 'several_commands') return 'entry_ambiguous';
+  // A build for other platforms only, or for a newer .NET than the sandbox's runtime: ours to run, not the package's lack.
+  if (code === 'no_linux_build' || code === 'runtime_too_new') return 'platform_unsupported';
+  return 'entry_unresolved';
+}
+
+/**
+ * Whether the chosen package's registry entry is the subject's own: its name is in the owner's namespace
+ * (io.github.<owner>/...), which the registry verifies. A seed-only package, an entry matched by the seed list's package
+ * alone, or one matched by its repository URL is not shown to be theirs (R-LP-56).
+ */
+export const ownedEntry = (choice) => !!(choice && typeof choice.matched_by === 'string' && choice.matched_by.split('+').includes('namespace'));
+
 /** Everything the install steps and the steps log say, as one text (step fields are only strings the driver wrote). */
 function installText(inst, stepsLog) {
   const parts = [];
@@ -1376,8 +1562,24 @@ function probeMs(rec, p, tag) {
   return Number.isFinite(d) && d >= 0 ? d : null;
 }
 
+/**
+ * A server that did not declare the tools capability at initialize and answered tools/list "method not found"
+ * (-32601): the answer the specification allows such a server (a prompts-only or resources-only one), not a failure
+ * (R-LP-75). Only with an initialize answer in hand: a 2026-07-28 server that refused initialize declared nothing we read.
+ */
+export function noToolsCapability(p) {
+  if (!isObj(p) || !isObj(p.initialize)) return false;
+  const caps = p.initialize.capabilities;
+  // A capabilities object is required: an initialize answer without one is malformed, not a statement of no tools.
+  if (!isObj(caps)) return false;
+  const declared = caps.tools !== undefined && caps.tools !== null && caps.tools !== false;
+  const L = isObj(p.lists) ? p.lists['tools/list'] : null;
+  return !declared && isObj(L) && L.error_code === -32601;
+}
+
 /** A list that did not come: the server's own fault only when it sent a JSON-RPC error or a malformed result. */
 function listDetail(p) {
+  if (noToolsCapability(p)) return 'no_tools_capability';
   const L = isObj(p.lists) ? p.lists['tools/list'] : null;
   const err = isObj(L) && typeof L.error === 'string' ? L.error : null;
   if (err) {
@@ -1395,7 +1597,7 @@ function listDetail(p) {
  * Our sandbox's limits, another platform, the network, extras and dependency drift are told apart before any crash
  * is blamed (R-LP-59..65).
  */
-export function failureDetail(rec, bare, envp, { deadlineHit = false, records = [], stepsLog = null, launch = null, argsUnfilled = null, pydeps = null } = {}) {
+export function failureDetail(rec, bare, envp, { deadlineHit = false, records = [], stepsLog = null, launch = null, argsUnfilled = null, pydeps = null, owned = false, crashNotEvidence = false } = {}) {
   if (!rec) return deadlineHit ? 'shard_deadline' : 'harness_error';
   if (rec.excluded) return 'sandbox_evidence_missing';
   const inst = rec.install;
@@ -1411,6 +1613,28 @@ export function failureDetail(rec, bare, envp, { deadlineHit = false, records = 
     const text = installText(inst, stepsLog);
     if (failed.some((s) => s.exit === 137 || s.exit === 124) || OOM_TEXT.test(text)) return 'install_resource_limit';
     if (refusedCount(inst) > 0) return 'install_blocked';
+    if (inst.kind === 'cargo') {
+      // Only cargo's own words before any build, or our entry helper's answer, can be the crate's (R-LP-54).
+      const entry = failed.find((s) => s.name === 'entry');
+      if (entry) return entryDetail(isObj(entry.result) ? entry.result.error : null);
+      const ev = failed.some((s) => s.name === 'install') && cargoInstallEvidence(text, isObj(launch) ? launch.crate : null);
+      // The crate's own word counts against the subject only when its registry entry is the subject's (R-LP-56).
+      return ev ? (owned ? ev : 'package_error_unowned') : 'install_build_failed';
+    }
+    if (inst.kind === 'mcpb') {
+      // R-LP-73: the planner already read these very bytes (their sha256 is pinned) and judged the bundle; what goes wrong
+      // in the sandbox (the download, our caps, a uv bundle's pip install, which runs its dependencies' builds) is ours.
+      const fetchStep = failed.find((s) => s.name === 'fetch');
+      const code = fetchStep && isObj(fetchStep.result) ? fetchStep.result.error : null;
+      return ['too_large', 'too_many_files', 'too_big_unpacked'].includes(code) ? 'install_resource_limit' : 'install_build_failed';
+    }
+    if (inst.kind === 'nuget') {
+      const entry = failed.find((s) => s.name === 'entry');
+      if (entry) return entryDetail(isObj(entry.result) ? entry.result.error : null);
+      const ev = failed.some((s) => s.name === 'install') && nugetInstallEvidence(text, isObj(launch) ? launch.package : null);
+      // The CLI's word counts against the subject only when the registry entry is the subject's (R-LP-56, R-LP-58).
+      return ev ? (owned ? ev : 'package_error_unowned') : 'install_build_failed';
+    }
     if (PACKAGE_ERROR.test(text)) return 'install_failed';
     return 'install_build_failed';
   }
@@ -1431,6 +1655,12 @@ export function failureDetail(rec, bare, envp, { deadlineHit = false, records = 
   // A PyPI launch with no entry runs venv/bin/<package name>, a guess: the console script often has another name.
   const guess = !isObj(launch) || !launch.kind || (launch.kind === 'pypi' && !launch.entry);
   const sound = own && argsUnfilled === 0 && !guess;
+  // R-LP-58: a .NET tool built for an older runtime ran rolled forward onto the sandbox's .NET 10; R-LP-74: a bundle that
+  // does not run here as shipped (its manifest does not list linux, it is python or uv on an environment we rebuilt, or
+  // links were left out when it was unpacked). Its exit may be ours, so nothing below counts it against the server (a
+  // crash, a module it lacks, a quiet exit with a declared variable).
+  const noEvidence = rolledForward(inst) || crashNotEvidence;
+  const blamable = sound && !noEvidence;
   const err = typeof p.stderr === 'string' ? p.stderr : '';
   // What stopped the start before the server's own code could fail, in our words (R-LP-60..64), ahead of any
   // finding against the server: another operating system, the network, our sandbox's limits.
@@ -1446,10 +1676,10 @@ export function failureDetail(rec, bare, envp, { deadlineHit = false, records = 
   if (on('import') && imp === 'env') return 'start_env_limited';
   // The server's own packaging (R-LP-68): its wheel lacks a module of its own package, or its own code imports a module
   // the release neither ships nor declares, and that is not installed. Only with the release's facts in hand.
-  if (imp === 'own_missing' && sound) return 'missing_own_module';
-  if (imp === 'undeclared' && sound) return 'undeclared_dependency';
+  if (imp === 'own_missing' && blamable) return 'missing_own_module';
+  if (imp === 'undeclared' && blamable) return 'undeclared_dependency';
   // A declared variable makes a quiet own exit needs_credentials; a crash that asks for no configuration is a crash.
-  if (needsEnv && !sound) return 'start_env_limited';
+  if (needsEnv && !blamable) return 'start_env_limited';
   if (needsEnv && !(CRASH_TEXT.test(err) && !CONFIG_TEXT.test(err) && !CONFIG_CASE_RE.test(err) && !ENV_NAME_TEXT.test(err))) return 'needs_credentials';
   // The probe's own duration, not the record's total (which holds the install and the analysis too, R-LP-40).
   const ms = probeMs(rec, p, p === envp ? 'env' : 'bare');
@@ -1459,7 +1689,32 @@ export function failureDetail(rec, bare, envp, { deadlineHit = false, records = 
   // does not support, a bug of its own) is not the server's code failing (R-LP-69).
   if (on('frame') && frameInDependency(err, { pydeps, pkg: isObj(launch) ? launch.package : null })) return 'start_env_limited';
   // A crash signature is the evidence; an early exit with no telling stderr is not (R-LP-45).
-  return sound && ms !== null && ms < START_QUICK_MS && CRASH_TEXT.test(err) ? 'start_failed' : 'start_env_limited';
+  return blamable && ms !== null && ms < START_QUICK_MS && CRASH_TEXT.test(err) ? 'start_failed' : 'start_env_limited';
+}
+
+/**
+ * R-LP-74: whether a bundle's crash is no evidence against it: the planner said so (no linux in its manifest, python or uv
+ * on an environment we rebuilt), or the sandbox left links out when it unpacked it (a file the server may need is missing).
+ */
+export function crashNotEvidenceOf(choice, rec) {
+  if (choice && isObj(choice.mcpb) && choice.mcpb.crash_not_evidence) return true;
+  const inst = rec && isObj(rec.install) ? rec.install : null;
+  if (!inst || inst.kind !== 'mcpb') return false;
+  const f = (Array.isArray(inst.steps) ? inst.steps : []).find((x) => x && x.name === 'fetch');
+  return !!(f && isObj(f.result) && Number(f.result.links_skipped) > 0);
+}
+
+/**
+ * Whether a .NET tool ran on another runtime than it was built for: its entry's target framework is not net10.0 or newer
+ * (net8.0, netcoreapp3.1, netstandard2.0, a platform-suffixed or unreadable one, or none recorded). Only a tool built for
+ * the sandbox's own runtime runs as shipped (R-LP-58).
+ */
+export function rolledForward(inst) {
+  if (!isObj(inst) || inst.kind !== 'nuget') return false;
+  const e = (Array.isArray(inst.steps) ? inst.steps : []).find((x) => x && x.name === 'entry');
+  const tfm = e && isObj(e.result) && typeof e.result.tfm === 'string' ? e.result.tfm : '';
+  const m = /^net([0-9]{1,2})\.([0-9])$/.exec(tfm);
+  return !m || Number(m[1]) * 10 + Number(m[2]) < 100;
 }
 
 // ------------------------------------------------------------------ observations
@@ -1658,7 +1913,7 @@ export function buildItem(item, ctx) {
     lines.push(...resolutionObs(r));
     result.install = r.choice ? { method: r.choice.type, matched_by: safeText(r.choice.matched_by, /^[a-z+-]{1,40}$/), verified_by: safeText(r.choice.verified_by, /^[a-z_]{1,20}$/), provenance_signer: safeText(r.choice.provenance_signer, /^[a-z_]{1,40}$/), oci_bytes: int(r.choice.oci_bytes), transport: r.choice.transport, version_requested: safeText(r.choice.version, SAFE_VERSION), args: r.choice.args_n, args_unfilled: r.choice.args_unfilled, env_declared: r.choice.env_names.length, registry_entries: r.registry ? r.registry.entries : 0, entry_source: safeText(r.choice.entry_source, /^[a-z_]{1,30}$/) } : null;
     if (Array.isArray(r.unverified)) result.unverified = r.unverified.map((u) => safeText(u.why, /^[a-z_]{1,40}$/));
-    files['raw/resolution.json'] = json({ registry: r.registry, choice: r.choice, candidates: r.candidates, launch: r.launch, subdir: r.subdir, seed_packages: r.seed_packages, invalid: r.invalid ?? null, unverified: r.unverified ?? null });
+    files['raw/resolution.json'] = json({ registry: r.registry, choice: r.choice, candidates: r.candidates, launch: r.launch, subdir: r.subdir, seed_packages: r.seed_packages, invalid: r.invalid ?? null, unverified: r.unverified ?? null, ...(r.error_class ? { error_class: safeText(r.error_class, /^[A-Za-z]{1,40}$/) } : {}) });
   }
   let detail = null; let subjectSha = null; let deadlineHit = ctx.deadlineHit;
   let oracle = { lines: [], raw: [], summary: null, components: [] };
@@ -1666,10 +1921,13 @@ export function buildItem(item, ctx) {
     detail = (r && r.detail) || 'harness_error';
   } else {
     const oci = item.target && item.target.launch && item.target.launch.kind === 'docker' && ctx.ociOut;
-    const dir = oci ? join(ctx.ociOut, item.target_id, item.target_id) : join(ctx.subjectsOut, item.target_id);
-    const telemetryFile = oci ? join(ctx.ociOut, item.target_id, '_shard', 'telemetry.jsonl') : ctx.subjectsTelemetry;
+    const build = !oci && item.target && isBuild(item.target.launch) && ctx.buildsOut;
+    const dir = oci ? join(ctx.ociOut, item.target_id, item.target_id) : build ? join(ctx.buildsOut, item.target_id) : join(ctx.subjectsOut, item.target_id);
+    const telemetryFile = oci ? join(ctx.ociOut, item.target_id, '_shard', 'telemetry.jsonl') : build ? ctx.buildsTelemetry : ctx.subjectsTelemetry;
     const ociRun = oci ? (ctx.ociRuns || {})[item.target_id] : null;
     if (oci) deadlineHit = !ociRun || ociRun.outcome === 'deadline' || ociRun.rc === 124 || ociRun.rc === 137;
+    // The builds ran after the subjects (or did not, when the deadline came first: builds_rc stays -1).
+    if (build) deadlineHit = !Number.isInteger(ctx.state.builds_rc) || ctx.state.builds_rc < 0 || ctx.state.builds_rc === 124 || ctx.state.builds_rc === 137;
     const rec = readJson(join(dir, 'record.json'));
     const bare = readJson(join(dir, 'probe-bare.json'));
     const envp = readJson(join(dir, 'probe-env.json'));
@@ -1692,8 +1950,18 @@ export function buildItem(item, ctx) {
     const primary = listed(envp) ? envp : listed(bare) ? bare : null;
     let reader = { listed: false };
     const tel = telemetryFor(telemetryFile, item.target_id);
-    if (!primary) {
-      detail = ociRun && ociRun.outcome === 'disk_low' ? 'disk_low' : failureDetail(rec, bare, envp, { deadlineHit, records: tel.records, stepsLog: readText(join(dir, 'steps.log')), launch: r.launch, argsUnfilled: r.choice ? r.choice.args_unfilled : null, pydeps: r.choice ? r.choice.pydeps : null });
+    // R-LP-75: no tools capability and tools/list "method not found": nothing to grade and nobody's fault (no skip).
+    const noTools = !primary ? [envp, bare].find(noToolsCapability) || null : null;
+    if (noTools) {
+      result.detail = 'no_tools_capability';
+      result.live = { tools_capability: false, tool_count: 0, config_state: noTools === bare ? 'none' : 'dummy' };
+      reader = { listed: false, no_tools_capability: true, capabilities: noTools.initialize.capabilities };
+      lines.push(obs('protocol_era', 'legacy'));
+      lines.push(obs('protocol_negotiated', safeText(noTools.initialize.protocolVersion, /^[0-9A-Za-z.-]{1,40}$/), 'not a plain protocol version'));
+      lines.push(obs('server_info', serverInfo(noTools.initialize.serverInfo), 'no serverInfo object'));
+      lines.push(obs('capabilities_flags', capabilityFlags(noTools.initialize.capabilities), 'no capabilities object'));
+    } else if (!primary) {
+      detail = ociRun && ociRun.outcome === 'disk_low' ? 'disk_low' : failureDetail(rec, bare, envp, { deadlineHit, records: tel.records, stepsLog: readText(join(dir, 'steps.log')), launch: r.launch, argsUnfilled: r.choice ? r.choice.args_unfilled : null, owned: ownedEntry(r.choice), pydeps: r.choice ? r.choice.pydeps : null, crashNotEvidence: crashNotEvidenceOf(r.choice, rec) });
     } else {
       const text = listText(primary.lists['tools/list'].raw_pages);
       let g = null;
@@ -1774,10 +2042,12 @@ export function buildItem(item, ctx) {
     files['observations/live.ndjson'] = lines.join('\n') + '\n';
     return { status: 'skipped', detail, files, skips: [{ stage, reason, fault, evidence: RESULT_PATH, ...(retryable ? { retryable: true } : {}) }], subjectSha, components: oracle.components };
   }
-  result.status = 'graded';
+  // A server with no tools capability is assessed with nothing to grade (R-LP-75): status no_tools, no skip, fault none.
+  const status = result.detail === 'no_tools_capability' ? 'no_tools' : 'graded';
+  result.status = status;
   files[RESULT_PATH] = json(result);
   files['observations/live.ndjson'] = lines.join('\n') + '\n';
-  return { status: 'graded', detail: null, files, skips: [], subjectSha, components: oracle.components };
+  return { status, detail: null, files, skips: [], subjectSha, components: oracle.components };
 }
 
 /** Raw files, each capped at RAW_FILE_CAP and all at RAW_TOTAL_CAP; what was cut is recorded. */
@@ -1929,7 +2199,7 @@ export function bundleShard({ work, env = process.env, now = () => new Date(), l
   const plan = readJson(join(work, 'plan.json'));
   if (!plan || plan.format !== PLAN_FORMAT) throw new ControlFailure('no plan in the work folder');
   const state = readJson(join(work, 'sandbox.json')) || {};
-  const shardJson = readJson(join(work, 'driver-subjects', '_shard', 'shard.json')) || readJson(join(work, 'driver-controls', '_shard', 'shard.json'));
+  const shardJson = readJson(join(work, 'driver-subjects', '_shard', 'shard.json')) || readJson(join(work, 'driver-builds', '_shard', 'shard.json')) || readJson(join(work, 'driver-controls', '_shard', 'shard.json'));
   const runner = shardJson && isObj(shardJson.runner) ? shardJson.runner : null;
   const mscCommit = typeof state.msc_commit === 'string' && /^[0-9a-f]{40}$/.test(state.msc_commit) ? state.msc_commit : null;
   const ctx = {
@@ -1938,6 +2208,7 @@ export function bundleShard({ work, env = process.env, now = () => new Date(), l
     subjectsOut: join(work, 'driver-subjects'), subjectsTelemetry: join(work, 'driver-subjects', '_shard', 'telemetry.jsonl'),
     deadlineHit: state.subjects_rc === 124 || state.subjects_rc === 137,
     ociOut: join(work, 'driver-oci'), ociRuns: ociRuns(join(work, 'oci-runs.jsonl')),
+    buildsOut: join(work, 'driver-builds'), buildsTelemetry: join(work, 'driver-builds', '_shard', 'telemetry.jsonl'),
     runnerEnv: runner ? { os: safeText(runner.os, /^[a-z]{1,10}$/), arch: safeText(runner.arch, /^[a-z0-9_]{1,10}$/), kernel: safeText(runner.kernel, /^[A-Za-z0-9._+-]{1,60}$/), node: safeText(runner.node, /^v[0-9.]{1,20}$/), docker: safeText(runner.docker, /^[0-9][0-9A-Za-z.+-]{0,30}$/), container_platform: safeText(runner.container_platform, /^[a-z0-9/]{1,30}$/) } : null,
     toolVersions: { mcp_check: VERSION, rubric: M.RUBRIC_VERSION, spec: M.SPEC_VERSION, surface_corpus: mscCommit, worker_kit: safeText(state.worker_kit_ref, /^[0-9a-f]{40}$/), gvisor: safeText(state.gvisor_release, /^[0-9.a-z-]{1,40}$/) },
     sandboxSummary: { runtime: 'runsc', selftest: state.selftest_check_rc === 0 ? 'passed' : 'failed', controls_rc: int(state.controls_rc), subjects_rc: int(state.subjects_rc), swept: state.swept === true },
@@ -2098,6 +2369,7 @@ export async function main(argv, { env = process.env, stdout = process.stdout, s
     writeFileSync(join(work, 'plan.json'), json(plan));
     writeFileSync(join(work, 'targets-controls.json'), json(lists.controls));
     writeFileSync(join(work, 'targets-subjects.json'), json(lists.subjects));
+    writeFileSync(join(work, 'targets-builds.json'), json(lists.builds));
     mkdirSync(join(work, 'oci'), { recursive: true });
     for (const o of lists.oci) writeFileSync(join(work, 'oci', o.id + '.json'), json(o.list));
     writeFileSync(join(work, 'oci.json'), json(lists.oci.map((o) => ({ id: o.id, image: o.image, bytes: o.bytes }))));

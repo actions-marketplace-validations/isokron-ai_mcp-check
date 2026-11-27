@@ -1,0 +1,69 @@
+# Validation of the ast-grep oracle (corpus/ast-grep/) against ground truth: manual dispatch only, from main, on free public
+# Actions. The input is a list of targets (a public repository at a pinned commit, an optional subfolder and the tools its
+# server registers; `node corpus/ast-grep/harness.mjs shards <targets.json> <dir>` splits a larger set into inputs under the
+# 65,535-character limit). Each target's source is fetched at its commit with git and read with the pinned ast-grep; the job
+# summary and the artifact carry precision and recall per language. Nothing of a target is run, installed or built. This
+# workflow reads only public repositories, holds no secret, and writes only to its own run.
+
+name: ast-grep-validate
+
+on:
+  workflow_dispatch:
+    inputs:
+      targets:
+        description: 'JSON list of targets: {"id", "repo", "sha", "language", "subdir"?, "holdout"?, "multi"?, "tools": [[name] or [name, 0]]}.'
+        required: true
+        type: string
+      label:
+        description: Short label for this run, such as shard-1.
+        required: false
+        type: string
+        default: ''
+
+run-name: ast-grep validate ${{ inputs.label }}
+
+permissions: {}
+
+concurrency:
+  group: ast-grep-validate-${{ inputs.label }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: github.repository == 'isokron-ai/mcp-check' && github.ref == 'refs/heads/main'
+    name: ast-grep-validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    steps:
+      - name: Check the inputs
+        env:
+          TARGETS: ${{ inputs.targets }}
+          LABEL: ${{ inputs.label }}
+        run: |
+          label_re='^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$'
+          if [[ -n "$LABEL" && ! "$LABEL" =~ $label_re ]]; then echo "::error title=ast-grep-validate::label is malformed"; exit 1; fi
+          if [[ ! "$TARGETS" =~ ^\[[^[:cntrl:]]+\]$ ]] || [ "${#TARGETS}" -gt 65000 ]; then echo "::error title=ast-grep-validate::targets must be one line of JSON, a list"; exit 1; fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          package-manager-cache: false
+      - name: Install ast-grep (pinned, lockfile, no install scripts)
+        working-directory: corpus/ast-grep
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Read each target's source and score it
+        env:
+          TARGETS: ${{ inputs.targets }}
+        run: node corpus/ast-grep/harness.mjs run - --json "$RUNNER_TEMP/ast-grep-validate.json"
+      - name: Keep the scores
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ast-grep-validate-${{ inputs.label || 'run' }}
+          path: ${{ runner.temp }}/ast-grep-validate.json
+          retention-days: 30
+          if-no-files-found: ignore

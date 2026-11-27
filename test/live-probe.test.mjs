@@ -21,7 +21,7 @@ const FX = join(root, 'test', 'fixtures', 'live-probe');
 const fx = (f) => readFileSync(join(FX, f), 'utf8');
 const MARKER = 'liveprobe-MARKERMARKERMARKER0000';
 /** The mcp-surface-corpus commit both workflows pin (SURFACE_CORPUS_REF, the conformance call and sandbox-guard). */
-const SANDBOX_PIN = '11974fbb75a8c276214c887a079d6ad6df374124';
+const SANDBOX_PIN = '4504c0bba95c73ae22236e71f1ff6ca08432bff0';
 const NODE24 = 'docker.io/library/node:24-bookworm-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23fceb061c54';
 const items = (n, f = (i) => 'owner' + i + '/repo' + i) => JSON.stringify(Array.from({ length: n }, (_, i) => ({ subject: f(i), run_key: String(i + 1).repeat(64).slice(0, 64).replace(/[^0-9a-f]/g, 'a'), fence: i + 1 })));
 
@@ -135,7 +135,7 @@ test('live-probe resolve: the seed list finds a moved repository; seed packages 
 test('live-probe resolve: skips with the right codes (none, remote only, unsupported, private registry, sse, bad subject)', async () => {
   const f = fakeFetch([
     server('io.github.acme/remote', 'acme/remote', [], { remotes: [{ type: 'streamable-http', url: 'https://mcp.acme.example/mcp' }] }),
-    server('io.github.acme/rusty', 'acme/rusty', [{ registryType: 'cargo', identifier: 'rusty' }, { registryType: 'mcpb', identifier: 'https://example.com/x.mcpb' }]),
+    server('io.github.acme/rusty', 'acme/rusty', [{ registryType: 'conda', identifier: 'rusty' }]),
     server('io.github.acme/private', 'acme/private', [npmPkg('@acme/private', { registryBaseUrl: 'https://npm.acme.example' })]),
     server('io.github.acme/sse', 'acme/sse', [npmPkg('@acme/sse', { transport: { type: 'sse', url: 'http://localhost:3000/sse' } })]),
   ]);
@@ -433,7 +433,7 @@ test('R-LP-22: the self test judges the bundles with the ingest tool-qa runs, wh
 });
 
 test('R-LP-23: the sandbox pin includes the install-network hostile cases and the proxy positive control (mcp-surface-corpus #9, #10)', () => {
-  assert.equal(SANDBOX_PIN, '11974fbb75a8c276214c887a079d6ad6df374124');
+  assert.equal(SANDBOX_PIN, '4504c0bba95c73ae22236e71f1ff6ca08432bff0');
   for (const f of ['live-probe.yml', 'live-probe-selftest.yml']) {
     const y = wf(f);
     assert.equal(/\n  SURFACE_CORPUS_REF: '([0-9a-f]{40})'\n/.exec(y)[1], SANDBOX_PIN, f);
@@ -664,7 +664,7 @@ test('live-probe failure details: install, start, credentials, list, evidence an
   assert.equal(LP.failureDetail(rec({}), { ...exited(1), stderr: 'panic: boom' }, null, ctx), 'start_failed');
   assert.equal(LP.failureDetail(rec({}), exited(1), null, ctx), 'start_env_limited', 'an early exit with no stderr is no evidence (R-LP-45)');
   assert.equal(LP.failureDetail(rec({}), { error: 'time limit (45000 ms)' }, null, ctx), 'start_timeout');
-  assert.equal(LP.failureDetail(rec({}), { initialize: {}, error: null, lists: { 'tools/list': { ok: false, error: 'Method not found', error_code: -32601 } } }, null), 'list_failed');
+  assert.equal(LP.failureDetail(rec({}), { initialize: { capabilities: { tools: {} } }, error: null, lists: { 'tools/list': { ok: false, error: 'Method not found', error_code: -32601 } } }, null), 'list_failed');
   assert.equal(LP.failureDetail(rec({ env: { names: { registry: ['API_KEY'] }, secret_named: ['API_KEY'] } }), exited(1), exited(1), ctx), 'needs_credentials');
   // R-LP-07: an optional key named in the README is not a declared credential.
   assert.equal(LP.failureDetail(rec({ env: { names: { registry: [], readme: ['ANCHOR_KEY'], used: ['ANCHOR_KEY'] }, secret_named: ['ANCHOR_KEY'] } }), { error: null, initialize_error: 'the server exited (exit 1, signal null)', stderr: 'panic: boom', timing: { total_ms: 2000 } }, { error: null, initialize_error: 'the server exited (exit 1, signal null)', stderr: 'panic: boom', timing: { total_ms: 2000 } }, ctx), 'start_failed');
@@ -760,7 +760,8 @@ test('R-LP-34: start_failed is the server\'s only with its own early non-zero ex
 
 test('R-LP-35: list_failed is the server\'s only for a JSON-RPC error it sent or a malformed result; our limits are list_probe_limited (tool)', () => {
   assert.deepEqual(LP.DETAILS.list_probe_limited, ['timeout_start', false, 'list', 'tool']);
-  const listed = (error, error_code = null) => ({ initialize: {}, era: 'legacy', error: null, lists: { 'tools/list': { ok: false, error, error_code, pages: 0 } }, transport: { exit: null, signal: null } });
+  // The server declared tools (R-LP-75: without that capability, "method not found" is no failure).
+  const listed = (error, error_code = null) => ({ initialize: { capabilities: { tools: {} } }, era: 'legacy', error: null, lists: { 'tools/list': { ok: false, error, error_code, pages: 0 } }, transport: { exit: null, signal: null } });
   const r = lpRec({ env: needEnv });
   for (const [e, c] of [['Method not found', -32601], ['Internal error', -32603], ['the tools/list result has no tools array', null], ['nextCursor is not a string', null], ['the server repeated the same cursor', null], ['the answer has no result object', null]]) assert.equal(LP.failureDetail(r, listed(e, c), null), 'list_failed', e);
   for (const [e, c] of [['time limit', null], ['time limit (45000 ms)', null], ['paging stopped after 100 pages', null], ['the server wrote more than 25165824 bytes', null], ['HTTP request failed: ECONNRESET: x', null], ['HTTP 502: Bad Gateway', 502], ['the server exited (exit 1, signal null)', null]]) assert.equal(LP.failureDetail(r, listed(e, c), null), 'list_probe_limited', e);
@@ -1292,4 +1293,95 @@ test('R-PIN-07: the bundles report this repository at the commit that ran, the c
   LP.bundleShard({ work: w3, env: { MCP_CHECK_COMMIT: COMMIT } });
   assert.deepEqual(toolsOf(w3, 0).map((c) => c.name), ['@isokron/mcp-check', 'isokron-ai/mcp-surface-corpus', 'fuzz']);
   assert.equal(toolsOf(w3, 0)[2].version, COMMIT);
+});
+
+// R-LP-75. formulahendry/mcp-server-spec-driven-development@8a0532a2eb15 (npm): its initialize declares prompts only, and
+// tools/list answers JSON-RPC -32601 "Method not found", which the specification lets a server without the tools
+// capability answer. 6 results of 25-27 Nov recorded it as list_failed, fault subject.
+const promptsOnly = (caps = { prompts: {} }, code = -32601, error = 'Method not found') => ({
+  format: 'isokron-surface-probe/1', mode: 'bare', protocol_offered: '2025-11-25', era: 'legacy', error: null,
+  initialize: { protocolVersion: '2025-11-25', capabilities: caps, serverInfo: { name: 'mcp-server-spec-driven-development', version: '0.3.0' } },
+  lists: { 'tools/list': { ok: false, items: null, pages: 0, page_sizes: [], error, error_code: code, ms: 4 } },
+  transport: { exit: null, signal: null, non_json_lines: 0, notifications: [] }, timing: { initialize_ms: 310, total_ms: 420 },
+});
+
+test('R-LP-75: a server that declared no tools capability and answered tools/list "method not found" is nothing to grade and nobody\'s fault, never list_failed', () => {
+  assert.equal(LP.noToolsCapability(promptsOnly()), true);
+  assert.equal(LP.noToolsCapability(promptsOnly({})), true, 'an empty capabilities object declares no tools');
+  assert.equal(LP.noToolsCapability({ ...promptsOnly(), initialize: { protocolVersion: '2025-11-25' } }), false, 'no capabilities object is a malformed answer, not no tools');
+  assert.equal(LP.noToolsCapability(promptsOnly({ tools: {} })), false, 'a server that declared tools must list them');
+  assert.equal(LP.noToolsCapability(promptsOnly({ prompts: {} }, -32603, 'Internal error')), false, 'another error is still the server\'s');
+  assert.equal(LP.noToolsCapability({ ...promptsOnly(), initialize: null, era: 'modern' }), false, 'no initialize answer: nothing declared that we read');
+  const rec = JSON.parse(fx('record-ok.json'));
+  assert.equal(LP.failureDetail(rec, promptsOnly(), null), 'no_tools_capability');
+  assert.equal(LP.failureDetail(rec, promptsOnly({ tools: {} }), null), 'list_failed');
+  assert.notEqual(LP.DETAILS.no_tools_capability[3], 'subject');
+  // Through the bundle: status no_tools, no skip (fault none, coverage assessed), a bundle tool-qa accepts.
+  const w = workFolder();
+  writeFileSync(join(w, 'driver-subjects', 's002', 'probe-bare.json'), JSON.stringify(promptsOnly()));
+  writeFileSync(join(w, 'driver-subjects', 's002', 'record.json'), fx('record-ok.json'));
+  const summary = LP.bundleShard({ work: w, log: () => {} });
+  assert.deepEqual(summary[1], { index: 1, status: 'no_tools', detail: null });
+  const dir = join(w, 'out', '1');
+  const meta = JSON.parse(readFileSync(join(dir, 'meta.json'), 'utf8'));
+  assert.deepEqual(meta.skips, []);
+  assert.deepEqual(resultFault(meta.skips), { fault: null, coverage: 'assessed', faults: {} });
+  const result = JSON.parse(readFileSync(join(dir, 'bundle', LP.RESULT_PATH), 'utf8'));
+  assert.deepEqual([result.status, result.detail, result.fault, result.live], ['no_tools', 'no_tools_capability', null, { tools_capability: false, tool_count: 0, config_state: 'none' }]);
+  const obsLines = readFileSync(join(dir, 'bundle', 'observations', 'live.ndjson'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  assert.equal(obsLines.find((o) => o.field === 'capabilities_flags').value.tools, false);
+  assert.ok(!obsLines.some((o) => o.field === 'error_taxonomy_code'));
+  const item = JSON.parse(readFileSync(join(w, 'plan.json'), 'utf8')).items[1];
+  const j = judge(dir, item);
+  assert.ok(j.v.ok, JSON.stringify(j.v.errors));
+  assert.deepEqual(j.problems, []);
+});
+
+// R-LP-76. The 25-27 Nov retry_later rejections: getsigit/si@edd8da4f368e (11 attempts) and anderson-0/qh@cea4812df0f4 (18):
+// the registry search with the 2-character repo name answers HTTP 422; SubmitRocket/wpmission-mcp-server@7d8bd3435153
+// (19 attempts): ghcr's token service answers 403 DENIED for ghcr.io/support-wpmission/wpmission-mcp-server. All were
+// upstream_error (infra, retryable) and came back every cycle.
+test('R-LP-76: a registry 4xx is our refused query (tool, not retried), a denied pull token is image_access_denied (tool), a 2-character search is never sent, and a bug in the resolver is never an outage', async () => {
+  assert.equal(LP.httpDetail(422), 'registry_query_refused');
+  assert.equal(LP.httpDetail(400), 'registry_query_refused');
+  // A 403 without rate-limit headers (a CDN or firewall in front of a registry), 408 and 425 stay retryable.
+  for (const s of [403, 408, 425]) assert.equal(LP.httpDetail(s, () => null), 'upstream_error', String(s));
+  assert.equal(LP.httpDetail(401), 'registry_query_refused');
+  assert.equal(LP.httpDetail(429), 'rate_limited');
+  assert.equal(LP.httpDetail(403, (k) => (k === 'x-ratelimit-remaining' ? '0' : null)), 'rate_limited');
+  for (const s of [500, 502, 503]) assert.equal(LP.httpDetail(s), 'upstream_error', String(s));
+  assert.deepEqual(LP.DETAILS.registry_query_refused, ['tool_error', false, 'resolve', 'tool']);
+  assert.deepEqual(LP.DETAILS.image_access_denied, ['install_failed_registry', false, 'resolve', 'tool']);
+  assert.deepEqual(LP.DETAILS.resolver_error, ['tool_error', false, 'resolve', 'tool']);
+  for (const d of ['registry_query_refused', 'image_access_denied', 'resolver_error', 'no_tools_capability']) assert.ok(SKIP_FAULTS[LP.DETAILS[d][0]].allowed.includes(LP.DETAILS[d][3]), d);
+  // A registry that refuses 2-character searches, as registry.modelcontextprotocol.io does (re-checked 27 Nov: si and qh 422, abc 200).
+  const strict = (base) => { const f = async (url, init) => { const q = new URL(url).searchParams.get('search'); if (q !== null && q.length < 3) { f.refused.push(q); return res(422, { title: 'Unprocessable Entity' }); } return base(url, init); }; f.refused = []; return f; };
+  const si = strict(fakeFetch([server('io.github.getsigit/si', 'getsigit/si', [npmPkg('@getsigit/si')])]));
+  const r = await LP.resolveSubject({ subject: 'getsigit/si', repo: 'getsigit/si' }, { fetch: si });
+  assert.deepEqual(si.refused, [], 'no query shorter than the registry minimum is sent');
+  assert.equal(r.status, 'runnable', 'owner/name still finds the entry');
+  // A query the registry refuses anyway is ours and final.
+  const refuse = await LP.resolveSubject({ subject: 'acme/box', repo: 'acme/box' }, { fetch: fakeFetch([], { status: 422 }) });
+  assert.equal(refuse.detail, 'registry_query_refused');
+  assert.equal(LP.DETAILS[refuse.detail][1], false, 'not retryable');
+  // ghcr's token service: 403 DENIED for the repository. Ours (private or gone look alike), not retried.
+  const denied = async (url, init = {}) => { const u = new URL(url); if (u.pathname === '/token') return res(403, { errors: [{ code: 'DENIED', message: 'requested access to the resource is denied' }] }); if (!init.headers.authorization) return res(401, '', { 'www-authenticate': 'Bearer realm="https://ghcr.io/token",service="ghcr.io"' }); return res(200, goodImage); };
+  assert.equal(await ociCode(denied, LP.parseOciRef('ghcr.io/support-wpmission/wpmission-mcp-server:0.1.0')), 'image_access_denied');
+  const wp = await LP.resolveSubject({ subject: 'SubmitRocket/wpmission-mcp-server', repo: 'SubmitRocket/wpmission-mcp-server' }, { seed: new Map([['submitrocket/wpmission-mcp-server', [{ registry: 'oci', identifier: 'ghcr.io/support-wpmission/wpmission-mcp-server:0.1.0' }]]]), fetch: async (url, init) => (new URL(url).hostname === 'registry.modelcontextprotocol.io' ? res(200, { servers: [] }) : denied(url, init)) });
+  assert.equal(wp.detail, 'image_access_denied');
+  // A rate limit at the token service is still a rate limit; an outage is still retryable.
+  const limited = async (url, init = {}) => { const u = new URL(url); if (u.pathname === '/token') return res(429, ''); if (!init.headers.authorization) return res(401, '', { 'www-authenticate': 'Bearer realm="https://ghcr.io/token",service="ghcr.io"' }); return res(200, goodImage); };
+  assert.equal(await ociCode(limited), 'rate_limited');
+  assert.equal((await LP.resolveSubject({ subject: 'a/b', repo: 'a/b' }, { fetch: fakeFetch([], { status: 503 }) })).detail, 'upstream_error');
+  // One candidate's provenance refused (npm answers 410 for its attestations): that candidate is unverified, the next one runs.
+  // Both entries match on their repository URL only, so each package's provenance is asked; the npm one comes first.
+  const prov = fakeFetch([server('com.example/x', 'acme/prov', [npmPkg('@other/prov-x')]), server('com.example/y', 'acme/prov', [{ registryType: 'oci', identifier: 'ghcr.io/acme/prov:1', transport: { type: 'stdio' } }])], { oci: { 'ghcr.io': () => res(200, goodImage) } });
+  const provFetch = async (url, init) => (new URL(url).hostname === 'registry.npmjs.org' ? res(410, {}) : prov(url, init));
+  const pr = await LP.resolveSubject({ subject: 'acme/prov', repo: 'acme/prov' }, { fetch: provFetch });
+  assert.equal(pr.status, 'runnable', 'the refused candidate does not end the subject');
+  assert.equal(pr.launch.kind, 'docker');
+  assert.equal(pr.choice.verified_by, 'ghcr_owner');
+  // An exception of ours (no detail code) is resolver_error, with its class kept.
+  const bug = await LP.resolveSubject({ subject: 'acme/box', repo: 'acme/box' }, { seed: new Map([['acme/box', [{ registry: 'npm', identifier: 5 }]]]), fetch: fakeFetch([]) });
+  assert.deepEqual([bug.detail, bug.error_class], ['resolver_error', 'TypeError']);
 });
