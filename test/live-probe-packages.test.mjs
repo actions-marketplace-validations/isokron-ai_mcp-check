@@ -414,7 +414,7 @@ test('R-LP-72: a node or python script outside the bundle (an absolute path of t
   assert.equal((await launchOf(nodeArgs(['--no-warnings', '${__dirname}/server/gone.js']))).detail, 'package_not_runnable');
   // Mutation check: without the outside check the absolute path is started, and its crash would be the bundle's.
   const src = readFileSync(join(root, 'corpus', 'mcpb.mjs'), 'utf8');
-  const from = "  const checkPath = (p, what, { optional = false } = {}) => {\n";
+  const from = "  const checkPath = (p0, what, { optional = false } = {}) => {\n    const p = oneSlash(p0);\n";
   assert.ok(src.includes(from), 'the mutation text is in corpus/mcpb.mjs');
   const file = join(root, 'corpus', '.mutant-mcpb-' + process.pid + '-' + Math.random().toString(16).slice(2) + '.mjs');
   writeFileSync(file, src.replace(from, from + "    if (what === 'script') return;\n"));
@@ -465,6 +465,44 @@ test('R-LP-72: a file a node option loads before the script (-r, --require, --im
   assert.equal((await go(M, nodeArgs(['--disable-warning', 'ExperimentalWarning', 'server/index.js']))).why, 'script_relative', 'without --disable-warning its value is read as the script');
   M = await mutate("    if (p.startsWith(BUNDLE_DIR + '/') && !segs.includes('..')) throw fail('bundle_runtime_unsupported', { why: `${what}_unreadable` });\n", '');
   assert.equal((await go(M, nodeArgs(['${__dirname}/my server(1).js']))).why, 'script_outside', 'without the rule a bundle path we do not read is called outside');
+});
+
+test('R-LP-72: a path with a run of slashes names the file it would without them; a module from the home folder, another scheme, or a file: URL with a host or an encoded slash is ours, never the bundle\'s missing module', async () => {
+  const nodeArgs = (args) => zip({ 'manifest.json': manifest({ type: 'node', mcp_config: { command: 'node', args } }), 'server/index.js': 'x', 'lib/a.mjs': 'x' });
+  const S = '${__dirname}/server/index.js';
+  // A run of slashes: the file is there (script, option, binary), so it starts; a really missing one stays the bundle's.
+  for (const args of [['${__dirname}/server//index.js'], ['--import', '${__dirname}/lib//a.mjs', S], ['-r', '${__dirname}//lib///a.mjs', S], ['server//index.js']]) assert.ok((await launchOf(nodeArgs(args))).launch, JSON.stringify(args));
+  assert.equal((await launchOf(nodeArgs(['${__dirname}/server//gone.js']))).detail, 'package_not_runnable');
+  const bin = zip({ 'manifest.json': manifest({ type: 'binary', mcp_config: { command: '${__dirname}/bin//srv' } }), 'bin/srv': ELF64() });
+  assert.equal((await launchOf(bin)).launch.entry, 'bin/srv', 'a binary named with a run of slashes');
+  // Ours: the home folder, a scheme a loader would fetch or resolve, a file: URL naming another host, an encoded separator.
+  for (const [v, why] of [['~/h.js', 'option_outside'], ['~user/h.js', 'option_outside'], ['https://x.example/y.js', 'option_scheme'], ['http://x/y.js', 'option_scheme'], ['jsr:@std/x', 'option_scheme'],
+    ['file://host/work/pkg/lib/a.mjs', 'option_outside'], ['file:///work/pkg/lib%2Fa.mjs', 'option_unreadable'], ['file:///work/pkg%5Clib/a.mjs', 'option_unreadable']]) {
+    const r = await launchOf(nodeArgs(['--import', v, S]));
+    assert.deepEqual([r.detail, r.why], ['bundle_runtime_unsupported', why], v);
+  }
+  // Still started: a file: URL of a file the bundle holds, a package name, node: and data:.
+  for (const v of ['file:///work/pkg/lib/a.mjs', 'dotenv/config', '@scope/pkg', 'node:fs', 'data:text/javascript,1']) assert.ok((await launchOf(nodeArgs(['--import', v, S]))).launch, v);
+  // Mutation checks: without each rule the fixture would start (and a missing-module crash count against the server),
+  // or a held file would be the bundle's missing one.
+  const src = readFileSync(join(root, 'corpus', 'mcpb.mjs'), 'utf8');
+  const mutate = async (from, to) => {
+    assert.ok(src.includes(from), from.slice(0, 60));
+    const file = join(root, 'corpus', '.mutant-mcpb-' + process.pid + '-' + Math.random().toString(16).slice(2) + '.mjs');
+    writeFileSync(file, src.replace(from, to));
+    try { return await import(pathToFileURL(file).href); } finally { rmSync(file, { force: true }); }
+  };
+  const go = async (M, bundle) => { try { return await M.mcpbLaunch(mcpbPkg(), { fetch: releases({ [URL1]: { body: bundle } }) }); } catch (e) { return { detail: e.detail, why: e.why }; } };
+  let M = await mutate("a.replace(/\\/{2,}/g, '/')", 'a');
+  assert.equal((await go(M, nodeArgs(['--import', '${__dirname}/lib//a.mjs', S]))).detail, 'package_not_runnable', 'without the collapse a held file reads as missing');
+  M = await mutate("        if (v.startsWith('~')) throw fail('bundle_runtime_unsupported', { why: 'option_outside' });\n", '');
+  assert.ok((await go(M, nodeArgs(['--import', '~/h.js', S]))).launch, 'without the home rule ~/h.js would be started');
+  M = await mutate("          if (u.host) throw fail('bundle_runtime_unsupported', { why: 'option_outside' });\n", '');
+  assert.ok((await go(M, nodeArgs(['--import', 'file://host/work/pkg/lib/a.mjs', S]))).launch, 'without the host rule another machine\'s file would pass for the bundle\'s');
+  M = await mutate("          if (/%(2f|5c)/i.test(u.pathname)) throw fail('bundle_runtime_unsupported', { why: 'option_unreadable' });\n", '');
+  assert.ok((await go(M, nodeArgs(['--import', 'file:///work/pkg/lib%2Fa.mjs', S]))).launch, 'without the rule an encoded slash would be read as a separator');
+  M = await mutate("        } else if (!drive && /^[A-Za-z][A-Za-z0-9+.-]*:/.test(v)) throw fail('bundle_runtime_unsupported', { why: 'option_scheme' });\n", '        }\n');
+  assert.ok((await go(M, nodeArgs(['--import', 'https://x.example/y.js', S]))).launch, 'without the scheme rule an https: module would be started');
 });
 
 test('R-LP-72 mutation check: without the sha256 check, the entry-name check, the redirect host check, the required-config check or the ELF check, the fixture gets through', async () => {
