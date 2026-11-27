@@ -363,6 +363,42 @@ test('R-LP-72: a bundle is the subject\'s fault only for its own evidence (the r
   assert.equal(none.detail, 'platform_unsupported', 'our limit for one bundle comes before the other\'s 404');
 });
 
+test('R-LP-72: a path the bundle\'s runtime would resolve (an extension node adds, a folder, a name in another case, a Windows .exe) is never the bundle\'s missing file; uv with no project is a launcher', async () => {
+  const nodeM = (arg) => manifest({ type: 'node', mcp_config: { command: 'node', args: ['${__dirname}/' + arg] } });
+  // node adds .js and takes a folder's index.js; python runs a folder's __main__.py.
+  assert.ok((await launchOf(zip({ 'manifest.json': nodeM('server/index'), 'server/index.js': 'x' }))).launch, 'node adds .js');
+  assert.ok((await launchOf(zip({ 'manifest.json': nodeM('server'), 'server/index.js': 'x' }))).launch, 'node takes the folder');
+  assert.ok((await launchOf(zip({ 'manifest.json': manifest({ type: 'python', mcp_config: { command: 'python', args: ['${__dirname}/app'] } }), 'app/__main__.py': 'x' }))).launch, 'python runs the folder');
+  // A name in another case runs on macOS and Windows only: ours (platform_unsupported), never package_not_runnable.
+  assert.equal((await launchOf(zip({ 'manifest.json': nodeM('Server/Index.js'), 'server/index.js': 'x' }))).detail, 'platform_unsupported');
+  // A binary named without its .exe, or in another case: a build for another platform.
+  const bin = (cmd, files) => zip({ 'manifest.json': manifest({ type: 'binary', mcp_config: { command: '${__dirname}/' + cmd } }), ...files });
+  assert.equal((await launchOf(bin('server/srv', { 'server/srv.exe': 'MZ' }))).detail, 'platform_unsupported', 'srv.exe only');
+  assert.equal((await launchOf(bin('server/SRV', { 'server/srv': ELF64() }))).detail, 'platform_unsupported', 'another case');
+  // Still the bundle's own: a path that names nothing it holds.
+  assert.equal((await launchOf(zip({ 'manifest.json': nodeM('server/gone.js'), 'server/index.js': 'x' }))).detail, 'package_not_runnable');
+  assert.equal((await launchOf(bin('server/srv', { 'server/other': ELF64() }))).detail, 'package_not_runnable');
+  // `uv run <command>` with no pyproject runs a command of the user's environment: a launcher, not a fault of the bundle.
+  assert.equal((await launchOf(zip({ 'manifest.json': manifest({ type: 'uv', mcp_config: { command: 'uv', args: ['run', 'x-mcp'] } }) }))).detail, 'bundle_runtime_unsupported');
+  // Mutation checks: without the resolution rule node's extension, and without the case rule another case, is the bundle's
+  // missing file; without the uv rule a launcher is.
+  const src = readFileSync(join(root, 'corpus', 'mcpb.mjs'), 'utf8');
+  const mutate = async (from, to) => {
+    assert.ok(src.includes(from), from.slice(0, 60));
+    const file = join(root, 'corpus', '.mutant-mcpb-' + process.pid + '-' + Math.random().toString(16).slice(2) + '.mjs');
+    writeFileSync(file, src.replace(from, to));
+    try { return await import(pathToFileURL(file).href); } finally { rmSync(file, { force: true }); }
+  };
+  const go = async (M, bundle) => { try { return await M.mcpbLaunch(mcpbPkg(), { fetch: releases({ [URL1]: { body: bundle } }) }); } catch (e) { return { detail: e.detail }; } };
+  let M = await mutate("set.has(r) || [...set].some((n) => n.startsWith(r + '/') || n.startsWith(r + '.'))", 'set.has(r)');
+  assert.equal((await go(M, zip({ 'manifest.json': nodeM('server/index'), 'server/index.js': 'x' }))).detail, 'package_not_runnable', 'without the rule node\'s .js is a missing file');
+  assert.equal((await go(M, bin('server/srv', { 'server/srv.exe': 'MZ' }))).detail, 'package_not_runnable', 'without the rule srv.exe is a missing file');
+  M = await mutate("throw fail(holds(rel, lower, rel.toLowerCase()) ? 'platform_unsupported' : 'package_not_runnable', { why });", "throw fail('package_not_runnable', { why });");
+  assert.equal((await go(M, zip({ 'manifest.json': nodeM('Server/Index.js'), 'server/index.js': 'x' }))).detail, 'package_not_runnable', 'without the case rule');
+  M = await mutate("throw fail('bundle_runtime_unsupported', { why: 'uv_no_project' })", "throw fail('package_not_runnable', { why: 'no_pyproject' })");
+  assert.equal((await go(M, zip({ 'manifest.json': manifest({ type: 'uv', mcp_config: { command: 'uv', args: ['run', 'x-mcp'] } }) }))).detail, 'package_not_runnable', 'without the uv rule');
+});
+
 test('R-LP-72 mutation check: without the sha256 check, the entry-name check, the redirect host check, the required-config check or the ELF check, the fixture gets through', async () => {
   const src = readFileSync(join(root, 'corpus', 'mcpb.mjs'), 'utf8');
   const mutate = async (from, to) => {

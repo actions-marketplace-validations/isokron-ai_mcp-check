@@ -102,7 +102,7 @@ The run is named `shard <shard_id>`.
      (ours); a tool built for other platforms only, or for a newer .NET, is `platform_unsupported` (tool); several
      commands is `entry_ambiguous` (tool). A tool built for an older .NET runs rolled forward, so its crash is no evidence
      against it (`start_env_limited`).
-   - **MCP bundles** (registry type `mcpb`, R-LP-72..61, `corpus/mcpb.mjs`). The planner downloads the bundle from the
+   - **MCP bundles** (registry type `mcpb`, R-LP-72..74, `corpus/mcpb.mjs`). The planner downloads the bundle from the
      GitHub release asset the registry or seed list names (github.com, then its release-asset hosts only; every
      redirect checked; at most 200 MiB, read as a stream), checks its sha256 against the registry's `fileSha256` when
      there is one, and reads it as data: the zip's central directory (every entry name checked as the sandbox checks
@@ -126,8 +126,12 @@ The run is named `shard <shard_id>`.
      `package_not_runnable`) counts against the subject only for an entry in its namespace: anyone can publish an entry
      naming someone else's repository with a dead bundle URL (repository-only: `unverified_registry_entry`; seed-only or
      seed-matched: `bundle_unowned`, ours). A bare launcher (npx, sh, bun, docker ...) is never a file of the bundle
-     (`bundle_runtime_unsupported`), and only a name that leaves the bundle makes it invalid. Links the sandbox left
-     out when it unpacked the bundle make its crash no evidence either. What goes wrong in the sandbox is ours: the
+     (`bundle_runtime_unsupported`; so is `uv run <command>` with no pyproject), and only a name that leaves the bundle
+     makes it invalid. A path the manifest names is the bundle's missing file only when it names nothing the bundle
+     holds: not one a runtime resolves (node's `.js`, a folder's index or `__main__.py`, a Windows `.exe`), nor a name
+     in another case (it runs on macOS and Windows: `platform_unsupported`). Links the sandbox left out when it
+     unpacked the bundle make its crash no evidence either, and a bundle whose crash is no evidence is no more at fault
+     for a quiet exit with a declared variable (never `needs_credentials`). What goes wrong in the sandbox is ours: the
      planner already judged those very bytes. After npm, PyPI and an image, before a
      .NET tool or a crate; `PACKAGE_ALLOWANCE_S.mcpb` (120 s) on top of its share.
    - **npm install scripts run**, inside the sandbox's install container: gVisor with syscall tracing, egress only

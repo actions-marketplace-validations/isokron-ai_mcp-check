@@ -283,7 +283,17 @@ export function bundleLaunch({ manifest, names, members }, { url, sha256, buf, t
   const c = cmd.value;
   const base = { kind: 'mcpb', url, sha256, workdir: '.', ...(Object.keys(env).length ? { env } : {}) };
   const scriptIn = (a) => { const rel = inBundle(a); return rel && rel !== '.' ? rel : null; };
-  const needFile = (rel) => { if (rel && !names.has(rel)) throw fail('package_not_runnable', { why: 'entry_missing' }); };
+  // Whether the bundle holds what a path names: the file, or what a runtime resolves it to (node adds .js, .mjs, .cjs or
+  // .json, or takes a folder's index or package.json main; python runs a folder's __main__.py; Windows adds .exe). A
+  // name that differs only in case runs on the case-insensitive file systems of macOS and Windows: not here, and no
+  // fault of the bundle. Only a path that names nothing of the bundle at all is its own (R-LP-72, re-check of 27 Nov).
+  const holds = (rel, set = names, r = rel) => set.has(r) || [...set].some((n) => n.startsWith(r + '/') || n.startsWith(r + '.'));
+  const missing = (rel, why) => {
+    if (holds(rel)) return;
+    const lower = new Set([...names].map((n) => n.toLowerCase()));
+    throw fail(holds(rel, lower, rel.toLowerCase()) ? 'platform_unsupported' : 'package_not_runnable', { why });
+  };
+  const needFile = (rel) => { if (rel) missing(rel, 'entry_missing'); };
   let launch;
   if (c === 'uv' || /\/uv$/.test(c)) {
     const u = uvRun(argv);
@@ -292,7 +302,7 @@ export function bundleLaunch({ manifest, names, members }, { url, sha256, buf, t
     if (u.python) needFile(scriptIn(u.python[0]));
     if (!names.has('pyproject.toml')) {
       // No project: `uv run <script>` runs the script with no dependencies installed, as plain python does.
-      if (!u.python) throw fail('package_not_runnable', { why: 'no_pyproject' });
+      if (!u.python) throw fail('bundle_runtime_unsupported', { why: 'uv_no_project' });
       launch = { ...base, runtime: 'python', args: u.python, pythonpath: pythonpath ?? ['.'] };
     } else launch = { ...base, runtime: 'uv', args: u.python ?? u.args, ...(u.console ? { console: u.console } : {}), ...(u.extras.length ? { extras: u.extras.slice(0, 8) } : {}), pythonpath: pythonpath ?? ['.'] };
   } else if (c === 'node' || c === 'nodejs') {
@@ -309,7 +319,9 @@ export function bundleLaunch({ manifest, names, members }, { url, sha256, buf, t
     if (LAUNCHERS.has(c.split('/').pop()) || (!c.includes('/') && !names.has(c))) throw fail('bundle_runtime_unsupported', { why: 'launcher' });
     const rel = c.startsWith('/') ? scriptIn(c) : BUNDLE_PATH.test(c) ? c : null;
     if (!rel) throw fail('bundle_runtime_unsupported', { why: 'command' });
-    if (!names.has(rel)) throw fail(linuxListed ? 'package_not_runnable' : 'platform_unsupported', { why: 'binary_missing' });
+    // A binary must be the very file (no runtime resolves it), but one named with an extension (server.exe) or in another
+    // case is a build for another platform, and with no linux listed its absence is no fault either.
+    if (!names.has(rel)) { if (!linuxListed) throw fail('platform_unsupported', { why: 'binary_missing' }); missing(rel, 'binary_missing'); throw fail('platform_unsupported', { why: 'binary_missing' }); }
     if (!linuxListed) throw fail('platform_unsupported', { why: 'platforms' });
     const m = members.find((x) => x.name === rel);
     if (!m || !isLinuxAmd64(buf, m)) throw fail('platform_unsupported', { why: 'not_linux_amd64' });
