@@ -399,6 +399,31 @@ test('R-LP-72: a path the bundle\'s runtime would resolve (an extension node add
   assert.equal((await go(M, zip({ 'manifest.json': manifest({ type: 'uv', mcp_config: { command: 'uv', args: ['run', 'x-mcp'] } }) }))).detail, 'package_not_runnable', 'without the uv rule');
 });
 
+test('R-LP-72: a node or python script outside the bundle (an absolute path of the author\'s machine, one that climbs out, a relative one the bundle does not hold) is never the bundle\'s crash: bundle_runtime_unsupported', async () => {
+  const nodeArgs = (args) => zip({ 'manifest.json': manifest({ type: 'node', mcp_config: { command: 'node', args } }), 'server/index.js': 'x' });
+  const pyArgs = (args) => zip({ 'manifest.json': manifest({ type: 'python', mcp_config: { command: 'python3', args } }), 'server/main.py': 'x' });
+  for (const args of [['/Users/dev/app/server.js'], ['--no-warnings', '/opt/app/index.js'], ['${__dirname}/../outside.js'], ['../app/server.js'], ['dist/index.js'], ['-r', 'dotenv/config', '/home/me/srv.js']]) {
+    const r = await launchOf(nodeArgs(args));
+    assert.deepEqual([r.detail, r.why], ['bundle_runtime_unsupported', args.some((a) => a.startsWith('/') || a.includes('..')) ? 'script_outside' : 'script_relative'], JSON.stringify(args));
+  }
+  for (const args of [['C:\\dev\\server.py'], ['/Users/dev/main.py'], ['-u', '/srv/main.py']]) assert.equal((await launchOf(pyArgs(args))).detail, 'bundle_runtime_unsupported', JSON.stringify(args));
+  // Started as before: a file of the bundle (by ${__dirname} or relative), after options; inline code or a module is not a path.
+  for (const args of [['${__dirname}/server/index.js'], ['server/index.js'], ['./server/index.js'], ['--no-warnings', '-r', 'dotenv/config', '${__dirname}/server/index.js'], ['-e', 'require("x")']]) assert.ok((await launchOf(nodeArgs(args))).launch, JSON.stringify(args));
+  for (const args of [['${__dirname}/server/main.py'], ['-u', 'server/main.py'], ['-m', 'server.main']]) assert.ok((await launchOf(pyArgs(args))).launch, JSON.stringify(args));
+  // The bundle's own: a path inside it that names nothing it holds, found after the options too.
+  assert.equal((await launchOf(nodeArgs(['--no-warnings', '${__dirname}/server/gone.js']))).detail, 'package_not_runnable');
+  // Mutation check: without the outside check the absolute path is started, and its crash would be the bundle's.
+  const src = readFileSync(join(root, 'corpus', 'mcpb.mjs'), 'utf8');
+  const from = "    if (sc.startsWith('/') || sc.split(/[/\\\\]/).includes('..')) throw fail('bundle_runtime_unsupported', { why: 'script_outside' });\n    const r = sc.replace(/^(\\.\\/)+/, '').replace(/\\/+$/, '');\n    if (!r || !BUNDLE_PATH.test(r) || !holds(r)) throw fail('bundle_runtime_unsupported', { why: 'script_relative' });\n";
+  assert.ok(src.includes(from), 'the mutation text is in corpus/mcpb.mjs');
+  const file = join(root, 'corpus', '.mutant-mcpb-' + process.pid + '-' + Math.random().toString(16).slice(2) + '.mjs');
+  writeFileSync(file, src.replace(from, ''));
+  let M; try { M = await import(pathToFileURL(file).href); } finally { rmSync(file, { force: true }); }
+  const got = await M.mcpbLaunch(mcpbPkg(), { fetch: releases({ [URL1]: { body: nodeArgs(['/Users/dev/app/server.js']) } }) }).catch((e) => ({ detail: e.detail }));
+  assert.ok(got.launch, 'without the check the author\'s absolute path would be started');
+  assert.equal(got.info.crash_not_evidence, false, '...as a node bundle whose crash counts');
+});
+
 test('R-LP-72 mutation check: without the sha256 check, the entry-name check, the redirect host check, the required-config check or the ELF check, the fixture gets through', async () => {
   const src = readFileSync(join(root, 'corpus', 'mcpb.mjs'), 'utf8');
   const mutate = async (from, to) => {

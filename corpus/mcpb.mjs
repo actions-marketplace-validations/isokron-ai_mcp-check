@@ -206,6 +206,24 @@ function inBundle(p) {
   return rel && BUNDLE_PATH.test(rel) ? rel : null;
 }
 
+/** Options of node and python that take the next argument as their value; those that run code given inline or a module. */
+const VALUE_OPTS = { node: new Set(['-r', '--require', '--import', '--loader', '--experimental-loader', '-C', '--conditions', '--title', '--env-file', '--input-type', '--inspect-port', '--max-old-space-size']), python: new Set(['-X', '-W']) };
+const NO_SCRIPT = { node: new Set(['-e', '--eval', '-p', '--print']), python: new Set(['-c', '-m']) };
+
+/** The script argument of a node or python command line (the first argument that is not an option), or null for code given inline, a module or none. */
+export function scriptOf(argv, runtime) {
+  const vals = VALUE_OPTS[runtime]; const none = NO_SCRIPT[runtime];
+  for (let i = 0; i < (Array.isArray(argv) ? argv.length : 0); i++) {
+    const a = argv[i];
+    if (typeof a !== 'string') return null;
+    if (a === '--') return typeof argv[i + 1] === 'string' ? argv[i + 1] : null;
+    if (!a.startsWith('-') || a === '-') return a === '-' ? null : a;
+    if (none.has(a) || none.has(a.split('=')[0]) || (runtime === 'python' && /^-[A-Za-z]*[cm]/.test(a))) return null;
+    if (vals.has(a)) i++;
+  }
+  return null;
+}
+
 /** `uv run [options] <target> [args]` as uv would run it in the bundle: { console } or { python: args }, extras, or null. */
 export function uvRun(argv) {
   if (!Array.isArray(argv) || argv[0] !== 'run') return null;
@@ -294,22 +312,35 @@ export function bundleLaunch({ manifest, names, members }, { url, sha256, buf, t
     throw fail(holds(rel, lower, rel.toLowerCase()) ? 'platform_unsupported' : 'package_not_runnable', { why });
   };
   const needFile = (rel) => { if (rel) missing(rel, 'entry_missing'); };
+  // The script a node or python command runs: a file of the bundle must be there (needFile). One outside the bundle (an
+  // absolute path such as /Users/dev/app/server.js, or a relative one that climbs out of it) is a file of the author's
+  // machine, and a relative one the bundle does not hold is resolved against a working folder the client chooses: not
+  // ours to start, never the bundle's crash (R-LP-72, review of 27 Nov).
+  const checkScript = (av, rt) => {
+    const sc = scriptOf(av, rt);
+    if (sc === null || sc === BUNDLE_DIR) return;
+    const rel = scriptIn(sc);
+    if (rel) { needFile(rel); return; }
+    if (sc.startsWith('/') || sc.split(/[/\\]/).includes('..')) throw fail('bundle_runtime_unsupported', { why: 'script_outside' });
+    const r = sc.replace(/^(\.\/)+/, '').replace(/\/+$/, '');
+    if (!r || !BUNDLE_PATH.test(r) || !holds(r)) throw fail('bundle_runtime_unsupported', { why: 'script_relative' });
+  };
   let launch;
   if (c === 'uv' || /\/uv$/.test(c)) {
     const u = uvRun(argv);
     if (!u) throw fail('bundle_runtime_unsupported', { why: 'uv_run' });
     if (u.dir !== '.') throw fail('bundle_runtime_unsupported', { why: 'uv_project_subfolder' });
-    if (u.python) needFile(scriptIn(u.python[0]));
+    if (u.python) checkScript(u.python, 'python');
     if (!names.has('pyproject.toml')) {
       // No project: `uv run <script>` runs the script with no dependencies installed, as plain python does.
       if (!u.python) throw fail('bundle_runtime_unsupported', { why: 'uv_no_project' });
       launch = { ...base, runtime: 'python', args: u.python, pythonpath: pythonpath ?? ['.'] };
     } else launch = { ...base, runtime: 'uv', args: u.python ?? u.args, ...(u.console ? { console: u.console } : {}), ...(u.extras.length ? { extras: u.extras.slice(0, 8) } : {}), pythonpath: pythonpath ?? ['.'] };
   } else if (c === 'node' || c === 'nodejs') {
-    needFile(scriptIn(argv[0]));
+    checkScript(argv, 'node');
     launch = { ...base, runtime: 'node', args: argv };
   } else if (c === 'python' || c === 'python3') {
-    if (argv[0] !== '-m') needFile(scriptIn(argv[0]));
+    checkScript(argv, 'python');
     launch = { ...base, runtime: 'python', args: argv, ...(pythonpath ? { pythonpath } : {}) };
   } else {
     // A binary: a file of the bundle (by ${__dirname}, or a path relative to the bundle), linux/amd64, and the manifest
