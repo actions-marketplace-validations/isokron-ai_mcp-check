@@ -220,3 +220,39 @@ test('R-RD-44: a search transform keeps its reason when over-budget candidates a
   assert.deepEqual(both, { candidates: 516, files: ['srv/server.py', 'srv/deep.py'], reasons: ['a FastMCP tool search transform (BM25SearchTransform, line 3) lists search tools, not these', 'error'] });
   assert.deepEqual(R.incompleteWith(null, 1, ['a.py'], []), { candidates: 1, files: ['a.py'] });
 });
+
+test('R-RD-44: only runtime dependencies decide the SDK major; a dependency group or extra that would install another major leaves it unknown', () => {
+  const at = (pyproject, extra = {}) => R.analyseRepo(new Map([['pyproject.toml', pyproject], ['server.py', SNAKE_SERVER('srv')], ...Object.entries(extra)]));
+  for (const [what, pp] of [
+    ['dependency group', '[project]\nname = "x"\ndependencies = ["mcp>=1"]\n\n[dependency-groups]\ndev = ["mcp<2"]\n'],
+    ['optional extra', '[project]\nname = "x"\ndependencies = ["mcp>=1"]\n\n[project.optional-dependencies]\nlegacy = ["mcp<2"]\n'],
+    ['Poetry group', '[tool.poetry.dependencies]\nmcp = ">=1"\n\n[tool.poetry.group.dev.dependencies]\nmcp = "<2"\n'],
+  ]) {
+    const an = at(pp);
+    assert.equal(an.found[0].tool.annotations, undefined, what + ': no key is guessed');
+    assert.ok(an.notes.some((n) => /a dependency group or extra would install another Python SDK major/.test(n)), what + ': ' + an.notes.join('\n'));
+  }
+  const dev = at('[project]\nname = "x"\ndependencies = ["mcp>=1"]\n', { 'requirements-dev.txt': 'mcp<2\n' });
+  assert.equal(dev.found[0].tool.annotations, undefined, 'requirements-dev.txt is a group too');
+  const agree = at('[project]\nname = "x"\ndependencies = ["mcp>=2"]\n\n[dependency-groups]\ndev = ["mcp>=2.1"]\n');
+  assert.deepEqual(agree.found[0].tool.annotations, { readOnlyHint: true }, 'a group that agrees changes nothing');
+  assert.equal(R.analyseRepo(new Map([['pyproject.toml', '[project]\nname = "x"\n\n[dependency-groups]\ndev = ["mcp<2"]\n'], ['server.py', SNAKE_SERVER('srv')]])).found[0].tool.annotations, undefined, 'mcp only in a group: unknown');
+});
+
+test('R-RD-44: a lock the nearest folder\'s requirements do not allow (a parent project\'s, or stale) leaves the SDK major unknown', () => {
+  const root = R.analyseRepo(new Map([['uv.lock', lock('1.2.0')], ['pkg/pyproject.toml', '[project]\nname = "pkg"\ndependencies = ["mcp>=2"]\n'], ['pkg/server.py', SNAKE_SERVER('pkg')]]));
+  assert.equal(root.found[0].tool.annotations, undefined);
+  assert.ok(root.notes.some((n) => /uv\.lock pins mcp 1\.x, which mcp>=2 in pkg\/pyproject\.toml does not allow/.test(n)), root.notes.join('\n'));
+  const stale = R.analyseRepo(new Map([['uv.lock', lock('1.9.0')], ['pyproject.toml', '[project]\nname = "x"\ndependencies = ["mcp>=2"]\n'], ['server.py', SNAKE_SERVER('srv')]]));
+  assert.equal(stale.found[0].tool.annotations, undefined);
+  const fine = R.analyseRepo(new Map([['uv.lock', lock('2.3.0')], ['pyproject.toml', '[project]\nname = "x"\ndependencies = ["mcp>=1.9"]\n'], ['server.py', SNAKE_SERVER('srv')]]));
+  assert.deepEqual(fine.found[0].tool.annotations, { readOnlyHint: true }, 'a lock the requirements allow decides');
+});
+
+test('R-RD-44: a package whose own manifest was not read (past the reader\'s limits) is not decided by an ancestor\'s lock', async () => {
+  const r = await R.fromDirectory(repo({ 'uv.lock': lock('1.2.0'), 'pyproject.toml': '[project]\nname = "ws"\ndependencies = ["mcp<2"]\n', 'packages/servers/deep/pyproject.toml': '[project]\nname = "deep"\ndependencies = ["mcp>=2"]\n', 'packages/servers/deep/server.py': SNAKE_SERVER('deep') }));
+  const t = r.candidates.flatMap((c) => c.tools).find((x) => x.name === 'deep_list');
+  assert.ok(t, 'the tool is read');
+  assert.equal(t.annotations, undefined, 'its package manifest (depth 3) is not read, so the root lock does not decide');
+  assert.ok((r.best.notes || []).some((n) => /the package manifest in packages\/servers\/deep was not read/.test(n)), JSON.stringify(r.best.notes));
+});

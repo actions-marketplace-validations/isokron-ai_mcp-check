@@ -3180,8 +3180,12 @@
     const out = [];
     const want = pyDistName(dist);
     // { spec, marker }: the environment marker (after ";") is kept, so a requirement for some environments only is known as such
-    const req = (s) => { const m = /^\s*([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]*\])?\s*([^;@]*?)\s*(?:;\s*(.*?))?\s*$/.exec(s); if (m && pyDistName(m[1]) === want) out.push({ spec: m[2], marker: m[3] ? m[3].trim() : null }); };
-    if (/(^|\/)requirements[^/]*\.(txt|lock)$/.test(path)) { text.split('\n').forEach((l) => { const x = l.replace(/(^|\s)#.*$/, ''); if (!/^\s*-/.test(x)) req(x); }); return out; }
+    // group: null for a runtime requirement (project.dependencies, the main Poetry table, a requirements file), else the
+    // dependency group or extra it belongs to (dev, test, docs, an optional extra): those do not decide what a server runs on
+    let group = null;
+    const req = (s) => { const m = /^\s*([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]*\])?\s*([^;@]*?)\s*(?:;\s*(.*?))?\s*$/.exec(s); if (m && pyDistName(m[1]) === want) out.push({ spec: m[2], marker: m[3] ? m[3].trim() : null, group }); };
+    if (/(^|\/)requirements[^/]*\.(txt|lock)$/.test(path)) {
+      const fm = /(^|\/)requirements[-_.]?([^/]*)\.(?:txt|lock)$/.exec(path); group = fm && /(dev|test|lint|doc|ci|bench|example)/i.test(fm[2]) ? fm[2] : null; text.split('\n').forEach((l) => { const x = l.replace(/(^|\s)#.*$/, ''); if (!/^\s*-/.test(x)) req(x); }); return out; }
     if (!/(^|\/)pyproject\.toml$/.test(path)) return out;
     let section = '';
     const strings = (body) => { const re = /"((?:[^"\\\n]|\\.)*)"|'([^'\n]*)'/g; let m; while ((m = re.exec(body))) req(m[1] !== undefined ? m[1] : m[2]); };
@@ -3195,13 +3199,15 @@
       if (!kv) continue;
       if (poetry) {
         if (pyDistName(kv[2]) !== want) continue;
+        group = section === 'tool.poetry.dependencies' ? null : section;
         const v = /^["']([^"']*)["']/.exec(kv[3]) || /\bversion\s*=\s*["']([^"']*)["']/.exec(kv[3]);
         const mk = /\bmarkers\s*=\s*["']([^"']*)["']/.exec(kv[3]) || /\bpython\s*=\s*["']([^"']*)["']/.exec(kv[3]);
-        if (v) out.push({ spec: v[1], marker: mk && !/^["']/.test(kv[3]) ? mk[1] : null }); else if (/^\{/.test(kv[3])) out.push({ spec: '', marker: mk ? mk[1] : null });
+        if (v) out.push({ spec: v[1], marker: mk && !/^["']/.test(kv[3]) ? mk[1] : null, group }); else if (/^\{/.test(kv[3])) out.push({ spec: '', marker: mk ? mk[1] : null, group });
         continue;
       }
       const isReqArray = (section === 'project' && kv[2] === 'dependencies') || section === 'project.optional-dependencies' || section === 'dependency-groups';
       if (!isReqArray || !/^\[/.test(kv[3].trim())) continue;
+      group = section === 'project' ? null : section + '.' + kv[2];
       // the array, to its closing bracket outside a string (extras such as mcp[cli] are inside strings)
       let body = ''; let depth = 0; let q = null; let done = false;
       for (let j = i; j < lines.length && !done; j++) {
@@ -3245,7 +3251,7 @@
   const PY_REQ_FILE = /(^|\/)(pyproject\.toml|requirements[^/]*\.(txt|lock))$/;
   const pyDirOf = (p) => (p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : '');
   const pyUp = (d) => (d === '' ? null : pyDirOf(d));
-  function pyScopes(entries) {
+  function pyScopes(entries, unreadPaths) {
     const skip = (p) => /(^|\/)(node_modules|\.venv|venv|site-packages)\//.test(p);
     const decl = new Map(); const locks = new Map();
     for (const [p, text] of entries) {
@@ -3256,7 +3262,8 @@
         if (!locks.has(d) || (m && locks.get(d) === null)) locks.set(d, m ? { major: Number(m[1]), path: p } : null);
       } else if (PY_REQ_FILE.test(p)) { if (!decl.has(d)) decl.set(d, []); decl.get(d).push([p, text]); }
     }
-    return { decl, locks, imports: entries.filter(([p, t]) => typeof t === 'string' && /\.py$/.test(p) && !skip(p)) };
+    const unread = new Set((unreadPaths || []).filter((p) => (PY_REQ_FILE.test(p) || PY_LOCK_FILE.test(p)) && !skip(p)).map(pyDirOf));
+    return { decl, locks, unread, imports: entries.filter(([p, t]) => typeof t === 'string' && /\.py$/.test(p) && !skip(p)) };
   }
   // the folder that declares the SDK for files in `dir`: dir or the nearest above it with a manifest; a manifest in a
   // folder that is not the server (examples, docs, tests, ...) counts only for files in that folder itself
@@ -3270,30 +3277,48 @@
   function pySdkMajorAt(dir, sc, importsMajor) {
     const d = pyDeclaringDir(dir, sc);
     const narrowed = (allowed) => (importsMajor ? allowed.filter((x) => (importsMajor >= 2 ? x >= 2 : x < 2)) : allowed);
-    if (d === null) return importsMajor ? { major: importsMajor, from: 'imports', why: 'the SDK modules the source imports' } : { major: null, why: 'no requirement on mcp or fastmcp and no SDK module import says which Python SDK major is installed' };
-    for (let ld = d; ld !== null; ld = pyUp(ld)) {
-      if (ld !== d && notServerFolder(ld)) continue;
-      const lk = sc.locks.get(ld);
-      if (lk) return { major: lk.major, from: 'lock', why: lk.path + ' pins mcp ' + lk.major + '.x' };
-    }
-    let uncond = PY_MCP_MAJORS.slice(); const variants = []; let declared = false; let unreadable = false; const from = []; const said = [];
+    const none = { major: null, why: 'no requirement on mcp or fastmcp and no SDK module import says which Python SDK major is installed' };
+    const imp = { major: importsMajor, from: 'imports', why: 'the SDK modules the source imports' };
+    // a package whose own manifest is in the listing but was not read (past the reader's limits): what it declares is
+    // not known, so no lock or requirement of another folder decides for it (R-RD-44)
+    for (let u = dir; u !== null && u !== d; u = pyUp(u)) if (sc.unread && sc.unread.has(u)) return importsMajor ? imp : { major: null, why: 'the package manifest in ' + (u || '.') + ' was not read' };
+    if (d !== null && sc.unread && sc.unread.has(d) && !sc.decl.has(d)) return importsMajor ? imp : { major: null, why: 'the package manifest in ' + (d || '.') + ' was not read' };
+    if (d === null) return importsMajor ? imp : none;
+    // the runtime requirements of the declaring folder; a dependency group or extra that would change the answer: unknown
+    let uncond = PY_MCP_MAJORS.slice(); const variants = []; const groups = []; let declared = false; let unreadable = false; const from = []; const said = [];
     for (const [p, text] of sc.decl.get(d) || []) {
       const take = (dist, majors, map) => pyReqSpecs(p, text, dist).forEach((r) => {
-        declared = true; const a0 = specMajors(r.spec, majors); if (!a0) { unreadable = true; return; }
+        const a0 = specMajors(r.spec, majors); if (!a0) { unreadable = true; return; }
         const a = map ? Array.from(new Set(a0.map(map))) : a0;
+        const txt = dist + (r.spec ? r.spec : ' (any version)') + (r.marker ? ' ; ' + r.marker : '') + ' in ' + p + (r.group ? ' [' + r.group + ']' : '');
+        if (r.group) { groups.push({ a, txt }); return; }
+        declared = true;
         if (r.marker) variants.push({ a, marker: r.marker }); else uncond = uncond.filter((x) => a.includes(x));
-        from.push(dist === 'mcp' ? 'mcp' : 'fastmcp'); said.push(dist + (r.spec ? r.spec : ' (any version)') + (r.marker ? ' ; ' + r.marker : '') + ' in ' + p);
+        from.push(dist === 'mcp' ? 'mcp' : 'fastmcp'); said.push(txt);
       });
       take('mcp', PY_MCP_MAJORS, null); take('fastmcp', PY_FASTMCP_MAJORS, pyMcpOfFastmcp); take('fastmcp-slim', PY_FASTMCP_MAJORS, pyMcpOfFastmcp);
     }
     if (unreadable) return { major: null, why: 'a requirement on mcp or fastmcp could not be read' };
-    if (!declared) return importsMajor ? { major: importsMajor, from: 'imports', why: 'the SDK modules the source imports' } : { major: null, why: 'no requirement on mcp or fastmcp and no SDK module import says which Python SDK major is installed' };
     const base = narrowed(uncond);
+    // a lock in the declaring folder or above it (a workspace root) pins the version, when the folder's own runtime
+    // requirements allow it; a lock they do not allow (stale, or another project's) leaves the major unknown
+    for (let ld = d; ld !== null; ld = pyUp(ld)) {
+      if (ld !== d && notServerFolder(ld)) continue;
+      const lk = sc.locks.get(ld);
+      if (!lk) continue;
+      if (declared && !base.includes(lk.major)) return { major: null, why: lk.path + ' pins mcp ' + lk.major + '.x, which ' + said.slice(0, 2).join('; ') + ' does not allow' };
+      if (!declared && importsMajor && importsMajor !== lk.major) return { major: null, why: lk.path + ' pins mcp ' + lk.major + '.x, and the source imports SDK ' + importsMajor + '.x modules' };
+      return { major: lk.major, from: 'lock', why: lk.path + ' pins mcp ' + lk.major + '.x' };
+    }
+    if (!declared) return importsMajor ? imp : groups.length ? { major: null, why: 'mcp or fastmcp is required only by a dependency group or extra (' + groups.slice(0, 2).map((g) => g.txt).join('; ') + ')' } : none;
     if (!base.length) return { major: null, why: 'the requirements on mcp and fastmcp allow no Python SDK major together (' + said.slice(0, 4).join('; ') + ')' };
     const outcomes = new Set([Math.max(...base)]);
     for (const v of variants) { const w = base.filter((x) => v.a.includes(x)); outcomes.add(w.length ? Math.max(...w) : null); }
     if (outcomes.size > 1 || outcomes.has(null)) return { major: null, why: 'the Python SDK major depends on environment markers (' + said.slice(0, 4).join('; ') + ')' };
     const major = Math.max(...base);
+    // installed with a dependency group or extra, the major could differ: then it is not known
+    const odd = groups.filter((g) => { const w = base.filter((x) => g.a.includes(x)); return !w.length || Math.max(...w) !== major; });
+    if (odd.length) return { major: null, why: 'a dependency group or extra would install another Python SDK major (' + odd.slice(0, 2).map((g) => g.txt).join('; ') + ')' };
     const inferred = uncond.length > 1 && !(importsMajor);
     return { major, from: Array.from(new Set(from.concat(importsMajor ? ['imports'] : []))).join('+'), inferred, why: inferred ? 'SDK ' + major + '.x inferred from ' + said.slice(0, 3).join('; ') + ': no lock file, and the newest major the range allows is what installs' : said.slice(0, 3).join('; ') };
   }
@@ -3309,8 +3334,8 @@
     if (answers.every((x) => x !== null && x === answers[0])) return { major: answers[0], from: 'packages', why: 'every Python package of the repository' };
     return { major: null, why: 'Python packages of the repository declare different SDK majors; each package is read with its own' };
   }
-  function pySdkMajorFor(entries) {
-    const sc = pyScopes(entries); const memo = new Map();
+  function pySdkMajorFor(entries, unreadPaths) {
+    const sc = pyScopes(entries, unreadPaths); const memo = new Map();
     return (path, text) => {
       const imp = pySdkImports(text); const k = pyDirOf(path) + '\u0000' + imp;
       if (!memo.has(k)) memo.set(k, pySdkMajorAt(pyDirOf(path), sc, imp));
@@ -4174,7 +4199,7 @@
     const dupes = []; const unresolved = []; const overBudget = [];
     const pyStats = { snakeHintsUnknown: 0, unknownWhy: new Set(), inferred: new Set() };
     // the Python SDK major of each file's own package (R-RD-44); a caller's opts.sdk.pyMajor (tests) wins
-    const pyMajorOf = pySdkMajorFor(all);
+    const pyMajorOf = pySdkMajorFor(all, opts.unreadManifests);
     const pySdkOf = (p, t) => {
       if (opts.sdk && Number.isInteger(opts.sdk.pyMajor)) return sdk;
       const a = pyMajorOf(p, t); const o = Object.assign({}, sdk); delete o.pyMajor; delete o.pyMajorFrom; delete o.pyMajorUnknown; delete o.pyMajorWhy;
@@ -4405,7 +4430,10 @@
       const srcFiles = await readMany(pl.src.slice(0, maxRead), 16);
       const repoFiles = new Map(); metaFiles.concat(srcFiles).forEach(([p, t]) => { if (t) repoFiles.set(p, t); });
       readFiles = repoFiles;
-      return analyseRepo(repoFiles, { maxSourceFiles: maxSrc, allowBuilt });
+      // Python manifests in the listing that were not read (past the depth and count caps): their package's SDK major is
+      // not taken from another folder (R-RD-44)
+      const unreadManifests = paths.filter((p) => (PY_REQ_FILE.test(p) || PY_LOCK_FILE.test(p)) && !repoFiles.has(p));
+      return analyseRepo(repoFiles, { maxSourceFiles: maxSrc, allowBuilt, unreadManifests });
     };
     let an = await analyse(plan);
     let built = false;
