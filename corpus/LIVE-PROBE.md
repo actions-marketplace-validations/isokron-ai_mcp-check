@@ -172,7 +172,12 @@ syscall trace summarised and removed. Nothing of a target runs on the runner. No
 1. **SDK clients**, each the official SDK used the way its documentation shows, pinned (`corpus/oracles/pins.json`):
    TypeScript 1.x (`@modelcontextprotocol/sdk` 1.32.2) and 2.x (`@modelcontextprotocol/client` 2.4.0), Python
    (`mcp` 2.3.0) and Go (`github.com/modelcontextprotocol/go-sdk` v1.8.0). Each connects with its own default
-   negotiation (the Python and Go clients try `server/discover` first) and lists every page of tools/list.
+   negotiation (the Python and Go clients try `server/discover` first) and lists every page of tools/list. The Go
+   client reports each `tools/list` result as the server sent it, read off the wire under the SDK (R-ORC-11): go-sdk's
+   typed `mcp.Tool` cannot hold `execution`, annotation keys it does not know or an empty annotations title, and writes
+   `readOnlyHint` and `idempotentHint` out, so a list re-marshalled from it is the SDK's view, not the catalog. Its
+   typed parse still decides the outcome (`typed_tool_count`); a list it could report only from the typed structs
+   (`tools_source: typed`) is compared on names, never on its catalog (`catalog_vs_reader: sdk_typed_only`).
 2. **The official conformance suite** (`@modelcontextprotocol/conformance` 0.2.0-alpha.12, built from git commit
    f44482b, pinned by npm integrity), against both frozen requirement sets it ships: 2025-11-25 (the stateful wire)
    and 2026-07-28 (stateless). The stage refuses to run when the installed sets do not hash as pinned. Of each set's
@@ -191,7 +196,11 @@ syscall trace summarised and removed. Nothing of a target runs on the runner. No
 
 The stage runs at most once in full per target, after the first probe that got a tool list, and at most once with the
 clients only, after the first probe that got none (a client that lists where our probe did not is the lead for a
-reader bug). It never runs past the target's time limit less 75 s (kept for the driver's second probe and its
+reader bug), and then only when the server answered that probe (an initialize result, or a 2026-07-28 refusal of it):
+for a server that never started every client fails initialize too, so the record is a skip with `why: not_started`
+and the clients do not run (R-ORC-12). A server that declared no tools capability and answered `tools/list` "method
+not found" (live-probe R-LP-75) agrees with every client that was refused the list or listed none
+(`catalog_vs_reader: no_tools_capability`): no disagreement. It never runs past the target's time limit less 75 s (kept for the driver's second probe and its
 analysis), at most 150 s; each target's limit grows by 150 s for it (`ORACLE_ALLOWANCE_S`). Streamable HTTP targets
 are probed inside the sandbox by a helper container, so the stage does not run for them (`oracle_stage.why`:
 `http_transport`). The stage runs inside the driver's probe call: `step_telemetry` gives `oracle_ms` and `probe_ms`

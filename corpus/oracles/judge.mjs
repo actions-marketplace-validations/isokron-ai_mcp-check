@@ -41,7 +41,8 @@ const pick = (s, re) => (typeof s === 'string' && re.test(s) ? s : null);
 
 /**
  * The spec's defaults for tool annotations (a hint left out means this value). Some SDKs write a default out when a
- * server left it out (the Go SDK writes idempotentHint: false): the same catalog to a client, not another server.
+ * server left it out (the Go SDK's typed Tool writes idempotentHint: false; since R-ORC-11 the Go client reports the
+ * raw list instead): the same catalog to a client, not another server.
  */
 export const ANNOTATION_DEFAULTS = Object.freeze({ readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true });
 
@@ -79,6 +80,9 @@ function clientEntry(c, pinsClient) {
   const r = isObj(c.result) ? c.result : null;
   const outcome = OUTCOMES.includes(r && r.outcome) ? r.outcome : OUTCOMES.includes(c.outcome) ? c.outcome : 'client_error';
   const cat = outcome === 'listed' && r ? clientCatalog(r.tools) : null;
+  // R-ORC-11: a client that could only report its SDK's typed structs (the Go client when it saw no raw page) lost
+  // fields the server sent: its catalog is not compared, only its outcome and names.
+  const typedOnly = r && r.tools_source === 'typed';
   return {
     entry: {
       client: c.id, sdk: pinsClient ? pinsClient.sdk : null, sdk_version: pick(r && r.sdk_version, VERSION_RE) || (pinsClient ? pinsClient.version : null),
@@ -88,6 +92,7 @@ function clientEntry(c, pinsClient) {
       pages: int(r && r.pages), ms: int(c.ms),
     },
     names: cat ? cat.names : null,
+    typedOnly,
   };
 }
 
@@ -106,10 +111,12 @@ export function judgeOracles(rec, { reader, pins, baseline = null }) {
   if (rec.mode === 'skipped' || rec.mode === 'error') { out.status = rec.mode; out.why = pick(rec.why, /^[a-z_]{1,40}$/) || (rec.mode === 'error' ? 'stage_error' : null); return out; }
   out.status = 'ran';
   const names = new Map();
+  const lossy = new Set();
   for (const c of Array.isArray(rec.clients) ? rec.clients : []) {
     const pc = (pins.clients || []).find((x) => x.id === c.id);
     if (!pc) continue;
-    const { entry, names: n } = clientEntry(c, pc);
+    const { entry, names: n, typedOnly } = clientEntry(c, pc);
+    if (typedOnly) lossy.add(c.id);
     out.clients.push(entry);
     if (n) names.set(c.id, n);
     if (entry.outcome !== 'unavailable' && entry.outcome !== 'skipped') out.components.push({ name: pc.sdk, version: entry.sdk_version || pc.version });
@@ -159,32 +166,45 @@ export function judgeOracles(rec, { reader, pins, baseline = null }) {
   // wrote a default the server did not send), or different.
   const rd = reader && reader.listed && Array.isArray(reader.tools) ? clientCatalog(reader.tools) : null;
   for (const c of out.clients) {
+    // R-LP-75: the server declared no tools capability; a client that was refused the list, or listed none, agrees.
+    if (noToolsAgrees(reader, c)) { c.catalog_vs_reader = 'no_tools_capability'; continue; }
     if (c.outcome !== 'listed' || !reader || !reader.listed) continue;
+    if (lossy.has(c.client)) { c.catalog_vs_reader = 'sdk_typed_only'; continue; }
     c.catalog_vs_reader = c.catalog_sha256 === reader.catalog_hash ? 'same' : rd && c.catalog_defaults_sha256 && c.catalog_defaults_sha256 === rd.catalog_defaults_sha256 ? 'same_but_annotation_defaults' : 'different';
   }
-  out.disagreements = disagreements(out, names, reader, rd);
+  out.disagreements = disagreements(out, names, reader, rd, lossy);
   return out;
+}
+
+/**
+ * Our reader saw a server with no tools capability that answered tools/list "method not found" (live-probe R-LP-75), and
+ * this client agrees: it was refused the list, or listed no tool (the TypeScript v2 SDK returns an empty list).
+ */
+export function noToolsAgrees(reader, c) {
+  return !!(reader && !reader.listed && reader.no_tools_capability === true && (c.outcome === 'list_failed' || (c.outcome === 'listed' && c.tool_count === 0)));
 }
 
 /** A client that timed out or crashed (D12); one that was refused at initialize or at the list (D6). */
 const crashClass = (outcome) => (outcome === 'timeout' || outcome === 'client_error' ? 'D12' : 'D6');
 
 /** The disagreements between our reader, the clients and the suite (DESIGN-v3 §7 classes). */
-export function disagreements(j, names, reader, readerCatalog = null) {
+export function disagreements(j, names, reader, readerCatalog = null, lossy = new Set()) {
   const d = [];
-  const listedClients = j.clients.filter((c) => c.outcome === 'listed');
-  const failedClients = j.clients.filter((c) => !['listed', 'unavailable', 'skipped'].includes(c.outcome));
+  // A client that agrees there are no tools to list (R-LP-75) takes part in no comparison.
+  const clients = j.clients.filter((c) => !noToolsAgrees(reader, c));
+  const listedClients = clients.filter((c) => c.outcome === 'listed');
+  const failedClients = clients.filter((c) => !['listed', 'unavailable', 'skipped'].includes(c.outcome));
   const readerListed = !!(reader && reader.listed);
   const diffNames = (a, b) => { const A = new Set(a || []); const B = new Set(b || []); return { only_a: [...A].filter((x) => !B.has(x)).length, only_b: [...B].filter((x) => !A.has(x)).length }; };
   // Our reader against each client.
-  for (const c of j.clients) {
+  for (const c of clients) {
     if (c.outcome === 'unavailable' || c.outcome === 'skipped') continue;
     const b = `client:${c.client}`;
     if (readerListed && c.outcome !== 'listed') d.push({ class: crashClass(c.outcome), oracle_a: 'reader', oracle_b: b, kind: 'outcome', detail: { a: 'listed', b: c.outcome } });
     else if (!readerListed && c.outcome === 'listed') d.push({ class: 'D6', oracle_a: 'reader', oracle_b: b, kind: 'outcome', detail: { a: 'not_listed', b: 'listed' } });
     else if (readerListed && c.outcome === 'listed') {
       if (c.names_sha256 !== namesSha(reader.names)) d.push({ class: 'D6', oracle_a: 'reader', oracle_b: b, kind: 'tool_names', detail: { ...diffNames(reader.names, names.get(c.client)), count_a: int(reader.tool_count), count_b: c.tool_count } });
-      else if (c.catalog_sha256 !== reader.catalog_hash && !(readerCatalog && c.catalog_defaults_sha256 && c.catalog_defaults_sha256 === readerCatalog.catalog_defaults_sha256)) d.push({ class: 'D4', oracle_a: 'reader', oracle_b: b, kind: 'catalog', detail: { count_a: int(reader.tool_count), count_b: c.tool_count } });
+      else if (!lossy.has(c.client) && c.catalog_sha256 !== reader.catalog_hash && !(readerCatalog && c.catalog_defaults_sha256 && c.catalog_defaults_sha256 === readerCatalog.catalog_defaults_sha256)) d.push({ class: 'D4', oracle_a: 'reader', oracle_b: b, kind: 'catalog', detail: { count_a: int(reader.tool_count), count_b: c.tool_count } });
     }
   }
   // Clients against each other: the first listed client is the reference.
@@ -192,6 +212,7 @@ export function disagreements(j, names, reader, readerCatalog = null) {
   if (ref) {
     for (const c of listedClients.slice(1)) {
       if (c.names_sha256 !== ref.names_sha256) d.push({ class: 'D6', oracle_a: `client:${ref.client}`, oracle_b: `client:${c.client}`, kind: 'tool_names', detail: { ...diffNames(names.get(ref.client), names.get(c.client)), count_a: ref.tool_count, count_b: c.tool_count } });
+      else if (lossy.has(c.client) || lossy.has(ref.client)) continue;
       else if (c.catalog_sha256 !== ref.catalog_sha256 && c.catalog_defaults_sha256 !== ref.catalog_defaults_sha256) d.push({ class: 'D4', oracle_a: `client:${ref.client}`, oracle_b: `client:${c.client}`, kind: 'catalog', detail: { count_a: ref.tool_count, count_b: c.tool_count } });
     }
     for (const c of failedClients) d.push({ class: crashClass(c.outcome), oracle_a: `client:${ref.client}`, oracle_b: `client:${c.client}`, kind: 'outcome', detail: { a: 'listed', b: c.outcome } });
