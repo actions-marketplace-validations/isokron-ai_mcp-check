@@ -317,13 +317,17 @@ and the 4x free-disk rule. An image on another host is unassessed until the list
 | `bundle_hash_mismatch` (the bytes at the URL are not the ones the registry entry names in fileSha256) | `install_failed_registry` | subject | no |
 | `bundle_unowned` (one of the four bundle failures above, or `package_not_runnable`, for a bundle whose registry entry is not shown to be the subject's: seed-only or seed-matched; a repository-only entry is `unverified_registry_entry`) | `install_failed_registry` | tool | no |
 | `bundle_invalid` (the file is no zip archive at all, or names a path that leaves it: absolute or with a `..` segment; only for an entry in the subject's namespace, else `bundle_unowned`) | `install_failed_registry` | subject | no |
-| `list_failed` (a JSON-RPC error the server sent, or a malformed result) | `timeout_start` | subject | no |
+| `list_failed` (a JSON-RPC error the server sent, or a malformed result; not "method not found" from a server that declared no tools capability) | `timeout_start` | subject | no |
+| `no_tools_capability` (the server declared no `tools` capability at initialize and answered `tools/list` with -32601 "method not found", as the specification lets it: a prompts-only or resources-only server. `buildItem` records it as status `no_tools` with no skip, so it is assessed with nothing to grade and nobody's fault; the row is the fallback if a caller still skips it, R-LP-75) | `no_tools_found` | tool | no |
 | `list_probe_limited` (our time limit, the page cap, the read cap, or an HTTP transport failure while listing) | `timeout_start` | tool | no |
 | `start_timeout` | `timeout_start` | tool (the subject's time budget also pays for the install, so a slow runner or sandbox start can run it out; it is no evidence the server hung) | no |
 | `list_rejected` (the engine refused the list) | `tool_error` | tool | no |
 | `harness_error` (our driver or bundle step failed) | `tool_error` | tool | yes |
 | `rate_limited` | `rate_limited` | infra | yes |
-| `upstream_error`, `shard_deadline`, `disk_low` | `upstream_unavailable` | infra | yes |
+| `upstream_error` (a 5xx, 408, 425 or a 403 with no rate-limit headers, a network failure, a read cut at our cap), `shard_deadline`, `disk_low` | `upstream_unavailable` | infra | yes |
+| `registry_query_refused` (a registry's 4xx other than 403, 404, 408, 425 and 429: its answer to our request, the same on a retry; a 403 without rate-limit headers stays `upstream_error`, since a CDN or firewall may send it for a while; one candidate's provenance answer refused leaves that candidate unverified and the next one is tried; a search shorter than 3 characters, which the MCP registry answers 422, is never sent, R-LP-76) | `tool_error` | tool | no |
+| `image_access_denied` (the registry's token service refused a pull token, 401 or 403: ghcr's `DENIED` for a private or missing package; private and gone look alike and the request is ours, R-LP-76) | `install_failed_registry` | tool | no |
+| `resolver_error` (an exception in our resolver with no detail code: a bug of ours, never an outage; its class name is kept in `raw/resolution.json`, R-LP-76) | `tool_error` | tool | no |
 | `sandbox_evidence_missing` (no syscall trace or firewall log for it) | `trace_unavailable` | tool | yes |
 
 ## Controls

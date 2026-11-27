@@ -188,7 +188,17 @@ export const DETAILS = Object.freeze({
   list_probe_limited: ['timeout_start', false, 'list', 'tool'], // our time limit, page cap or read cap, or an HTTP transport failure
   list_rejected: ['tool_error', false, 'grade', 'tool'], // our engine refused the list it was given
   rate_limited: ['rate_limited', true, 'resolve', 'infra'],
-  upstream_error: ['upstream_unavailable', true, 'resolve', 'infra'],
+  upstream_error: ['upstream_unavailable', true, 'resolve', 'infra'], // 5xx, 408, a network failure or a cut read: tried again
+  // R-LP-76: a registry's 4xx (other than 404, 408, 429 and a rate limit) is its answer to our request and comes back the
+  // same on every retry: ours, not retried (a 2-character search is a 422).
+  registry_query_refused: ['tool_error', false, 'resolve', 'tool'],
+  // R-LP-76: the token service refused a pull token for the image (ghcr's 403 DENIED: a private or missing package). We
+  // cannot tell private from gone, and the request is ours: not the subject's, not retried.
+  image_access_denied: ['install_failed_registry', false, 'resolve', 'tool'],
+  resolver_error: ['tool_error', false, 'resolve', 'tool'], // R-LP-76: an exception of ours in the resolver, never an outage
+  // R-LP-75: a fallback only (buildItem records such a server as no_tools, with no skip): the server declared no tools
+  // capability and answered tools/list "method not found", as the specification lets it. Never the subject's.
+  no_tools_capability: ['no_tools_found', false, 'list', 'tool'],
   harness_error: ['tool_error', true, 'start', 'tool'], // our driver or bundle step failed; tried again, then accepted as a gap
   shard_deadline: ['upstream_unavailable', true, 'start', 'infra'],
   sandbox_evidence_missing: ['trace_unavailable', true, 'start', 'tool'],
@@ -344,9 +354,15 @@ export function loadSeed(file) {
   return map;
 }
 
-/** A fetch's failure as a detail code: rate_limited (429, or 403 with a rate limit), else upstream_error. */
+/**
+ * A fetch's failure as a detail code: rate_limited (429, or 403 with a rate limit); registry_query_refused for any other
+ * 4xx but 403, 408 and 425 (the registry's answer to our request, the same on a retry: R-LP-76); else upstream_error
+ * (5xx, 408, 425, and a 403 with no rate-limit headers, which a CDN or firewall in front of a registry may send for a
+ * while: still tried again; the token service's own 403 is image_access_denied, below).
+ */
 export function httpDetail(status, header = () => null) {
   if (status === 429 || (status === 403 && (header('x-ratelimit-remaining') === '0' || header('retry-after') != null))) return 'rate_limited';
+  if (Number.isInteger(status) && status >= 400 && status < 500 && ![403, 408, 425].includes(status)) return 'registry_query_refused';
   return 'upstream_error';
 }
 
@@ -471,7 +487,13 @@ export async function resolveOciImage(ref, { fetch: fetchImpl = globalThis.fetch
       if (realm.protocol !== 'https:' || realm.port !== '' || !OCI_TOKEN_HOSTS.includes(realm.hostname)) throw fail('oci_host_not_allowed');
       if (params.service) realm.searchParams.set('service', params.service);
       realm.searchParams.set('scope', 'repository:' + ref.path + ':pull');
-      const tok = await getJson(fetchImpl, realm.href, { timeoutMs, cap: 64 * 1024 });
+      let tok;
+      try { tok = await getJson(fetchImpl, realm.href, { timeoutMs, cap: 64 * 1024 }); } catch (e) {
+        // R-LP-76: the token service's own 401 or 403 (ghcr's DENIED for a private or missing package) is its answer
+        // about the image, the same on every retry; private and gone look alike, so it is ours (tool), never infra.
+        if (e && (e.status === 401 || e.status === 403) && e.detail !== 'rate_limited') throw fail('image_access_denied', { status: e.status });
+        throw e;
+      }
       const token = tok && (typeof tok.token === 'string' ? tok.token : typeof tok.access_token === 'string' ? tok.access_token : null);
       if (!token || token.length > 16384) throw fail('image_registry_unreadable');
       auth = 'Bearer ' + token;
@@ -850,10 +872,13 @@ export async function launchFor(pkg, { fetch: fetchImpl = globalThis.fetch } = {
  * which the registry verifies), repository (only its repository URL, free text anyone can publish).
  */
 export const REGISTRY_PAGE = 100;
+export const REGISTRY_MIN_QUERY = 3;
 export async function registryEntries(subject, seedPkgs, { fetch: fetchImpl = globalThis.fetch, base = REGISTRY_BASE, stats = null } = {}) {
   const [owner, name] = subject.split('/');
   const seedIds = new Set(seedPkgs.map((p) => String(p.registry).toLowerCase() + ':' + String(p.identifier).toLowerCase()));
-  const queries = [...new Set([name, owner + '/' + name, ...seedPkgs.filter((p) => ['npm', 'pypi', 'cargo', 'nuget'].includes(p.registry)).map((p) => p.identifier.split('/').pop())])].filter((q) => q && q.length <= 200).slice(0, 5);
+  // The registry refuses a search shorter than REGISTRY_MIN_QUERY with a 422 (getsigit/si, anderson-0/qh): such a query
+  // is never sent; owner/name is always long enough (R-LP-76).
+  const queries = [...new Set([name, owner + '/' + name, ...seedPkgs.filter((p) => ['npm', 'pypi', 'cargo', 'nuget'].includes(p.registry)).map((p) => p.identifier.split('/').pop())])].filter((q) => q && q.length >= REGISTRY_MIN_QUERY && q.length <= 200).slice(0, 5);
   const found = new Map();
   for (const q of queries) {
     const d = await getJson(fetchImpl, base + '/v0.1/servers?search=' + encodeURIComponent(q) + '&version=latest&limit=100');
@@ -875,7 +900,7 @@ export async function registryEntries(subject, seedPkgs, { fetch: fetchImpl = gl
 /** The resolve details that put a bundle's own failure on the subject (R-LP-72): only for an entry in its namespace. */
 export const SUBJECT_RESOLVE_DETAILS = Object.freeze(['bundle_unavailable', 'bundle_hash_mismatch', 'bundle_invalid', 'package_not_runnable']);
 // Our limits before a package's own failure: a subject is not shown at fault while any of its packages failed on our side.
-const DETAIL_ORDER = ['unverified_registry_entry', 'image_too_large', 'oci_host_not_allowed', 'unsupported_transport', 'image_registry_unreadable', 'start_needs_config', 'platform_unsupported', 'bundle_runtime_unsupported', 'bundle_unreadable', 'bundle_too_large', 'bundle_host_not_allowed', 'bundle_unowned', 'image_unavailable', 'bundle_unavailable', 'bundle_hash_mismatch', 'bundle_invalid', 'package_not_runnable', 'launch_invalid', 'private_registry', 'unsupported_package'];
+const DETAIL_ORDER = ['unverified_registry_entry', 'image_too_large', 'oci_host_not_allowed', 'unsupported_transport', 'image_registry_unreadable', 'image_access_denied', 'registry_query_refused', 'start_needs_config', 'platform_unsupported', 'bundle_runtime_unsupported', 'bundle_unreadable', 'bundle_too_large', 'bundle_host_not_allowed', 'bundle_unowned', 'image_unavailable', 'bundle_unavailable', 'bundle_hash_mismatch', 'bundle_invalid', 'package_not_runnable', 'launch_invalid', 'private_registry', 'unsupported_package'];
 
 /**
  * How to run one subject: { status: 'runnable', launch, choice, registry, subdir } or { status: 'skipped', detail }.
@@ -914,7 +939,12 @@ export async function resolveSubject(item, { seed = new Map(), fetch: fetchImpl 
       let verifiedBy = !c.entry ? 'seed' : c.entry.seed ? 'seed' : c.entry.namespace ? 'namespace' : null;
       if (!verifiedBy) {
         const why = {};
-        verifiedBy = await packageVerifiedBy(c.pkg, item.repo, { fetch: fetchImpl, chains, out: why });
+        // R-LP-76: one candidate's provenance answer that a registry refused (a 4xx) leaves that candidate unverified; it
+        // does not end the subject (an outage or rate limit still does, and is retried).
+        try { verifiedBy = await packageVerifiedBy(c.pkg, item.repo, { fetch: fetchImpl, chains, out: why }); } catch (e) {
+          if (!(e && e.detail === 'registry_query_refused')) throw e;
+          verifiedBy = null; why.why = 'provenance_refused';
+        }
         if (!verifiedBy) { details.push('unverified_registry_entry'); out.unverified = [...(out.unverified || []), { identifier: String(c.pkg.identifier || '').slice(0, 200), why: why.why || null }].slice(0, 8); continue; }
         // Install exactly the version whose provenance was checked (R-LP-17).
         if (why.version && (r.launch.kind === 'npm' || r.launch.kind === 'pypi')) {
@@ -954,7 +984,10 @@ export async function resolveSubject(item, { seed = new Map(), fetch: fetchImpl 
     if (own.length) out.registry = { name: own[0].server.name, version: typeof own[0].server.version === 'string' ? own[0].server.version.slice(0, 64) : null, entries: own.length, transports: [], remotes: Array.isArray(own[0].server.remotes) ? own[0].server.remotes.length : 0 };
   } catch (e) {
     out.status = 'skipped';
-    out.detail = e && (e.detail === 'rate_limited' || e.detail === 'upstream_error') ? e.detail : 'upstream_error';
+    // R-LP-76: a detail code of ours stands (an outage, a rate limit, a refused query); an exception without one is a bug
+    // of ours, never somebody else's outage: resolver_error (tool), with the error's class kept.
+    out.detail = e && typeof e.detail === 'string' && Object.hasOwn(DETAILS, e.detail) && DETAILS[e.detail][2] === 'resolve' ? e.detail : 'resolver_error';
+    if (out.detail === 'resolver_error') out.error_class = String((e && e.name) || typeof e).replace(/[^A-Za-z]/g, '').slice(0, 40) || null;
     out.launch = null; out.choice = null;
   }
   return out;
@@ -1529,8 +1562,24 @@ function probeMs(rec, p, tag) {
   return Number.isFinite(d) && d >= 0 ? d : null;
 }
 
+/**
+ * A server that did not declare the tools capability at initialize and answered tools/list "method not found"
+ * (-32601): the answer the specification allows such a server (a prompts-only or resources-only one), not a failure
+ * (R-LP-75). Only with an initialize answer in hand: a 2026-07-28 server that refused initialize declared nothing we read.
+ */
+export function noToolsCapability(p) {
+  if (!isObj(p) || !isObj(p.initialize)) return false;
+  const caps = p.initialize.capabilities;
+  // A capabilities object is required: an initialize answer without one is malformed, not a statement of no tools.
+  if (!isObj(caps)) return false;
+  const declared = caps.tools !== undefined && caps.tools !== null && caps.tools !== false;
+  const L = isObj(p.lists) ? p.lists['tools/list'] : null;
+  return !declared && isObj(L) && L.error_code === -32601;
+}
+
 /** A list that did not come: the server's own fault only when it sent a JSON-RPC error or a malformed result. */
 function listDetail(p) {
+  if (noToolsCapability(p)) return 'no_tools_capability';
   const L = isObj(p.lists) ? p.lists['tools/list'] : null;
   const err = isObj(L) && typeof L.error === 'string' ? L.error : null;
   if (err) {
@@ -1864,7 +1913,7 @@ export function buildItem(item, ctx) {
     lines.push(...resolutionObs(r));
     result.install = r.choice ? { method: r.choice.type, matched_by: safeText(r.choice.matched_by, /^[a-z+-]{1,40}$/), verified_by: safeText(r.choice.verified_by, /^[a-z_]{1,20}$/), provenance_signer: safeText(r.choice.provenance_signer, /^[a-z_]{1,40}$/), oci_bytes: int(r.choice.oci_bytes), transport: r.choice.transport, version_requested: safeText(r.choice.version, SAFE_VERSION), args: r.choice.args_n, args_unfilled: r.choice.args_unfilled, env_declared: r.choice.env_names.length, registry_entries: r.registry ? r.registry.entries : 0, entry_source: safeText(r.choice.entry_source, /^[a-z_]{1,30}$/) } : null;
     if (Array.isArray(r.unverified)) result.unverified = r.unverified.map((u) => safeText(u.why, /^[a-z_]{1,40}$/));
-    files['raw/resolution.json'] = json({ registry: r.registry, choice: r.choice, candidates: r.candidates, launch: r.launch, subdir: r.subdir, seed_packages: r.seed_packages, invalid: r.invalid ?? null, unverified: r.unverified ?? null });
+    files['raw/resolution.json'] = json({ registry: r.registry, choice: r.choice, candidates: r.candidates, launch: r.launch, subdir: r.subdir, seed_packages: r.seed_packages, invalid: r.invalid ?? null, unverified: r.unverified ?? null, ...(r.error_class ? { error_class: safeText(r.error_class, /^[A-Za-z]{1,40}$/) } : {}) });
   }
   let detail = null; let subjectSha = null; let deadlineHit = ctx.deadlineHit;
   let oracle = { lines: [], raw: [], summary: null, components: [] };
@@ -1901,7 +1950,17 @@ export function buildItem(item, ctx) {
     const primary = listed(envp) ? envp : listed(bare) ? bare : null;
     let reader = { listed: false };
     const tel = telemetryFor(telemetryFile, item.target_id);
-    if (!primary) {
+    // R-LP-75: no tools capability and tools/list "method not found": nothing to grade and nobody's fault (no skip).
+    const noTools = !primary ? [envp, bare].find(noToolsCapability) || null : null;
+    if (noTools) {
+      result.detail = 'no_tools_capability';
+      result.live = { tools_capability: false, tool_count: 0, config_state: noTools === bare ? 'none' : 'dummy' };
+      reader = { listed: false, no_tools_capability: true, capabilities: noTools.initialize.capabilities };
+      lines.push(obs('protocol_era', 'legacy'));
+      lines.push(obs('protocol_negotiated', safeText(noTools.initialize.protocolVersion, /^[0-9A-Za-z.-]{1,40}$/), 'not a plain protocol version'));
+      lines.push(obs('server_info', serverInfo(noTools.initialize.serverInfo), 'no serverInfo object'));
+      lines.push(obs('capabilities_flags', capabilityFlags(noTools.initialize.capabilities), 'no capabilities object'));
+    } else if (!primary) {
       detail = ociRun && ociRun.outcome === 'disk_low' ? 'disk_low' : failureDetail(rec, bare, envp, { deadlineHit, records: tel.records, stepsLog: readText(join(dir, 'steps.log')), launch: r.launch, argsUnfilled: r.choice ? r.choice.args_unfilled : null, owned: ownedEntry(r.choice), pydeps: r.choice ? r.choice.pydeps : null, crashNotEvidence: crashNotEvidenceOf(r.choice, rec) });
     } else {
       const text = listText(primary.lists['tools/list'].raw_pages);
@@ -1983,10 +2042,12 @@ export function buildItem(item, ctx) {
     files['observations/live.ndjson'] = lines.join('\n') + '\n';
     return { status: 'skipped', detail, files, skips: [{ stage, reason, fault, evidence: RESULT_PATH, ...(retryable ? { retryable: true } : {}) }], subjectSha, components: oracle.components };
   }
-  result.status = 'graded';
+  // A server with no tools capability is assessed with nothing to grade (R-LP-75): status no_tools, no skip, fault none.
+  const status = result.detail === 'no_tools_capability' ? 'no_tools' : 'graded';
+  result.status = status;
   files[RESULT_PATH] = json(result);
   files['observations/live.ndjson'] = lines.join('\n') + '\n';
-  return { status: 'graded', detail: null, files, skips: [], subjectSha, components: oracle.components };
+  return { status, detail: null, files, skips: [], subjectSha, components: oracle.components };
 }
 
 /** Raw files, each capped at RAW_FILE_CAP and all at RAW_TOTAL_CAP; what was cut is recorded. */
