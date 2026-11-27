@@ -11,7 +11,7 @@ import { spawnSync } from 'node:child_process';
 import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
 import {
-  FORMAT, KNOWN_ANSWER_FILE, MARKER_RE, MAX_ITEMS, MAX_ITEMS_CHARS, PERMANENT, RESULT_PATH, SKIP_REASON, SKIPS, TRANSIENT, skipFaultFor, skipReasonFor,
+  FORMAT, SETTINGS, KNOWN_ANSWER_FILE, MARKER_RE, MAX_ITEMS, MAX_ITEMS_CHARS, PERMANENT, RESULT_PATH, SKIP_REASON, SKIPS, TRANSIENT, skipFaultFor, skipReasonFor,
   InputProblem, buildBundle, gradeError, forgeryControl, isDateTime, knownAnswerControl, knownAnswerFile, main, observationsOf,
   parseInputs, runShard, scanSubject, settingsDigest,
   RAW_FILE_CAP, READ_LANGUAGES, SERVERS_SHARE, rawFiles, resultOf, serverBreakdown, serverSkip, CALLS_PER_SUBJECT, RATE_RESERVE, SUBJECT_HEAP_MB, fixtureFetch, httpDetail, jsonUpTo, knownAnswer, notRead, rawText, readDetail, reportItem, scanInWorker, writeItem,
@@ -66,6 +66,12 @@ function fakeGithub(subjects, calls = []) {
       if (!s) return res(404);
       if (typeof s.branch === 'number') return res(s.branch);
       return res(200, { name: decodeURIComponent(m[3]), commit: { sha: s.sha || SHA, commit: { committer: { date: s.date === undefined ? DATE : s.date } } } });
+    }
+    m = /^https:\/\/api\.github\.com\/repos\/([^/]+)\/([^/]+)\/commits\/([0-9a-f]{40})$/.exec(u);
+    if (m) {
+      const s = of(m[1], m[2]);
+      if (!s || (s.goneCommits || []).includes(m[3])) return res(422, { message: 'No commit found for SHA' });
+      return res(200, { sha: m[3], commit: { committer: { date: DATE } } });
     }
     m = /^https:\/\/api\.github\.com\/repos\/([^/]+)\/([^/]+)\/git\/trees\/([0-9a-f]{40})\?recursive=1$/.exec(u);
     if (m) {
@@ -1039,4 +1045,53 @@ test('R-AE-17: scan-static writes raw/subject/code-effects.json only when asked 
   assert.deepEqual(resultOf(item, on, DATE), resultOf(item, off, DATE), 'results/ is the same');
   assert.equal(Object.keys(rawFiles(off.raw)['files']).some((p) => /code-effects/.test(p)), false);
   assert.ok(Object.keys(rawFiles(on.raw)['files']).includes('raw/subject/code-effects.json'));
+});
+
+test('R-SS-15: an item that names a commit (sha) is read at exactly that commit, never the branch head; a commit gone from the repository is a retryable infra skip, never the subject\'s', async () => {
+  const ASKED = 'a'.repeat(40);
+  // parseInputs takes an optional full sha and refuses anything else.
+  const p = parseInputs({ shardId: 's', attemptId: 'a', items: JSON.stringify([{ subject: 'o/r', run_key: key(0), fence: 1, sha: ASKED }, { subject: 'o/q', run_key: key(1), fence: 2 }]) });
+  assert.deepEqual(p.items.map((x) => x.sha ?? null), [ASKED, null]);
+  for (const bad of ['main', 'A'.repeat(40), 'a'.repeat(39), 7, null]) {
+    assert.throws(() => parseInputs({ shardId: 's', attemptId: 'a', items: JSON.stringify([{ subject: 'o/r', run_key: key(0), fence: 1, sha: bad }]) }), (e) => e.code === 'bad_sha');
+  }
+  // Read at the asked commit: the commit lookup replaces the branch lookup; the tree and files are of that commit.
+  const calls = [];
+  const s = await scanSubject('o/r', { fetch: fakeGithub({ 'o/r': { files: jsLiteral } }, calls), token: TOKEN, sha: ASKED });
+  assert.equal(s.status, 'graded', s.detail);
+  assert.deepEqual(s.commit, { sha: ASKED, date: DATE });
+  assert.equal(calls[1].url, 'https://api.github.com/repos/o/r/commits/' + ASKED);
+  assert.ok(!calls.some((c) => c.url.includes('/branches/')), 'the branch head is not read');
+  assert.equal(calls[2].url, 'https://api.github.com/repos/o/r/git/trees/' + ASKED + '?recursive=1');
+  assert.ok(calls.slice(3).every((c) => c.url.startsWith('https://raw.githubusercontent.com/o/r/' + ASKED + '/')));
+  // A commit that is not there any more (force-pushed away).
+  const gone = await scanSubject('o/r', { fetch: fakeGithub({ 'o/r': { files: jsLiteral, goneCommits: [ASKED] } }), sha: ASKED });
+  assert.deepEqual([gone.status, gone.detail, gone.retryable], ['skipped', 'commit_moved', true]);
+  assert.equal(skipFaultFor('commit_moved'), 'infra');
+  // In the worker thread too.
+  const t = await scanInWorker('o/r', { fetch: fakeGithub({ 'o/r': { files: jsLiteral } }), sha: ASKED });
+  assert.equal(t.commit && t.commit.sha, ASKED);
+  // Through a shard: the bundle's manifest names the commit read, and an item without sha still reads the head.
+  const out = join(tmp('sha'), 'out');
+  const shardCalls = [];
+  const items = JSON.stringify([{ subject: 'o/r', run_key: key(0), fence: 1, sha: ASKED }, { subject: 'o/q', run_key: key(1), fence: 2 }]);
+  const r = await runShard({ shardId: 's', attemptId: 'a', items, out, fetch: fakeGithub({ 'o/r': { files: jsLiteral }, 'o/q': { files: jsLiteral } }, shardCalls), token: TOKEN });
+  assert.deepEqual(r.items.map((x) => x.status), ['graded', 'graded']);
+  assert.ok(shardCalls.some((c) => c.url === 'https://api.github.com/repos/o/r/commits/' + ASKED));
+  assert.ok(shardCalls.some((c) => c.url === 'https://api.github.com/repos/o/q/branches/main'));
+  const meta = (i) => JSON.parse(readFileSync(join(out, String(i), 'meta.json'), 'utf8'));
+  assert.deepEqual([meta(0).subject.sha, meta(1).subject.sha], [ASKED, SHA]);
+  // The log and the settings say which was read.
+  const logOf = (i) => readTree(join(out, String(i), 'bundle')).get('logs/scan.log') ?? '';
+  assert.match(logOf(0), /the commit the item names read/);
+  assert.doesNotMatch(logOf(0), /default branch head read/);
+  assert.match(logOf(1), /default branch head read/);
+  assert.match(SETTINGS.subject_ref, /items\[\]\.sha/);
+  assert.match(observationsOf({ commit: null, detail: 'commit_moved' }, { asked: ASKED }), /the commit the item names was not read \(commit_moved\)/);
+  // The same in the same thread (isolate off).
+  const out2 = join(tmp('sha2'), 'out');
+  const calls2 = [];
+  await runShard({ shardId: 's', attemptId: 'a', items, out: out2, fetch: fakeGithub({ 'o/r': { files: jsLiteral }, 'o/q': { files: jsLiteral } }, calls2), token: TOKEN, isolate: false });
+  assert.ok(calls2.some((c) => c.url === 'https://api.github.com/repos/o/r/commits/' + ASKED));
+  assert.equal(JSON.parse(readFileSync(join(out2, '0', 'meta.json'), 'utf8')).subject.sha, ASKED);
 });

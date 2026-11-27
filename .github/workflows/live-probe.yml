@@ -1,6 +1,7 @@
 # Loop worker (internal): the live-probe lane of isokron-ai/tool-qa. The tool-qa pump dispatches it with shard_id,
 # attempt_id and items (tool-qa docs/INTERFACES.md, "Worker dispatch"); each item is a public GitHub repository,
-# owner/name, with the run_key and fence its result must quote. corpus/live-probe.mjs works out each subject's install
+# owner/name, with the run_key and fence its result must quote, and optionally the commit (sha) its run_key is filed
+# under, which pins the static layer's checkout to it. corpus/live-probe.mjs works out each subject's install
 # method from its published package (the official MCP Registry entry, else the seed list), the sandbox of
 # isokron-ai/mcp-surface-corpus (at SURFACE_CORPUS_REF) installs and starts it under gVisor with deny-by-default egress
 # and speaks MCP to it (initialize, then the list methods; no tool is ever called), and the live tool list is graded

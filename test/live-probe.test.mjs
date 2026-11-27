@@ -1388,3 +1388,19 @@ test('R-LP-76: a registry 4xx is our refused query (tool, not retried), a denied
   const bug = await LP.resolveSubject({ subject: 'acme/box', repo: 'acme/box' }, { seed: new Map([['acme/box', [{ registry: 'npm', identifier: 5 }]]]), fetch: fakeFetch([]) });
   assert.deepEqual([bug.detail, bug.error_class], ['resolver_error', 'TypeError']);
 });
+
+test('R-LP-88: an item that names a commit (sha) pins its sandbox target to that commit instead of the branch head; anything but a full sha is refused', async () => {
+  const ASKED = 'a'.repeat(40);
+  const f = fakeFetch([server('io.github.a/one', 'a/one', [npmPkg('one')]), server('io.github.a/two', 'a/two', [npmPkg('two')])]);
+  const inputs = LP.parseInputs({ shardId: 's', attemptId: 'a1', items: JSON.stringify([{ subject: 'a/one', run_key: 'a'.repeat(64), fence: 1, sha: ASKED }, { subject: 'a/two', run_key: 'b'.repeat(64), fence: 2 }]) });
+  assert.deepEqual(inputs.items.map((x) => x.sha ?? null), [ASKED, null]);
+  const plan = await LP.planShard({ inputs, fetch: f, marker: MARKER, validateTarget: (t) => { if ((t.commit === undefined) === (t.ref === undefined)) throw new Error('exactly one of commit or ref'); } });
+  assert.equal(plan.items[0].target.commit, ASKED);
+  assert.equal('ref' in plan.items[0].target, false);
+  assert.equal(plan.items[1].target.ref, 'HEAD');
+  assert.equal('commit' in plan.items[1].target, false);
+  for (const bad of ['main', 'A'.repeat(40), 'a'.repeat(41), 1]) {
+    assert.throws(() => LP.parseInputs({ shardId: 's', attemptId: 'a1', items: JSON.stringify([{ subject: 'a/one', run_key: 'a'.repeat(64), fence: 1, sha: bad }]) }), (e) => e.code === 'bad_sha');
+  }
+  assert.throws(() => LP.parseInputs({ shardId: 's', attemptId: 'a1', items: JSON.stringify([{ subject: 'a/one', run_key: 'a'.repeat(64), fence: 1, extra: 1 }]) }), (e) => e.code === 'bad_item');
+});
