@@ -135,7 +135,7 @@ test('live-probe resolve: the seed list finds a moved repository; seed packages 
 test('live-probe resolve: skips with the right codes (none, remote only, unsupported, private registry, sse, bad subject)', async () => {
   const f = fakeFetch([
     server('io.github.acme/remote', 'acme/remote', [], { remotes: [{ type: 'streamable-http', url: 'https://mcp.acme.example/mcp' }] }),
-    server('io.github.acme/rusty', 'acme/rusty', [{ registryType: 'nuget', identifier: 'Rusty' }, { registryType: 'mcpb', identifier: 'https://example.com/x.mcpb' }]),
+    server('io.github.acme/rusty', 'acme/rusty', [{ registryType: 'mcpb', identifier: 'https://example.com/x.mcpb' }]),
     server('io.github.acme/private', 'acme/private', [npmPkg('@acme/private', { registryBaseUrl: 'https://npm.acme.example' })]),
     server('io.github.acme/sse', 'acme/sse', [npmPkg('@acme/sse', { transport: { type: 'sse', url: 'http://localhost:3000/sse' } })]),
   ]);
