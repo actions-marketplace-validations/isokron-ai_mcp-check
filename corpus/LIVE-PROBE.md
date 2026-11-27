@@ -174,7 +174,12 @@ syscall trace summarised and removed. Nothing of a target runs on the runner. No
 1. **SDK clients**, each the official SDK used the way its documentation shows, pinned (`corpus/oracles/pins.json`):
    TypeScript 1.x (`@modelcontextprotocol/sdk` 1.32.2) and 2.x (`@modelcontextprotocol/client` 2.4.0), Python
    (`mcp` 2.3.0) and Go (`github.com/modelcontextprotocol/go-sdk` v1.8.0). Each connects with its own default
-   negotiation (the Python and Go clients try `server/discover` first) and lists every page of tools/list.
+   negotiation (the Python and Go clients try `server/discover` first) and lists every page of tools/list. The Go
+   client reports each `tools/list` result as the server sent it, read off the wire under the SDK (R-ORC-11): go-sdk's
+   typed `mcp.Tool` cannot hold `execution`, annotation keys it does not know or an empty annotations title, and writes
+   `readOnlyHint` and `idempotentHint` out, so a list re-marshalled from it is the SDK's view, not the catalog. Its
+   typed parse still decides the outcome (`typed_tool_count`); a list it could report only from the typed structs
+   (`tools_source: typed`) is compared on names, never on its catalog (`catalog_vs_reader: sdk_typed_only`).
 2. **The official conformance suite** (`@modelcontextprotocol/conformance` 0.2.0-alpha.12, built from git commit
    f44482b, pinned by npm integrity), against both frozen requirement sets it ships: 2025-11-25 (the stateful wire)
    and 2026-07-28 (stateless). The stage refuses to run when the installed sets do not hash as pinned. Of each set's
@@ -193,7 +198,11 @@ syscall trace summarised and removed. Nothing of a target runs on the runner. No
 
 The stage runs at most once in full per target, after the first probe that got a tool list, and at most once with the
 clients only, after the first probe that got none (a client that lists where our probe did not is the lead for a
-reader bug). It never runs past the target's time limit less 75 s (kept for the driver's second probe and its
+reader bug), and then only when the server answered that probe (an initialize result, or a 2026-07-28 refusal of it):
+for a server that never started every client fails initialize too, so the record is a skip with `why: not_started`
+and the clients do not run (R-ORC-12). A server that declared no tools capability and answered `tools/list` "method
+not found" (live-probe R-LP-75) agrees with every client that was refused the list or listed none
+(`catalog_vs_reader: no_tools_capability`): no disagreement. It never runs past the target's time limit less 75 s (kept for the driver's second probe and its
 analysis), at most 150 s; each target's limit grows by 150 s for it (`ORACLE_ALLOWANCE_S`). Streamable HTTP targets
 are probed inside the sandbox by a helper container, so the stage does not run for them (`oracle_stage.why`:
 `http_transport`). The stage runs inside the driver's probe call: `step_telemetry` gives `oracle_ms` and `probe_ms`
@@ -243,6 +252,17 @@ and how a reproducer becomes a regression test are in [FUZZ.md](FUZZ.md).
 | `controls/` | The three control outputs (below). |
 | `raw/` | Captured target bytes, each file at most 6 MiB (a cut is recorded in `raw_truncated`): `tools-list.json` (the tools/list answers), `probe-bare.json` and `probe-env.json` (each probe whole, with its JSON-RPC transcript), `record.json` (the sandbox's record), `registry.json`, `static.json`, `analysis.json`, `steps.txt` (install and run log), `telemetry.jsonl` (the sandbox telemetry of this subject and of the run: settings, containers, syscall trace summaries, DNS queries, connections, egress, firewall drops), `report.json` (findings with tool names and messages), `static-compare.json`, `resolution.json`, `oracles.json` (the oracle stage's record: each client's output, each scenario's checks, the bridge's transcript and counts, the sessions' trace summaries). |
 | `logs/live-probe.log` | One line: the item's outcome. |
+
+The list read from source (`static_vs_live`, and the `static_vs_live_agreement` record) is mcp-check's own reader at
+this commit, never the sandbox's vendored engine (R-LP-77). `corpus/live-probe-driver.mjs` copies
+`src/inputs/repo-source.cjs`, the modules it requires and `corpus/static-read.cjs` into a folder the sandbox puts in its
+read-only tools volume; the sandbox's static step runs it in its container (no network) over every file of the source
+archive, through `fromGitHub` as scan-static calls it, and `static.json` carries the answer as `reader` with the
+bundle's sha256. live-probe grades it as scan-static grades a subject (`usableList`, then `gradeCandidate`), so the two
+lanes give the same static grade for the same commit. A names-only, several-server, incomplete or empty read is not
+graded: `static_graded: false` with `static_skip` (`names_only`, `multiple_servers`, `reader_limit`, `no_tools`). An
+answer from a bundle whose sha256 is not this checkout's is not used (`reader_mismatch`, R-LP-78), nor a missing one
+(`reader_missing`). `static_reader` gives the first 12 hex digits of the bundle id. The id is reported by the bundle itself, inside a container we trust: the check catches drift and a missing bundle, not tampering.
 
 Subject text (tool names and descriptions, server info, package names, host names a server looked up) is kept under
 `raw/`. Outside it, a subject's string appears only when a strict pattern shows it is plain and holds no word ingest
@@ -319,13 +339,17 @@ and the 4x free-disk rule. An image on another host is unassessed until the list
 | `bundle_hash_mismatch` (the bytes at the URL are not the ones the registry entry names in fileSha256) | `install_failed_registry` | subject | no |
 | `bundle_unowned` (one of the four bundle failures above, or `package_not_runnable`, for a bundle whose registry entry is not shown to be the subject's: seed-only or seed-matched; a repository-only entry is `unverified_registry_entry`) | `install_failed_registry` | tool | no |
 | `bundle_invalid` (the file is no zip archive at all, or names a path that leaves it: absolute or with a `..` segment; only for an entry in the subject's namespace, else `bundle_unowned`) | `install_failed_registry` | subject | no |
-| `list_failed` (a JSON-RPC error the server sent, or a malformed result) | `timeout_start` | subject | no |
+| `list_failed` (a JSON-RPC error the server sent, or a malformed result; not "method not found" from a server that declared no tools capability) | `timeout_start` | subject | no |
+| `no_tools_capability` (the server declared no `tools` capability at initialize and answered `tools/list` with -32601 "method not found", as the specification lets it: a prompts-only or resources-only server. `buildItem` records it as status `no_tools` with no skip, so it is assessed with nothing to grade and nobody's fault; the row is the fallback if a caller still skips it, R-LP-75) | `no_tools_found` | tool | no |
 | `list_probe_limited` (our time limit, the page cap, the read cap, or an HTTP transport failure while listing) | `timeout_start` | tool | no |
 | `start_timeout` | `timeout_start` | tool (the subject's time budget also pays for the install, so a slow runner or sandbox start can run it out; it is no evidence the server hung) | no |
 | `list_rejected` (the engine refused the list) | `tool_error` | tool | no |
 | `harness_error` (our driver or bundle step failed) | `tool_error` | tool | yes |
 | `rate_limited` | `rate_limited` | infra | yes |
-| `upstream_error`, `shard_deadline`, `disk_low` | `upstream_unavailable` | infra | yes |
+| `upstream_error` (a 5xx, 408, 425 or a 403 with no rate-limit headers, a network failure, a read cut at our cap), `shard_deadline`, `disk_low` | `upstream_unavailable` | infra | yes |
+| `registry_query_refused` (a registry's 4xx other than 403, 404, 408, 425 and 429: its answer to our request, the same on a retry; a 403 without rate-limit headers stays `upstream_error`, since a CDN or firewall may send it for a while; one candidate's provenance answer refused leaves that candidate unverified and the next one is tried; a search shorter than 3 characters, which the MCP registry answers 422, is never sent, R-LP-76) | `tool_error` | tool | no |
+| `image_access_denied` (the registry's token service refused a pull token, 401 or 403: ghcr's `DENIED` for a private or missing package; private and gone look alike and the request is ours, R-LP-76) | `install_failed_registry` | tool | no |
+| `resolver_error` (an exception in our resolver with no detail code: a bug of ours, never an outage; its class name is kept in `raw/resolution.json`, R-LP-76) | `tool_error` | tool | no |
 | `sandbox_evidence_missing` (no syscall trace or firewall log for it) | `trace_unavailable` | tool | yes |
 
 ## Controls
