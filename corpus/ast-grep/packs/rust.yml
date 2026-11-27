@@ -1,0 +1,11 @@
+# Tool-registration idioms of Rust MCP servers: rmcp #[tool], rust-mcp-sdk #[mcp_tool], Tool::new.
+id: rs-tool-attribute
+language: Rust
+rule:
+  kind: attribute_item
+  regex: '^#\[\s*(?:\w+::)*(?:tool|mcp_tool)\s*(?:\(|\])'
+---
+id: rs-tool-new
+language: Rust
+rule:
+  pattern: Tool::new($$$ARGS)

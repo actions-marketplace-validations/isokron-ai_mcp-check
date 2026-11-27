@@ -1,0 +1,31 @@
+# Tool-registration idioms of Python MCP servers: FastMCP decorators, the low-level server's list_tools, add_tool.
+id: py-tool-decorator
+language: Python
+rule:
+  kind: decorator
+  regex: '^@\s*[A-Za-z_][\w.]*\.tool\b'
+---
+id: py-tool-type
+language: Python
+rule:
+  pattern: $$$P.Tool($$$ARGS)
+  kind: call
+  regex: '^(?:[\w.]+\.)?Tool\('
+---
+id: py-add-tool
+language: Python
+rule:
+  pattern: $RECV.add_tool($$$ARGS)
+---
+id: py-tool-from-function
+language: Python
+rule:
+  pattern: Tool.from_function($$$ARGS)
+---
+# Not a registration: FastMCP's mount(prefix, server) and import_server() put another server's tools under a prefix, so a
+# function's own name is then not its wire name. Seen anywhere in the repository, they cap the confidence at low.
+id: py-compose
+language: Python
+rule:
+  kind: call
+  regex: '^[A-Za-z_][\w.]*\.(?:mount|import_server)\('

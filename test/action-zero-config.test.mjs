@@ -493,11 +493,19 @@ test('zero-config + baseline: the code is compared with the baseline, never the 
 });
 
 test('zero-config: a committed list is graded only with a clear label, and SARIF points into it', () => {
+  // a committed list that leaves out the tools the source registers is not the server's list: the code is graded (R-RD-41)
+  const other = workspace('ts-zod');
+  writeFileSync(join(other, 'tools.json'), JSON.stringify({ tools: [{ name: 'old_tool', description: 'From an old release.', inputSchema: { type: 'object' } }] }, null, 2));
+  const o = act(other, {});
+  assert.equal(o.status, 0, o.stdout + o.stderr);
+  assert.match(o.summary, /from the repository code in `\.`/);
+  assert.doesNotMatch(o.summary, /Graded the committed list/);
+
   const ws = workspace('ts-zod');
-  writeFileSync(join(ws, 'tools.json'), JSON.stringify({ tools: [{ name: 'old_tool', description: 'From an old release.', inputSchema: { type: 'object' } }] }, null, 2));
+  writeFileSync(join(ws, 'tools.json'), JSON.stringify({ tools: [{ name: 'old_tool', description: 'From an old release.', inputSchema: { type: 'object' } }, { name: 'search_notes', description: 'Search notes.', inputSchema: { type: 'object' } }, { name: 'delete_note', description: 'Delete a note.', inputSchema: { type: 'object' } }] }, null, 2));
   const r = act(ws, {});
   assert.equal(r.status, 0, r.stdout + r.stderr);
-  assert.match(r.summary, /1 tools from the committed list `tools\.json`\./);
+  assert.match(r.summary, /3 tools from the committed list `tools\.json`\./);
   assert.match(r.summary, /\*\*Graded the committed list `tools\.json`, not the code; it may be stale\.\*\* Nothing was run\./);
   const sarif = JSON.parse(readFileSync(join(ws, 'mcp-check-results', 'report.sarif'), 'utf8'));
   for (const x of sarif.runs[0].results.filter((x) => x.locations[0].logicalLocations[0].name === 'old_tool')) assert.deepEqual(x.locations[0].physicalLocation, { artifactLocation: { uri: 'tools.json' }, region: { startLine: 4 } });

@@ -1,0 +1,26 @@
+# Tool-registration idioms of TypeScript and JavaScript MCP servers. Written once with language __LANG__; the runner
+# makes a copy for each of TypeScript, Tsx and JavaScript (corpus/ast-grep/run.mjs). A rule only finds a call; what
+# the call says (name, description, annotations) is read from the matched text by extract.mjs, and only when it is a
+# literal. Gating by the file's imports happens there too.
+id: ts-server-tool
+language: __LANG__
+rule:
+  pattern: $RECV.tool($$$ARGS)
+---
+id: ts-register-tool
+language: __LANG__
+rule:
+  pattern: $RECV.registerTool($$$ARGS)
+---
+id: ts-add-tool
+language: __LANG__
+rule:
+  pattern: $RECV.addTool($ARG)
+---
+id: ts-list-tools-handler
+language: __LANG__
+rule:
+  pattern: $RECV.setRequestHandler($SCHEMA, $$$HANDLER)
+constraints:
+  SCHEMA:
+    regex: ListToolsRequestSchema$
