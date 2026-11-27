@@ -1,5 +1,5 @@
 {
- "about": "What the live-probe lane's oracle stage runs (corpus/LIVE-PROBE.md, Oracles), pinned. The conformance suite is the official one, by npm version, tarball integrity and the git commit it was built from; its requirement sets are frozen per spec revision, and the lane refuses to run when the installed sets do not hash to these. Each revision lists every server scenario of its frozen set: run (read-only: initialize, ping and the list methods, on the revision's own wire) or not run, with why. Nothing here calls a tool, gets a prompt or reads a resource. The SDK clients are the official TypeScript (1.x and 2.x lines), Python and Go SDKs, each pinned in its own lockfile. Change only by a reviewed commit, with the baselines re-recorded.",
+ "about": "What the live-probe lane's oracle stage runs (corpus/LIVE-PROBE.md, Oracles), pinned. The conformance suite is the official one, by npm version, tarball integrity and the git commit it was built from; its requirement sets are frozen per spec revision, and the lane refuses to run when the installed sets do not hash to these. Each revision lists every server scenario of its frozen set: run (read-only: initialize, ping and the list methods, on the revision's own wire) or not run, with why. Nothing here calls a tool, gets a prompt or reads a resource. The SDK clients are the official TypeScript (1.x and 2.x lines), Python and Go SDKs, each pinned in its own lockfile, and the MCP Inspector's CLI (in the npm lockfile). Change only by a reviewed commit, with the baselines re-recorded.",
  "conformance": {
   "package": "@modelcontextprotocol/conformance",
   "version": "0.2.0-alpha.12",
@@ -559,6 +559,14 @@
    "kind": "go",
    "sdk": "github.com/modelcontextprotocol/go-sdk",
    "version": "v1.8.0"
+  },
+  {
+   "id": "inspector",
+   "kind": "npm",
+   "sdk": "@modelcontextprotocol/inspector",
+   "version": "2.16.0",
+   "catalog": "spec_fields",
+   "note": "the MCP Inspector's CLI mode (--cli --method tools/list), not an SDK: it reports the tools its own parse keeps (keys outside the specification's Tool and ToolAnnotations are dropped), so its catalog is compared on the specification's fields only (R-ORC-13)"
   }
  ],
  "client_timeout_ms": 30000
