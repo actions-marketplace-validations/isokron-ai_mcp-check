@@ -49,8 +49,6 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
       - run: npm ci --ignore-scripts --no-audit --no-fund
-      # the pinned ast-grep binary, for the oracle's rule tests (test/ast-grep.test.mjs)
-      - run: npm ci --ignore-scripts --no-audit --no-fund --prefix corpus/ast-grep
       - run: npm test
       - name: Engine files match engine/VENDORED.json
         run: npm run vendor:verify

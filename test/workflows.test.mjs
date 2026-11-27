@@ -176,8 +176,6 @@ test('R-AG-09: scan-static installs ast-grep and turns the oracle on only when L
   assert.ok(steps.indexOf(install) < steps.indexOf(scanStep), 'installed before the scan');
   assert.ok(!/LANE_SCAN_STATIC_AST_GREP/.test(code.replace(/vars\.LANE_SCAN_STATIC_AST_GREP == 'true'/g, '')), 'the variable is read only as == "true"');
   assert.match(readFileSync(fileURLToPath(new URL('../corpus/scan-static.mjs', import.meta.url)), 'utf8'), /astGrep: env\.SCAN_STATIC_AST_GREP === '1'/);
-  // the test job installs the pinned binary for the rule tests
-  assert.match(wf['ci.yml'], /npm ci --ignore-scripts --no-audit --no-fund --prefix corpus\/ast-grep\n      - run: npm test/);
 });
 
 test('R-AG-09: ast-grep-validate: dispatch only from main, public data only, no secret, the inputs checked whole and read through env', () => {

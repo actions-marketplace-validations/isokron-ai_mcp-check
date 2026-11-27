@@ -1,6 +1,6 @@
 // The ast-grep oracle (O3) of the scan-static lane: corpus/ast-grep/. Rows R-AG-NN of REGRESSIONS.md. Tests that run the
-// ast-grep binary need it installed (npm ci --ignore-scripts --prefix corpus/ast-grep; CI does); without it they are skipped
-// off CI and fail on CI.
+// ast-grep binary need it installed (npm ci --ignore-scripts --prefix corpus/ast-grep; on CI this file does it); without it they
+// are skipped off CI and fail on CI.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -19,6 +19,8 @@ import { runShard } from '../corpus/scan-static.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const FIXTURES = join(root, 'test/fixtures/ast-grep');
+// The pinned binary: installed already, or (on CI) from the lockfile, with no install scripts, before the first test needs it.
+if (!binaryPath() && process.env.CI) spawnSync('npm', ['ci', '--ignore-scripts', '--no-audit', '--no-fund', '--prefix', join(root, 'corpus/ast-grep')], { stdio: 'inherit' });
 const BIN = binaryPath();
 const needBinary = { skip: !BIN && !process.env.CI ? 'ast-grep is not installed (npm ci --ignore-scripts --prefix corpus/ast-grep)' : false };
 
