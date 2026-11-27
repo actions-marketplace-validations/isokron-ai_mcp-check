@@ -224,10 +224,11 @@ export const FIELDS = Object.freeze({
   static_vs_live_agreement: 'object', commit_sha: 'string', commit_date: 'timestamp',
 });
 /**
- * PyPI launches name the extras that hold the server (`pkg[mcp]`, R-LP-66): on only once SURFACE_CORPUS_REF pins a
- * sandbox whose target format takes `launch.extras` (mcp-surface-corpus R-SBX-49); an older one refuses the field.
+ * PyPI launches name the extras that hold the server (`pkg[mcp]`, R-LP-66): on since SURFACE_CORPUS_REF pins a sandbox
+ * whose target format takes `launch.extras` (mcp-surface-corpus R-SBX-49, in 4504c0b; an older one refuses the field).
+ * R-LP-84: about 10 servers keep the MCP SDK in their `mcp` extra.
  */
-export const EMIT_PYPI_EXTRAS = false;
+export const EMIT_PYPI_EXTRAS = true;
 /** Extras a release declares that hold an MCP server or its command line: installed with it, in this order. */
 export const SERVER_EXTRAS = Object.freeze(['mcp', 'server', 'cli']);
 export function serverExtras(deps) {

@@ -317,7 +317,7 @@ test('R-LP-66: a PyPI launch installs the extra that holds the server (mcp, serv
   // mcp-surface-corpus 4c16b58 (R-SBX-49 is after it).
   const y = readFileSync(new URL('../.github/workflows/live-probe.yml', import.meta.url), 'utf8');
   const pin = /\n  SURFACE_CORPUS_REF: '([0-9a-f]{40})'\n/.exec(y)[1];
-  if (pin === '4c16b586e8e5886acb098285b6ec405fd4db4ac7') assert.equal(LP.EMIT_PYPI_EXTRAS, false);
+  assert.equal(LP.EMIT_PYPI_EXTRAS, pin !== '4c16b586e8e5886acb098285b6ec405fd4db4ac7', 'on exactly when the pinned sandbox takes launch.extras');
 });
 
 test('R-LP-67: an HTTP-mode server\'s own exit comes from the sandbox\'s container record, only with its output read back', () => {
