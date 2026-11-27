@@ -38,6 +38,7 @@ import { codeEffectsReport } from '../src/code-effects.js';
 import { isApproximate, readerNotes, registrationNotSeen, repoProvenance, usableList } from '../src/inputs/collect.js';
 import { VERSION } from '../src/version.js';
 import { ranCommit } from './tool-commit.mjs';
+import { oracleForScan } from './ast-grep/hook.mjs';
 
 const require = createRequire(import.meta.url);
 const Repo = require('../src/inputs/repo-source.cjs');
@@ -684,6 +685,8 @@ export function observationsOf(scan) {
     rec('commit_sha', scan.commit ? scan.commit.sha : null, noCommit),
     rec('commit_date', scan.commit ? scan.commit.date : null, scan.commit ? 'GitHub gave no committer date for the commit' : noCommit),
     rec('registration_provenance', scan.list, 'no tool list was graded (' + scan.detail + ')'),
+    // where the reader and the ast-grep oracle differ (a lead about our reader, never a verdict on the subject); only then
+    ...(scan.oracle && scan.oracle.entries.length ? [rec('oracle_disagreements', scan.oracle.entries)] : []),
   ].join('\n') + '\n';
 }
 
@@ -717,6 +720,8 @@ export function resultOf(item, scan, scannedAt) {
     skipped_checks: g ? g.skipped_checks : null,
     // a repository of several servers: each one's grades, by position (R-SS-13); raw/subject/servers.json names them
     servers: Array.isArray(scan.servers) ? scan.servers : null,
+    // the ast-grep oracle's answer (corpus/ast-grep/), only when it ran: counts and codes, no subject text
+    ...(scan.oracle ? { oracle_ast_grep: scan.oracle.fact } : {}),
   };
 }
 
@@ -833,7 +838,13 @@ export class BundleTooLarge extends Error {
  */
 export function buildBundle({ item, scan, controls, startedAt, finishedAt, digest = settingsDigest(), commit = ranCommit(), rawCap = RAW_FILE_CAP, fileCap = BUNDLE_FILE_CAP, bundleCap = BUNDLE_CAP }) {
   // A subject scanned in its own thread brings its raw/ texts built and capped already (R-SS-08).
-  const raw = scan.rawFiles && typeof scan.rawFiles === 'object' ? scan.rawFiles : rawFiles(scan.raw || {}, rawCap);
+  const base = scan.rawFiles && typeof scan.rawFiles === 'object' ? scan.rawFiles : rawFiles(scan.raw || {}, rawCap);
+  const raw = { files: { ...base.files }, truncated: [...base.truncated] };
+  if (scan.oracle) {
+    const o = rawText(scan.oracle.raw, rawCap);
+    raw.files['raw/subject/ast-grep.json'] = o.text;
+    if (o.truncated) raw.truncated.push('raw/subject/ast-grep.json');
+  }
   const files = {};
   files[RESULT_PATH] = json({ ...resultOf(item, scan, finishedAt), raw_truncated: raw.truncated });
   files['observations/static.ndjson'] = observationsOf(scan);
@@ -841,6 +852,7 @@ export function buildBundle({ item, scan, controls, startedAt, finishedAt, diges
   if (scan.commit) log.push(logLine(finishedAt, 'default branch head read'));
   if (scan.listing) log.push(logLine(finishedAt, 'listing via ' + scan.listing.via + (scan.listing.truncated ? ' (cut short by GitHub)' : '') + '; ' + scan.listing.files_read + ' of ' + scan.listing.source_files + ' source files read'));
   log.push(logLine(finishedAt, scan.status === 'graded' ? 'graded: ' + scan.grade.tool_count + ' tools' : 'skipped: ' + scan.detail + (scan.retryable ? ' (retryable)' : '')));
+  if (scan.oracle) log.push(logLine(finishedAt, scan.oracle.log));
   if (raw.truncated.length) log.push(logLine(finishedAt, 'raw files cut to ' + rawCap + ' bytes: ' + raw.truncated.join(', ')));
   for (const c of controls) log.push(logLine(finishedAt, 'control ' + c.control.kind + ': ' + c.control.observed));
   files['logs/scan.log'] = log.join('\n') + '\n';
@@ -857,7 +869,7 @@ export function buildBundle({ item, scan, controls, startedAt, finishedAt, diges
     subject: { id: item.subject, repo: item.repo, sha: scan.commit ? scan.commit.sha : null },
     // The commit that ran, not the package version: tool-qa's version pins (R-PIN-01) are commits of this repository.
     tools: [{ name: 'mcp-check', version: commit }],
-    oracles: [],
+    oracles: scan.oracle ? [scan.oracle.component] : [],
     settings_manifest_digest: digest,
     started_at: startedAt,
     finished_at: finishedAt,
@@ -1004,7 +1016,7 @@ export function scanInWorker(subject, { fetch: fetchImpl = globalThis.fetch, tok
  * controls_failed=true before throwing. Throws InputProblem on malformed inputs (before anything is read or
  * written) and Error on a harness problem.
  */
-export async function runShard({ shardId, attemptId, items, out, codeEffects = false, fetch: fetchImpl = globalThis.fetch, token = null, now = () => new Date(), marker = newMarker, tmp = tmpdir(), log = () => {}, budgetMs = SHARD_BUDGET_MS, timeoutMs = SUBJECT_TIMEOUT_MS, clock = () => performance.now(), knownAnswerExpected = KNOWN_ANSWER_FILE, onOutputs = () => {}, isolate = true, workerUrl, graceMs = SUBJECT_GRACE_MS, caps = {}, write }) {
+export async function runShard({ shardId, attemptId, items, out, codeEffects = false, astGrep = false, oracle = oracleForScan, fetch: fetchImpl = globalThis.fetch, token = null, now = () => new Date(), marker = newMarker, tmp = tmpdir(), log = () => {}, budgetMs = SHARD_BUDGET_MS, timeoutMs = SUBJECT_TIMEOUT_MS, clock = () => performance.now(), knownAnswerExpected = KNOWN_ANSWER_FILE, onOutputs = () => {}, isolate = true, workerUrl, graceMs = SUBJECT_GRACE_MS, caps = {}, write }) {
   const input = parseInputs({ shardId, attemptId, items });
   if (existsSync(out) && readdirSync(out).length) throw new Error('the output folder is not empty');
   const t0 = clock();
@@ -1051,6 +1063,11 @@ export async function runShard({ shardId, attemptId, items, out, codeEffects = f
         : await scanSubject(item.repo, { fetch: tracked, token, timeoutMs, codeEffects });
       if (scan.detail === 'rate_limited') stop = 'rate_limited'; // the next subjects would hit it too: they are not read
     }
+    // The ast-grep oracle (corpus/ast-grep/), when turned on: the same commit's source, read by rules instead of the reader.
+    // It never changes what the reader said and a failure of it is not one of the subject's.
+    if (astGrep && scan.status && !stop) {
+      try { const o = await oracle(item, scan); if (o) scan = { ...scan, oracle: o }; } catch { /* the oracle adds nothing */ }
+    }
     const finishedAt = now().toISOString();
     const forgery = i === input.items[0].index ? first : await forgeryControl({ marker: marker(), tmp });
     if (forgery.control.observed !== forgery.control.expected) throw controlFailed('the forgery control gave ' + forgery.control.observed);
@@ -1077,7 +1094,7 @@ export async function main(argv, env, { fetch: fetchImpl = globalThis.fetch, std
     };
     const res = await runShard({
       shardId: env.SHARD_ID, attemptId: env.ATTEMPT_ID, items: env.ITEMS, out: argv[1],
-      fetch: fetchImpl, token: env.GITHUB_TOKEN || null, log: (s) => stdout.write(s + '\n'), onOutputs: put, codeEffects: env.SCAN_STATIC_CODE_EFFECTS === '1',
+      fetch: fetchImpl, token: env.GITHUB_TOKEN || null, log: (s) => stdout.write(s + '\n'), onOutputs: put, codeEffects: env.SCAN_STATIC_CODE_EFFECTS === '1', astGrep: env.SCAN_STATIC_AST_GREP === '1',
     });
     stdout.write(res.items.filter((x) => x.status === 'graded').length + ' of ' + res.items.length + ' items graded; every item has a bundle\n');
     return 0;
