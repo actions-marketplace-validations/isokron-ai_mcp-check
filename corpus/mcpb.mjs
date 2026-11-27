@@ -206,23 +206,64 @@ function inBundle(p) {
   return rel && BUNDLE_PATH.test(rel) ? rel : null;
 }
 
-/** Options of node and python that take the next argument as their value; those that run code given inline or a module. */
-const VALUE_OPTS = { node: new Set(['-r', '--require', '--import', '--loader', '--experimental-loader', '-C', '--conditions', '--title', '--env-file', '--input-type', '--inspect-port', '--max-old-space-size']), python: new Set(['-X', '-W']) };
-const NO_SCRIPT = { node: new Set(['-e', '--eval', '-p', '--print']), python: new Set(['-c', '-m']) };
+/**
+ * node's options that take a value (the next argument, or after `=`). Those whose value is a file the runtime loads before
+ * the script: -r/--require, --import, --loader/--experimental-loader take a module (a path, a file: URL or a package name),
+ * --env-file a path. --env-file-if-exists names a file that may be missing, so it is a value and nothing more.
+ */
+const NODE_VALUE = new Set(['-r', '--require', '--import', '--loader', '--experimental-loader', '--env-file', '--env-file-if-exists', '-C', '--conditions',
+  '--title', '--input-type', '--inspect-port', '--debug-port', '--disable-warning', '--max-old-space-size', '--max-semi-space-size', '--stack-size',
+  '--redirect-warnings', '--report-dir', '--report-directory', '--report-filename', '--report-signal', '--diagnostic-dir', '--heapsnapshot-signal',
+  '--heapsnapshot-near-heap-limit', '--icu-data-dir', '--openssl-config', '--tls-cipher-list', '--tls-keylog', '--unhandled-rejections',
+  '--dns-result-order', '--secure-heap', '--secure-heap-min', '--trace-event-categories', '--trace-event-file-pattern', '--use-largepages',
+  '--watch-path', '--localstorage-file', '--experimental-default-type', '--experimental-sea-config', '--cpu-prof-dir', '--cpu-prof-name',
+  '--heap-prof-dir', '--heap-prof-name', '--snapshot-blob', '--test-reporter', '--test-reporter-destination', '--test-name-pattern',
+  '--test-skip-pattern', '--test-concurrency', '--test-timeout', '--network-family-autoselection-attempt-timeout', '--max-http-header-size', '--policy-integrity']);
+const NODE_MODULE = new Set(['-r', '--require', '--import', '--loader', '--experimental-loader']);
+const NODE_PATH = new Set(['--env-file']);
+const NODE_INLINE = new Set(['-e', '--eval', '-p', '--print']);
+/** python's long options that take a value; its short ones (-W, -X with a value, -c, -m) are read letter by letter. */
+const PY_VALUE = new Set(['--check-hash-based-pycs']);
+/** python's one-letter flags that take no value and may be grouped (-uB): anything else ends the group. */
+const PY_FLAGS = new Set('bBdEhiIOPqsSuvVxR'.split(''));
 
-/** The script argument of a node or python command line (the first argument that is not an option), or null for code given inline, a module or none. */
-export function scriptOf(argv, runtime) {
-  const vals = VALUE_OPTS[runtime]; const none = NO_SCRIPT[runtime];
-  for (let i = 0; i < (Array.isArray(argv) ? argv.length : 0); i++) {
-    const a = argv[i];
-    if (typeof a !== 'string') return null;
-    if (a === '--') return typeof argv[i + 1] === 'string' ? argv[i + 1] : null;
-    if (!a.startsWith('-') || a === '-') return a === '-' ? null : a;
-    if (none.has(a) || none.has(a.split('=')[0]) || (runtime === 'python' && /^-[A-Za-z]*[cm]/.test(a))) return null;
-    if (vals.has(a)) i++;
+/**
+ * A node or python command line as the runtime reads it: { script, loads }, where script is the first argument that is
+ * not an option (null for code given inline, a module, stdin or none) and loads lists the files an option makes the
+ * runtime load first: { opt, value, module } (module: a node module specifier, which may be a package name).
+ */
+export function commandLine(argv, runtime) {
+  const loads = []; const out = (script) => ({ script, loads });
+  const list = Array.isArray(argv) ? argv : [];
+  for (let i = 0; i < list.length; i++) {
+    const a = list[i];
+    if (typeof a !== 'string') return out(null);
+    if (a === '--') return out(typeof list[i + 1] === 'string' ? list[i + 1] : null);
+    if (a === '-' || !a.startsWith('-')) return out(a === '-' ? null : a);
+    if (runtime === 'node') {
+      const eq = a.indexOf('=');
+      const [opt, attached] = a.startsWith('--') && eq > 0 ? [a.slice(0, eq), a.slice(eq + 1)] : [a, null];
+      if (NODE_INLINE.has(opt)) return out(null);
+      if (!NODE_VALUE.has(opt)) continue;
+      const value = attached ?? list[++i];
+      if (typeof value !== 'string') return out(null);
+      if (NODE_MODULE.has(opt) || NODE_PATH.has(opt)) loads.push({ opt, value, module: NODE_MODULE.has(opt) });
+      continue;
+    }
+    // python: a long option, or a group of one-letter flags that may end in one taking a value (-uW ignore, -Wignore).
+    if (a.startsWith('--')) { if (PY_VALUE.has(a)) i++; continue; }
+    for (let k = 1; k < a.length; k++) {
+      const ch = a[k];
+      if (ch === 'c' || ch === 'm') return out(null);
+      if (ch === 'W' || ch === 'X') { if (k === a.length - 1) i++; break; }
+      if (!PY_FLAGS.has(ch)) break;
+    }
   }
-  return null;
+  return out(null);
 }
+
+/** The script argument of a node or python command line, or null for code given inline, a module or none. */
+export function scriptOf(argv, runtime) { return commandLine(argv, runtime).script; }
 
 /** `uv run [options] <target> [args]` as uv would run it in the bundle: { console } or { python: args }, extras, or null. */
 export function uvRun(argv) {
@@ -312,18 +353,37 @@ export function bundleLaunch({ manifest, names, members }, { url, sha256, buf, t
     throw fail(holds(rel, lower, rel.toLowerCase()) ? 'platform_unsupported' : 'package_not_runnable', { why });
   };
   const needFile = (rel) => { if (rel) missing(rel, 'entry_missing'); };
-  // The script a node or python command runs: a file of the bundle must be there (needFile). One outside the bundle (an
-  // absolute path such as /Users/dev/app/server.js, or a relative one that climbs out of it) is a file of the author's
-  // machine, and a relative one the bundle does not hold is resolved against a working folder the client chooses: not
-  // ours to start, never the bundle's crash (R-LP-72, review of 27 Nov).
+  // The script a node or python command runs, and the files an option makes node load first (-r, --import, --loader,
+  // --env-file): a file of the bundle must be there (needFile). One outside the bundle (an absolute path such as
+  // /Users/dev/app/server.js or /Users/dev/.env, a file: URL, or a relative one that climbs out of it) is a file of the
+  // author's machine, and a relative one the bundle does not hold is resolved against a working folder the client
+  // chooses: not ours to start, never the bundle's crash (R-LP-72, reviews of 27 Nov). A package name (-r dotenv/config)
+  // is the bundle's own dependency, as for any import.
+  const checkPath = (p, what, { optional = false } = {}) => {
+    if (p === BUNDLE_DIR) return;
+    const rel = scriptIn(p);
+    if (rel) { if (optional && !holds(rel)) throw fail('bundle_runtime_unsupported', { why: `${what}_missing` }); needFile(rel); return; }
+    const segs = p.split(/[/\\]/);
+    // Under the bundle's folder but in a name our path rule does not read (a parenthesis, say): ours, not outside.
+    if (p.startsWith(BUNDLE_DIR + '/') && !segs.includes('..')) throw fail('bundle_runtime_unsupported', { why: `${what}_unreadable` });
+    if (p.startsWith('/') || segs.includes('..')) throw fail('bundle_runtime_unsupported', { why: `${what}_outside` });
+    const r = p.replace(/^(\.\/)+/, '').replace(/\/+$/, '');
+    if (!r || !BUNDLE_PATH.test(r) || !holds(r)) throw fail('bundle_runtime_unsupported', { why: `${what}_relative` });
+  };
   const checkScript = (av, rt) => {
-    const sc = scriptOf(av, rt);
-    if (sc === null || sc === BUNDLE_DIR) return;
-    const rel = scriptIn(sc);
-    if (rel) { needFile(rel); return; }
-    if (sc.startsWith('/') || sc.split(/[/\\]/).includes('..')) throw fail('bundle_runtime_unsupported', { why: 'script_outside' });
-    const r = sc.replace(/^(\.\/)+/, '').replace(/\/+$/, '');
-    if (!r || !BUNDLE_PATH.test(r) || !holds(r)) throw fail('bundle_runtime_unsupported', { why: 'script_relative' });
+    const { script, loads } = commandLine(av, rt);
+    for (const l of loads) {
+      let v = l.value;
+      if (l.module) {
+        if (/^(node|data):/.test(v)) continue;
+        if (/^file:/i.test(v)) { try { v = decodeURIComponent(new URL(v).pathname); } catch { throw fail('bundle_runtime_unsupported', { why: 'option_outside' }); } }
+        // A package name (dotenv/config, @scope/pkg): resolved in the bundle's node_modules like any import.
+        else if (!(v.startsWith('/') || v.startsWith('./') || v.startsWith('../') || v === '.' || v === '..' || /^[A-Za-z]:[\\/]/.test(v) || v.includes('\\'))) continue;
+      }
+      // An env file is often the user's to write (`${__dirname}/.env`): one the bundle does not ship is no fault of it.
+      checkPath(v, 'option', { optional: !l.module });
+    }
+    if (script !== null) checkPath(script, 'script');
   };
   let launch;
   if (c === 'uv' || /\/uv$/.test(c)) {

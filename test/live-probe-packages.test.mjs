@@ -414,14 +414,57 @@ test('R-LP-72: a node or python script outside the bundle (an absolute path of t
   assert.equal((await launchOf(nodeArgs(['--no-warnings', '${__dirname}/server/gone.js']))).detail, 'package_not_runnable');
   // Mutation check: without the outside check the absolute path is started, and its crash would be the bundle's.
   const src = readFileSync(join(root, 'corpus', 'mcpb.mjs'), 'utf8');
-  const from = "    if (sc.startsWith('/') || sc.split(/[/\\\\]/).includes('..')) throw fail('bundle_runtime_unsupported', { why: 'script_outside' });\n    const r = sc.replace(/^(\\.\\/)+/, '').replace(/\\/+$/, '');\n    if (!r || !BUNDLE_PATH.test(r) || !holds(r)) throw fail('bundle_runtime_unsupported', { why: 'script_relative' });\n";
+  const from = "  const checkPath = (p, what, { optional = false } = {}) => {\n";
   assert.ok(src.includes(from), 'the mutation text is in corpus/mcpb.mjs');
   const file = join(root, 'corpus', '.mutant-mcpb-' + process.pid + '-' + Math.random().toString(16).slice(2) + '.mjs');
-  writeFileSync(file, src.replace(from, ''));
+  writeFileSync(file, src.replace(from, from + "    if (what === 'script') return;\n"));
   let M; try { M = await import(pathToFileURL(file).href); } finally { rmSync(file, { force: true }); }
   const got = await M.mcpbLaunch(mcpbPkg(), { fetch: releases({ [URL1]: { body: nodeArgs(['/Users/dev/app/server.js']) } }) }).catch((e) => ({ detail: e.detail }));
   assert.ok(got.launch, 'without the check the author\'s absolute path would be started');
   assert.equal(got.info.crash_not_evidence, false, '...as a node bundle whose crash counts');
+});
+
+test('R-LP-72: a file a node option loads before the script (-r, --require, --import, --loader, --experimental-loader, --env-file) is checked like the script; a package name stays allowed; value options and grouped python flags are read as the runtime reads them', async () => {
+  const nodeArgs = (args) => zip({ 'manifest.json': manifest({ type: 'node', mcp_config: { command: 'node', args } }), 'server/index.js': 'x', 'server/pre.js': 'x' });
+  const pyArgs = (args) => zip({ 'manifest.json': manifest({ type: 'python', mcp_config: { command: 'python3', args } }), 'server/main.py': 'x' });
+  const S = '${__dirname}/server/index.js';
+  // A file of the author's machine, one that climbs out, or a relative one the bundle does not hold: ours, never started.
+  for (const [args, why] of [
+    [['-r', '/Users/x/h.js', 'server/index.js'], 'option_outside'], [['--require=/Users/x/h.js', S], 'option_outside'],
+    [['--import', 'file:///Users/x/h.mjs', S], 'option_outside'], [['--loader', '../hooks.mjs', S], 'option_outside'],
+    [['--experimental-loader=./gone.mjs', S], 'option_relative'], [['--env-file', '/Users/dev/.env', 'server/index.js'], 'option_outside'],
+    [['--env-file=.env', S], 'option_relative'], [['--env-file', '${__dirname}/config/app.env', S], 'option_missing'], [['--env-file', '${__dirname}/.env', S], 'option_unreadable'],
+    [['${__dirname}/my server(1).js'], 'script_unreadable'],
+  ]) {
+    const r = await launchOf(nodeArgs(args));
+    assert.deepEqual([r.detail, r.why], ['bundle_runtime_unsupported', why], JSON.stringify(args));
+  }
+  // Started: a package name, a file of the bundle, node: and data: specifiers; a value option's value is not the script.
+  for (const args of [['-r', 'dotenv/config', S], ['--import', '@scope/pkg/register', S], ['-r', '${__dirname}/server/pre.js', S], ['--require=./server/pre.js', 'server/index.js'],
+    ['--import', 'data:text/javascript,1', S], ['--disable-warning', 'ExperimentalWarning', 'server/index.js'], ['--title', 'srv', S], ['--max-old-space-size=512', S]]) assert.ok((await launchOf(nodeArgs(args))).launch, JSON.stringify(args));
+  // A file in the bundle that an option names but the bundle lacks is its own, as for the script.
+  assert.equal((await launchOf(nodeArgs(['-r', '${__dirname}/server/gone.js', S]))).detail, 'package_not_runnable');
+  // python: an attached -W or -X value (-Wmodule) and a grouped flag (-uW ignore) do not hide the script; a long option's value is not it.
+  for (const args of [['-Wmodule', '/Users/dev/main.py'], ['-uW', 'ignore', '/srv/main.py'], ['--check-hash-based-pycs', 'never', '/srv/main.py'], ['-Xutf8', '-B', '/srv/main.py']]) assert.equal((await launchOf(pyArgs(args))).detail, 'bundle_runtime_unsupported', JSON.stringify(args));
+  for (const args of [['-Wignore', '${__dirname}/server/main.py'], ['-uB', 'server/main.py'], ['-um', 'server.main'], ['-c', 'import x']]) assert.ok((await launchOf(pyArgs(args))).launch, JSON.stringify(args));
+  // Mutation checks.
+  const src = readFileSync(join(root, 'corpus', 'mcpb.mjs'), 'utf8');
+  const mutate = async (from, to) => {
+    assert.ok(src.includes(from), from.slice(0, 60));
+    const file = join(root, 'corpus', '.mutant-mcpb-' + process.pid + '-' + Math.random().toString(16).slice(2) + '.mjs');
+    writeFileSync(file, src.replace(from, to));
+    try { return await import(pathToFileURL(file).href); } finally { rmSync(file, { force: true }); }
+  };
+  const go = async (M, bundle) => { try { return await M.mcpbLaunch(mcpbPkg(), { fetch: releases({ [URL1]: { body: bundle } }) }); } catch (e) { return { detail: e.detail, why: e.why }; } };
+  let M = await mutate('    for (const l of loads) {', '    for (const l of []) {');
+  assert.ok((await go(M, nodeArgs(['--env-file', '/Users/dev/.env', 'server/index.js']))).launch, 'without the option check the author\'s .env would be loaded and the crash counted');
+  assert.ok((await go(M, nodeArgs(['-r', '/Users/x/h.js', 'server/index.js']))).launch, 'without the option check -r /Users/x/h.js would be started');
+  M = await mutate("      if (ch === 'c' || ch === 'm') return out(null);", "      if (/[cm]/.test(a.slice(k))) return out(null);");
+  assert.ok((await go(M, pyArgs(['-Wmodule', '/Users/dev/main.py']))).launch, 'with the unanchored pattern -Wmodule hides the script');
+  M = await mutate("'--title', '--input-type', '--inspect-port', '--debug-port', '--disable-warning',", "'--title', '--input-type', '--inspect-port', '--debug-port',");
+  assert.equal((await go(M, nodeArgs(['--disable-warning', 'ExperimentalWarning', 'server/index.js']))).why, 'script_relative', 'without --disable-warning its value is read as the script');
+  M = await mutate("    if (p.startsWith(BUNDLE_DIR + '/') && !segs.includes('..')) throw fail('bundle_runtime_unsupported', { why: `${what}_unreadable` });\n", '');
+  assert.equal((await go(M, nodeArgs(['${__dirname}/my server(1).js']))).why, 'script_outside', 'without the rule a bundle path we do not read is called outside');
 });
 
 test('R-LP-72 mutation check: without the sha256 check, the entry-name check, the redirect host check, the required-config check or the ELF check, the fixture gets through', async () => {

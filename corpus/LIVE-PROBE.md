@@ -127,7 +127,8 @@ The run is named `shard <shard_id>`.
      naming someone else's repository with a dead bundle URL (repository-only: `unverified_registry_entry`; seed-only or
      seed-matched: `bundle_unowned`, ours). A bare launcher (npx, sh, bun, docker ...) is never a file of the bundle
      (`bundle_runtime_unsupported`; so is `uv run <command>` with no pyproject, and a node or python script outside the
-     bundle: an absolute path of the author's machine, one that climbs out, a relative one the bundle does not hold), and only a name that leaves the bundle
+     bundle: an absolute path of the author's machine, one that climbs out, a relative one the bundle does not hold, and
+     the same for a file a node option loads first: `-r`, `--import`, `--loader`, `--env-file`; a package name is allowed), and only a name that leaves the bundle
      makes it invalid. A path the manifest names is the bundle's missing file only when it names nothing the bundle
      holds: not one a runtime resolves (node's `.js`, a folder's index or `__main__.py`, a Windows `.exe`), nor a name
      in another case (it runs on macOS and Windows: `platform_unsupported`). Links the sandbox left out when it
