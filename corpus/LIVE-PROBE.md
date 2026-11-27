@@ -28,7 +28,9 @@ The run is named `shard <shard_id>`.
    repository is the subject, or whose packages are the seed list's packages for it (tool-qa
    `history/seed-v1.json`, at the worker-kit commit), latest versions only. The first package that can run here
    wins: packages named in the seed list first, then stdio before streamable HTTP, then npm, PyPI, OCI. Arguments and
-   env come from the entry's declared values and defaults; a required env value is a dummy, never a credential.
+   env come from the entry's declared values and defaults; a required env value is a dummy, never a credential. An
+   optional env name gets its declared default (an image that defaults to HTTP declares `MCP_TRANSPORT` default
+   `stdio`), never a value we invent: no default, a secret's or a `{placeholder}` one leaves it out (R-LP-80).
    Building from source is the build-probe lane's work, not this one.
    - **Which command runs a PyPI package.** The planner reads the release's wheel (pure-Python first, at most 30 MiB,
      files.pythonhosted.org only) and launches the console script it declares in `*.dist-info/entry_points.txt`: the

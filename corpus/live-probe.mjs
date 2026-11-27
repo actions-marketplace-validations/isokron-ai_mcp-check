@@ -745,14 +745,19 @@ export function packageArgs(list) {
   return { args: args.slice(0, 40), unfilled };
 }
 
-/** Env names a registry package declares as required: dummy values in the sandbox (or the declared default). */
+/**
+ * Env a registry package declares: a required name gets its declared default, else a dummy value in the sandbox (null);
+ * an optional name gets its declared default and nothing else (R-LP-80: an image whose own default is HTTP declares
+ * `MCP_TRANSPORT` optional with default `stdio`, which a client applies). Never a value we invent: no default, a
+ * secret's default, or one with a `{placeholder}` leaves an optional name out.
+ */
 export function packageEnv(list) {
   const env = {}; const names = [];
   for (const e of Array.isArray(list) ? list.slice(0, 100) : []) {
     if (!isObj(e) || typeof e.name !== 'string' || !ENV_NAME.test(e.name) || RESERVED_ENV.test(e.name)) continue;
     names.push(e.name);
-    if (!e.isRequired) continue;
     const d = typeof e.default === 'string' && e.default.length <= 500 && !/[\u0000\n\r]/.test(e.default) && !e.isSecret ? e.default : null;
+    if (!e.isRequired && (d === null || /\{[A-Za-z0-9_]+\}/.test(d))) continue;
     if (Object.keys(env).length < 60) env[e.name] = d;
   }
   return { env, names: names.slice(0, 100) };
