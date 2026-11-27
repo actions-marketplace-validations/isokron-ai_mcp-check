@@ -658,6 +658,10 @@ test('R-ORC-11: the Go client reports the tools/list result the server sent, not
   const lossy = judgeOracles(rec(typed, { tools_source: 'typed' }), { reader, pins: PINS });
   assert.deepEqual(lossy.disagreements, []);
   assert.equal(lossy.clients.find((c) => c.client === 'go').catalog_vs_reader, 'sdk_typed_only');
+  // A typed-only list first in line does not stop the other clients being compared with each other.
+  const first = rec(tools); first.clients.unshift(first.clients.pop()); first.clients[0].result = { ...first.clients[0].result, tools: typed, tools_source: 'typed' };
+  first.clients[2].result = { ...first.clients[2].result, tools: tools.map((t, i) => (i === 0 ? { ...t, description: 'Other.' } : t)) };
+  assert.ok(judgeOracles(first, { reader, pins: PINS }).disagreements.some((x) => x.class === 'D4' && x.oracle_a === 'client:typescript-v1' && x.oracle_b === 'client:typescript-v2'));
   const named = judgeOracles(rec(typed.slice(1), { tools_source: 'typed' }), { reader, pins: PINS });
   assert.ok(named.disagreements.some((x) => x.class === 'D6' && x.oracle_b === 'client:go' && x.kind === 'tool_names'));
   // The Go program itself: its result type holds raw JSON, the typed list is only counted.

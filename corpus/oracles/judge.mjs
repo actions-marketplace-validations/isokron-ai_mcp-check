@@ -207,10 +207,11 @@ export function disagreements(j, names, reader, readerCatalog = null, lossy = ne
       else if (!lossy.has(c.client) && c.catalog_sha256 !== reader.catalog_hash && !(readerCatalog && c.catalog_defaults_sha256 && c.catalog_defaults_sha256 === readerCatalog.catalog_defaults_sha256)) d.push({ class: 'D4', oracle_a: 'reader', oracle_b: b, kind: 'catalog', detail: { count_a: int(reader.tool_count), count_b: c.tool_count } });
     }
   }
-  // Clients against each other: the first listed client is the reference.
-  const ref = listedClients[0];
+  // Clients against each other: the first listed client is the reference, one whose catalog is comparable if any is
+  // (a typed-only list, R-ORC-11, is a reference for names only).
+  const ref = listedClients.find((c) => !lossy.has(c.client)) || listedClients[0];
   if (ref) {
-    for (const c of listedClients.slice(1)) {
+    for (const c of listedClients.filter((x) => x !== ref)) {
       if (c.names_sha256 !== ref.names_sha256) d.push({ class: 'D6', oracle_a: `client:${ref.client}`, oracle_b: `client:${c.client}`, kind: 'tool_names', detail: { ...diffNames(names.get(ref.client), names.get(c.client)), count_a: ref.tool_count, count_b: c.tool_count } });
       else if (lossy.has(c.client) || lossy.has(ref.client)) continue;
       else if (c.catalog_sha256 !== ref.catalog_sha256 && c.catalog_defaults_sha256 !== ref.catalog_defaults_sha256) d.push({ class: 'D4', oracle_a: `client:${ref.client}`, oracle_b: `client:${c.client}`, kind: 'catalog', detail: { count_a: ref.tool_count, count_b: c.tool_count } });
