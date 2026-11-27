@@ -69,7 +69,7 @@ test('R-LP-82: the registry\'s first package argument names the console script (
   assert.deepEqual([r.launch.entry, r.choice.entry_source], ['bawbel', 'lone_script']);
   // A crash of our pick is no evidence; of the registry's or a signalled script, it is.
   const rec = { install: { kind: 'pypi', ok: true, steps: [{ name: 'install', exit: 0 }] }, env: { names: { registry: [] }, secret_named: [] }, timing: { total_ms: 60000 }, timed_out: false };
-  const crash = { initialize_error: 'the server exited (exit 1, signal null)', lists: {}, transport: { exit: 1, signal: null }, timing: { total_ms: 2000 }, stderr: 'Traceback (most recent call last):\n  File "/work/venv/lib/python3.13/site-packages/bawbel/cli.py", line 3, in main\nTypeError: unsupported operand\n' };
+  const crash = { initialize_error: 'the server exited (exit 1, signal null)', lists: {}, transport: { exit: 1, signal: null }, timing: { total_ms: 2000 }, stderr: 'Traceback (most recent call last):\n  File "/work/venv/bin/bawbel", line 8, in <module>\nTypeError: unsupported operand\n' };
   const launch = { kind: 'pypi', package: 'bawbel-scanner', entry: 'bawbel' };
   assert.equal(LP.failureDetail(rec, crash, null, { launch, argsUnfilled: 0, entryGuess: true }), 'start_env_limited');
   assert.equal(LP.failureDetail(rec, crash, null, { launch, argsUnfilled: 0 }), 'start_failed');
