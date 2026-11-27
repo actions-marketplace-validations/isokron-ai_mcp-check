@@ -235,6 +235,12 @@ export const ORACLE_FIELDS = Object.freeze({
 export const EMIT_TOOL_LIST_FIELDS = true;
 export const TOOL_LIST_FIELDS = Object.freeze({ tool_count: 'integer', tool_list_sha256: 'hash' });
 /**
+ * R-LP-87: tool_names_sha256 (mcp-results R-RES-15, planned): written only while EMIT_TOOL_NAMES_FIELD is on, which
+ * needs tool-qa's ingest to pin a registry that declares it (INGEST_REF; else the observation is an undeclared_field).
+ */
+export const EMIT_TOOL_NAMES_FIELD = false;
+export const TOOL_NAMES_FIELDS = Object.freeze({ tool_names_sha256: 'hash' });
+/**
  * The fuzz stage's fields (corpus/FUZZ.md): written only while EMIT_FUZZ_FIELDS is on, which needs the mcp-results
  * registry to hold them and tool-qa's ingest to pin that registry. list_determinism is already a planned field there
  * (boolean); fuzz_stage, invariant_results and unicode_identifier_findings are proposed.
@@ -1677,7 +1683,7 @@ export function rolledForward(inst) {
 
 /** One observations line, checked against FIELDS. A value of the wrong type is written as null with why. */
 export function obs(field, value, why) {
-  const type = FIELDS[field] || (EMIT_TOOL_LIST_FIELDS ? TOOL_LIST_FIELDS[field] : undefined) || (EMIT_ORACLE_FIELDS ? ORACLE_FIELDS[field] : undefined) || (EMIT_FUZZ_FIELDS ? FUZZ_FIELDS[field] : undefined);
+  const type = FIELDS[field] || (EMIT_TOOL_LIST_FIELDS ? TOOL_LIST_FIELDS[field] : undefined) || (EMIT_TOOL_NAMES_FIELD ? TOOL_NAMES_FIELDS[field] : undefined) || (EMIT_ORACLE_FIELDS ? ORACLE_FIELDS[field] : undefined) || (EMIT_FUZZ_FIELDS ? FUZZ_FIELDS[field] : undefined);
   if (!type) throw new Error('not a field of this lane: ' + field);
   const ok = value !== null && value !== undefined && checkType(type, value);
   return JSON.stringify(ok ? { field, value, stage: STAGE } : { field, value: null, why: why || (value === null || value === undefined ? 'not observed' : 'not of the registry type'), stage: STAGE });
@@ -1749,13 +1755,15 @@ export function toolsOf(rawPages) {
 }
 
 /**
- * R-LP-87: the sha256 of the JSON array of the live list's tool names, each once, sorted by code unit: exactly the
- * ast-grep oracle's tool_set_sha256 (corpus/ast-grep/index.mjs), so the two reads and the live list can be compared
- * by hash (tool-qa's three-way rule). Null when the list has no named tool.
+ * R-LP-87: sha256(JSON.stringify([...new Set(names)].sort())) of the live list's tool names (the wire names the engine
+ * counts for tool_count; a tool with no string name has none): deduplicated, then the default JavaScript sort (UTF-16
+ * code units, not localeCompare), with no case or space folding. Byte for byte the ast-grep oracle's tool_set_sha256
+ * (corpus/ast-grep/index.mjs summarize), so the source reads and the live list compare by names (tool-qa state/oracle.mjs,
+ * the three-way rule). Null when no tool is named.
  */
-export function toolNamesSha256(tools) {
-  const names = [...new Set((Array.isArray(tools) ? tools : []).map((t) => (isObj(t) && typeof t.name === 'string' ? t.name : null)).filter((n) => n !== null))].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
-  return names.length ? sha256(JSON.stringify(names)) : null;
+export function toolNamesSha256(names) {
+  const list = (Array.isArray(names) ? names : []).filter((n) => typeof n === 'string');
+  return list.length ? sha256(JSON.stringify([...new Set(list)].sort())) : null;
 }
 
 /**
@@ -1928,7 +1936,7 @@ export function buildItem(item, ctx) {
       }
       result.timing.grade_ms = Date.now() - g0;
       if (g) {
-        result.live = { ...g.summary, config_state: primary === bare ? 'none' : 'dummy', pages: int(primary.lists['tools/list'].pages), tool_names_sha256: toolNamesSha256(toolsOf(primary.lists['tools/list'].raw_pages)) };
+        result.live = { ...g.summary, config_state: primary === bare ? 'none' : 'dummy', pages: int(primary.lists['tools/list'].pages), tool_names_sha256: toolNamesSha256(g.names) };
         reader = { listed: true, tool_count: g.summary.tool_count, catalog_hash: g.summary.catalog_hash, names: g.names, tools: toolsOf(primary.lists['tools/list'].raw_pages), pages: int(primary.lists['tools/list'].pages), check_ids: Object.keys(g.summary.check_counts), capabilities: isObj(primary.initialize) && isObj(primary.initialize.capabilities) ? primary.initialize.capabilities : null };
         files['raw/report.json'] = json({ findings: g.report.findings, tool_names: g.names });
         const cmp = compareStatic(g, stat);
@@ -1936,6 +1944,8 @@ export function buildItem(item, ctx) {
         if (cmp.raw) files['raw/static-compare.json'] = json(cmp.raw);
         lines.push(obs('static_vs_live_agreement', cmp.summary));
         if (EMIT_TOOL_LIST_FIELDS) { lines.push(obs('tool_count', g.summary.tool_count)); lines.push(obs('tool_list_sha256', g.summary.catalog_hash)); }
+        // R-LP-87: next to them, the names-only hash (null, with why, when the list names no tool).
+        if (EMIT_TOOL_NAMES_FIELD) lines.push(obs('tool_names_sha256', toolNamesSha256(g.names), 'the list names no tool'));
         const init = isObj(primary.initialize) ? primary.initialize : null;
         lines.push(obs('protocol_era', primary.era === 'modern' ? 'modern' : 'legacy'));
         lines.push(obs('client_version', safeText(primary.protocol_offered, /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/)));
