@@ -154,9 +154,10 @@ export function pickScript(scripts, pkg) {
 }
 
 /**
- * R-LP-82: the console script to run, with how it was chosen: { entry, drop, source } or null. First the registry's own
- * word: a first package argument that names a declared script exactly is that script (the publisher's launch is
- * `<script> <rest>`; drop 1 of the args). Then pickScript's choice (source console_script). Then a package's only script
+ * R-LP-82: the console script to run, with how it was chosen: { entry, drop, source } or null. First a first package
+ * argument that names a declared script exactly (source registry_args; drop 1 of the args): our reading of the args,
+ * not the publisher's word (a `uvx <package> <args>` launch passes them to the package's own script), so like
+ * lone_script its failure is never evidence (live-probe.mjs entryGuessOf). Then pickScript's choice (source console_script). Then a package's only script
  * with no server signal (source lone_script): it is what a user would run, so it is run, but it is still our pick, so a
  * failure of it is never evidence against the server (failureDetail treats it like the package-name guess).
  */

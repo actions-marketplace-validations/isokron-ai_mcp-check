@@ -1762,6 +1762,14 @@ export function crashNotEvidenceOf(choice, rec) {
 }
 
 /**
+ * R-LP-82: an entry that is our pick, not the publisher's, so its failure is never evidence against the server: a lone
+ * script with no server signal, and the script read from the registry's first package argument (our reading of the
+ * args: a `uvx <package> <args>` launch passes them to the package's own script).
+ */
+export const ENTRY_GUESS_SOURCES = Object.freeze(['lone_script', 'registry_args']);
+export const entryGuessOf = (choice) => !!(isObj(choice) && ENTRY_GUESS_SOURCES.includes(choice.entry_source));
+
+/**
  * Whether a .NET tool ran on another runtime than it was built for: its entry's target framework is not net10.0 or newer
  * (net8.0, netcoreapp3.1, netstandard2.0, a platform-suffixed or unreadable one, or none recorded). Only a tool built for
  * the sandbox's own runtime runs as shipped (R-LP-58).
@@ -2189,7 +2197,7 @@ export function buildItem(item, ctx) {
       lines.push(obs('server_info', serverInfo(noTools.initialize.serverInfo), 'no serverInfo object'));
       lines.push(obs('capabilities_flags', capabilityFlags(noTools.initialize.capabilities), 'no capabilities object'));
     } else if (!primary) {
-      detail = ociRun && ociRun.outcome === 'disk_low' ? 'disk_low' : failureDetail(rec, bare, envp, { deadlineHit, records: tel.records, stepsLog: readText(join(dir, 'steps.log')), launch: r.launch, argsUnfilled: r.choice ? r.choice.args_unfilled : null, owned: ownedEntry(r.choice), pydeps: r.choice ? r.choice.pydeps : null, crashNotEvidence: crashNotEvidenceOf(r.choice, rec), entryGuess: !!(r.choice && r.choice.entry_source === 'lone_script') });
+      detail = ociRun && ociRun.outcome === 'disk_low' ? 'disk_low' : failureDetail(rec, bare, envp, { deadlineHit, records: tel.records, stepsLog: readText(join(dir, 'steps.log')), launch: r.launch, argsUnfilled: r.choice ? r.choice.args_unfilled : null, owned: ownedEntry(r.choice), pydeps: r.choice ? r.choice.pydeps : null, crashNotEvidence: crashNotEvidenceOf(r.choice, rec), entryGuess: entryGuessOf(r.choice) });
       // R-LP-81: a retry was planned because the first run's cause was ours to test (an SDK we let float, a subcommand
       // we did not give): that first run is never the server's fault, whatever its detail would say alone.
       if (retry && (DETAILS[detail] || [])[3] === 'subject') { result.retry.first_detail = detail; detail = retry.reason === 'mcp_drift' ? 'start_dependency_drift' : 'start_env_limited'; }

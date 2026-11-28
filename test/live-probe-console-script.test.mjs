@@ -52,7 +52,7 @@ const server = (args) => ({ name: 'io.github.acme/widget', repository: { url: 'h
 const world = (wheel, args) => { const pf = pypiFetch({ wheel }); return async (u, init) => (new URL(u).hostname === 'registry.modelcontextprotocol.io' ? res(200, { servers: [{ server: server(args) }] }) : pf(u, init)); };
 const resolve = (M, wheel, args) => M.resolveSubject({ subject: 'acme/widget', repo: 'acme/widget' }, { fetch: world(wheel, args) });
 
-test('R-LP-82: the registry\'s first package argument names the console script (datasentry); a package\'s only script is run (bawbel); our pick is never evidence against the server', async () => {
+test('R-LP-82: the registry\'s first package argument names the console script (datasentry); a package\'s only script is run (bawbel); neither pick is ever evidence against the server', async () => {
   // The publisher's launch: `<script> <rest>` among several scripts.
   const three = [['datasentry', 'ds.cli:main'], ['datasentry-demo', 'ds.demo:main'], ['datasentry-server', 'ds.web:main']];
   assert.deepEqual(PE.scriptChoice(three, 'widget-mcp', ['datasentry', 'mcp']), { entry: 'datasentry', drop: 1, source: 'registry_args' });
@@ -73,12 +73,19 @@ test('R-LP-82: the registry\'s first package argument names the console script (
   const launch = { kind: 'pypi', package: 'bawbel-scanner', entry: 'bawbel' };
   assert.equal(LP.failureDetail(rec, crash, null, { launch, argsUnfilled: 0, entryGuess: true }), 'start_env_limited');
   assert.equal(LP.failureDetail(rec, crash, null, { launch, argsUnfilled: 0 }), 'start_failed');
+  // Both our picks are guesses for blame: a lone script, and the script read from the registry's first argument
+  // (`uvx <package> <args>` passes them to the package's own script, so args[0] naming a script is our reading).
+  assert.deepEqual(['lone_script', 'registry_args', 'console_script', 'module_main'].map((x) => LP.entryGuessOf({ entry_source: x })), [true, true, false, false]);
+  const viaArgs = await resolve(LP, wheelOf(['datasentry = ds.cli:main', 'datasentry-demo = ds.demo:main']), [{ type: 'positional', value: 'datasentry' }]);
+  assert.equal(LP.failureDetail(rec, crash, null, { launch: viaArgs.launch, argsUnfilled: 0, entryGuess: LP.entryGuessOf(viaArgs.choice) }), 'start_env_limited', 'a registry_args pick that crashes is never start_failed');
   // Mutation checks: without the registry rule the datasentry package is ambiguous (the package-name guess runs);
   // without the lone rule bawbel's only script is not run; without the guess flag its crash would be the server's.
   let M = await mutant("  if (first && BIN.test(first)) { const named = scripts.find(([n]) => n === first); if (named) return { entry: named[0], drop: 1, source: 'registry_args' }; }\n", '', 'pypi-entry.mjs');
   assert.equal(M.scriptChoice(three, 'widget-mcp', ['datasentry', 'mcp']), null);
   M = await mutant("  if (scripts.length === 1) return { entry: scripts[0][0], drop: 0, source: 'lone_script' };\n", '', 'pypi-entry.mjs');
   assert.equal(M.scriptChoice([['bawbel', 'bawbel.cli:main']], 'bawbel-scanner'), null);
+  M = await mutant("export const ENTRY_GUESS_SOURCES = Object.freeze(['lone_script', 'registry_args']);", "export const ENTRY_GUESS_SOURCES = Object.freeze(['lone_script']);");
+  assert.equal(M.entryGuessOf({ entry_source: 'registry_args' }), false, 'without registry_args in the list its crash would count');
   M = await mutant("(launch.kind === 'pypi' && (!launch.entry || entryGuess))", "(launch.kind === 'pypi' && !launch.entry)");
   assert.equal(M.failureDetail(rec, crash, null, { launch, argsUnfilled: 0, entryGuess: true }), 'start_failed');
 });

@@ -41,7 +41,9 @@ The run is named `shard <shard_id>`.
      `<module>/__main__.py` named like the package (or a lone one whose name says mcp or server; never tests, docs,
      examples or scripts) runs as `python -m <module>`. A picked entry is no longer a guess, so it needs that signal. Otherwise (ambiguous, no wheel, unreadable, lookup failed) the run keeps the old
      `venv/bin/<package name>` guess, which a failure never blames on the server. A package's only script with no
-     such signal is run too (`lone_script`), and like the guess its failure is never evidence against the server.
+     such signal is run too (`lone_script`). Both picks are our reading, not the publisher's word (a `uvx <package>
+     <args>` launch passes the args to the package's own script), so like the guess their failure is never evidence
+     against the server.
      `install.entry_source` says which.
      The wheel is parsed as untrusted data (bounds-checked, inflation capped); no package code runs on the planner.
    - **Whose entry it is.** Anyone can publish a registry entry whose repository URL names someone else's repository,
