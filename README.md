@@ -219,9 +219,9 @@ The engine is the same file as the web checker; `engine/VENDORED.json` records i
 
 ### Reader QA on real repositories
 
-The `--repo` source reader is checked against 113 public MCP server repositories at pinned commits (TypeScript, Python, Go, Rust and a few others), with the tool lists each server registers as ground truth. The targets, commits and tool names are in [`qa/`](qa/) (`targets.json`, `truth/`, `servers.json`); nothing else of a server is stored. The reader is static, so nothing of a target is cloned, installed, built or run.
+The `--repo` source reader is checked against 95 public MCP server repositories at pinned commits (TypeScript, Python, Go, Rust and a few others), with the tool lists each server registers as ground truth. The targets, commits and tool names are in [`qa/`](qa/) (`targets.json`, `truth/`, `servers.json`); nothing else of a server is stored. A further 18 targets are held out: they measure whether the reader generalises, so they, their commits and their truth stay in a private harness and are not published (run the gate on the 95 only; a reader change is not to be fitted to a repository because it is in this list). The reader is static, so nothing of a target is cloned, installed, built or run.
 
-The [`reader-qa`](.github/workflows/reader-qa.yml) workflow runs the build under test and the base build (the pull request's base commit, or `base_ref` on a manual dispatch, `main` by default) over the target set in four shards, scores the first against the truth and compares the two. It runs on `workflow_dispatch` and on pull requests that carry the label `reader-change`: label every pull request that touches `src/inputs/`. It reads with the job's `GITHUB_TOKEN` (permissions `contents: read`, no secrets, `pull_request`, never `pull_request_target`) and retries a rate limit or a GitHub-side failure with a growing wait.
+The [`reader-qa`](.github/workflows/reader-qa.yml) workflow runs the build under test and the base build (the pull request's base commit, or `base_ref` on a manual dispatch, `main` by default) over the target set in four shards, scores the first against the truth and compares the two. It runs on `workflow_dispatch` and on pull requests that carry the label `reader-change`: label every pull request that touches `src/inputs/`. It reads with the job's `GITHUB_TOKEN` (permissions `contents: read`, no secrets, `pull_request`, never `pull_request_target`) and retries a rate limit or a GitHub-side failure with a growing wait. One run at a time: a concurrency group keeps two runs from sharing the token's API budget. When the GitHub API refuses a listing the reader falls back to jsDelivr; the summary counts those targets and names them next to any byte difference.
 
 The job summary shows precision and recall per language, the number of targets whose output is byte-identical to the base build, and every change. The run fails when:
 
@@ -231,7 +231,7 @@ The job summary shows precision and recall per language, the number of targets w
 - a run ends in an error or does not finish;
 - a target regresses against the base build: a default tool lost, a phantom or wrong-server tool gained, or a graded list lost.
 
-The numbers of the last local run, for comparison, are in [`qa/reference.json`](qa/reference.json). To change the truth of one target, edit `qa/truth/<id>.json` and give the reason in the pull request. To run it locally, see the header of [`qa/run.mjs`](qa/run.mjs) and [`qa/score.mjs`](qa/score.mjs).
+The reader's numbers on these 95 targets at `main`, for comparison, are in [`qa/reference.json`](qa/reference.json). To change the truth of one target, edit `qa/truth/<id>.json` and give the reason in the pull request. To run it locally, see the header of [`qa/run.mjs`](qa/run.mjs) and [`qa/score.mjs`](qa/score.mjs).
 
 ## Licence
 

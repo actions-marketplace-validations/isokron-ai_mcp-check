@@ -81,6 +81,7 @@ function scoreTarget(t, servers, dir) {
   if (st === 'graded') {
     row.fidelity = report.source?.fidelity ?? null;
     row.from = report.source?.from ?? null;
+    row.via = report.source?.via ?? null;
     row.grades = Object.fromEntries(SECTIONS.map((s) => [s, report.sections?.[s]?.grade ?? null]));
     if (row.fidelity === 'names') {
       const bad = (report.tools || []).flatMap((x) => x.findings || []).filter((f) => SCHEMA_FINDING_RE.test(f.id || ''));
@@ -225,6 +226,8 @@ function main() {
   const silentPicks = rows.filter((r) => r.multi_server && /silent (wrong|unattributed) pick/.test(r.multi_outcome || '')).map((r) => r.id);
   const wrongServer = single.filter((r) => r.wrong_server > 0).map((r) => r.id);
   const namesOnlyGraded = rows.filter((r) => r.names_only_graded).map((r) => r.id);
+  // The reader falls back to jsDelivr when the GitHub API refuses the listing (rate limit). Counted, never silent.
+  const fallbacks = rows.filter((r) => r.via === 'jsdelivr').map((r) => r.id);
   const errors = rows.filter((r) => r.status === 'error' || r.status === 'missing').map((r) => `${r.id} (${r.status}${r.message ? ': ' + r.message : ''})`);
   const falseLists = rows.filter((r) => r.false_list).map((r) => r.id);
   const slow = rows.filter((r) => r.ms != null).sort((a, b) => b.ms - a.ms)[0];
@@ -247,6 +250,7 @@ function main() {
   if (opt.base) {
     const b = scoreLabel(opt.out, opt.base);
     cmp = { ...diffRows(b.rows, rows), bytes: byteCompare(opt.out, opt.base, opt.label, doc.targets), base: opt.base };
+    cmp.fallback_base = b.rows.filter((r) => r.via === 'jsdelivr').map((r) => r.id);
     if (cmp.regressions.length) gate.failures.push(`${cmp.regressions.length} regression(s) against ${opt.base}: ${cmp.regressions.map((c) => c.id).join(', ')}`);
   }
   gate.pass = gate.failures.length === 0;
@@ -260,12 +264,13 @@ function main() {
   md += `## Gate: ${gate.pass ? 'PASS' : 'FAIL'}\n\n`;
   md += mdTable([{ k: 'Recall, TypeScript', v: langRec('ts'), r: ref?.recall?.ts }, { k: 'Recall, Python', v: langRec('python'), r: ref?.recall?.python }, { k: 'Recall, Go', v: langRec('go'), r: ref?.recall?.go }, { k: 'Recall, Rust', v: langRec('rust'), r: ref?.recall?.rust },
     { k: 'Recall, all', v: overall.recall, r: ref?.recall?.all }, { k: 'Precision, all', v: overall.precision, r: ref?.precision?.all }], [['', (r) => r.k], ['this run', (r) => fmt(r.v)], [`last local QA${ref ? ' (' + ref.build + ')' : ''}`, (r) => fmt(r.r)], ['gate', (r) => (/^Recall, (TypeScript|Python|Go|Rust)/.test(r.k) ? `>= ${opt.minRecall}` : '')]]);
+  md += `\njsDelivr fallbacks (GitHub API refused the listing): ${fallbacks.length} on this build${fallbacks.length ? ' (' + fallbacks.join(', ') + ')' : ''}${cmp ? `, ${cmp.fallback_base.length} on the base build${cmp.fallback_base.length ? ' (' + cmp.fallback_base.join(', ') + ')' : ''}` : ''}. A target read through a fallback can differ from a GitHub read; re-run when this is not 0.\n`;
   md += `\nSilent merges ${gate.silent_merges}, silent picks ${gate.silent_picks}, names-only lists graded ${gate.names_only_graded}, errors or missing ${gate.errors}.\n`;
   if (!gate.pass) md += '\n' + gate.failures.map((f) => '- ' + f).join('\n') + '\n';
   if (cmp) {
     const nb = cmp.bytes.same + cmp.bytes.differ.length;
     md += `\n## Against ${cmp.base} (the base build)\n\nByte-identical output (saved tool list and JSON report) on **${cmp.bytes.same} of ${nb}** targets${cmp.bytes.missing.length ? `; no output from one side for ${cmp.bytes.missing.join(', ')}` : ''}. Regressions: ${cmp.regressions.length}. Improvements: ${cmp.improvements.length}.\n`;
-    if (cmp.bytes.differ.length) md += `\nDiffer in bytes: ${cmp.bytes.differ.join(', ')}.\n`;
+    if (cmp.bytes.differ.length) md += `\nDiffer in bytes: ${cmp.bytes.differ.map((id) => id + (fallbacks.includes(id) ? ' (head read via jsDelivr)' : '') + (cmp.fallback_base.includes(id) ? ' (base read via jsDelivr)' : '')).join(', ')}.\n`;
     if (cmp.regressions.length) md += '\nRegressions:\n' + cmp.regressions.map((c) => `- ${c.id}: ${c.what.join('; ')}`).join('\n') + '\n';
     if (cmp.improvements.length) md += '\nImprovements:\n' + cmp.improvements.map((c) => `- ${c.id}: ${c.what.join('; ')}`).join('\n') + '\n';
   }
@@ -278,7 +283,7 @@ function main() {
     ['P', (r) => (r.precision != null ? fmt(r.precision) : null)], ['R', (r) => (r.recall != null ? fmt(r.recall) : null)], ['s', (r) => (r.ms != null ? (r.ms / 1000).toFixed(1) : null)],
     ['grades', (r) => (r.grades ? SECTIONS.map((s) => r.grades[s] || '-').join(' ') : r.multi_outcome || null)]]);
   if (opt.md) fs.writeFileSync(opt.md, md);
-  if (opt.json) fs.writeFileSync(opt.json, JSON.stringify({ label: opt.label, runs, statuses, overall, source_reader_only: srcOnly, by_language: byLang, gate, compare: cmp, per_target: rows }, null, 1) + '\n');
+  if (opt.json) fs.writeFileSync(opt.json, JSON.stringify({ label: opt.label, runs, statuses, overall, source_reader_only: srcOnly, by_language: byLang, gate, jsdelivr_fallbacks: fallbacks, compare: cmp, per_target: rows }, null, 1) + '\n');
   process.stdout.write(md);
   if (opt.gate) { console.error(gate.pass ? 'GATE PASS' : 'GATE FAIL:\n  ' + gate.failures.join('\n  ')); process.exit(gate.pass ? 0 : 1); }
 }

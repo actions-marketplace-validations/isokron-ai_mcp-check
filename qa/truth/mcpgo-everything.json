@@ -1,1 +1,0 @@
-{"id":"mcpgo-everything","tools":[{"name":"add"},{"name":"echo"},{"name":"getTinyImage"},{"name":"get_resource_link"},{"name":"longRunningOperation"},{"name":"notify"}],"server_root":"examples/everything"}

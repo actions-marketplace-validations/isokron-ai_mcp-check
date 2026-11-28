@@ -1,1 +1,0 @@
-{"id":"rustfs-mcp","tools":[{"name":"create_bucket"},{"name":"delete_bucket"},{"name":"list_buckets"},{"name":"list_objects"},{"name":"get_object"},{"name":"upload_file"}],"server_root":""}

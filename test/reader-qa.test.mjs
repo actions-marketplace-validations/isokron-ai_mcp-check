@@ -46,7 +46,8 @@ function score(out, ...args) {
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'reader-qa-'));
 
 test('R-QA-01: the committed targets are public repositories at 40-hex commits, each truth file holds names only, no secret-shaped text', () => {
-  assert.ok(targets.length >= 100);
+  assert.ok(targets.length >= 90);
+  assert.ok(!targets.some((t) => 'holdout' in t), 'holdout targets are not published');
   const ids = new Set();
   for (const t of targets) {
     assert.ok(!ids.has(t.id), t.id + ' twice'); ids.add(t.id);
@@ -95,7 +96,7 @@ test('R-QA-04: the gate passes on a perfect run and fails on low recall, an erro
   synth(out, 'head'); synth(out, 'base');
   let r = score(out, '--base', 'base', '--gate');
   assert.equal(r.code, 0, r.err + r.out.slice(0, 600));
-  assert.match(r.out, /Byte-identical output[^\n]*\*\*113 of 113\*\*/);
+  assert.match(r.out, new RegExp('Byte-identical output[^\\n]*\\*\\*' + targets.length + ' of ' + targets.length + '\\*\\*'));
   assert.match(r.out, /Recall, Go \| 1\.00/);
 
   // recall: the Go targets lose half their tools
@@ -117,7 +118,7 @@ test('R-QA-04: the gate passes on a perfect run and fails on low recall, an erro
   // a regression: one default tool lost against the base, recall still above the threshold
   const reg = tmp(); synth(reg, 'base'); synth(reg, 'head', (t, o) => { if (t.id === 'ref-time') o.report.tools = o.report.tools.slice(1); });
   r = score(reg, '--base', 'base', '--gate'); assert.equal(r.code, 1); assert.match(r.err, /1 regression\(s\) against base: ref-time/);
-  assert.match(r.out, /Byte-identical output[^\n]*\*\*112 of 113\*\*/);
+  assert.match(r.out, new RegExp('Byte-identical output[^\\n]*\\*\\*' + (targets.length - 1) + ' of ' + targets.length + '\\*\\*'));
   assert.match(r.out, /ref-time: default tools found \d+ -> \d+/);
 });
 
@@ -125,6 +126,7 @@ test('R-QA-05: reader-qa.yml: dispatch and labelled pull_request only, contents:
   assert.match(wf, /\non:\n  workflow_dispatch:\n[\s\S]*\n  pull_request:\n    types: \[opened, reopened, synchronize, labeled\]\n/);
   assert.ok(!/pull_request_target|workflow_run|\n  (push|schedule|workflow_call):/.test(code));
   assert.match(wf, /\npermissions:\n  contents: read\n/);
+  assert.match(wf, /\nconcurrency:\n  group: reader-qa\n  cancel-in-progress: false\n/);
   assert.ok(!/secrets\./.test(code), 'no secret');
   assert.ok(!/\n\s+(contents|issues|pull-requests|actions|id-token|packages): write/.test(code), 'no write permission');
   assert.match(code, /contains\(github\.event\.pull_request\.labels\.\*\.name, 'reader-change'\)/);
@@ -137,4 +139,14 @@ test('R-QA-05: reader-qa.yml: dispatch and labelled pull_request only, contents:
   assert.equal([...code.matchAll(/GITHUB_TOKEN: \$\{\{ github\.token \}\}/g)].length, 2);
   assert.ok(!/npm (ci|install)|\bgit clone\b|\bdocker\b|\bnpx\b/.test(code), 'nothing is installed, cloned or run from a target');
   assert.match(code, /--gate/);
+});
+
+test('R-QA-06: a target read through the jsDelivr fallback is counted in the summary and named next to a byte difference', () => {
+  const out = tmp();
+  const via = (v) => (t, o) => { if (t.id === 'ref-time') { o.report.source.via = v; if (v === 'jsdelivr') o.report.tools = o.report.tools.slice(); } };
+  synth(out, 'base'); synth(out, 'head', via('jsdelivr'));
+  const r = score(out, '--base', 'base');
+  assert.match(r.out, /jsDelivr fallbacks \(GitHub API refused the listing\): 1 on this build \(ref-time\), 0 on the base build/);
+  const none = tmp(); synth(none, 'head', via('github'));
+  assert.match(score(none).out, /jsDelivr fallbacks[^\n]*: 0 on this build\./);
 });

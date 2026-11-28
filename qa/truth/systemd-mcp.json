@@ -1,1 +1,0 @@
-{"id":"systemd-mcp","tools":[{"name":"change_unit_state"},{"name":"check_restart_reload"},{"name":"get_file"},{"name":"get_man_page","default":false},{"name":"list_loaded_units"},{"name":"list_log"},{"name":"list_unit_files"}],"server_root":""}
