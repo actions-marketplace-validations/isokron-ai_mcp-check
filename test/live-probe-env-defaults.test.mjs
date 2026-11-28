@@ -35,9 +35,28 @@ test('R-LP-80: an optional env name gets its declared default (MCP_TRANSPORT=std
   // A default with a newline or over 500 characters is never passed.
   assert.deepEqual(LP.packageEnv([{ name: 'A', default: 'x\ny' }, { name: 'B', default: 'x'.repeat(501) }]).env, {});
   // Mutation check: without the rule an optional name's declared default is dropped (the image starts HTTP).
-  const M = await mutant("    if (!e.isRequired && (d === null || /\\{[A-Za-z0-9_]+\\}/.test(d))) continue;", '    if (!e.isRequired) continue;');
+  const M = await mutant("    if (!e.isRequired && (d === null || PLACEHOLDER.test(d))) continue;", '    if (!e.isRequired) continue;');
   assert.deepEqual(M.packageEnv(WYRE).env, { ALERTOPS_KEY: null, REGION: 'eu' });
   // ...and without the placeholder check a templated default is passed as if it were a value.
-  const P = await mutant("    if (!e.isRequired && (d === null || /\\{[A-Za-z0-9_]+\\}/.test(d))) continue;", '    if (!e.isRequired && d === null) continue;');
+  const P = await mutant("    if (!e.isRequired && (d === null || PLACEHOLDER.test(d))) continue;", '    if (!e.isRequired && d === null) continue;');
   assert.equal(P.packageEnv(WYRE).env.DATA_DIR, '{home}/data');
+});
+
+test('R-LP-80: a placeholder in an optional default ({data-dir}, $HOME, ${HOME}, <your-key>) is never passed; config_state says defaults when the probe set only declared defaults', async () => {
+  for (const d of ['{data-dir}', '{home.dir}/x', '$HOME/data', '${HOME}/data', '<your-key>', 'Bearer <token>']) assert.deepEqual(LP.packageEnv([{ name: 'OPT', default: d }]).env, {}, d);
+  for (const d of ['stdio', 'https://api.example.com', '8080', 'costs 5$', 'x < y']) assert.deepEqual(LP.packageEnv([{ name: 'OPT', default: d }]).env, { OPT: d }, d);
+  // config_state: none (the bare probe), defaults (only declared defaults we passed), dummy (any dummy value).
+  const bare = { tag: 'bare' }; const envp = { tag: 'env' };
+  const rec = (used) => ({ env: { names: { registry: [], readme: [], used } } });
+  const launch = { kind: 'npm', package: 'x', env: { MCP_TRANSPORT: 'stdio', API_KEY: null } };
+  assert.equal(LP.configStateOf(bare, bare, rec(['MCP_TRANSPORT']), launch), 'none');
+  assert.equal(LP.configStateOf(envp, bare, rec(['MCP_TRANSPORT']), launch), 'defaults');
+  assert.equal(LP.configStateOf(envp, bare, rec(['MCP_TRANSPORT', 'API_KEY']), launch), 'dummy', 'a required name with no default is a dummy');
+  assert.equal(LP.configStateOf(envp, bare, rec(['MCP_TRANSPORT', 'README_TOKEN']), launch), 'dummy', 'a README name is a dummy');
+  assert.equal(LP.configStateOf(envp, bare, rec([]), launch), 'dummy');
+  // Mutation checks: the old pattern lets {data-dir} through; without configStateOf every env probe is "dummy".
+  const M = await mutant("    if (!e.isRequired && (d === null || PLACEHOLDER.test(d))) continue;", "    if (!e.isRequired && (d === null || /\\{[A-Za-z0-9_]+\\}/.test(d))) continue;");
+  assert.deepEqual(M.packageEnv([{ name: 'OPT', default: '{data-dir}' }]).env, { OPT: '{data-dir}' });
+  const C = await mutant("  return used && used.length && used.every((n) => typeof given[n] === 'string') ? 'defaults' : 'dummy';", "  return 'dummy';");
+  assert.equal(C.configStateOf(envp, bare, rec(['MCP_TRANSPORT']), launch), 'dummy');
 });
