@@ -89,3 +89,30 @@ test('R-LP-82: the registry\'s first package argument names the console script (
   M = await mutant("(launch.kind === 'pypi' && (!launch.entry || entryGuess))", "(launch.kind === 'pypi' && !launch.entry)");
   assert.equal(M.failureDetail(rec, crash, null, { launch, argsUnfilled: 0, entryGuess: true }), 'start_failed');
 });
+
+test('R-LP-82: through buildItem, a crash of our entry pick (lone_script, registry_args) is start_env_limited; of the publisher\'s own console script it is start_failed', async () => {
+  const { mkdtempSync, mkdirSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const rec = { install: { kind: 'pypi', ok: true, steps: [{ name: 'install', exit: 0 }] }, env: { names: { registry: [] }, secret_named: [] }, timing: { total_ms: 60000 }, timed_out: false };
+  const crash = { initialize_error: 'the server exited (exit 1, signal null)', lists: {}, transport: { exit: 1, signal: null }, timing: { total_ms: 2000 }, stderr: 'Traceback (most recent call last):\n  File "/work/venv/bin/bawbel", line 8, in <module>\nTypeError: unsupported operand\n' };
+  const detailOf = (M, source) => {
+    const out = mkdtempSync(join(tmpdir(), 'lp-buildItem-'));
+    try {
+      mkdirSync(join(out, 's001'), { recursive: true });
+      writeFileSync(join(out, 's001', 'record.json'), JSON.stringify(rec));
+      writeFileSync(join(out, 's001', 'probe-bare.json'), JSON.stringify(crash));
+      const launch = { kind: 'pypi', package: 'bawbel-scanner', entry: 'bawbel' };
+      const item = { subject: 'acme/bawbel', target_id: 's001', target: { id: 's001', launch }, resolution: { status: 'runnable', launch, choice: { type: 'pypi', entry_source: source, args_unfilled: 0, env_names: [] } } };
+      const ctx = { subjectsOut: out, subjectsTelemetry: join(out, 'none.jsonl'), deadlineHit: false, retries: {}, sandboxSummary: null, state: {}, plan: { items: [] } };
+      return M.buildItem(item, ctx).detail;
+    } finally { rmSync(out, { recursive: true, force: true }); }
+  };
+  // The same crash: ours for a pick of ours, the server's for the publisher's own script.
+  assert.equal(detailOf(LP, 'lone_script'), 'start_env_limited');
+  assert.equal(detailOf(LP, 'registry_args'), 'start_env_limited');
+  assert.equal(detailOf(LP, 'console_script'), 'start_failed');
+  // Mutation: the guard at buildItem's call, entryGuess: entryGuessOf(r.choice), replaced by false: our pick's crash is the server's.
+  const M = await mutant('entryGuess: entryGuessOf(r.choice) });', 'entryGuess: false });');
+  assert.equal(detailOf(M, 'lone_script'), 'start_failed', 'without the guard a lone_script crash blames the server');
+  assert.equal(detailOf(M, 'registry_args'), 'start_failed');
+});
