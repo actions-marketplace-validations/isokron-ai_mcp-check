@@ -29,7 +29,7 @@ test('R-LP-86: an npm package for another OS, CPU or libc is unsupported_platfor
   for (const [k, log] of Object.entries(LOGS)) assert.equal(fd(LP, log), 'unsupported_platform', k);
   assert.deepEqual(LP.DETAILS.unsupported_platform.slice(-1), ['tool']);
   // Still the package's own word where npm says it: a name that is not there.
-  assert.equal(fd(LP, 'npm error code E404\nnpm error 404 Not Found - GET https://registry.npmjs.org/nope\n'), 'install_failed');
+  assert.equal(fd(LP, 'npm error code E404\nnpm error 404 Not Found - GET https://registry.npmjs.org/x - Not found\n'), 'install_failed', 'its own registry URL (R-LP-90)');
   assert.equal(fd(LP, 'npm error gyp ERR! build error\n'), 'install_build_failed');
   // Mutation check: without the rule npm's platform refusal is an install failure with no cause.
   const M = await mutant("    if (inst.kind === 'npm' && NPM_PLATFORM.test(text)) return 'unsupported_platform';\n", '');
@@ -52,6 +52,9 @@ test('R-LP-86: a transport we cannot run says why (sse, no URL, a variable nothi
   assert.deepEqual(vars, { port: '5000', path: 'mcp' });
   assert.deepEqual(T(pkg().transport, vars), { transport: 'http', http: { port: 5000, path: '/mcp' } });
   assert.deepEqual(T(pkg().transport, { port: '50 00', path: 'mcp' }), { detail: 'unsupported_transport', why: 'url_variable' }, 'a value we would not put in a URL');
+  // The URL's variables are the values the server gets: an env name's default (packageEnv passes no `value`).
+  assert.deepEqual(LP.transportVars(pkg({ environmentVariables: [{ name: 'port', value: '7000', default: '5000' }] })), { port: '5000' });
+  assert.deepEqual(LP.transportVars(pkg({ environmentVariables: [{ name: 'port', value: '7000' }] })), {}, 'a value packageEnv would not pass is no variable');
   const r = await LP.launchFor(pkg({ environmentVariables: [{ name: 'port', default: '5000' }], packageArguments: [{ type: 'named', name: '--path', default: 'mcp' }] }));
   assert.deepEqual([r.launch.transport, r.launch.http], ['http', { port: 5000, path: '/mcp' }]);
   // The resolver records each refusal and its reason (raw/resolution.json, transport_refused).

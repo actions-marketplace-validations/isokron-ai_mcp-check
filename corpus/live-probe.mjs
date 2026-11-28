@@ -839,13 +839,14 @@ export function transportOf(t, vars = {}) {
 }
 
 /**
- * The variables a transport URL may name: a package's declared env names and named arguments (`--port` is `port`),
- * each with its declared value or default; nothing else.
+ * The variables a transport URL may name: a package's declared env names, each with the default packageEnv passes to
+ * the server, and its named arguments (`--port` is `port`) with the value or default packageArgs passes; nothing else.
  */
 export function transportVars(pkg) {
   const vars = {};
   const put = (n, v) => { if (typeof n === 'string' && typeof v === 'string' && !Object.prototype.hasOwnProperty.call(vars, n)) vars[n] = v; };
-  for (const e of Array.isArray(pkg.environmentVariables) ? pkg.environmentVariables.slice(0, 100) : []) if (isObj(e) && !e.isSecret) put(e.name, typeof e.value === 'string' ? e.value : e.default);
+  // An env name's declared default, as packageEnv passes it to the server (never a value it would not pass).
+  for (const e of Array.isArray(pkg.environmentVariables) ? pkg.environmentVariables.slice(0, 100) : []) if (isObj(e) && !e.isSecret) put(e.name, e.default);
   for (const a of Array.isArray(pkg.packageArguments) ? pkg.packageArguments.slice(0, 40) : []) {
     if (!isObj(a)) continue;
     const v = typeof a.value === 'string' ? a.value : a.default;

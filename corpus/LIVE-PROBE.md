@@ -337,7 +337,7 @@ and the 4x free-disk rule. An image on another host is unassessed until the list
 | `private_registry` | `no_runnable_artifact` | tool (we reach only the default registries, as with `unsupported_package`) | no |
 | `image_too_large` (over our 2 GB cap) | `too_large` | tool | no |
 | `remote_only` | `remote_only` | subject | no |
-| `unsupported_transport` (SSE, or streamable HTTP with no URL, not on loopback, with no port or one under 1024, or naming a variable the package does not declare; a `{variable}` the package declares with a value or default, such as `{port}`, is filled; `raw/resolution.json` `transport_refused` says which and why, R-LP-86) | `unsupported_transport` | tool | no |
+| `unsupported_transport` (SSE, or streamable HTTP with no URL, not on loopback, with no port or one under 1024, or naming a variable the package does not declare; a `{variable}` the package declares (an env name's default, a named argument's value or default), such as `{port}`, is filled; `raw/resolution.json` `transport_refused` says which and why, R-LP-86) | `unsupported_transport` | tool | no |
 | `image_unavailable` (the registry's own 404, or 401 or 403 after a good token exchange, or a digest mismatch) | `install_failed_registry` | subject | no |
 | `image_registry_unreadable` (no Bearer challenge, a bad realm, no token, bad JSON, no linux/amd64 entry, no layers, bad sizes, or a 401 or 403 with no token exchanged) | `install_failed_registry` | tool | no |
 | `image_pull_failed` (the run-stage pull failed on a digest the planner already read; the pull records no stderr, so a rate limit, a timeout and the runner's disk look alike) | `install_failed_registry` | tool | no |
