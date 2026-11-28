@@ -254,12 +254,14 @@ export function pickWheel(files) {
 export async function pypiEntry(pkg, version, { fetch: fetchImpl = globalThis.fetch, timeoutMs = 20_000, args = [] } = {}) {
   const url = 'https://pypi.org/pypi/' + encodeURIComponent(pkg) + (version && version !== 'latest' ? '/' + encodeURIComponent(version) : '') + '/json';
   const meta = await getCapped(fetchImpl, url, { cap: JSON_CAP, accept: 'application/json', timeoutMs });
-  if (meta.error) return { entry_source: 'lookup_failed' };
+  // R-LP-90: PyPI's own 404 for the release is the one fact that it is not there.
+  if (meta.error) return { entry_source: 'lookup_failed', ...(meta.error === 'not_found' ? { release: { found: false, files: 0 } } : {}) };
   let j;
   try { j = JSON.parse(meta.buf.toString('utf8')); } catch { return { entry_source: 'lookup_failed' }; }
+  const release = { found: true, files: j && Array.isArray(j.urls) ? j.urls.length : null };
   const info = j && typeof j === 'object' && j.info && typeof j.info === 'object' ? j.info : null;
   const { members, ...r } = await entryOf(j, pkg, fetchImpl, timeoutMs, args);
-  return { ...r, deps: pypiDeps(info, members || null) };
+  return { ...r, deps: pypiDeps(info, members || null), release };
 }
 
 async function entryOf(j, pkg, fetchImpl, timeoutMs, args = []) {
