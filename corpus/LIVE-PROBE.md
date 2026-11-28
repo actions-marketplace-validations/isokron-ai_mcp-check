@@ -156,7 +156,16 @@ The run is named `shard <shard_id>`.
      recomputes a pass; the sandbox script then runs no target unless that guard passed from the same commit as
      the checkout, and checks the telemetry once more itself.
 
-   Then the controls, then the subjects, each with its own time limit, all stopped at minute 34 of the job. Last,
+   Then the controls, then the subjects, each with its own time limit, all stopped at minute 34 of the job. After
+   every first run, one retry with a changed launch for a subject whose start failed on a cause that change tests
+   (R-LP-81; `corpus/live-probe.mjs retry` plans it from the first runs' output, read as data, and the sandbox's own
+   target check passes each one): a PyPI server that failed on an import the MCP SDK's 2.x line removed
+   (`mcp.server.fastmcp`, a name or attribute of `mcp`, or the SDK's own "This is mcp 2.x"), while its release declares
+   `mcp` with no upper bound, runs again with `mcp<2` (a resolve to the release date needs the sandbox to take
+   `--uploaded-prior-to`; until then the known cap is the change). A retry that lists tools is the item's run; one that
+   does not leaves the first run's cause as it was, and its fault is never the server's once a retry was planned
+   (a detail that alone would be is kept as `retry.first_detail`); the SDK's own "This is mcp 2.x" is drift on any run. Both runs are in the bundle (`raw/first/` or
+   `raw/retry/`), and `retry` in the result says what was changed and what came of it. Last,
    every container, network and volume is removed, and the upload steps start only when there is no container or
    volume left at all (labelled or not), no labelled network, no host process running as the sandbox user (uid
    65534), and no `runsc` or `containerd-shim-runsc` process.
