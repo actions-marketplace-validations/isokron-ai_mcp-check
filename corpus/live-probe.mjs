@@ -1976,12 +1976,34 @@ export const RETRY_FORMAT = 'isokron-mcp-check-live-probe-retry/1';
 /** The MCP SDK's own word that a server written for 1.x got 2.x: its message, or the 1.x module 2.x no longer has. */
 const MCP2_TEXT = /\bThis is mcp 2\.x\b|No module named 'mcp\.server\.fastmcp'/;
 
-/** A launch with a retry's change applied: { constraints } added to a PyPI install. */
+/** A launch with a retry's change applied: { constraints } added to a PyPI install, { args_prefix } before its args. */
 export function retryLaunch(launch, change) {
   if (!isObj(launch) || !isObj(change)) return launch;
   const out = { ...launch };
   if (Array.isArray(change.constraints)) out.constraints = [...(Array.isArray(launch.constraints) ? launch.constraints : []), ...change.constraints];
+  if (Array.isArray(change.args_prefix)) out.args = [...change.args_prefix, ...(Array.isArray(launch.args) ? launch.args : [])];
   return out;
+}
+
+/** The subcommands that serve MCP, in the order one is tried (R-LP-83). */
+export const SERVE_SUBCOMMANDS = Object.freeze(['mcp', 'stdio', 'serve', 'server', 'run', 'start']);
+/** A command line's own usage banner: argparse, Click and Typer, commander, and the plain "a subcommand must be given". */
+const USAGE_TEXT = /(?:^|\n)\s*usage:\s|(?:^|\n)Commands:\s*\n|\bsubcommand (?:must be|is required)|\bmissing (?:sub)?command\b|\bthe following arguments are required: (?:command|subcommand|\{)/i;
+
+/**
+ * The subcommand a usage banner lists that serves MCP, or null: a word of SERVE_SUBCOMMANDS that the banner names as a
+ * choice (argparse `{reviews,mcp}`, `<serve|compare>`, a Click/Typer or commander `Commands:` list, `e.g. 'x stdio ...'`).
+ * Never one it does not list.
+ */
+export function serveSubcommand(text) {
+  const t = String(text || '').slice(0, 20000);
+  if (!USAGE_TEXT.test(t)) return null;
+  const listedWords = new Set();
+  for (const m of t.matchAll(/[{<]([A-Za-z0-9_-]+(?:[,|][A-Za-z0-9_-]+)+)[}>]/g)) for (const w of m[1].split(/[,|]/)) listedWords.add(w.toLowerCase());
+  const cmds = /(?:^|\n)\s*(?:Commands|Available commands|Subcommands):\s*\n((?:[ \t]*(?:[│|][ \t]*)?[A-Za-z0-9_-]+(?:[ \t,][^\n]*)?\n?){1,60})/i.exec(t);
+  if (cmds) for (const line of cmds[1].split('\n')) { const w = /^[ \t]*(?:[│|][ \t]*)?([A-Za-z0-9_-]+)/.exec(line); if (w) listedWords.add(w[1].toLowerCase()); }
+  for (const m of t.matchAll(/\be\.g\.?\s*['"`]?[A-Za-z0-9_.-]+\s+([A-Za-z0-9_-]+)/g)) listedWords.add(m[1].toLowerCase());
+  return SERVE_SUBCOMMANDS.find((w) => listedWords.has(w)) || null;
 }
 
 /**
@@ -1994,7 +2016,12 @@ export function retryLaunch(launch, change) {
  */
 export function retryFor(item, { rec, bare, envp } = {}) {
   const l = isObj(item) && isObj(item.target) ? item.target.launch : null;
-  if (!isObj(l) || l.kind !== 'pypi') return null;
+  if (!isObj(l)) return null;
+  return driftRetry(item, l, { rec, bare, envp }) || cliRetry(l, { rec, bare, envp });
+}
+
+function driftRetry(item, l, { rec, bare, envp }) {
+  if (l.kind !== 'pypi') return null;
   if (listed(envp) || listed(bare) || !isObj(rec) || !isObj(rec.install) || rec.install.ok !== true) return null;
   const err = [bare, envp].map((p) => (isObj(p) && typeof p.stderr === 'string' ? p.stderr : '')).join('\n');
   const imp = failedImport(err);
@@ -2006,6 +2033,27 @@ export function retryFor(item, { rec, bare, envp } = {}) {
   const cons = Array.isArray(l.constraints) ? l.constraints : [];
   if (cons.length >= 10 || cons.some((c) => /^mcp\s*[<>=~!]/i.test(String(c)))) return null;
   return { reason: 'mcp_drift', change: { constraints: ['mcp<2'] } };
+}
+
+/**
+ * R-LP-83: cli_subcommand. A PyPI or npm entry that is a command line with subcommands printed its usage and exited
+ * (nothing tells us which subcommand serves MCP): when the banner lists one of SERVE_SUBCOMMANDS, run again once with it
+ * first. Never a subcommand the banner does not list, and not when the arguments already begin with one.
+ */
+function cliRetry(l, { rec, bare, envp }) {
+  if (!['pypi', 'npm'].includes(l.kind)) return null;
+  if (listed(envp) || listed(bare) || !isObj(rec) || !isObj(rec.install) || rec.install.ok !== true) return null;
+  const args = Array.isArray(l.args) ? l.args : [];
+  if (args.length >= 40 || (args[0] && SERVE_SUBCOMMANDS.includes(String(args[0]).toLowerCase()))) return null;
+  for (const p of [bare, envp]) {
+    if (!isObj(p) || typeof p.stderr !== 'string') continue;
+    // It exited by itself (argparse 2, Click/Typer 2, others 0 or 1), not a signal or a time limit.
+    const t = isObj(p.transport) ? p.transport : {};
+    if (!Number.isInteger(t.exit) || ![0, 1, 2, 64].includes(t.exit) || t.signal) continue;
+    const sub = serveSubcommand(p.stderr);
+    if (sub) return { reason: 'cli_subcommand', change: { args_prefix: [sub] } };
+  }
+  return null;
 }
 
 /**
@@ -2038,8 +2086,11 @@ export function retriesOf(file) {
   const out = {};
   if (!isObj(j) || j.format !== RETRY_FORMAT || !Array.isArray(j.retries)) return out;
   for (const x of j.retries.slice(0, 100)) {
-    if (!isObj(x) || typeof x.id !== 'string' || !/^s[0-9]{3}$/.test(x.id) || !['mcp_drift'].includes(x.reason)) continue;
-    const c = isObj(x.change) && Array.isArray(x.change.constraints) && x.change.constraints.every((v) => typeof v === 'string' && /^[A-Za-z0-9._-]{1,60}[<>=!~]{1,2}[0-9][0-9.]{0,20}$/.test(v)) ? { constraints: x.change.constraints.slice(0, 10) } : null;
+    if (!isObj(x) || typeof x.id !== 'string' || !/^s[0-9]{3}$/.test(x.id) || !['mcp_drift', 'cli_subcommand'].includes(x.reason)) continue;
+    const ch = isObj(x.change) ? x.change : {};
+    const c = x.reason === 'mcp_drift'
+      ? (Array.isArray(ch.constraints) && ch.constraints.every((v) => typeof v === 'string' && /^[A-Za-z0-9._-]{1,60}[<>=!~]{1,2}[0-9][0-9.]{0,20}$/.test(v)) ? { constraints: ch.constraints.slice(0, 10) } : null)
+      : (Array.isArray(ch.args_prefix) && ch.args_prefix.length === 1 && SERVE_SUBCOMMANDS.includes(ch.args_prefix[0]) ? { args_prefix: [ch.args_prefix[0]] } : null);
     if (c) out[x.id] = { reason: x.reason, change: c };
   }
   return out;
