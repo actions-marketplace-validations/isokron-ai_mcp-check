@@ -129,14 +129,17 @@ test('R-QA-05: reader-qa.yml: dispatch and labelled pull_request only, contents:
   assert.match(wf, /\nconcurrency:\n  group: reader-qa\n  cancel-in-progress: false\n/);
   assert.ok(!/secrets\./.test(code), 'no secret');
   assert.ok(!/\n\s+(contents|issues|pull-requests|actions|id-token|packages): write/.test(code), 'no write permission');
-  assert.match(code, /contains\(github\.event\.pull_request\.labels\.\*\.name, 'reader-change'\)/);
-  assert.match(code, /github\.event\.label\.name == 'reader-change'/);
+  assert.match(code, /LABELS: \$\{\{ join\(github\.event\.pull_request\.labels\.\*\.name, ','\) \}\}/);
+  assert.match(code, /\[ "\$LABEL" != reader-change \]/);
+  assert.match(code, /needs\.detect\.outputs\.run == 'true'/);
+  assert.match(code, /grep -qE '\^\(src\/inputs\/\|qa\/\|/);
   assert.match(code, /github\.repository == 'isokron-ai\/mcp-check'/);
   assert.match(code, /ref: \$\{\{ github\.event_name == 'pull_request' && github\.event\.pull_request\.base\.sha \|\| inputs\.base_ref \|\| 'main' \}\}/);
   assert.match(code, /BASE_REF: \$\{\{ inputs\.base_ref \}\}/);
   for (const m of code.matchAll(/run: \|?\n?((?:.*\n)*?)(?=      - |\n?$)/g)) assert.ok(!/\$\{\{\s*(inputs|github\.event\.pull_request)\./.test(m[1]), 'an input or PR field expanded in a run: script');
   // the token is set only on the two steps that read repositories, and no step installs or builds anything
   assert.equal([...code.matchAll(/GITHUB_TOKEN: \$\{\{ github\.token \}\}/g)].length, 2);
+  assert.match(wf, /replaced run shows as\n# cancelled/);
   assert.ok(!/npm (ci|install)|\bgit clone\b|\bdocker\b|\bnpx\b/.test(code), 'nothing is installed, cloned or run from a target');
   assert.match(code, /--gate/);
 });
@@ -149,4 +152,41 @@ test('R-QA-06: a target read through the jsDelivr fallback is counted in the sum
   assert.match(r.out, /jsDelivr fallbacks \(GitHub API refused the listing\): 1 on this build \(ref-time\), 0 on the base build/);
   const none = tmp(); synth(none, 'head', via('github'));
   assert.match(score(none).out, /jsDelivr fallbacks[^\n]*: 0 on this build\./);
+});
+
+test('R-QA-07: no group of qa/servers.json names a held-out server folder, and attribution still works without them', () => {
+  const servers = JSON.parse(fs.readFileSync(path.join(qa, 'servers.json'), 'utf8'));
+  const deny = { 'mudler/MCPs': ['twitter'], 'modelcontextprotocol/rust-sdk': ['conformance'] };
+  for (const [repo, groups] of Object.entries(servers.servers)) for (const g of Object.keys(groups)) {
+    for (const bad of deny[repo] || []) assert.ok(g !== bad && !g.startsWith(bad + '/') && !g.endsWith('/' + bad), repo + ' names the held-out folder ' + bad);
+  }
+  for (const [repo, aliases] of Object.entries(servers.server_aliases || {})) for (const [k, v] of Object.entries(aliases)) for (const bad of deny[repo] || []) assert.ok(!k.includes(bad) && !v.includes(bad), repo);
+  // a multi-server root still refuses with the held-out groups gone, and a merge across two remaining groups is still found
+  const out = tmp(); synth(out, 'head');
+  assert.equal(score(out, '--gate').code, 0);
+  const g = servers.servers['mudler/MCPs'];
+  const count = new Map(); for (const v of Object.values(g)) for (const n of v) count.set(n, (count.get(n) || 0) + 1);
+  const uniq = Object.keys(g).map((k) => g[k].find((n) => count.get(n) === 1)).filter(Boolean);
+  const merged = tmp(); synth(merged, 'head', (t, o) => { if (t.id === 'mudler-mcps') { o.meta.exit = 0; o.err = ''; o.report = { sections: { spec: { grade: 'A' } }, source: { fidelity: 'schemas', from: 'source', files: [] }, tools: [{ name: uniq[0] }, { name: uniq[1] }] }; } });
+  const r = score(merged, '--gate');
+  assert.equal(r.code, 1); assert.match(r.err, /silent monorepo merge\(s\): mudler-mcps/);
+});
+
+test('R-QA-08: a pull request that changes src/inputs/, qa/ or the workflow runs the gate without the label; an unrelated label does not re-run it', () => {
+  const m = /run: \|\n((?:          .*\n)+)/.exec(wf.slice(wf.indexOf('Decide whether the gate runs')));
+  assert.ok(m, 'the detect script');
+  const script = m[1].replace(/^ {10}/gm, '').replace(/git diff --name-only HEAD\^1 HEAD/, 'printf "%s\\n" "$CHANGED"');
+  const decide = (env) => {
+    const out = path.join(tmp(), 'o');
+    const r = spawnSync('bash', ['-c', script], { env: { PATH: process.env.PATH, GITHUB_OUTPUT: out, EVENT: 'pull_request', ACTION: 'synchronize', LABEL: '', LABELS: '', CHANGED: '', ...env }, encoding: 'utf8' });
+    assert.equal(r.status, 0, r.stderr);
+    return fs.readFileSync(out, 'utf8').trim();
+  };
+  assert.equal(decide({ CHANGED: 'src/inputs/repo-source.cjs\nREADME.md' }), 'run=true');
+  assert.equal(decide({ CHANGED: 'qa/targets.json' }), 'run=true');
+  assert.equal(decide({ CHANGED: '.github/workflows/reader-qa.yml' }), 'run=true');
+  assert.equal(decide({ CHANGED: 'src/report.js\nREADME.md' }), 'run=false');
+  assert.equal(decide({ CHANGED: 'src/report.js', LABELS: 'bug,reader-change' }), 'run=true');
+  assert.equal(decide({ CHANGED: 'src/inputs/x.cjs', ACTION: 'labeled', LABEL: 'bug', LABELS: 'bug' }), 'run=false');
+  assert.equal(decide({ EVENT: 'workflow_dispatch' }), 'run=true');
 });

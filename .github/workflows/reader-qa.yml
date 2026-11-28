@@ -9,7 +9,9 @@
 # carries precision and recall per language, the byte-identical counts and the changes; qa/reference.json holds the
 # last local run for comparison.
 #
-# Runs on workflow_dispatch and on pull requests that carry the label `reader-change`. Safety: pull_request (never
+# Runs on workflow_dispatch, on pull requests that carry the label `reader-change`, and automatically on any pull
+# request that changes src/inputs/, qa/ or this workflow (the `detect` job), so the gate cannot be skipped by forgetting
+# the label. Safety: pull_request (never
 # pull_request_target), permissions contents: read, no secrets, actions pinned by full SHA. The reader is static: it
 # lists each repository through the GitHub API and reads files from raw.githubusercontent.com; nothing of a target is
 # cloned, installed, built or run. The only execution is this repository's own code (the two builds and qa/*.mjs),
@@ -34,18 +36,44 @@ permissions:
   contents: read
 
 # One reader-qa run at a time in this repository, whatever triggered it: the runs share the job token's API budget
-# (about 1,000 requests an hour). A second run waits; a third replaces the waiting one.
+# (about 1,000 requests an hour). A second run waits; a third replaces the waiting one, and the replaced run shows as
+# cancelled: push again (or remove and add the label) to run it.
 concurrency:
   group: reader-qa
   cancel-in-progress: false
 
 jobs:
+  detect:
+    if: github.repository == 'isokron-ai/mcp-check'
+    name: detect
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.d.outputs.run }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Decide whether the gate runs
+        id: d
+        env:
+          EVENT: ${{ github.event_name }}
+          ACTION: ${{ github.event.action }}
+          LABEL: ${{ github.event.label.name }}
+          LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+        run: |
+          run=false
+          if [ "$EVENT" = workflow_dispatch ]; then run=true
+          elif [ "$ACTION" = labeled ] && [ "$LABEL" != reader-change ]; then run=false
+          elif [[ ",$LABELS," == *",reader-change,"* ]]; then run=true
+          elif git diff --name-only HEAD^1 HEAD | grep -qE '^(src/inputs/|qa/|\.github/workflows/reader-qa\.yml$)'; then run=true; echo "A path the gate guards changed: running without the label."
+          fi
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+
   shard:
-    if: >-
-      github.repository == 'isokron-ai/mcp-check' &&
-      (github.event_name == 'workflow_dispatch' ||
-      (contains(github.event.pull_request.labels.*.name, 'reader-change') &&
-      (github.event.action != 'labeled' || github.event.label.name == 'reader-change')))
+    needs: detect
+    if: github.repository == 'isokron-ai/mcp-check' && needs.detect.outputs.run == 'true'
     name: shard ${{ matrix.shard }} of 4
     runs-on: ubuntu-24.04
     timeout-minutes: 40
