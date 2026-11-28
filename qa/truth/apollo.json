@@ -1,0 +1,1 @@
+{"id":"apollo","tools":[{"name":"introspect","default":false},{"name":"search","default":false},{"name":"validate","default":false},{"name":"execute","default":false},{"name":"explorer","default":false}],"server_root":"crates/apollo-mcp-server"}

@@ -1,0 +1,1 @@
+{"id":"elastic","tools":[{"name":"list_indices"},{"name":"get_mappings"},{"name":"search"},{"name":"esql"},{"name":"get_shards"}],"server_root":""}

@@ -1,0 +1,7 @@
+{
+  "build": "main bc39bcd, 26 Nov 2026",
+  "note": "The last local run of the real-repo QA (113 targets, 100 with default-tool truth, 2,240 truth tools). Printed next to each run for comparison only; the gate thresholds are in qa/score.mjs.",
+  "recall": { "ts": 0.89, "python": 0.90, "go": 0.99, "rust": 0.82, "all": 0.91 },
+  "precision": { "all": 0.99 },
+  "statuses": { "graded": 98, "no-tools": 8, "refused": 7, "error": 0 }
+}

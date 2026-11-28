@@ -217,6 +217,22 @@ npm run vendor:verify # engine/ matches engine/VENDORED.json
 
 The engine is the same file as the web checker; `engine/VENDORED.json` records its SHA-256. See [CONTRIBUTING.md](CONTRIBUTING.md) (contributions are accepted under the DCO) and [SECURITY.md](SECURITY.md).
 
+### Reader QA on real repositories
+
+The `--repo` source reader is checked against 113 public MCP server repositories at pinned commits (TypeScript, Python, Go, Rust and a few others), with the tool lists each server registers as ground truth. The targets, commits and tool names are in [`qa/`](qa/) (`targets.json`, `truth/`, `servers.json`); nothing else of a server is stored. The reader is static, so nothing of a target is cloned, installed, built or run.
+
+The [`reader-qa`](.github/workflows/reader-qa.yml) workflow runs the build under test and the base build (the pull request's base commit, or `base_ref` on a manual dispatch, `main` by default) over the target set in four shards, scores the first against the truth and compares the two. It runs on `workflow_dispatch` and on pull requests that carry the label `reader-change`: label every pull request that touches `src/inputs/`. It reads with the job's `GITHUB_TOKEN` (permissions `contents: read`, no secrets, `pull_request`, never `pull_request_target`) and retries a rate limit or a GitHub-side failure with a growing wait.
+
+The job summary shows precision and recall per language, the number of targets whose output is byte-identical to the base build, and every change. The run fails when:
+
+- recall of default tools is below 0.8 for TypeScript, Python, Go or Rust;
+- a graded list merges several servers of one repository, or silently picks one on a multi-server root;
+- a names-only list is graded on schema or annotation checks;
+- a run ends in an error or does not finish;
+- a target regresses against the base build: a default tool lost, a phantom or wrong-server tool gained, or a graded list lost.
+
+The numbers of the last local run, for comparison, are in [`qa/reference.json`](qa/reference.json). To change the truth of one target, edit `qa/truth/<id>.json` and give the reason in the pull request. Locally: `GITHUB_TOKEN=$(gh auth token) node qa/run.mjs --label head --bin bin/mcp-check.js --only ref-time`, then `node qa/score.mjs --label head`.
+
 ## Licence
 
 MIT, Copyright (c) 2026 Stormhaven Enterprises LLC / IsoKron, Joshua Bryan. Third-party notices: [NOTICE](NOTICE).

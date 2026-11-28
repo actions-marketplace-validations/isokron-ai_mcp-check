@@ -1,0 +1,1 @@
+{"id":"mcp-trino","tools":[{"name":"execute_query"},{"name":"explain_query"},{"name":"get_table_schema"},{"name":"list_catalogs"},{"name":"list_schemas"},{"name":"list_tables"}],"server_root":""}

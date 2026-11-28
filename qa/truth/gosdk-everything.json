@@ -1,0 +1,1 @@
+{"id":"gosdk-everything","tools":[{"name":"elicit (form)"},{"name":"elicit (url)"},{"name":"greet"},{"name":"greet (content with ResourceLink)"},{"name":"greet (structured)"},{"name":"greet (with Icons)"},{"name":"log"},{"name":"ping"},{"name":"roots"},{"name":"sample"}],"server_root":"examples/server/everything"}

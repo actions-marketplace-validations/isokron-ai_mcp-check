@@ -1,0 +1,1 @@
+{"id":"ht-mcp","tools":[{"name":"ht_create_session"},{"name":"ht_send_keys"},{"name":"ht_take_snapshot"},{"name":"ht_execute_command"},{"name":"ht_list_sessions"},{"name":"ht_close_session"}],"server_root":""}

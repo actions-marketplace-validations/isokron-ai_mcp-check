@@ -1,0 +1,1 @@
+{"id":"ref-git","tools":[{"name":"git_status"},{"name":"git_diff_unstaged"},{"name":"git_diff_staged"},{"name":"git_diff"},{"name":"git_commit"},{"name":"git_add"},{"name":"git_reset"},{"name":"git_log"},{"name":"git_create_branch"},{"name":"git_checkout"},{"name":"git_merge"},{"name":"git_show"},{"name":"git_branch"},{"name":"git_remote"}],"server_root":"src/git"}

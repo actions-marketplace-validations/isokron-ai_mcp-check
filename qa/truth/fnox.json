@@ -1,0 +1,1 @@
+{"id":"fnox","tools":[{"name":"get_secret"},{"name":"exec"},{"name":"request_secret","default":false}],"server_root":""}
