@@ -52,6 +52,11 @@ test('R-LP-90: npm\'s E404 and ETARGET are the package\'s only for its own regis
   const own404 = 'npm error code E404\nnpm error 404 Not Found - GET https://registry.npmjs.org/@acme%2fmcp - Not found\n';
   assert.equal(fd(LP, 'npm', own404), 'install_failed');
   assert.equal(fd(LP, 'npm', 'npm error code E404\nnpm error 404 Not Found - GET https://registry.npmjs.org/left-pad-gone - Not found\n'), 'install_build_failed', 'a dependency\'s 404');
+  // A dependency whose name extends the subject's is a dependency's 404, not the subject's (the URL ends at the name).
+  const ev = (M, pkg, log) => M.packageInstallEvidence('npm', log, { launch: { kind: 'npm', package: pkg }, owned: true });
+  const ext = [['foo-mcp', 'npm error code E404\nnpm error 404 Not Found - GET https://registry.npmjs.org/foo-mcp-utils - Not found\n'], ['@acme/mcp', 'npm error code E404\nnpm error 404 Not Found - GET https://registry.npmjs.org/@acme%2fmcp-core - Not found\n']];
+  for (const [pkg, log] of ext) assert.equal(ev(LP, pkg, log), 'install_build_failed', 'a 404 on ' + log.split('GET ')[1].split(' ')[0] + ' is not the install of ' + pkg + ' (a tool fault, not install_failed)');
+  assert.equal(ev(LP, 'foo-mcp', 'npm error code E404\nnpm error 404 Not Found - GET https://registry.npmjs.org/foo-mcp\n'), 'install_failed', 'the subject\'s own 404, at the end of the text');
   assert.equal(fd(LP, 'npm', 'npm error code ETARGET\nnpm error notarget No matching version found for @acme/mcp@9.9.9.\n'), 'install_failed');
   assert.equal(fd(LP, 'npm', 'npm error code ETARGET\nnpm error notarget No matching version found for zod@^9.\n'), 'install_build_failed');
   assert.equal(fd(LP, 'npm', own404, { owned: false }), 'install_build_failed');
@@ -69,4 +74,7 @@ test('R-LP-90: npm\'s E404 and ETARGET are the package\'s only for its own regis
   assert.equal(fd(M, 'pypi', REQUIRES_PYTHON), 'install_failed');
   M = await mutant("    return (e404 || etarget) && owned ? 'install_failed' : 'install_build_failed';", "    return /\\bE404\\b/.test(t) && owned ? 'install_failed' : 'install_build_failed';");
   assert.equal(fd(M, 'npm', 'npm error code E404\nnpm error 404 Not Found - GET https://registry.npmjs.org/left-pad-gone - Not found\n'), 'install_failed');
+  // The (?:\s|$) anchor after the registry URL: without it foo-mcp's regex matches a 404 on foo-mcp-utils.
+  M = await mutant("url + '(?:\\\\s|$)'", "url");
+  for (const [pkg, log] of ext) assert.equal(ev(M, pkg, log), 'install_failed', 'without the anchor a dependency 404 would be the subject\'s');
 });
