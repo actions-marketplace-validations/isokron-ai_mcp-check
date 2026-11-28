@@ -231,7 +231,7 @@ The job summary shows precision and recall per language, the number of targets w
 - a run ends in an error or does not finish;
 - a target regresses against the base build: a default tool lost, a phantom or wrong-server tool gained, or a graded list lost.
 
-The numbers of the last local run, for comparison, are in [`qa/reference.json`](qa/reference.json). To change the truth of one target, edit `qa/truth/<id>.json` and give the reason in the pull request. Locally: `GITHUB_TOKEN=$(gh auth token) node qa/run.mjs --label head --bin bin/mcp-check.js --only ref-time`, then `node qa/score.mjs --label head`.
+The numbers of the last local run, for comparison, are in [`qa/reference.json`](qa/reference.json). To change the truth of one target, edit `qa/truth/<id>.json` and give the reason in the pull request. To run it locally, see the header of [`qa/run.mjs`](qa/run.mjs) and [`qa/score.mjs`](qa/score.mjs).
 
 ## Licence
 
