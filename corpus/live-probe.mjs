@@ -764,6 +764,9 @@ export async function packageVerifiedBy(pkg, subject, { fetch: fetchImpl = globa
   out.why = 'unsupported_package'; return null;
 }
 
+/** A value that stands for one the user fills in: `{name}` (also with `-` or `.`), `$NAME`, `${NAME}`, `<your-key>`. */
+export const PLACEHOLDER = /\{[A-Za-z0-9_.-]{1,80}\}|\$\{?[A-Za-z_][A-Za-z0-9_]{0,80}\}?|<[^<>\n]{1,80}>/;
+
 /** Arguments from a registry package's packageArguments: values and defaults only, never a value we would invent. */
 export function packageArgs(list) {
   const args = []; let unfilled = 0;
@@ -784,7 +787,8 @@ export function packageArgs(list) {
  * Env a registry package declares: a required name gets its declared default, else a dummy value in the sandbox (null);
  * an optional name gets its declared default and nothing else (R-LP-80: an image whose own default is HTTP declares
  * `MCP_TRANSPORT` optional with default `stdio`, which a client applies). Never a value we invent: no default, a
- * secret's default, or one with a `{placeholder}` leaves an optional name out.
+ * secret's default, or a placeholder (`{name}`, `{data-dir}`, `$HOME`, `${HOME}`, `<your-key>`) leaves an optional name
+ * out (PLACEHOLDER).
  */
 export function packageEnv(list) {
   const env = {}; const names = [];
@@ -792,7 +796,7 @@ export function packageEnv(list) {
     if (!isObj(e) || typeof e.name !== 'string' || !ENV_NAME.test(e.name) || RESERVED_ENV.test(e.name)) continue;
     names.push(e.name);
     const d = typeof e.default === 'string' && e.default.length <= 500 && !/[\u0000\n\r]/.test(e.default) && !e.isSecret ? e.default : null;
-    if (!e.isRequired && (d === null || /\{[A-Za-z0-9_]+\}/.test(d))) continue;
+    if (!e.isRequired && (d === null || PLACEHOLDER.test(d))) continue;
     if (Object.keys(env).length < 60) env[e.name] = d;
   }
   return { env, names: names.slice(0, 100) };
@@ -1947,6 +1951,18 @@ export function fuzzFor(dir, item, ctx) {
   return { lines, raw, summary: { ...stage, counts: rec && rec.summary ? rec.summary : null, results: rows } };
 }
 
+/**
+ * The configuration the listing probe ran with (R-LP-80): none (the bare probe), defaults (every name it set is one the
+ * registry entry declares with a default we passed as given), dummy (any dummy value: a required name with no default,
+ * a name read from the README or the source).
+ */
+export function configStateOf(probe, bare, rec, launch) {
+  if (probe === bare) return 'none';
+  const used = isObj(rec) && isObj(rec.env) && isObj(rec.env.names) && Array.isArray(rec.env.names.used) ? rec.env.names.used : null;
+  const given = isObj(launch) && isObj(launch.env) ? launch.env : {};
+  return used && used.length && used.every((n) => typeof given[n] === 'string') ? 'defaults' : 'dummy';
+}
+
 // ------------------------------------------------------------------ one item
 
 /** Everything about one item: { status, detail, files, skips, subjectSha }. Never throws on subject data. */
@@ -2005,7 +2021,7 @@ export function buildItem(item, ctx) {
     const noTools = !primary ? [envp, bare].find(noToolsCapability) || null : null;
     if (noTools) {
       result.detail = 'no_tools_capability';
-      result.live = { tools_capability: false, tool_count: 0, config_state: noTools === bare ? 'none' : 'dummy' };
+      result.live = { tools_capability: false, tool_count: 0, config_state: configStateOf(noTools, bare, rec, r.launch) };
       reader = { listed: false, no_tools_capability: true, capabilities: noTools.initialize.capabilities };
       lines.push(obs('protocol_era', 'legacy'));
       lines.push(obs('protocol_negotiated', safeText(noTools.initialize.protocolVersion, /^[0-9A-Za-z.-]{1,40}$/), 'not a plain protocol version'));
@@ -2023,7 +2039,7 @@ export function buildItem(item, ctx) {
       }
       result.timing.grade_ms = Date.now() - g0;
       if (g) {
-        result.live = { ...g.summary, config_state: primary === bare ? 'none' : 'dummy', pages: int(primary.lists['tools/list'].pages), tool_names_sha256: toolNamesSha256(g.names) };
+        result.live = { ...g.summary, config_state: configStateOf(primary, bare, rec, r.launch), pages: int(primary.lists['tools/list'].pages), tool_names_sha256: toolNamesSha256(g.names) };
         reader = { listed: true, tool_count: g.summary.tool_count, catalog_hash: g.summary.catalog_hash, names: g.names, tools: toolsOf(primary.lists['tools/list'].raw_pages), pages: int(primary.lists['tools/list'].pages), check_ids: Object.keys(g.summary.check_counts), capabilities: isObj(primary.initialize) && isObj(primary.initialize.capabilities) ? primary.initialize.capabilities : null };
         files['raw/report.json'] = json({ findings: g.report.findings, tool_names: g.names });
         const cmp = compareStatic(g, stat);
@@ -2047,7 +2063,7 @@ export function buildItem(item, ctx) {
         lines.push(obs('startup_ms', int(tm.initialize_ms), 'no initialize answer'));
         lines.push(obs('latency_cold_ms', int(primary.lists['tools/list'].ms), 'not timed'));
         lines.push(obs('startup_without_config', bare ? (listed(bare) ? 'lists_tools' : 'no_list') : 'not_run'));
-        lines.push(obs('config_state', primary === bare ? 'none' : 'dummy'));
+        lines.push(obs('config_state', configStateOf(primary, bare, rec, r.launch)));
         lines.push(obs('catalog_per_config_state', { none: bare ? { listed: listed(bare), ...(catalogOf(bare) || {}) } : null, dummy: envp ? { listed: listed(envp), ...(catalogOf(envp) || {}) } : null }));
         const tr = isObj(primary.transport) ? primary.transport : {};
         lines.push(obs('stdout_noise_lines', int(tr.non_json_lines), 'not counted'));
