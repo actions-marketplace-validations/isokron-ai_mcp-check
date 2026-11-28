@@ -173,6 +173,8 @@ export const DETAILS = Object.freeze({
   // R-LP-72: a failure that would be the bundle's own (above, or package_not_runnable), for a bundle whose registry entry
   // is not shown to be the subject's (a seed-only or seed-matched package): ours to report, never the subject's.
   bundle_unowned: ['install_failed_registry', false, 'resolve', 'tool'],
+  // R-LP-89: the release host answered a 4xx that does not change (not 403, 408, 425, 429): ours, never retried.
+  bundle_fetch_refused: ['tool_error', false, 'resolve', 'tool'],
   // R-LP-56: the install succeeded but our entry helper found nothing it may start (its name pattern, its regular-file or
   // record checks): ours, never the package's.
   entry_unresolved: ['install_failed_registry', false, 'install', 'tool'],
@@ -916,7 +918,7 @@ export async function registryEntries(subject, seedPkgs, { fetch: fetchImpl = gl
 /** The resolve details that put a bundle's own failure on the subject (R-LP-72): only for an entry in its namespace. */
 export const SUBJECT_RESOLVE_DETAILS = Object.freeze(['bundle_unavailable', 'bundle_hash_mismatch', 'bundle_invalid', 'package_not_runnable']);
 // Our limits before a package's own failure: a subject is not shown at fault while any of its packages failed on our side.
-const DETAIL_ORDER = ['unverified_registry_entry', 'image_too_large', 'oci_host_not_allowed', 'unsupported_transport', 'image_registry_unreadable', 'image_access_denied', 'registry_query_refused', 'start_needs_config', 'platform_unsupported', 'bundle_runtime_unsupported', 'bundle_unreadable', 'bundle_too_large', 'bundle_host_not_allowed', 'bundle_unowned', 'image_unavailable', 'bundle_unavailable', 'bundle_hash_mismatch', 'bundle_invalid', 'package_not_runnable', 'launch_invalid', 'private_registry', 'unsupported_package'];
+const DETAIL_ORDER = ['unverified_registry_entry', 'image_too_large', 'oci_host_not_allowed', 'unsupported_transport', 'image_registry_unreadable', 'image_access_denied', 'registry_query_refused', 'start_needs_config', 'platform_unsupported', 'bundle_runtime_unsupported', 'bundle_unreadable', 'bundle_too_large', 'bundle_host_not_allowed', 'bundle_fetch_refused', 'bundle_unowned', 'image_unavailable', 'bundle_unavailable', 'bundle_hash_mismatch', 'bundle_invalid', 'package_not_runnable', 'launch_invalid', 'private_registry', 'unsupported_package'];
 
 /**
  * How to run one subject: { status: 'runnable', launch, choice, registry, subdir } or { status: 'skipped', detail }.

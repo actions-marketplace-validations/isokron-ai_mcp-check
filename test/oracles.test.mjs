@@ -5,16 +5,16 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createBridge } from '../corpus/oracles/bridge.mjs';
 import { CLEANUP_SLACK_MS, lastJsonLine, oracleEnv, runOracles, runProgram, suiteProblem, variantCommand } from '../corpus/oracles/run.mjs';
 import { tap } from '../corpus/oracles/ts-client.mjs';
 import { relay } from '../corpus/oracles/relay.mjs';
 import { baselineProblems, clientCatalog, judgeOracles, namesSha, noToolsAgrees, specFields } from '../corpus/oracles/judge.mjs';
-import { inspectorError, resultOf as inspectorResult, watchSession } from '../corpus/oracles/inspector-client.mjs';
+import { inspectorArgs, inspectorError, readServerEnv, resultOf as inspectorResult, serverEnvOf, watchSession } from '../corpus/oracles/inspector-client.mjs';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { answered, limitsOf, oracleProbe, targetOf } from '../corpus/live-probe-driver.mjs';
 import * as LP from '../corpus/live-probe.mjs';
@@ -723,6 +723,75 @@ test('R-ORC-12: no oracle clients for a target that never answered (the skip say
   assert.equal(noToolsAgrees(reader, { outcome: 'timeout' }), false, 'a timeout is not agreement');
 });
 
+/** A whole shard of one graded subject whose oracle record has the Inspector failing initialize: its meta and result. */
+function inspectorFailedBundle() {
+  const w = mkdtempSync(join(tmpdir(), 'live-probe-oracle-insp-'));
+  const put = (p, x) => { mkdirSync(join(w, p, '..'), { recursive: true }); writeFileSync(join(w, p), typeof x === 'string' ? x : JSON.stringify(x)); };
+  const fx = (f) => readFileSync(join(LPFX, f), 'utf8');
+  const MARKER = 'liveprobe-' + 'cd'.repeat(16);
+  const resolution = { status: 'runnable', detail: null, registry: { name: 'io.github.isokron-ai/mcp-check', version: '1.3.1', entries: 1, transports: ['stdio'], remotes: 0 }, choice: { type: 'npm', identifier: '@isokron/mcp-check', version: '1.3.1', transport: 'stdio', runtime_hint: 'npx', args_n: 1, args_unfilled: 0, env_names: [], oci_digest: null, purl: 'pkg:npm/%40isokron/mcp-check@1.3.1', matched_by: 'seed', verified_by: 'seed' }, candidates: [], launch: { kind: 'npm' }, subdir: null, seed_packages: 1 };
+  put('plan.json', { format: LP.PLAN_FORMAT, shard_id: 's', attempt_id: 'attempt-1', marker: MARKER, planned_at: '2026-11-24T10:00:00.000Z', subject_timeout_s: 147, runnable: 1, items: [{ index: 0, subject: 'isokron-ai/mcp-check', repo: 'isokron-ai/mcp-check', run_key: '1'.repeat(64), fence: 1, target_id: 's001', target: { id: 's001', launch: { kind: 'npm' } }, resolution, resolve_ms: 1 }] });
+  put('sandbox.json', { oracles_installed: true, install_rc: 0, guard_rc: 0, selftest_rc: 0, selftest_check_rc: 0, controls_rc: 0, subjects_rc: 0, swept: true, left: { labelled: 0, containers: 0, volumes: 0, uid_65534_processes: 0, runsc_processes: 0 }, msc_commit: 'a'.repeat(40), gvisor_release: '20261103', worker_kit_ref: 'b'.repeat(40) });
+  put('selftest/results.json', { cases: [{ case: 'direct-ip', blocked: true, logged: true, pass: true }], passed: 1, total: 1 });
+  put('driver-controls/s901/probe-bare.json', fx('probe-known.json'));
+  put('driver-controls/s901/record.json', fx('record-ok.json'));
+  put('driver-controls/s901/oracles.json', fx('oracles-known.json'));
+  put('driver-controls/s902/probe-bare.json', fx('probe-forgery.json').split('liveprobe-MARKERMARKERMARKER0000').join(MARKER));
+  put('driver-controls/s902/record.json', fx('record-ok.json'));
+  put('driver-controls/s902/oracles.json', fx('oracles-forgery.json').split('liveprobe-MARKERMARKERMARKER0000').join(MARKER));
+  put('driver-controls/_shard/telemetry.jsonl', '');
+  put('driver-subjects/_shard/telemetry.jsonl', '');
+  put('driver-subjects/s001/record.json', fx('record-ok.json'));
+  put('driver-subjects/s001/probe-bare.json', fx('probe-known.json'));
+  const o = JSON.parse(fx('oracles-known.json'));
+  const insp = o.clients.find((c) => c.id === 'inspector');
+  insp.result = { ...insp.result, outcome: 'init_failed', stage: 'connect', error: 'Connection closed', tools: null };
+  put('driver-subjects/s001/oracles.json', o);
+  const [summary] = LP.bundleShard({ work: w });
+  const meta = JSON.parse(readFileSync(join(w, 'out', '0', 'meta.json'), 'utf8'));
+  const result = JSON.parse(readFileSync(join(w, 'out', '0', 'bundle', LP.RESULT_PATH), 'utf8'));
+  return { status: summary.status, skips: meta.skips, result };
+}
+
+// R-ORC-14 (review of #61). The Inspector starts its stdio server with a default environment of its own (HOME, LOGNAME,
+// PATH, SHELL, TERM, USER), which dropped the DOCKER_* variables the lane gives the client: a sandbox on DOCKER_HOST
+// would have failed initialize on every item. The pass-through starts the server command with the client's own env.
+test('R-ORC-14: the server command behind the Inspector gets the client\'s environment (DOCKER_* included), not the Inspector\'s default one', async () => {
+  const w = mkdtempSync(join(tmpdir(), 'oracle-insp-env-'));
+  const envFile = join(w, 'server-env.json');
+  const given = oracleEnv({ DOCKER_HOST: 'unix:///run/user/1001/docker.sock', DOCKER_CONTEXT: 'rootless', DOCKER_CONFIG: '/tmp/dcfg', NOT_DOCKER: 'x' }, '/tmp/oracle-home');
+  writeFileSync(envFile, JSON.stringify(given), { mode: 0o600 });
+  assert.deepEqual(readServerEnv(envFile), given);
+  // Registry credentials never go into the env file.
+  assert.deepEqual(serverEnvOf({ ...given, DOCKER_AUTH_CONFIG: '{"auths":{}}' }), given);
+  const src0 = readFileSync(join(root, 'corpus', 'oracles', 'inspector-client.mjs'), 'utf8');
+  assert.ok(src0.includes('writeFileSync(envFile, JSON.stringify(serverEnvOf(process.env)), { mode: 0o600 });'), 'the client writes serverEnvOf, not the whole env');
+  // The Inspector's argv carries the env file to the pass-through.
+  const args = inspectorArgs('/x/launcher.js', join(w, 'session.json'), envFile, ['docker', 'run', '-i', 'img']);
+  const at = args.indexOf('--pipe');
+  assert.deepEqual(args.slice(at, at + 4), ['--pipe', join(w, 'session.json'), envFile, '--']);
+  assert.deepEqual(args.slice(at + 4), ['docker', 'run', '-i', 'img']);
+  // The pass-through itself, started as the Inspector starts it (its own default env, no DOCKER_*): the server
+  // command it runs sees the client's DOCKER_* variables.
+  const inspectorDefault = { HOME: w, PATH: process.env.PATH, USER: 'u', LOGNAME: 'u', SHELL: '/bin/sh', TERM: 'dumb' };
+  const show = 'process.stdout.write(JSON.stringify({ h: process.env.DOCKER_HOST, c: process.env.DOCKER_CONTEXT, g: process.env.DOCKER_CONFIG, n: process.env.NOT_DOCKER ?? null }) + "\\n")';
+  const r = spawnSync(process.execPath, [join(root, 'corpus', 'oracles', 'inspector-client.mjs'), '--pipe', join(w, 'session.json'), envFile, '--', process.execPath, '-e', show], { env: inspectorDefault, input: '', encoding: 'utf8', timeout: 20_000 });
+  assert.deepEqual(JSON.parse(r.stdout.trim().split('\n').pop()), { h: 'unix:///run/user/1001/docker.sock', c: 'rootless', g: '/tmp/dcfg', n: null });
+  // Without the env file the pass-through does not start the server with an environment it cannot vouch for.
+  const bad = spawnSync(process.execPath, [join(root, 'corpus', 'oracles', 'inspector-client.mjs'), '--pipe', join(w, 'session.json'), join(w, 'missing.json'), '--', process.execPath, '-e', show], { env: inspectorDefault, input: '', encoding: 'utf8', timeout: 20_000 });
+  assert.equal(bad.status, 2);
+  // Mutation check: with the Inspector's env (the line before the fix), the server command has no DOCKER_HOST.
+  const src = readFileSync(join(root, 'corpus', 'oracles', 'inspector-client.mjs'), 'utf8');
+  const from = "  const child = spawn(cmd[0], cmd.slice(1), { stdio: ['pipe', 'pipe', 'inherit'], env });";
+  assert.ok(src.includes(from));
+  const mfile = join(root, 'corpus', 'oracles', '.mutant-insp-' + process.pid + '.mjs');
+  writeFileSync(mfile, src.replace(from, "  const child = spawn(cmd[0], cmd.slice(1), { stdio: ['pipe', 'pipe', 'inherit'] });"));
+  try {
+    const m = spawnSync(process.execPath, [mfile, '--pipe', join(w, 'session.json'), envFile, '--', process.execPath, '-e', show], { env: inspectorDefault, input: '', encoding: 'utf8', timeout: 20_000 });
+    assert.equal(JSON.parse(m.stdout.trim().split('\n').pop()).h, undefined);
+  } finally { rmSync(mfile, { force: true }); }
+});
+
 // R-ORC-13. Owner decision of 27 Nov (design D1): the MCP Inspector's CLI as an oracle beside the SDK clients and the
 // conformance suite. It reports the tools its own parse keeps: on the raw-fields server (R-ORC-11) it drops
 // annotations.returnDirect, annotations.description and the top-level hints, and keeps execution and the empty title.
@@ -768,11 +837,30 @@ test('R-ORC-13: the MCP Inspector is an oracle client: its answer in the clients
   const other = judgeOracles(rec(client('inspector', kept.map((t, i) => (i === 0 ? { ...t, description: 'Other.' } : t)), { tools_source: 'inspector' })), { reader, pins: PINS });
   assert.deepEqual(other.disagreements.map((x) => `${x.class} ${x.oracle_a} ${x.oracle_b} ${x.kind}`), ['D4 reader client:inspector catalog', 'D4 client:typescript-v1 client:inspector catalog']);
   assert.equal(other.clients.find((c) => c.client === 'inspector').catalog_vs_reader, 'different');
+  // Never the reference client, also when it comes first in the clients list: the reference is the first SDK client.
+  const first = (insp) => ({ format: 'isokron-live-probe-oracles/1', mode: 'full', ms: 4000, clients: [insp, client('typescript-v1', tools), client('typescript-v2', tools), client('python', tools), client('go', tools, { tools_source: 'wire' })] });
+  const firstOther = judgeOracles(first(client('inspector', kept.map((t, i) => (i === 0 ? { ...t, description: 'Other.' } : t)), { tools_source: 'inspector' })), { reader, pins: PINS });
+  assert.deepEqual(firstOther.disagreements.map((x) => `${x.class} ${x.oracle_a} ${x.oracle_b} ${x.kind}`), ['D4 reader client:inspector catalog', 'D4 client:typescript-v1 client:inspector catalog']);
+  assert.deepEqual(judgeOracles(first(client('inspector', kept, { tools_source: 'inspector' })), { reader, pins: PINS }).disagreements, []);
+  // Mutation check: without the guard the Inspector, first, would be the reference every SDK client is compared with.
+  const jsrc = readFileSync(join(root, 'corpus', 'oracles', 'judge.mjs'), 'utf8');
+  const guard = 'const ref = listedClients.find((c) => !lossy.has(c.client) && !(spec && spec.only.has(c.client))) || ';
+  assert.ok(jsrc.includes(guard));
+  const jm = join(root, 'corpus', 'oracles', '.mutant-judge-' + process.pid + '.mjs');
+  writeFileSync(jm, jsrc.replace(guard, 'const ref = '));
+  try {
+    const J = await import(pathToFileURL(jm).href);
+    const got = J.judgeOracles(first(client('inspector', kept.map((t, i) => (i === 0 ? { ...t, description: 'Other.' } : t)), { tools_source: 'inspector' })), { reader, pins: PINS });
+    assert.notDeepEqual(got.disagreements.map((x) => `${x.class} ${x.oracle_a} ${x.oracle_b} ${x.kind}`), ['D4 reader client:inspector catalog', 'D4 client:typescript-v1 client:inspector catalog']);
+  } finally { rmSync(jm, { force: true }); }
   // An Inspector-only failure: a disagreement (a lead about the oracles), with no attribution to the server; the
   // live result is graded as before (the oracle stage never adds a skip).
   const failed = judgeOracles(rec({ id: 'inspector', ms: 400, result: { format: 'isokron-oracle-client/1', client: 'inspector', outcome: 'init_failed', stage: 'connect', error: 'Connection closed', tools: null } }), { reader, pins: PINS });
   assert.deepEqual(failed.disagreements.map((x) => `${x.class} ${x.oracle_a} ${x.oracle_b} ${x.kind}`), ['D6 reader client:inspector outcome', 'D6 client:typescript-v1 client:inspector outcome']);
-  assert.ok(failed.disagreements.every((x) => !('attribution' in x) && !('fault' in x)));
+  // ...and the oracle stage adds no skip to the live-probe record: the item stays graded, with no fault.
+  const bundled = inspectorFailedBundle();
+  assert.deepEqual([bundled.status, bundled.skips, bundled.result.status, bundled.result.fault, bundled.result.detail], ['graded', [], 'graded', null, null]);
+  assert.ok(bundled.result.oracles.disagreements.some((x) => / outcome .* client:inspector$/.test(x)), 'the failure is there, as a disagreement');
   // The Inspector lists an empty list for a server without the tools capability, as TypeScript v2 does: agreement.
   assert.equal(noToolsAgrees({ listed: false, no_tools_capability: true }, { outcome: 'listed', tool_count: 0 }), true);
   // The pinned Inspector itself, where it is installed (npm ci in corpus/oracles; the self test installs it on GitHub).
