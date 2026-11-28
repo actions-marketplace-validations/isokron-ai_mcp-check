@@ -186,7 +186,9 @@ syscall trace summarised and removed. Nothing of a target runs on the runner. No
    disagreements are fed to `oracle_disagreements` as the SDK clients' are. Its answer has no stage and no protocol,
    so the server command runs behind our pass-through (`corpus/oracles/inspector-client.mjs --pipe`), which matches
    our initialize and tools/list ids to the answers (bytes unchanged) to tell a refused initialize from a refused
-   list. The Inspector reports the tools its own parse keeps, so its catalog is compared on the specification's Tool
+   list. The Inspector starts its server with a default environment of its own, so the pass-through starts the server
+   command with the client's environment (the DOCKER_* variables `oracleEnv` forwards), read from a file of its own in
+   the session folder (R-ORC-14). The Inspector is never the reference client. The Inspector reports the tools its own parse keeps, so its catalog is compared on the specification's Tool
    and ToolAnnotations keys only (`catalog_vs_reader: same_spec_fields`, pins.json `catalog: spec_fields`). Like every
    oracle, an Inspector-only failure is a lead about our tools or the oracles, never a finding against the server:
    the oracle stage adds no skip and no fault.
@@ -348,6 +350,7 @@ and the 4x free-disk rule. An image on another host is unassessed until the list
 | `bundle_unavailable` (the release page's own 404 for the bundle's URL, twice, for an entry in the subject's namespace) | `install_failed_registry` | subject | no |
 | `bundle_hash_mismatch` (the bytes at the URL are not the ones the registry entry names in fileSha256) | `install_failed_registry` | subject | no |
 | `bundle_unowned` (one of the four bundle failures above, or `package_not_runnable`, for a bundle whose registry entry is not shown to be the subject's: seed-only or seed-matched; a repository-only entry is `unverified_registry_entry`) | `install_failed_registry` | tool | no |
+| `bundle_fetch_refused` (the release host's 4xx other than github.com's 404, 403, 408, 425 and 429 for a bundle download: its answer to our request, the same on a retry; 5xx, 403, 408 and 425 stay retryable, R-LP-89) | `tool_error` | tool | no |
 | `bundle_invalid` (the file is no zip archive at all, or names a path that leaves it: absolute or with a `..` segment; only for an entry in the subject's namespace, else `bundle_unowned`) | `install_failed_registry` | subject | no |
 | `list_failed` (a JSON-RPC error the server sent, or a malformed result; not "method not found" from a server that declared no tools capability) | `timeout_start` | subject | no |
 | `no_tools_capability` (the server declared no `tools` capability at initialize and answered `tools/list` with -32601 "method not found", as the specification lets it: a prompts-only or resources-only server. `buildItem` records it as status `no_tools` with no skip, so it is assessed with nothing to grade and nobody's fault; the row is the fallback if a caller still skips it, R-LP-75) | `no_tools_found` | tool | no |
