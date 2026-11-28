@@ -111,8 +111,8 @@ test('R-LP-82: through buildItem, a crash of our entry pick (lone_script, regist
   assert.equal(detailOf(LP, 'lone_script'), 'start_env_limited');
   assert.equal(detailOf(LP, 'registry_args'), 'start_env_limited');
   assert.equal(detailOf(LP, 'console_script'), 'start_failed');
-  // Mutation: the guard at buildItem's call, entryGuess: entryGuessOf(r.choice), replaced by false: our pick's crash is the server's.
-  const M = await mutant('entryGuess: entryGuessOf(r.choice) });', 'entryGuess: false });');
+  // Mutation: the guard at buildItem's call, entryGuess: entryGuessOf(r.choice), replaced by false (whatever follows it in the call): our pick's crash is the server's.
+  const M = await mutant('entryGuess: entryGuessOf(r.choice)', 'entryGuess: false');
   assert.equal(detailOf(M, 'lone_script'), 'start_failed', 'without the guard a lone_script crash blames the server');
   assert.equal(detailOf(M, 'registry_args'), 'start_failed');
 });
