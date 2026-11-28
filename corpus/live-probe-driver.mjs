@@ -19,8 +19,10 @@
  * With `--fuzz on` (default off; the plan decides, corpus/FUZZ.md) the fuzz stage runs after that, once per target,
  * after the first probe that got a tool list: read-only protocol sessions (corpus/fuzz/), written to <out>/<target>/fuzz.json.
  */
-import { readFileSync, existsSync, mkdirSync, rmSync } from 'node:fs';
+import { readFileSync, existsSync, mkdirSync, rmSync, copyFileSync, mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { runOracles, writeOracles } from './oracles/run.mjs';
 import { runFuzz, FUZZ_BUDGET_MS } from './fuzz/run.mjs';
@@ -55,6 +57,11 @@ export function targetOf(command) {
   return m ? m[1] : null;
 }
 
+/** Whether a probe got an answer from the server: an initialize result, or a 2026-07-28 server's refusal of it. */
+export function answered(p) {
+  return !!p && typeof p === 'object' && ((!!p.initialize && typeof p.initialize === 'object') || p.era === 'modern');
+}
+
 /** The value of one run-shard option. */
 const optionOf = (args, flag) => { const i = args.indexOf(flag); return i >= 0 ? args[i + 1] : null; };
 
@@ -71,8 +78,15 @@ export function oracleProbe({ probe, listed, out, install, pins, starts, limits,
     if (!install || !id || full.has(id)) return p;
     const got = listed(p);
     if (!got && unlisted.has(id)) return p;
-    (got ? full : unlisted).add(id);
     const file = join(out, id, got ? 'oracles.json' : 'oracles-unlisted.json');
+    // R-ORC-12: with no list, the clients run only on a server that answered (an initialize result, or the 2026-07-28
+    // refusal of it): one that never started fails initialize for every client too, at about a minute an item. The skip
+    // is recorded, and a later probe of the target (the env one) that gets an answer still runs them.
+    if (!got && !answered(p)) {
+      try { mkdirSync(join(out, id), { recursive: true }); write(file, { format: 'isokron-live-probe-oracles/1', mode: 'skipped', why: 'not_started', probe_listed: false }); } catch (e) { log(`${id}: oracle stage error: ${String(e && e.message).slice(0, 300)}`); }
+      return p;
+    }
+    (got ? full : unlisted).add(id);
     try {
       const start = starts.get(id) ?? now();
       const limit = (limits.get(id) ?? 0) * 1000;
@@ -132,6 +146,17 @@ export async function removeQuietly(command, opts) {
   spawnSync('docker', ['rm', '-f', '-v', command[i + 1]], { env: (opts && opts.env) || process.env, stdio: 'ignore', timeout: 30_000 });
 }
 
+/**
+ * mcp-check's own source reader for the sandbox's static step (corpus/static-read.cjs, R-LP-77): its files copied into
+ * a fresh folder, which the sandbox driver puts in its read-only tools volume. Returns { dir, id }.
+ */
+export function readerBundle(base = tmpdir()) {
+  const SR = createRequire(import.meta.url)('./static-read.cjs');
+  const dir = mkdtempSync(join(base, 'isokron-reader-'));
+  for (const [name, from] of SR.bundleFiles()) copyFileSync(from, join(dir, name));
+  return { dir, id: SR.readerId(), entry: SR.SELF };
+}
+
 /** Each target's time limit in seconds, as the sandbox driver reads its list (its own default is 600 s). */
 export function limitsOf(list) {
   const limits = new Map();
@@ -166,7 +191,8 @@ export async function main(argv = process.argv.slice(2)) {
   const trace = (cid) => takeTrace(cfg, cid, { waitMs: 3000 });
   const withOracles = oracleProbe({ probe: probeStdio, listed, out, install, pins, starts, limits, takeTrace: trace });
   const probe = o.fuzz === 'on' ? fuzzProbe({ probe: withOracles, listed, out, enabled: true, starts, limits, takeTrace: trace }) : withOracles;
-  return runShard(o.rest, { makeDocker: (x) => new TimedDocker(x), probe, runscConfig: cfg });
+  const reader = readerBundle();
+  try { return await runShard(o.rest, { makeDocker: (x) => new TimedDocker(x), probe, runscConfig: cfg, reader }); } finally { rmSync(reader.dir, { recursive: true, force: true }); }
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {

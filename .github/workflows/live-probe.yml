@@ -1,6 +1,7 @@
 # Loop worker (internal): the live-probe lane of isokron-ai/tool-qa. The tool-qa pump dispatches it with shard_id,
 # attempt_id and items (tool-qa docs/INTERFACES.md, "Worker dispatch"); each item is a public GitHub repository,
-# owner/name, with the run_key and fence its result must quote. corpus/live-probe.mjs works out each subject's install
+# owner/name, with the run_key and fence its result must quote, and optionally the commit (sha) its run_key is filed
+# under, which pins the static layer's checkout to it. corpus/live-probe.mjs works out each subject's install
 # method from its published package (the official MCP Registry entry, else the seed list), the sandbox of
 # isokron-ai/mcp-surface-corpus (at SURFACE_CORPUS_REF) installs and starts it under gVisor with deny-by-default egress
 # and speaks MCP to it (initialize, then the list methods; no tool is ever called), and the live tool list is graded
@@ -56,7 +57,7 @@ env:
   # subject's packages). Every worker-kit step below names this same commit (test/live-probe.test.mjs checks).
   WORKER_KIT_REF: '2ffcea16117ec679398f83eefe8c6fa66d38bac6'
   # The isokron-ai/mcp-surface-corpus commit whose sandbox and driver run the servers (its main).
-  SURFACE_CORPUS_REF: '4504c0bba95c73ae22236e71f1ff6ca08432bff0'
+  SURFACE_CORPUS_REF: '78a7834cf028507b03e90e266b87bebeacfccd51'
 
 jobs:
   guard:
@@ -99,7 +100,7 @@ jobs:
     if: needs.guard.outputs.proceed == 'true'
     permissions:
       contents: read
-    uses: isokron-ai/mcp-surface-corpus/.github/workflows/sandbox-conformance.yml@4504c0bba95c73ae22236e71f1ff6ca08432bff0 # SURFACE_CORPUS_REF
+    uses: isokron-ai/mcp-surface-corpus/.github/workflows/sandbox-conformance.yml@78a7834cf028507b03e90e266b87bebeacfccd51 # SURFACE_CORPUS_REF
     with:
       mutations: false
       artifact-prefix: live-probe-sandbox
@@ -192,7 +193,7 @@ jobs:
       # telemetry check), from the commit SURFACE_CORPUS_REF pins. It fails the job unless the verdict is pass.
       - id: guard
         name: Sandbox guard on this runner (mcp-surface-corpus sandbox-guard)
-        uses: isokron-ai/mcp-surface-corpus/sandbox-guard@4504c0bba95c73ae22236e71f1ff6ca08432bff0 # SURFACE_CORPUS_REF
+        uses: isokron-ai/mcp-surface-corpus/sandbox-guard@78a7834cf028507b03e90e266b87bebeacfccd51 # SURFACE_CORPUS_REF
         with:
           out: ${{ runner.temp }}/live-probe/selftest
       # Registry and GitHub reads only (JSON, fixed hosts): nothing of a subject is fetched to run here.

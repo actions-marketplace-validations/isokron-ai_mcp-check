@@ -75,12 +75,14 @@ export const KNOWN_ANSWER_FILE = join(FIXTURES, 'known-answer.json');
 const API = 'https://api.github.com';
 const API_CAP = 1024 * 1024;
 const SHA_RE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+/** A commit an item may ask for (items[].sha). */
+export const COMMIT_RE = /^[0-9a-f]{40}$/;
 const DATE_TIME_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(\.\d{1,9})?(Z|[+-](\d{2}):(\d{2}))$/;
 
 /** Why a subject has no grades, when that will not change by asking again. bad_subject: not a GitHub owner/name. */
 export const PERMANENT = Object.freeze(['bad_subject', 'repo_unavailable', 'repo_empty', 'no_tools', 'unsupported_language', 'names_only', 'multiple_servers', 'reader_limit', 'list_rejected', 'listing_too_large', 'reader_error', 'bundle_error']);
 /** Why a subject has no grades for now; results/ marks the skip retryable. */
-export const TRANSIENT = Object.freeze(['rate_limited', 'upstream_error', 'timeout', 'read_failed', 'shard_deadline']);
+export const TRANSIENT = Object.freeze(['rate_limited', 'upstream_error', 'timeout', 'read_failed', 'shard_deadline', 'commit_moved']);
 /**
  * The skip reasons (tool-qa worker-kit/contract.mjs SKIP_REASONS) a skipped item is recorded with; results/ holds
  * the exact detail code. A passing failure is recorded with `retryable: true`, as rate_limited (a GitHub rate limit)
@@ -117,6 +119,9 @@ export const SKIPS = Object.freeze({
   timeout: Object.freeze([SKIP_UPSTREAM, 'infra']),
   read_failed: Object.freeze([SKIP_UPSTREAM, 'infra']),
   shard_deadline: Object.freeze([SKIP_UPSTREAM, 'infra']),
+  // The commit tool-qa asked for (items[].sha) is not in the repository any more (a force-push): never the
+  // subject's fault; tool-qa's next head poll names the new commit (tool-qa R-SHA-01).
+  commit_moved: Object.freeze([SKIP_UPSTREAM, 'infra']),
 });
 
 /** The skip reason a skip with this detail code (and list error, for list_rejected) is recorded with. */
@@ -136,7 +141,7 @@ export const SUBJECT_ID_RE = /^[^\s]{1,512}$/;
 export const SETTINGS = Object.freeze({
   lane: 'scan-static',
   format: FORMAT,
-  subject_ref: 'default branch head',
+  subject_ref: 'the commit the item names (items[].sha), else the default branch head',
   reader: 'repo-source fromGitHub, no jsDelivr fallback, default file limits',
   grading: 'parseList + analyseList, as mcp-check --repo',
   subject_timeout_ms: SUBJECT_TIMEOUT_MS,
@@ -169,7 +174,9 @@ export const newMarker = () => 'scanstatic-' + randomBytes(16).toString('hex');
 /**
  * The dispatch inputs, checked whole. Throws InputProblem; its message never repeats the input. A subject that the
  * manifest can name but that is not a GitHub owner/name gets repo null: its item reports a bad_subject skip.
- * @returns {{shardId: string, attemptId: string, items: {index: number, subject: string, repo: string|null, run_key: string, fence: number}[]}}
+ * An item may name the commit to read (`sha`, 40 lower-case hex: the commit its run_key is filed under, tool-qa
+ * R-SHA-01); without it the default branch head is read.
+ * @returns {{shardId: string, attemptId: string, items: {index: number, subject: string, repo: string|null, run_key: string, fence: number, sha?: string}[]}}
  */
 export function parseInputs({ shardId, attemptId, items }) {
   if (typeof shardId !== 'string' || !ID_RE.test(shardId)) throw new InputProblem('bad_shard_id', 'shard_id must be 1 to 128 letters, digits, ".", "_" or "-", starting with a letter or digit');
@@ -183,14 +190,15 @@ export function parseInputs({ shardId, attemptId, items }) {
     shardId, attemptId,
     items: list.map((x, i) => {
       if (!x || typeof x !== 'object' || Array.isArray(x)) throw new InputProblem('bad_item', 'items[' + i + '] is not an object');
-      if (Object.keys(x).some((k) => !['subject', 'run_key', 'fence'].includes(k))) throw new InputProblem('bad_item', 'items[' + i + '] has keys other than subject, run_key and fence');
+      if (Object.keys(x).some((k) => !['subject', 'run_key', 'fence', 'sha'].includes(k))) throw new InputProblem('bad_item', 'items[' + i + '] has keys other than subject, run_key, fence and sha');
       if (typeof x.subject !== 'string' || !SUBJECT_ID_RE.test(x.subject) || /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/.test(x.subject)) throw new InputProblem('bad_subject', 'items[' + i + '].subject must be 1 to 512 characters with no space or control character');
       if (typeof x.run_key !== 'string' || !RUN_KEY_RE.test(x.run_key)) throw new InputProblem('bad_run_key', 'items[' + i + '].run_key must be 64 lower-case hex digits');
       if (!Number.isSafeInteger(x.fence) || x.fence < 1) throw new InputProblem('bad_fence', 'items[' + i + '].fence must be a positive whole number');
+      if (x.sha !== undefined && (typeof x.sha !== 'string' || !COMMIT_RE.test(x.sha))) throw new InputProblem('bad_sha', 'items[' + i + '].sha must be 40 lower-case hex digits');
       if (seen.has(x.run_key)) throw new InputProblem('duplicate_run_key', 'items[' + i + '] repeats the run_key of an earlier item');
       seen.add(x.run_key);
       const repo = SUBJECT_RE.test(x.subject) && !/\/\.\.?$/.test(x.subject) ? x.subject : null;
-      return { index: i, subject: x.subject, repo, run_key: x.run_key, fence: x.fence };
+      return { index: i, subject: x.subject, repo, run_key: x.run_key, fence: x.fence, ...(x.sha ? { sha: x.sha } : {}) };
     }),
   };
 }
@@ -377,7 +385,7 @@ export const notRead = (detail) => ({
  * (TRANSIENT) and the skip_reason it is recorded with. Everything outside `raw` is ours; `raw` holds what the
  * subject wrote, for raw/ only.
  */
-export async function scanSubject(subject, { fetch: fetchImpl = globalThis.fetch, token = null, timeoutMs = SUBJECT_TIMEOUT_MS, codeEffects = false } = {}) {
+export async function scanSubject(subject, { fetch: fetchImpl = globalThis.fetch, token = null, timeoutMs = SUBJECT_TIMEOUT_MS, codeEffects = false, sha: want = null } = {}) {
   const out = {
     status: null, detail: null, retryable: false, skip_reason: null, http_status: null, list_error: null, error_name: null, language_hint: null,
     repository: null, commit: null, listing: null, list: null, grade: null, servers: null, raw: {},
@@ -411,9 +419,20 @@ export async function scanSubject(subject, { fetch: fetchImpl = globalThis.fetch
 
     phase = 'branch';
     let b;
-    try { b = await ghJson(f, '/repos/' + full + '/branches/' + branch.split('/').map(encodeURIComponent).join('/'), token); } catch (e) {
-      if (e.status === 404 || e.status === 409) throw fail('repo_empty', { status: e.status });
-      throw e;
+    if (want) {
+      // The commit tool-qa asked for (items[].sha): read exactly it, never the branch head (tool-qa R-SHA-01).
+      let c;
+      try { c = await ghJson(f, '/repos/' + full + '/commits/' + want, token); } catch (e) {
+        if (e.status === 404 || e.status === 422 || e.status === 409) throw fail('commit_moved', { status: e.status });
+        throw e;
+      }
+      if (!c || c.sha !== want) throw fail('upstream_error');
+      b = { commit: c };
+    } else {
+      try { b = await ghJson(f, '/repos/' + full + '/branches/' + branch.split('/').map(encodeURIComponent).join('/'), token); } catch (e) {
+        if (e.status === 404 || e.status === 409) throw fail('repo_empty', { status: e.status });
+        throw e;
+      }
     }
     const sha = b && b.commit && typeof b.commit.sha === 'string' && SHA_RE.test(b.commit.sha) ? b.commit.sha : null;
     if (!sha) throw fail('upstream_error');
@@ -678,9 +697,9 @@ export async function forgeryControl({ marker = newMarker(), tmp = tmpdir() } = 
 // ------------------------------------------------------------------ bundles
 
 /** The observations of one subject: commit_sha, commit_date, registration_provenance (stage "static"). */
-export function observationsOf(scan) {
+export function observationsOf(scan, { asked = null } = {}) {
   const rec = (field, value, why) => JSON.stringify(value === null || value === undefined ? { field, value: null, why, stage: STAGE } : { field, value, stage: STAGE });
-  const noCommit = 'the default branch head was not read (' + scan.detail + ')';
+  const noCommit = (asked ? 'the commit the item names was not read (' : 'the default branch head was not read (') + scan.detail + ')';
   return [
     rec('commit_sha', scan.commit ? scan.commit.sha : null, noCommit),
     rec('commit_date', scan.commit ? scan.commit.date : null, scan.commit ? 'GitHub gave no committer date for the commit' : noCommit),
@@ -847,9 +866,9 @@ export function buildBundle({ item, scan, controls, startedAt, finishedAt, diges
   }
   const files = {};
   files[RESULT_PATH] = json({ ...resultOf(item, scan, finishedAt), raw_truncated: raw.truncated });
-  files['observations/static.ndjson'] = observationsOf(scan);
+  files['observations/static.ndjson'] = observationsOf(scan, { asked: item.sha ?? null });
   const log = [logLine(startedAt, 'started; mcp-check ' + VERSION + ', rubric ' + M.RUBRIC_VERSION)];
-  if (scan.commit) log.push(logLine(finishedAt, 'default branch head read'));
+  if (scan.commit) log.push(logLine(finishedAt, item.sha ? 'the commit the item names read' : 'default branch head read'));
   if (scan.listing) log.push(logLine(finishedAt, 'listing via ' + scan.listing.via + (scan.listing.truncated ? ' (cut short by GitHub)' : '') + '; ' + scan.listing.files_read + ' of ' + scan.listing.source_files + ' source files read'));
   log.push(logLine(finishedAt, scan.status === 'graded' ? 'graded: ' + scan.grade.tool_count + ' tools' : 'skipped: ' + scan.detail + (scan.retryable ? ' (retryable)' : '')));
   if (scan.oracle) log.push(logLine(finishedAt, scan.oracle.log));
@@ -951,7 +970,7 @@ async function readCappedBody(res, cap) {
  * The thread has no environment and no network of its own: its requests go through `fetch` here (so the caller
  * sees every answer, onResponse(url, status, header)). Never throws.
  */
-export function scanInWorker(subject, { fetch: fetchImpl = globalThis.fetch, token = null, timeoutMs = SUBJECT_TIMEOUT_MS, graceMs = SUBJECT_GRACE_MS, onResponse = () => {}, workerUrl = WORKER_URL, codeEffects = false } = {}) {
+export function scanInWorker(subject, { fetch: fetchImpl = globalThis.fetch, token = null, timeoutMs = SUBJECT_TIMEOUT_MS, graceMs = SUBJECT_GRACE_MS, onResponse = () => {}, workerUrl = WORKER_URL, codeEffects = false, sha = null } = {}) {
   return new Promise((resolve) => {
     const inflight = new Map();
     let settled = false;
@@ -968,7 +987,7 @@ export function scanInWorker(subject, { fetch: fetchImpl = globalThis.fetch, tok
     const failed = (detail, name) => ({ ...notRead(detail), error_name: safeName(name) });
     try {
       // The thread gets no token (the requests it asks for get it here) and a heap limit (R-SS-08, R-SS-10).
-      worker = new Worker(workerUrl, { workerData: { subject, timeoutMs, ...(codeEffects ? { codeEffects: true } : {}) }, env: {}, resourceLimits: { maxOldGenerationSizeMb: SUBJECT_HEAP_MB } });
+      worker = new Worker(workerUrl, { workerData: { subject, timeoutMs, ...(codeEffects ? { codeEffects: true } : {}), ...(sha ? { sha } : {}) }, env: {}, resourceLimits: { maxOldGenerationSizeMb: SUBJECT_HEAP_MB } });
     } catch (e) {
       finish(failed('reader_error', e && e.name));
       return;
@@ -1059,8 +1078,8 @@ export async function runShard({ shardId, attemptId, items, out, codeEffects = f
     else if (!item.repo) scan = notRead('bad_subject');
     else {
       scan = isolate
-        ? await scanInWorker(item.repo, { fetch: fetchImpl, token, timeoutMs, graceMs, onResponse, workerUrl, codeEffects })
-        : await scanSubject(item.repo, { fetch: tracked, token, timeoutMs, codeEffects });
+        ? await scanInWorker(item.repo, { fetch: fetchImpl, token, timeoutMs, graceMs, onResponse, workerUrl, codeEffects, sha: item.sha ?? null })
+        : await scanSubject(item.repo, { fetch: tracked, token, timeoutMs, codeEffects, sha: item.sha ?? null });
       if (scan.detail === 'rate_limited') stop = 'rate_limited'; // the next subjects would hit it too: they are not read
     }
     // The ast-grep oracle (corpus/ast-grep/), when turned on: the same commit's source, read by rules instead of the reader.

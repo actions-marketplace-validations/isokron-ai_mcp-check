@@ -35,6 +35,9 @@ import M from '../src/engine.js';
 import { InputError } from '../src/limits.js';
 import { parseList } from '../src/tools.js';
 import { analyseList } from '../src/unreadable.js';
+import { usableList } from '../src/inputs/collect.js';
+import { createRequire } from 'node:module';
+import { gradeCandidate } from './scan-static.mjs';
 import { VERSION } from '../src/version.js';
 import { ranCommit } from './tool-commit.mjs';
 import { baselineProblems, judgeOracles } from './oracles/judge.mjs';
@@ -245,6 +248,12 @@ export const ORACLE_FIELDS = Object.freeze({
 export const EMIT_TOOL_LIST_FIELDS = true;
 export const TOOL_LIST_FIELDS = Object.freeze({ tool_count: 'integer', tool_list_sha256: 'hash' });
 /**
+ * R-LP-87: tool_names_sha256 (mcp-results R-RES-15, planned): written only while EMIT_TOOL_NAMES_FIELD is on, which
+ * needs tool-qa's ingest to pin a registry that declares it (INGEST_REF; else the observation is an undeclared_field).
+ */
+export const EMIT_TOOL_NAMES_FIELD = false;
+export const TOOL_NAMES_FIELDS = Object.freeze({ tool_names_sha256: 'hash' });
+/**
  * The fuzz stage's fields (corpus/FUZZ.md): written only while EMIT_FUZZ_FIELDS is on, which needs the mcp-results
  * registry to hold them and tool-qa's ingest to pin that registry. list_determinism is already a planned field there
  * (boolean); fuzz_stage, invariant_results and unicode_identifier_findings are proposed.
@@ -325,14 +334,16 @@ export function parseInputs({ shardId, attemptId, items }) {
     shardId, attemptId,
     items: list.map((x, i) => {
       if (!isObj(x)) throw new InputProblem('bad_item', 'items[' + i + '] is not an object');
-      if (Object.keys(x).some((k) => !['subject', 'run_key', 'fence'].includes(k))) throw new InputProblem('bad_item', 'items[' + i + '] has keys other than subject, run_key and fence');
+      if (Object.keys(x).some((k) => !['subject', 'run_key', 'fence', 'sha'].includes(k))) throw new InputProblem('bad_item', 'items[' + i + '] has keys other than subject, run_key, fence and sha');
       if (typeof x.subject !== 'string' || !SUBJECT_ID_RE.test(x.subject) || /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/.test(x.subject)) throw new InputProblem('bad_subject', 'items[' + i + '].subject must be 1 to 512 characters with no space or control character');
       if (typeof x.run_key !== 'string' || !RUN_KEY_RE.test(x.run_key)) throw new InputProblem('bad_run_key', 'items[' + i + '].run_key must be 64 lower-case hex digits');
       if (!Number.isSafeInteger(x.fence) || x.fence < 1) throw new InputProblem('bad_fence', 'items[' + i + '].fence must be a positive whole number');
+      // The commit to read (tool-qa R-SHA-01): the target is pinned to it instead of the branch head.
+      if (x.sha !== undefined && (typeof x.sha !== 'string' || !/^[0-9a-f]{40}$/.test(x.sha))) throw new InputProblem('bad_sha', 'items[' + i + '].sha must be 40 lower-case hex digits');
       if (seen.has(x.run_key)) throw new InputProblem('duplicate_run_key', 'items[' + i + '] repeats the run_key of an earlier item');
       seen.add(x.run_key);
       const repo = SUBJECT_RE.test(x.subject) && !/\/\.\.?$/.test(x.subject) ? x.subject : null;
-      return { index: i, subject: x.subject, repo, run_key: x.run_key, fence: x.fence };
+      return { index: i, subject: x.subject, repo, run_key: x.run_key, fence: x.fence, ...(x.sha ? { sha: x.sha } : {}) };
     }),
   };
 }
@@ -767,14 +778,19 @@ export function packageArgs(list) {
   return { args: args.slice(0, 40), unfilled };
 }
 
-/** Env names a registry package declares as required: dummy values in the sandbox (or the declared default). */
+/**
+ * Env a registry package declares: a required name gets its declared default, else a dummy value in the sandbox (null);
+ * an optional name gets its declared default and nothing else (R-LP-80: an image whose own default is HTTP declares
+ * `MCP_TRANSPORT` optional with default `stdio`, which a client applies). Never a value we invent: no default, a
+ * secret's default, or one with a `{placeholder}` leaves an optional name out.
+ */
 export function packageEnv(list) {
   const env = {}; const names = [];
   for (const e of Array.isArray(list) ? list.slice(0, 100) : []) {
     if (!isObj(e) || typeof e.name !== 'string' || !ENV_NAME.test(e.name) || RESERVED_ENV.test(e.name)) continue;
     names.push(e.name);
-    if (!e.isRequired) continue;
     const d = typeof e.default === 'string' && e.default.length <= 500 && !/[\u0000\n\r]/.test(e.default) && !e.isSecret ? e.default : null;
+    if (!e.isRequired && (d === null || /\{[A-Za-z0-9_]+\}/.test(d))) continue;
     if (Object.keys(env).length < 60) env[e.name] = d;
   }
   return { env, names: names.slice(0, 100) };
@@ -1037,7 +1053,7 @@ export async function planShard({ inputs, seed = new Map(), fetch: fetchImpl = g
     const r = await resolveSubject(it, { seed, fetch: fetchImpl, base });
     const x = { index: it.index, subject: it.subject, repo: it.repo, run_key: it.run_key, fence: it.fence, target_id: null, target: null, resolution: r, resolve_ms: clock() - t0 };
     if (r.status === 'runnable') {
-      const target = { id: targetId(it.index), repo: it.repo, ref: 'HEAD', ...(r.subdir ? { subdir: r.subdir } : {}), ...(r.registry && REGISTRY_NAME.test(r.registry.name) ? { registry: r.registry.name } : {}), launch: r.launch };
+      const target = { id: targetId(it.index), repo: it.repo, ...(it.sha ? { commit: it.sha } : { ref: 'HEAD' }), ...(r.subdir ? { subdir: r.subdir } : {}), ...(r.registry && REGISTRY_NAME.test(r.registry.name) ? { registry: r.registry.name } : {}), launch: r.launch };
       try { validateTarget(target, it.index); x.target_id = target.id; x.target = target; } catch (e) {
         r.status = 'skipped'; r.detail = 'launch_invalid'; r.invalid = String((e && e.message) || e).slice(0, 200);
       }
@@ -1113,20 +1129,41 @@ function catalogOf(probe) {
 /** A probe that got a whole tools/list answer. */
 export const listed = (p) => !!(p && isObj(p.lists) && isObj(p.lists['tools/list']) && p.lists['tools/list'].ok === true && Array.isArray(p.lists['tools/list'].raw_pages) && p.lists['tools/list'].raw_pages.length > 0);
 
-/** Live against static: counts and letters for results/; the names on each side for raw/. */
-export function compareStatic(live, stat) {
-  const best = stat && isObj(stat.static) && Array.isArray(stat.static.candidates) ? stat.static.candidates[0] : null;
-  if (!best || !Array.isArray(best.tools) || !best.tools.length) return { summary: { static_read: false }, raw: null };
-  let g;
-  try { g = gradeList(JSON.stringify({ tools: best.tools }), 'the tool list read from source'); } catch (e) {
-    return { summary: { static_read: true, static_graded: false, static_error: e instanceof InputError ? e.code : 'engine_error' }, raw: null };
+/** mcp-check's own reader as the sandbox ran it (corpus/static-read.cjs), and the id of this checkout's copy of it. */
+const StaticRead = createRequire(import.meta.url)('./static-read.cjs');
+export const READER_ID = StaticRead.readerId();
+/** Why a static list is not compared, in scan-static's words (usableList's problem -> its skip detail). */
+const STATIC_SKIP = { none: 'no_tools', names: 'names_only', multiple: 'multiple_servers', incomplete: 'reader_limit' };
+
+/**
+ * The static side, read and graded as scan-static reads and grades a subject (R-LP-77): the scan of mcp-check's own
+ * reader (static.json `reader`, from sandbox/static.mjs --reader), never the sandbox's vendored candidates; a scan from
+ * another reader is not used (R-LP-78). { skip } when there is no list to grade, else { candidate, grade }.
+ */
+export function staticAnswer(stat, readerId = READER_ID) {
+  const sr = stat && isObj(stat.reader) ? stat.reader : null;
+  if (!sr || sr.format !== StaticRead.FORMAT) return { skip: 'reader_missing' };
+  if (sr.reader_id !== readerId) return { skip: 'reader_mismatch' };
+  if (typeof sr.error === 'string' || !isObj(sr.scan) || !Array.isArray(sr.scan.candidates)) return { skip: 'reader_error' };
+  const scan = { ...sr.scan, best: Number.isInteger(sr.scan.best_index) && sr.scan.best_index >= 0 ? sr.scan.candidates[sr.scan.best_index] || null : null };
+  const u = usableList(scan);
+  if (u.problem) return { read: true, skip: STATIC_SKIP[u.problem] || 'reader_error' };
+  try { return { read: true, candidate: u.candidate, grade: gradeCandidate(u.candidate) }; } catch (e) {
+    return { read: true, skip: 'list_rejected', error: e instanceof InputError ? e.code : 'engine_error' };
   }
+}
+
+/** Live against static: counts and letters for results/; the names on each side for raw/. */
+export function compareStatic(live, stat, readerId = READER_ID) {
+  const a = staticAnswer(stat, readerId);
+  if (a.skip) return { summary: { static_read: !!a.read, static_graded: false, static_skip: a.skip, ...(a.error ? { static_error: a.error } : {}) }, raw: null };
+  const best = a.candidate; const g = { summary: a.grade.summary, report: a.grade.report, names: a.grade.parsed.tools.map((t) => (t && typeof t.name === 'string' ? t.name : null)) };
   const ln = new Set(live.names.filter(Boolean)); const sn = new Set(g.names.filter(Boolean));
   const onlyLive = [...ln].filter((n) => !sn.has(n)); const onlyStatic = [...sn].filter((n) => !ln.has(n));
   const differing = SECTIONS.filter((k) => live.summary.sections[k].grade !== g.summary.sections[k].grade);
   return {
     summary: {
-      static_read: true, static_graded: true,
+      static_read: true, static_graded: true, static_reader: readerId.slice(0, 12),
       static_kind: safeText(best.kind, /^[a-z][a-z0-9_-]{0,39}$/), static_fidelity: safeText(best.fidelity, /^[a-z][a-z0-9_-]{0,39}$/),
       live_tool_count: live.summary.tool_count, static_tool_count: g.summary.tool_count,
       names_in_both: [...ln].filter((n) => sn.has(n)).length, names_only_live: onlyLive.length, names_only_static: onlyStatic.length,
@@ -1721,7 +1758,7 @@ export function rolledForward(inst) {
 
 /** One observations line, checked against FIELDS. A value of the wrong type is written as null with why. */
 export function obs(field, value, why) {
-  const type = FIELDS[field] || (EMIT_TOOL_LIST_FIELDS ? TOOL_LIST_FIELDS[field] : undefined) || (EMIT_ORACLE_FIELDS ? ORACLE_FIELDS[field] : undefined) || (EMIT_FUZZ_FIELDS ? FUZZ_FIELDS[field] : undefined);
+  const type = FIELDS[field] || (EMIT_TOOL_LIST_FIELDS ? TOOL_LIST_FIELDS[field] : undefined) || (EMIT_TOOL_NAMES_FIELD ? TOOL_NAMES_FIELDS[field] : undefined) || (EMIT_ORACLE_FIELDS ? ORACLE_FIELDS[field] : undefined) || (EMIT_FUZZ_FIELDS ? FUZZ_FIELDS[field] : undefined);
   if (!type) throw new Error('not a field of this lane: ' + field);
   const ok = value !== null && value !== undefined && checkType(type, value);
   return JSON.stringify(ok ? { field, value, stage: STAGE } : { field, value: null, why: why || (value === null || value === undefined ? 'not observed' : 'not of the registry type'), stage: STAGE });
@@ -1790,6 +1827,18 @@ function resolutionObs(r) {
 /** Every tool of a probe's tools/list pages, in order (our reader's list, for the oracle judge). */
 export function toolsOf(rawPages) {
   return (Array.isArray(rawPages) ? rawPages : []).flatMap((p) => (p && isObj(p.result) && Array.isArray(p.result.tools) ? p.result.tools : []));
+}
+
+/**
+ * R-LP-87: sha256(JSON.stringify([...new Set(names)].sort())) of the live list's tool names (the wire names the engine
+ * counts for tool_count; a tool with no string name has none): deduplicated, then the default JavaScript sort (UTF-16
+ * code units, not localeCompare), with no case or space folding. Byte for byte the ast-grep oracle's tool_set_sha256
+ * (corpus/ast-grep/index.mjs summarize), so the source reads and the live list compare by names (tool-qa state/oracle.mjs,
+ * the three-way rule). Null when no tool is named.
+ */
+export function toolNamesSha256(names) {
+  const list = (Array.isArray(names) ? names : []).filter((n) => typeof n === 'string');
+  return list.length ? sha256(JSON.stringify([...new Set(list)].sort())) : null;
 }
 
 /**
@@ -1972,7 +2021,7 @@ export function buildItem(item, ctx) {
       }
       result.timing.grade_ms = Date.now() - g0;
       if (g) {
-        result.live = { ...g.summary, config_state: primary === bare ? 'none' : 'dummy', pages: int(primary.lists['tools/list'].pages) };
+        result.live = { ...g.summary, config_state: primary === bare ? 'none' : 'dummy', pages: int(primary.lists['tools/list'].pages), tool_names_sha256: toolNamesSha256(g.names) };
         reader = { listed: true, tool_count: g.summary.tool_count, catalog_hash: g.summary.catalog_hash, names: g.names, tools: toolsOf(primary.lists['tools/list'].raw_pages), pages: int(primary.lists['tools/list'].pages), check_ids: Object.keys(g.summary.check_counts), capabilities: isObj(primary.initialize) && isObj(primary.initialize.capabilities) ? primary.initialize.capabilities : null };
         files['raw/report.json'] = json({ findings: g.report.findings, tool_names: g.names });
         const cmp = compareStatic(g, stat);
@@ -1980,6 +2029,8 @@ export function buildItem(item, ctx) {
         if (cmp.raw) files['raw/static-compare.json'] = json(cmp.raw);
         lines.push(obs('static_vs_live_agreement', cmp.summary));
         if (EMIT_TOOL_LIST_FIELDS) { lines.push(obs('tool_count', g.summary.tool_count)); lines.push(obs('tool_list_sha256', g.summary.catalog_hash)); }
+        // R-LP-87: next to them, the names-only hash (null, with why, when the list names no tool).
+        if (EMIT_TOOL_NAMES_FIELD) lines.push(obs('tool_names_sha256', toolNamesSha256(g.names), 'the list names no tool'));
         const init = isObj(primary.initialize) ? primary.initialize : null;
         lines.push(obs('protocol_era', primary.era === 'modern' ? 'modern' : 'legacy'));
         lines.push(obs('client_version', safeText(primary.protocol_offered, /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/)));

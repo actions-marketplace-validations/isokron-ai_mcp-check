@@ -13,8 +13,10 @@ import { createBridge } from '../corpus/oracles/bridge.mjs';
 import { CLEANUP_SLACK_MS, lastJsonLine, oracleEnv, runOracles, runProgram, suiteProblem, variantCommand } from '../corpus/oracles/run.mjs';
 import { tap } from '../corpus/oracles/ts-client.mjs';
 import { relay } from '../corpus/oracles/relay.mjs';
-import { baselineProblems, clientCatalog, judgeOracles, namesSha } from '../corpus/oracles/judge.mjs';
-import { limitsOf, oracleProbe, targetOf } from '../corpus/live-probe-driver.mjs';
+import { baselineProblems, clientCatalog, judgeOracles, namesSha, noToolsAgrees, specFields } from '../corpus/oracles/judge.mjs';
+import { inspectorError, resultOf as inspectorResult, watchSession } from '../corpus/oracles/inspector-client.mjs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { answered, limitsOf, oracleProbe, targetOf } from '../corpus/live-probe-driver.mjs';
 import * as LP from '../corpus/live-probe.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
@@ -230,7 +232,7 @@ test('runOracles: the clients, then every read-only scenario of each revision th
   const removed = [];
   const rec = await runOracles({ command: ECHO, dockerEnv: { DOCKER_HOST: 'unix:///x' }, install: fakeInstall(dir), pins, budgetMs: 120_000, work, variant: local, removeContainer: async (n) => { removed.push(n); }, takeTrace: async () => ({ events: 1 }) });
   assert.equal(rec.format, 'isokron-live-probe-oracles/1');
-  assert.deepEqual(rec.clients.map((c) => [c.id, c.result ? c.result.outcome : c.outcome]), [['typescript-v1', 'listed'], ['typescript-v2', 'listed'], ['python', 'listed'], ['go', 'unavailable']]);
+  assert.deepEqual(rec.clients.map((c) => [c.id, c.result ? c.result.outcome : c.outcome]), [['typescript-v1', 'listed'], ['typescript-v2', 'listed'], ['python', 'listed'], ['go', 'unavailable'], ['inspector', 'listed']]);
   const envKeys = rec.clients[0].result.env_keys;
   assert.ok(envKeys.includes('DOCKER_HOST') && !envKeys.some((k) => /TOKEN|GITHUB_/.test(k)), 'a client runs with the oracle environment only');
   assert.equal(rec.conformance.problem, null);
@@ -238,8 +240,8 @@ test('runOracles: the clients, then every read-only scenario of each revision th
   for (const r of rec.conformance.runs) assert.ok(Array.isArray(r.checks) && r.checks.length, r.scenario);
   assert.equal(rec.bridge.stats.sessions, 8, 'one fresh server per scenario');
   assert.equal(rec.bridge.stats.superseded, 0);
-  assert.equal(removed.length, 3 + 8, 'every session\'s container is removed: three clients, eight scenarios');
-  assert.equal(rec.containers.length, 11);
+  assert.equal(removed.length, 4 + 8, 'every session\'s container is removed: four clients, eight scenarios');
+  assert.equal(rec.containers.length, 12);
   assert.ok(rec.containers.every((c) => c.role));
 });
 
@@ -263,7 +265,7 @@ test('runOracles: a client that hangs is stopped at its limit; no budget left me
 test('oracleProbe: once in full per target after a probe with a list, clients only after one without, never for the baseline', async () => {
   const runs = []; const writes = [];
   const listedP = { lists: { 'tools/list': { ok: true } } };
-  const probes = { 's001-s1': { lists: {} }, 's001-s2': listedP, 's002-s3': listedP, 's002-s4': listedP, 'shard-base5': listedP };
+  const probes = { 's001-s1': { initialize: {}, lists: {} }, 's001-s2': listedP, 's002-s3': listedP, 's002-s4': listedP, 'shard-base5': listedP };
   const cmd = (n) => ['docker', 'run', '--name', `surface-0123456789ab-${n}`];
   const hook = oracleProbe({
     probe: async (c) => probes[c[3].replace('surface-0123456789ab-', '')], listed: (p) => !!(p && p.lists['tools/list']),
@@ -312,7 +314,7 @@ test('judge: every SDK client\'s catalog hashes as our reader\'s (the engine\'s 
   assert.equal(st('2026-07-28', 'tools-list', 'wire-schema-valid'), 'fail', 'without a baseline a failure is a failure');
   assert.deepEqual(j.conformance.summary['2025-11-25'].scenarios_not_run.find((x) => x.scenario === 'tools-call-simple-text'), { scenario: 'tools-call-simple-text', scored: true, reason: 'calls_tool' });
   assert.equal(j.conformance.summary['2025-11-25'].level, 'payload');
-  assert.deepEqual(j.components.map((c) => c.name).sort(), ['@modelcontextprotocol/client', '@modelcontextprotocol/conformance', '@modelcontextprotocol/sdk', 'github.com/modelcontextprotocol/go-sdk', 'mcp']);
+  assert.deepEqual(j.components.map((c) => c.name).sort(), ['@modelcontextprotocol/client', '@modelcontextprotocol/conformance', '@modelcontextprotocol/inspector', '@modelcontextprotocol/sdk', 'github.com/modelcontextprotocol/go-sdk', 'mcp']);
 });
 
 test('judge: the baseline turns a listed failure into expected_fail, and a baselined failure that passes is stale', () => {
@@ -329,7 +331,7 @@ test('judge: the baseline turns a listed failure into expected_fail, and a basel
 
 test('judge: disagreements by class: D6 names and outcomes, D12 a timeout, D4 same names but other definitions, D7 the tool-name rule', () => {
   const reader = knownReader();
-  const rec = knownRec();
+  const rec = knownRec(); rec.clients = rec.clients.filter((c) => c.id !== 'inspector'); // the SDK clients only
   const [a, b, c, d] = rec.clients;
   a.result.tools = a.result.tools.slice(1);                        // one tool fewer: D6 tool_names (reader and client)
   b.result.outcome = 'init_failed'; b.result.tools = null;         // D6 outcome
@@ -346,7 +348,7 @@ test('judge: disagreements by class: D6 names and outcomes, D12 a timeout, D4 sa
   // Our reader got no list, a client did: the lead for a reader bug.
   const j2 = judgeOracles(knownRec(), { reader: { listed: false }, pins: PINS });
   assert.ok(j2.disagreements.every((x) => x.class === 'D6' && x.kind === 'outcome' && x.detail.a === 'not_listed'));
-  assert.equal(j2.disagreements.length, 4);
+  assert.equal(j2.disagreements.length, 5, 'the four SDK clients and the Inspector');
   // D7: the suite says the names break the rule, our engine did not flag them.
   const rec3 = knownRec();
   for (const r of rec3.conformance.runs) if (r.revision === '2025-11-25' && r.scenario === 'tools-list') r.checks.find((x) => x.id === 'tools-name-format').status = 'FAILURE';
@@ -412,7 +414,7 @@ test('live-probe bundle with the oracle stage: six fields, raw/oracles.json, the
   const recs = readFileSync(join(b, 'observations', 'live.ndjson'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
   const by = (f) => recs.filter((o) => o.field === f).map((o) => o.value);
   for (const f of Object.keys(LP.ORACLE_FIELDS)) assert.equal(by(f).length, 1, f);
-  assert.equal(by('sdk_client_results')[0].length, 4);
+  assert.equal(by('sdk_client_results')[0].length, 5, 'four SDK clients and the Inspector');
   assert.equal(by('conformance_suite')[0].git_commit, PINS.conformance.git_commit);
   assert.equal(by('conformance_summary')[0].revisions['2025-11-25'].scenarios_run, 5);
   assert.ok(by('conformance_checks')[0].every((c) => c.status !== 'fail'));
@@ -450,7 +452,7 @@ test('R-ORC-01: a client SDK that writes out an annotation default (Go: idempote
   const tools = annotate(LP.toolsOf(p.lists['tools/list'].raw_pages));
   const g = LP.gradeList(JSON.stringify({ tools }));
   const reader = { listed: true, tool_count: g.summary.tool_count, catalog_hash: g.summary.catalog_hash, names: g.names, tools, pages: 1, check_ids: Object.keys(g.summary.check_counts), capabilities: { tools: {} } };
-  const rec = knownRec();
+  const rec = knownRec(); rec.clients = rec.clients.filter((c) => c.id !== 'inspector'); // the SDK clients only
   for (const c of rec.clients) c.result.tools = annotate(c.result.tools);
   const go = rec.clients.find((c) => c.id === 'go');
   go.result.tools[0] = { ...go.result.tools[0], annotations: { idempotentHint: false, openWorldHint: false, readOnlyHint: true } };
@@ -613,4 +615,174 @@ test('R-ORC-10: the self test refuses a client that did not install; both oracle
   assert.equal(r.file, 'oracles.json');
   assert.equal(r.ms, 1250);
   assert.deepEqual(r.all.map((x) => x.file), ['oracles.json', 'oracles-unlisted.json']);
+});
+
+// R-ORC-11. The 25-27 Nov loop: 534 results (127 subjects) carried "D4 catalog reader client:go"; 503 of them were the
+// Go client's typed mcp.Tool (go-sdk v1.8.0) dropping `execution`, 6 unknown or empty annotation keys, 5 top-level hints.
+// The fixture server's tools are those shapes (test/fixtures/oracles/raw-fields-server.mjs names the subjects).
+const RAW_FIELDS = [process.execPath, join(FX, 'raw-fields-server.mjs')];
+async function rawFieldsTools() {
+  const { spawn: sp } = await import('node:child_process');
+  const c = sp(RAW_FIELDS[0], RAW_FIELDS.slice(1), { stdio: ['pipe', 'pipe', 'ignore'] });
+  const lines = []; let buf = '';
+  c.stdout.on('data', (d) => { buf += d; let i; while ((i = buf.indexOf('\n')) >= 0) { lines.push(JSON.parse(buf.slice(0, i))); buf = buf.slice(i + 1); } });
+  const ask = async (id, method, params) => { c.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n'); for (let k = 0; k < 200 && !lines.some((l) => l.id === id); k++) await new Promise((r) => setTimeout(r, 10)); return lines.find((l) => l.id === id).result; };
+  await ask(1, 'initialize', { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 't', version: '1' } });
+  const p1 = await ask(2, 'tools/list', {});
+  const p2 = await ask(3, 'tools/list', { cursor: p1.nextCursor });
+  c.kill();
+  return [{ result: p1 }, { result: p2 }];
+}
+
+test('R-ORC-11: the Go client reports the tools/list result the server sent, not its SDK\'s typed re-marshal; the same catalog is same, a typed-only list is never a D4', async () => {
+  const pages = await rawFieldsTools();
+  const tools = LP.toolsOf(pages);
+  const g = LP.gradeList(JSON.stringify({ tools }));
+  const reader = { listed: true, tool_count: g.summary.tool_count, catalog_hash: g.summary.catalog_hash, names: g.names, tools, pages: 2, check_ids: Object.keys(g.summary.check_counts), capabilities: { tools: {} } };
+  const client = (id, t, extra = {}) => ({ id, ms: 900, result: { format: 'isokron-oracle-client/1', client: id, outcome: 'listed', stage: 'list', protocol: '2025-11-25', pages: 2, tools: t, ...extra } });
+  // What go-sdk v1.8.0's typed Tool made of the same list (the old client): execution, returnDirect, description and
+  // the empty title gone, top-level hints gone, readOnlyHint and idempotentHint written out.
+  const typed = tools.map((t) => {
+    const { execution: _e, readOnlyHint: _r, openWorldHint: _o, ...rest } = t;
+    const a = { readOnlyHint: false, idempotentHint: false, ...Object.fromEntries(Object.entries(t.annotations || {}).filter(([k, v]) => ['readOnlyHint', 'destructiveHint', 'idempotentHint', 'openWorldHint', 'title'].includes(k) && v !== '')) };
+    return { ...rest, annotations: a };
+  });
+  const rec = (goTools, extra) => ({ format: 'isokron-live-probe-oracles/1', mode: 'full', ms: 4000, clients: [client('typescript-v1', tools), client('typescript-v2', tools), client('python', tools), client('go', goTools, extra)] });
+  // Before: the typed list is a D4 against the reader and the reference client (the archived cases' shape).
+  const before = judgeOracles(rec(typed), { reader, pins: PINS });
+  assert.deepEqual(before.disagreements.map((x) => `${x.class} ${x.oracle_a} ${x.oracle_b} ${x.kind}`), ['D4 reader client:go catalog', 'D4 client:typescript-v1 client:go catalog']);
+  // After: the raw list is the same catalog, with no disagreement.
+  const after = judgeOracles(rec(tools, { tools_source: 'wire', typed_tool_count: 4 }), { reader, pins: PINS });
+  assert.deepEqual(after.disagreements, []);
+  assert.deepEqual(after.clients.map((c) => c.catalog_vs_reader), ['same', 'same', 'same', 'same']);
+  // A client that could report only its typed structs is not compared on its catalog (its names still are).
+  const lossy = judgeOracles(rec(typed, { tools_source: 'typed' }), { reader, pins: PINS });
+  assert.deepEqual(lossy.disagreements, []);
+  assert.equal(lossy.clients.find((c) => c.client === 'go').catalog_vs_reader, 'sdk_typed_only');
+  // A typed-only list first in line does not stop the other clients being compared with each other.
+  const first = rec(tools); first.clients.unshift(first.clients.pop()); first.clients[0].result = { ...first.clients[0].result, tools: typed, tools_source: 'typed' };
+  first.clients[2].result = { ...first.clients[2].result, tools: tools.map((t, i) => (i === 0 ? { ...t, description: 'Other.' } : t)) };
+  assert.ok(judgeOracles(first, { reader, pins: PINS }).disagreements.some((x) => x.class === 'D4' && x.oracle_a === 'client:typescript-v1' && x.oracle_b === 'client:typescript-v2'));
+  const named = judgeOracles(rec(typed.slice(1), { tools_source: 'typed' }), { reader, pins: PINS });
+  assert.ok(named.disagreements.some((x) => x.class === 'D6' && x.oracle_b === 'client:go' && x.kind === 'tool_names'));
+  // The Go program itself: its result type holds raw JSON, the typed list is only counted.
+  const src = readFileSync(join(root, 'corpus', 'oracles', 'go', 'main.go'), 'utf8');
+  assert.match(src, /Tools \[\]json\.RawMessage `json:"tools"`/);
+  assert.doesNotMatch(src, /Tools +\[\]\*mcp\.Tool `json:"tools"`/);
+  // Built and run where Go and the pinned module are at hand (offline: GOPROXY=off; the self test builds it on GitHub).
+  const go = spawnSync('go', ['version'], { encoding: 'utf8' });
+  if (go.status !== 0) return;
+  const out = mkdtempSync(join(tmpdir(), 'orc11-'));
+  const b = spawnSync('go', ['build', '-o', join(out, 'oracle-go'), '.'], { cwd: join(root, 'corpus', 'oracles', 'go'), env: { ...process.env, GOPROXY: 'off', GOFLAGS: '-mod=readonly', GOTOOLCHAIN: 'local' }, encoding: 'utf8' });
+  if (b.status !== 0) return;
+  const r = JSON.parse(execFileSync(join(out, 'oracle-go'), ['15000', '--', ...RAW_FIELDS], { encoding: 'utf8' }).trim().split('\n').pop());
+  assert.deepEqual([r.outcome, r.pages, r.tools_source, r.typed_tool_count], ['listed', 2, 'wire', 4]);
+  assert.deepEqual(r.tools, tools, 'every tool exactly as the server sent it');
+  assert.deepEqual(judgeOracles(rec(r.tools, r), { reader, pins: PINS }).disagreements, []);
+});
+
+// R-ORC-12. The 25-27 Nov loop: 769 skipped results ran the clients-only pass (1.9 h of 26.7 h of job time); 600 were
+// servers that never started (start_env_limited, needs_credentials, start_needs_config, ...) and every client failed
+// initialize. grafana/mcp-grafana@5d8da53306cc: probe 91 s, then 65 s of clients. And the prompts-only server
+// (formulahendry/mcp-server-spec-driven-development@8a0532a2eb15) gave a D6 per client although all agreed it has no tools.
+test('R-ORC-12: no oracle clients for a target that never answered (the skip says why); a server with no tools capability gives no disagreement', async () => {
+  const runs = []; const writes = [];
+  const cmd = (n) => ['docker', 'run', '--name', `surface-0123456789ab-${n}`];
+  const exited = { format: 'isokron-surface-probe/1', era: null, initialize: null, initialize_error: 'the server exited (exit 1, signal null)', error: null, lists: {} };
+  const promptsOnly = { era: 'legacy', initialize: { protocolVersion: '2025-11-25', capabilities: { prompts: {} } }, lists: { 'tools/list': { ok: false, error: 'Method not found', error_code: -32601 } } };
+  const probes = { 's001-s1': exited, 's001-s2': exited, 's002-s3': exited, 's002-s4': { era: 'modern', initialize: null, lists: { 'tools/list': { ok: false } } }, 's003-s5': promptsOnly };
+  const hook = oracleProbe({
+    probe: async (c) => probes[c[3].replace('surface-0123456789ab-', '')], listed: () => false,
+    out: mkdtempSync(join(tmpdir(), 'drv-')), install: { clients: {} }, pins: PINS,
+    starts: new Map([['s001', Date.now()], ['s002', Date.now()], ['s003', Date.now()]]), limits: new Map([['s001', 300], ['s002', 300], ['s003', 300]]),
+    run: async (o) => { runs.push([o.command[3].slice(-7), o.mode]); return { format: 'x' }; },
+    write: (f, r) => writes.push([f.split('/').slice(-2).join('/'), r.mode, r.why ?? null]), remove: async () => {},
+  });
+  for (const n of Object.keys(probes)) await hook(cmd(n), {});
+  // s001 never started (both probes): skipped twice, no client run. s002 answered on its second probe (a 2026-07-28
+  // refusal of initialize): the clients run then. s003 answered initialize: the clients run.
+  assert.deepEqual(runs, [['s002-s4', 'clients_only'], ['s003-s5', 'clients_only']]);
+  assert.deepEqual(writes.slice(0, 3), [['s001/oracles-unlisted.json', 'skipped', 'not_started'], ['s001/oracles-unlisted.json', 'skipped', 'not_started'], ['s002/oracles-unlisted.json', 'skipped', 'not_started']]);
+  assert.equal(answered(exited), false);
+  assert.equal(answered(promptsOnly), true);
+  // The judge reads the skip as the stage's status and why.
+  const j = judgeOracles({ format: 'isokron-live-probe-oracles/1', mode: 'skipped', why: 'not_started', probe_listed: false }, { reader: { listed: false }, pins: PINS });
+  assert.deepEqual([j.status, j.why], ['skipped', 'not_started']);
+  // The prompts-only server: TypeScript v2 lists an empty list, the others are refused; all agree with our reader.
+  const reader = { listed: false, no_tools_capability: true, capabilities: { prompts: {} } };
+  const cl = (id, outcome, tools) => ({ id, ms: 500, result: { format: 'isokron-oracle-client/1', client: id, outcome, stage: 'list', protocol: '2025-11-25', pages: tools ? 1 : 0, ...(tools ? { tools } : { error: 'Method not found' }) } });
+  const rec = { format: 'isokron-live-probe-oracles/1', mode: 'clients_only', ms: 3000, clients: [cl('typescript-v1', 'list_failed'), cl('typescript-v2', 'listed', []), cl('python', 'list_failed'), cl('go', 'list_failed')] };
+  const k = judgeOracles(rec, { reader, pins: PINS });
+  assert.deepEqual(k.disagreements, []);
+  assert.deepEqual(k.clients.map((c) => c.catalog_vs_reader), ['no_tools_capability', 'no_tools_capability', 'no_tools_capability', 'no_tools_capability']);
+  // Without the capability fact (a server that declared tools), the same answers stay disagreements.
+  assert.ok(judgeOracles(rec, { reader: { listed: false }, pins: PINS }).disagreements.length > 0);
+  // A client that lists tools from a server that declared none is still a disagreement.
+  rec.clients[1] = cl('typescript-v2', 'listed', [{ name: 'x', inputSchema: { type: 'object' } }]);
+  assert.ok(judgeOracles(rec, { reader, pins: PINS }).disagreements.some((x) => x.oracle_b === 'client:typescript-v2'));
+  assert.equal(noToolsAgrees(reader, { outcome: 'timeout' }), false, 'a timeout is not agreement');
+});
+
+// R-ORC-13. Owner decision of 27 Nov (design D1): the MCP Inspector's CLI as an oracle beside the SDK clients and the
+// conformance suite. It reports the tools its own parse keeps: on the raw-fields server (R-ORC-11) it drops
+// annotations.returnDirect, annotations.description and the top-level hints, and keeps execution and the empty title.
+test('R-ORC-13: the MCP Inspector is an oracle client: its answer in the clients\' format, compared on the specification\'s fields, its failures disagreements and never the server\'s fault', async () => {
+  // The pin and the install.
+  const pin = PINS.clients.find((c) => c.id === 'inspector');
+  assert.deepEqual([pin.sdk, pin.kind, pin.catalog], ['@modelcontextprotocol/inspector', 'npm', 'spec_fields']);
+  assert.match(pin.version, /^\d+\.\d+\.\d+$/, 'an exact version');
+  const lock = JSON.parse(readFileSync(join(root, 'corpus', 'oracles', 'package-lock.json'), 'utf8'));
+  assert.equal(lock.packages['node_modules/@modelcontextprotocol/inspector'].version, pin.version);
+  assert.equal(JSON.parse(readFileSync(join(root, 'corpus', 'oracles', 'package.json'), 'utf8')).dependencies['@modelcontextprotocol/inspector'], pin.version);
+  assert.match(readFileSync(join(root, 'corpus', 'oracles', 'install.mjs'), 'utf8'), /'inspector-client\.mjs'\]\) cpSync/);
+  // The pass-through: our initialize and tools/list ids matched to their answers.
+  const st = { initialized: false, protocol: null, server_info: null, init_error_code: null, list_pages: 0, list_error_code: null };
+  const w = watchSession(st);
+  const line = (m) => Buffer.from(JSON.stringify(m) + '\n');
+  w.request(line({ jsonrpc: '2.0', id: 0, method: 'initialize', params: {} }));
+  w.response(line({ jsonrpc: '2.0', id: 0, result: { protocolVersion: '2025-11-25', capabilities: {}, serverInfo: { name: 'raw-fields', version: '1.0.0' } } }));
+  w.request(line({ jsonrpc: '2.0', id: 1, method: 'tools/list' }));
+  w.response(line({ jsonrpc: '2.0', id: 9, result: { tools: [] } }));
+  w.response(line({ jsonrpc: '2.0', id: 1, result: { tools: [] } }));
+  assert.deepEqual([st.initialized, st.protocol, st.list_pages], [true, '2025-11-25', 1], 'an answer to another id does not count');
+  // Its answers as client results.
+  const ok = inspectorResult({ exit: 0, stdout: JSON.stringify({ tools: [{ name: 'a', inputSchema: { type: 'object' } }] }), stderr: '', state: st, version: pin.version, ms: 800 });
+  assert.deepEqual([ok.client, ok.outcome, ok.stage, ok.protocol, ok.pages, ok.tools.length], ['inspector', 'listed', 'list', '2025-11-25', 1, 1]);
+  assert.equal(inspectorResult({ exit: 1, stdout: '', stderr: '{"error":{"code":"error","message":"Connection closed"}}', state: { ...st, initialized: false }, version: pin.version, ms: 300 }).outcome, 'init_failed');
+  assert.equal(inspectorResult({ exit: 1, stdout: '', stderr: '{"error":{"code":"error","message":"Internal error"}}', state: st, version: pin.version, ms: 300 }).outcome, 'list_failed');
+  assert.equal(inspectorResult({ exit: null, timedOut: true, stdout: '', stderr: '', state: null, version: pin.version, ms: 30_000, limitMs: 30_000 }).outcome, 'timeout');
+  assert.equal(inspectorError('noise\n{"error":{"code":"error","message":"bad"}}\n'), 'bad');
+  // The judge: the Inspector's list of the raw-fields server is the same catalog on the specification's fields.
+  const pages = await rawFieldsTools();
+  const tools = LP.toolsOf(pages);
+  const g = LP.gradeList(JSON.stringify({ tools }));
+  const reader = { listed: true, tool_count: g.summary.tool_count, catalog_hash: g.summary.catalog_hash, names: g.names, tools, pages: 2, check_ids: Object.keys(g.summary.check_counts), capabilities: { tools: {} } };
+  const kept = specFields(tools).map((t) => { const { annotations, ...rest } = t; return annotations && Object.keys(annotations).length ? { ...rest, annotations } : rest; });
+  const client = (id, t, extra = {}) => ({ id, ms: 900, result: { format: 'isokron-oracle-client/1', client: id, outcome: 'listed', stage: 'list', protocol: '2025-11-25', pages: 2, tools: t, ...extra } });
+  const rec = (insp) => ({ format: 'isokron-live-probe-oracles/1', mode: 'full', ms: 4000, clients: [client('typescript-v1', tools), client('typescript-v2', tools), client('python', tools), client('go', tools, { tools_source: 'wire' }), insp] });
+  const same = judgeOracles(rec(client('inspector', kept, { tools_source: 'inspector' })), { reader, pins: PINS });
+  assert.deepEqual(same.disagreements, []);
+  assert.equal(same.clients.find((c) => c.client === 'inspector').catalog_vs_reader, 'same_spec_fields');
+  assert.ok(same.components.some((c) => c.name === '@modelcontextprotocol/inspector' && c.version === pin.version));
+  // A difference on the specification's fields is a disagreement, against the reader and the reference client.
+  const other = judgeOracles(rec(client('inspector', kept.map((t, i) => (i === 0 ? { ...t, description: 'Other.' } : t)), { tools_source: 'inspector' })), { reader, pins: PINS });
+  assert.deepEqual(other.disagreements.map((x) => `${x.class} ${x.oracle_a} ${x.oracle_b} ${x.kind}`), ['D4 reader client:inspector catalog', 'D4 client:typescript-v1 client:inspector catalog']);
+  assert.equal(other.clients.find((c) => c.client === 'inspector').catalog_vs_reader, 'different');
+  // An Inspector-only failure: a disagreement (a lead about the oracles), with no attribution to the server; the
+  // live result is graded as before (the oracle stage never adds a skip).
+  const failed = judgeOracles(rec({ id: 'inspector', ms: 400, result: { format: 'isokron-oracle-client/1', client: 'inspector', outcome: 'init_failed', stage: 'connect', error: 'Connection closed', tools: null } }), { reader, pins: PINS });
+  assert.deepEqual(failed.disagreements.map((x) => `${x.class} ${x.oracle_a} ${x.oracle_b} ${x.kind}`), ['D6 reader client:inspector outcome', 'D6 client:typescript-v1 client:inspector outcome']);
+  assert.ok(failed.disagreements.every((x) => !('attribution' in x) && !('fault' in x)));
+  // The Inspector lists an empty list for a server without the tools capability, as TypeScript v2 does: agreement.
+  assert.equal(noToolsAgrees({ listed: false, no_tools_capability: true }, { outcome: 'listed', tool_count: 0 }), true);
+  // The pinned Inspector itself, where it is installed (npm ci in corpus/oracles; the self test installs it on GitHub).
+  const dir = join(root, 'corpus', 'oracles');
+  if (!existsSync(join(dir, 'node_modules', '@modelcontextprotocol', 'inspector', 'clients', 'launcher', 'build', 'index.js'))) return;
+  const r = JSON.parse(execFileSync(process.execPath, [join(dir, 'inspector-client.mjs'), '15000', '--', ...RAW_FIELDS], { encoding: 'utf8' }).trim().split('\n').pop());
+  assert.deepEqual([r.client, r.outcome, r.sdk_version, r.protocol, r.pages], ['inspector', 'listed', pin.version, '2025-11-25', 2]);
+  assert.deepEqual(r.tools.map((t) => t.name), tools.map((t) => t.name));
+  const live = judgeOracles(rec({ id: 'inspector', ms: r.ms, result: r }), { reader, pins: PINS });
+  assert.deepEqual(live.disagreements, [], 'the pinned Inspector on the raw-fields server agrees on the specification\'s fields');
+  const down = JSON.parse(execFileSync(process.execPath, [join(dir, 'inspector-client.mjs'), '15000', '--', process.execPath, '-e', 'process.exit(3)'], { encoding: 'utf8' }).trim().split('\n').pop());
+  assert.deepEqual([down.outcome, down.stage], ['init_failed', 'connect']);
 });
