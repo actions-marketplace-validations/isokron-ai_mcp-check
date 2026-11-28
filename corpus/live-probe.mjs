@@ -1001,6 +1001,8 @@ export async function resolveSubject(item, { seed = new Map(), fetch: fetchImpl 
         out.choice.entry = (fits && e.entry) || null;
         // What the release declares and ships: failureDetail tells the server's own modules from its dependencies (R-LP-61).
         if (e.deps) out.choice.pydeps = e.deps;
+        // What PyPI said of the release (R-LP-90): found, and how many files it has; failureDetail needs both.
+        if (isObj(e.release)) out.choice.pypi_release = e.release;
         // The extra that holds the MCP server (or its CLI's dependencies) installs with the package (R-LP-66).
         const extras = EMIT_PYPI_EXTRAS ? serverExtras(e.deps) : [];
         if (extras.length) { out.launch = { ...out.launch, extras }; out.choice.extras = extras; }
@@ -1229,7 +1231,43 @@ export function networkEvents(records, cap = 200) {
 }
 
 /** Package-level install errors: the package, its version or its launcher is not there (the server's own publishing). */
-const PACKAGE_ERROR = /\bE404\b|\bETARGET\b|No matching distribution|declares no bin/;
+/** Signs that pip or npm could not reach the index properly (our proxy, a name lookup, TLS, a time-out). */
+const PIP_NOT_THE_PACKAGE = /Retrying \(Retry\(|ProxyError|SSLError|ConnectionError|Max retries exceeded|Temporary failure in name resolution|Name or service not known|Read timed out|timed out/i;
+const NPM_NOT_THE_PACKAGE = /\b(?:ECONNRESET|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|ECONNREFUSED|EPROXY|ERR_SOCKET_TIMEOUT|UNABLE_TO_GET_ISSUER_CERT|SELF_SIGNED_CERT_IN_CHAIN)\b|socket hang up|npm error network/i;
+/** pip's word that a release exists for other Pythons or platforms only: no defect of the package. */
+const PIP_PLATFORM = /require a different python version|Requires-Python|is not a supported wheel|not a supported wheel on this platform/i;
+const escRe = (x) => String(x).replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
+
+/**
+ * R-LP-90: an npm or PyPI install failure is the package's own (install_failed, subject) only on the installer's word
+ * about this very package, for a registry entry in the subject's namespace (owned), with no sign of trouble reaching
+ * the index, as cargo and NuGet (R-LP-56, R-LP-58). PyPI: "No matching distribution found for <the package>" (PEP 503
+ * names), and the planner's PyPI JSON showed the release missing or with no file at all; a release for other Pythons or
+ * platforms only is unsupported_platform; a dependency with no distribution, a network retry, anything else is ours.
+ * npm: E404 for the package's own registry URL, or ETARGET for its own name; our entry helper's "declares no bin" is
+ * entry_unresolved (our reading of package.json). Returns a detail.
+ */
+export function packageInstallEvidence(kind, text, { launch = null, owned = false, release = null } = {}) {
+  const t = String(text || '');
+  const pkg = isObj(launch) && typeof launch.package === 'string' ? launch.package : null;
+  if (kind === 'pypi') {
+    if (PIP_PLATFORM.test(t)) return 'unsupported_platform';
+    if (!pkg || PIP_NOT_THE_PACKAGE.test(t)) return 'install_build_failed';
+    const named = [...t.matchAll(/No matching distribution found for ([A-Za-z0-9][A-Za-z0-9._-]{0,120})/g)].map((m) => normDist(m[1]));
+    const own = named.length > 0 && named.every((n) => n === normDist(pkg));
+    const gone = isObj(release) && (release.found === false || release.files === 0);
+    return own && owned && gone ? 'install_failed' : 'install_build_failed';
+  }
+  if (kind === 'npm') {
+    if (/declares no bin|has no bin of that name/.test(t)) return 'entry_unresolved';
+    if (!pkg || NPM_NOT_THE_PACKAGE.test(t)) return 'install_build_failed';
+    const url = 'https://registry\\.npmjs\\.org/' + escRe(pkg.startsWith('@') ? pkg.replace('/', '%2f') : pkg);
+    const e404 = /\bE404\b/.test(t) && new RegExp('404 Not Found - GET ' + url + '(?:\\s|$)', 'i').test(t);
+    const etarget = /\bETARGET\b/.test(t) && new RegExp('No matching version found for ' + escRe(pkg) + '@', 'i').test(t);
+    return (e404 || etarget) && owned ? 'install_failed' : 'install_build_failed';
+  }
+  return 'install_build_failed';
+}
 /**
  * Stderr that says the server needs configuration (R-LP-44): a config file missing or unreadable, a kubeconfig or
  * current-context, --config, a usage block, a missing or required argument, option, flag or environment variable, or
@@ -1653,7 +1691,7 @@ function listDetail(p) {
  * Our sandbox's limits, another platform, the network, extras and dependency drift are told apart before any crash
  * is blamed (R-LP-59..65).
  */
-export function failureDetail(rec, bare, envp, { deadlineHit = false, records = [], stepsLog = null, launch = null, argsUnfilled = null, pydeps = null, owned = false, crashNotEvidence = false, entryGuess = false } = {}) {
+export function failureDetail(rec, bare, envp, { deadlineHit = false, records = [], stepsLog = null, launch = null, argsUnfilled = null, pydeps = null, owned = false, crashNotEvidence = false, entryGuess = false, pypiRelease = null } = {}) {
   if (!rec) return deadlineHit ? 'shard_deadline' : 'harness_error';
   if (rec.excluded) return 'sandbox_evidence_missing';
   const inst = rec.install;
@@ -1691,8 +1729,7 @@ export function failureDetail(rec, bare, envp, { deadlineHit = false, records = 
       // The CLI's word counts against the subject only when the registry entry is the subject's (R-LP-56, R-LP-58).
       return ev ? (owned ? ev : 'package_error_unowned') : 'install_build_failed';
     }
-    if (PACKAGE_ERROR.test(text)) return 'install_failed';
-    return 'install_build_failed';
+    return packageInstallEvidence(inst.kind, text, { launch, owned, release: pypiRelease });
   }
   const p = envp || bare;
   if (!p) return rec.timed_out ? 'start_timeout' : 'harness_error';
@@ -2198,7 +2235,7 @@ export function buildItem(item, ctx) {
       lines.push(obs('server_info', serverInfo(noTools.initialize.serverInfo), 'no serverInfo object'));
       lines.push(obs('capabilities_flags', capabilityFlags(noTools.initialize.capabilities), 'no capabilities object'));
     } else if (!primary) {
-      detail = ociRun && ociRun.outcome === 'disk_low' ? 'disk_low' : failureDetail(rec, bare, envp, { deadlineHit, records: tel.records, stepsLog: readText(join(dir, 'steps.log')), launch: r.launch, argsUnfilled: r.choice ? r.choice.args_unfilled : null, owned: ownedEntry(r.choice), pydeps: r.choice ? r.choice.pydeps : null, crashNotEvidence: crashNotEvidenceOf(r.choice, rec), entryGuess: entryGuessOf(r.choice) });
+      detail = ociRun && ociRun.outcome === 'disk_low' ? 'disk_low' : failureDetail(rec, bare, envp, { deadlineHit, records: tel.records, stepsLog: readText(join(dir, 'steps.log')), launch: r.launch, argsUnfilled: r.choice ? r.choice.args_unfilled : null, owned: ownedEntry(r.choice), pydeps: r.choice ? r.choice.pydeps : null, crashNotEvidence: crashNotEvidenceOf(r.choice, rec), entryGuess: entryGuessOf(r.choice), pypiRelease: r.choice ? r.choice.pypi_release : null });
       // R-LP-81: a retry was planned because the first run's cause was ours to test (an SDK we let float, a subcommand
       // we did not give): that first run is never the server's fault, whatever its detail would say alone.
       if (retry && (DETAILS[detail] || [])[3] === 'subject') { result.retry.first_detail = detail; detail = retry.reason === 'mcp_drift' ? 'start_dependency_drift' : 'start_env_limited'; }
