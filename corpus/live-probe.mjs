@@ -248,6 +248,12 @@ export const ORACLE_FIELDS = Object.freeze({
 export const EMIT_TOOL_LIST_FIELDS = true;
 export const TOOL_LIST_FIELDS = Object.freeze({ tool_count: 'integer', tool_list_sha256: 'hash' });
 /**
+ * R-LP-87: tool_names_sha256 (mcp-results R-RES-15, planned): written only while EMIT_TOOL_NAMES_FIELD is on, which
+ * needs tool-qa's ingest to pin a registry that declares it (INGEST_REF; else the observation is an undeclared_field).
+ */
+export const EMIT_TOOL_NAMES_FIELD = false;
+export const TOOL_NAMES_FIELDS = Object.freeze({ tool_names_sha256: 'hash' });
+/**
  * The fuzz stage's fields (corpus/FUZZ.md): written only while EMIT_FUZZ_FIELDS is on, which needs the mcp-results
  * registry to hold them and tool-qa's ingest to pin that registry. list_determinism is already a planned field there
  * (boolean); fuzz_stage, invariant_results and unicode_identifier_findings are proposed.
@@ -772,14 +778,19 @@ export function packageArgs(list) {
   return { args: args.slice(0, 40), unfilled };
 }
 
-/** Env names a registry package declares as required: dummy values in the sandbox (or the declared default). */
+/**
+ * Env a registry package declares: a required name gets its declared default, else a dummy value in the sandbox (null);
+ * an optional name gets its declared default and nothing else (R-LP-80: an image whose own default is HTTP declares
+ * `MCP_TRANSPORT` optional with default `stdio`, which a client applies). Never a value we invent: no default, a
+ * secret's default, or one with a `{placeholder}` leaves an optional name out.
+ */
 export function packageEnv(list) {
   const env = {}; const names = [];
   for (const e of Array.isArray(list) ? list.slice(0, 100) : []) {
     if (!isObj(e) || typeof e.name !== 'string' || !ENV_NAME.test(e.name) || RESERVED_ENV.test(e.name)) continue;
     names.push(e.name);
-    if (!e.isRequired) continue;
     const d = typeof e.default === 'string' && e.default.length <= 500 && !/[\u0000\n\r]/.test(e.default) && !e.isSecret ? e.default : null;
+    if (!e.isRequired && (d === null || /\{[A-Za-z0-9_]+\}/.test(d))) continue;
     if (Object.keys(env).length < 60) env[e.name] = d;
   }
   return { env, names: names.slice(0, 100) };
@@ -1747,7 +1758,7 @@ export function rolledForward(inst) {
 
 /** One observations line, checked against FIELDS. A value of the wrong type is written as null with why. */
 export function obs(field, value, why) {
-  const type = FIELDS[field] || (EMIT_TOOL_LIST_FIELDS ? TOOL_LIST_FIELDS[field] : undefined) || (EMIT_ORACLE_FIELDS ? ORACLE_FIELDS[field] : undefined) || (EMIT_FUZZ_FIELDS ? FUZZ_FIELDS[field] : undefined);
+  const type = FIELDS[field] || (EMIT_TOOL_LIST_FIELDS ? TOOL_LIST_FIELDS[field] : undefined) || (EMIT_TOOL_NAMES_FIELD ? TOOL_NAMES_FIELDS[field] : undefined) || (EMIT_ORACLE_FIELDS ? ORACLE_FIELDS[field] : undefined) || (EMIT_FUZZ_FIELDS ? FUZZ_FIELDS[field] : undefined);
   if (!type) throw new Error('not a field of this lane: ' + field);
   const ok = value !== null && value !== undefined && checkType(type, value);
   return JSON.stringify(ok ? { field, value, stage: STAGE } : { field, value: null, why: why || (value === null || value === undefined ? 'not observed' : 'not of the registry type'), stage: STAGE });
@@ -1816,6 +1827,18 @@ function resolutionObs(r) {
 /** Every tool of a probe's tools/list pages, in order (our reader's list, for the oracle judge). */
 export function toolsOf(rawPages) {
   return (Array.isArray(rawPages) ? rawPages : []).flatMap((p) => (p && isObj(p.result) && Array.isArray(p.result.tools) ? p.result.tools : []));
+}
+
+/**
+ * R-LP-87: sha256(JSON.stringify([...new Set(names)].sort())) of the live list's tool names (the wire names the engine
+ * counts for tool_count; a tool with no string name has none): deduplicated, then the default JavaScript sort (UTF-16
+ * code units, not localeCompare), with no case or space folding. Byte for byte the ast-grep oracle's tool_set_sha256
+ * (corpus/ast-grep/index.mjs summarize), so the source reads and the live list compare by names (tool-qa state/oracle.mjs,
+ * the three-way rule). Null when no tool is named.
+ */
+export function toolNamesSha256(names) {
+  const list = (Array.isArray(names) ? names : []).filter((n) => typeof n === 'string');
+  return list.length ? sha256(JSON.stringify([...new Set(list)].sort())) : null;
 }
 
 /**
@@ -1998,7 +2021,7 @@ export function buildItem(item, ctx) {
       }
       result.timing.grade_ms = Date.now() - g0;
       if (g) {
-        result.live = { ...g.summary, config_state: primary === bare ? 'none' : 'dummy', pages: int(primary.lists['tools/list'].pages) };
+        result.live = { ...g.summary, config_state: primary === bare ? 'none' : 'dummy', pages: int(primary.lists['tools/list'].pages), tool_names_sha256: toolNamesSha256(g.names) };
         reader = { listed: true, tool_count: g.summary.tool_count, catalog_hash: g.summary.catalog_hash, names: g.names, tools: toolsOf(primary.lists['tools/list'].raw_pages), pages: int(primary.lists['tools/list'].pages), check_ids: Object.keys(g.summary.check_counts), capabilities: isObj(primary.initialize) && isObj(primary.initialize.capabilities) ? primary.initialize.capabilities : null };
         files['raw/report.json'] = json({ findings: g.report.findings, tool_names: g.names });
         const cmp = compareStatic(g, stat);
@@ -2006,6 +2029,8 @@ export function buildItem(item, ctx) {
         if (cmp.raw) files['raw/static-compare.json'] = json(cmp.raw);
         lines.push(obs('static_vs_live_agreement', cmp.summary));
         if (EMIT_TOOL_LIST_FIELDS) { lines.push(obs('tool_count', g.summary.tool_count)); lines.push(obs('tool_list_sha256', g.summary.catalog_hash)); }
+        // R-LP-87: next to them, the names-only hash (null, with why, when the list names no tool).
+        if (EMIT_TOOL_NAMES_FIELD) lines.push(obs('tool_names_sha256', toolNamesSha256(g.names), 'the list names no tool'));
         const init = isObj(primary.initialize) ? primary.initialize : null;
         lines.push(obs('protocol_era', primary.era === 'modern' ? 'modern' : 'legacy'));
         lines.push(obs('client_version', safeText(primary.protocol_offered, /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/)));

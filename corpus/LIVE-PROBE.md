@@ -28,7 +28,9 @@ The run is named `shard <shard_id>`.
    repository is the subject, or whose packages are the seed list's packages for it (tool-qa
    `history/seed-v1.json`, at the worker-kit commit), latest versions only. The first package that can run here
    wins: packages named in the seed list first, then stdio before streamable HTTP, then npm, PyPI, OCI. Arguments and
-   env come from the entry's declared values and defaults; a required env value is a dummy, never a credential.
+   env come from the entry's declared values and defaults; a required env value is a dummy, never a credential. An
+   optional env name gets its declared default (an image that defaults to HTTP declares `MCP_TRANSPORT` default
+   `stdio`), never a value we invent: no default, a secret's or a `{placeholder}` one leaves it out (R-LP-80).
    Building from source is the build-probe lane's work, not this one.
    - **Which command runs a PyPI package.** The planner reads the release's wheel (pure-Python first, at most 30 MiB,
      files.pythonhosted.org only) and launches the console script it declares in `*.dist-info/entry_points.txt`: the
@@ -255,7 +257,7 @@ and how a reproducer becomes a regression test are in [FUZZ.md](FUZZ.md).
 
 | Path | Holds |
 |---|---|
-| `results/live-probe.json` | Status (`graded` or `skipped`), our detail code, the tool-qa skip reason; the install method; the live grade (tool count, catalog hash, era, per-section grades, scores and caps, check counts, findings by check id and tool position); the comparison with the list read from source when the sandbox read one (counts, letters, checks that differ); timings; the sandbox's exit statuses. |
+| `results/live-probe.json` | Status (`graded` or `skipped`), our detail code, the tool-qa skip reason; the install method; the live grade (tool count, catalog hash, `tool_names_sha256` (`sha256(JSON.stringify([...new Set(names)].sort()))` of the wire names: the ast-grep oracle's `tool_set_sha256`, R-LP-87; also an observation next to `tool_list_sha256` once `EMIT_TOOL_NAMES_FIELD` is on), era, per-section grades, scores and caps, check counts, findings by check id and tool position); the comparison with the list read from source when the sandbox read one (counts, letters, checks that differ); timings; the sandbox's exit statuses. |
 | `observations/live.ndjson` | Field records from the mcp-results field registry (below). |
 | `controls/` | The three control outputs (below). |
 | `raw/` | Captured target bytes, each file at most 6 MiB (a cut is recorded in `raw_truncated`): `tools-list.json` (the tools/list answers), `probe-bare.json` and `probe-env.json` (each probe whole, with its JSON-RPC transcript), `record.json` (the sandbox's record), `registry.json`, `static.json`, `analysis.json`, `steps.txt` (install and run log), `telemetry.jsonl` (the sandbox telemetry of this subject and of the run: settings, containers, syscall trace summaries, DNS queries, connections, egress, firewall drops), `report.json` (findings with tool names and messages), `static-compare.json`, `resolution.json`, `oracles.json` (the oracle stage's record: each client's output, each scenario's checks, the bridge's transcript and counts, the sessions' trace summaries). |
