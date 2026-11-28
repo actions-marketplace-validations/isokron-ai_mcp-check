@@ -1,0 +1,1 @@
+{"id":"nu-mcp","tools":[{"name":"list_commands"},{"name":"command_help"},{"name":"evaluate"}],"server_root":"crates/nu-mcp"}

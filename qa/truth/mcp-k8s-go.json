@@ -1,0 +1,1 @@
+{"id":"mcp-k8s-go","tools":[{"name":"apply-k8s-resource"},{"name":"get-k8s-pod-logs"},{"name":"get-k8s-resource"},{"name":"k8s-pod-exec"},{"name":"list-k8s-contexts"},{"name":"list-k8s-events"},{"name":"list-k8s-namespaces"},{"name":"list-k8s-nodes"},{"name":"list-k8s-resources"}],"server_root":""}

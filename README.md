@@ -217,6 +217,22 @@ npm run vendor:verify # engine/ matches engine/VENDORED.json
 
 The engine is the same file as the web checker; `engine/VENDORED.json` records its SHA-256. See [CONTRIBUTING.md](CONTRIBUTING.md) (contributions are accepted under the DCO) and [SECURITY.md](SECURITY.md).
 
+### Reader QA on real repositories
+
+The `--repo` source reader is checked against 95 public MCP server repositories at pinned commits (TypeScript, Python, Go, Rust and a few others), with the tool lists each server registers as ground truth. The targets, commits and tool names are in [`qa/`](qa/) (`targets.json`, `truth/`, `servers.json`); nothing else of a server is stored. A further 18 targets are held out: they measure whether the reader generalises, so they, their commits and their truth stay in a private harness and are not published (run the gate on the 95 only; a reader change is not to be fitted to a repository because it is in this list). The reader is static, so nothing of a target is cloned, installed, built or run.
+
+The [`reader-qa`](.github/workflows/reader-qa.yml) workflow runs the build under test and the base build (the pull request's base commit, or `base_ref` on a manual dispatch, `main` by default) over the target set in four shards, scores the first against the truth and compares the two. It runs on `workflow_dispatch`, on pull requests that carry the label `reader-change`, and automatically on any pull request that changes `src/inputs/`, `qa/` or the workflow itself. It reads with the job's `GITHUB_TOKEN` (permissions `contents: read`, no secrets, `pull_request`, never `pull_request_target`) and retries a rate limit or a GitHub-side failure with a growing wait. One run at a time: a concurrency group keeps two runs from sharing the token's API budget. When the GitHub API refuses a listing the reader falls back to jsDelivr; the summary counts those targets and names them next to any byte difference.
+
+The job summary shows precision and recall per language, the number of targets whose output is byte-identical to the base build, and every change. The run fails when:
+
+- recall of default tools is below 0.8 for TypeScript, Python, Go or Rust;
+- a graded list merges several servers of one repository, or silently picks one on a multi-server root;
+- a names-only list is graded on schema or annotation checks;
+- a run ends in an error or does not finish;
+- a target regresses against the base build: a default tool lost, a phantom or wrong-server tool gained, or a graded list lost.
+
+The reader's numbers on these 95 targets at `main`, for comparison, are in [`qa/reference.json`](qa/reference.json). To change the truth of one target, edit `qa/truth/<id>.json` and give the reason in the pull request. To run it locally, see the header of [`qa/run.mjs`](qa/run.mjs) and [`qa/score.mjs`](qa/score.mjs).
+
 ## Licence
 
 MIT, Copyright (c) 2026 Stormhaven Enterprises LLC / IsoKron, Joshua Bryan. Third-party notices: [NOTICE](NOTICE).

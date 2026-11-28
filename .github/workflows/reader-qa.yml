@@ -1,0 +1,158 @@
+# Real-repo QA of the static source reader (`mcp-check --repo`), on free public Actions (qa/README.md).
+#
+# Reads the 95 public repositories of qa/targets.json at their pinned commits with the build under test (the PR head,
+# or the commit a dispatch runs) and with the base build (the PR's base commit, or `base_ref` for a dispatch, main by
+# default), in four shards. The last job scores the head build against the committed truth (qa/truth/), compares it
+# with the base build and fails when a gate rule is breached: per-language recall of default tools below 0.8, a silent
+# monorepo merge or pick, a names-only list graded on schema checks, a crash or timeout, or any regression against
+# the base build (a default tool lost, a phantom or wrong-server tool gained, a graded list lost). The job summary
+# carries precision and recall per language, the byte-identical counts and the changes; qa/reference.json holds the
+# last local run for comparison.
+#
+# Runs on workflow_dispatch, on pull requests that carry the label `reader-change`, and automatically on any pull
+# request that changes src/inputs/, qa/ or this workflow (the `detect` job), so the gate cannot be skipped by forgetting
+# the label. Safety: pull_request (never
+# pull_request_target), permissions contents: read, no secrets, actions pinned by full SHA. The reader is static: it
+# lists each repository through the GitHub API and reads files from raw.githubusercontent.com; nothing of a target is
+# cloned, installed, built or run. The only execution is this repository's own code (the two builds and qa/*.mjs),
+# with the job's read-only token in the environment of the reader's processes and nowhere else.
+
+name: reader-qa
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_ref:
+        description: Branch, tag or commit of the base build to compare with.
+        required: false
+        type: string
+        default: main
+  pull_request:
+    types: [opened, reopened, synchronize, labeled]
+
+run-name: reader-qa ${{ github.event_name == 'pull_request' && format('PR {0}', github.event.pull_request.number) || github.ref_name }}
+
+permissions:
+  contents: read
+
+# One reader-qa run at a time in this repository, whatever triggered it: the runs share the job token's API budget
+# (about 1,000 requests an hour). A second run waits; a third replaces the waiting one, and the replaced run shows as
+# cancelled: push again (or remove and add the label) to run it.
+concurrency:
+  group: reader-qa
+  cancel-in-progress: false
+
+jobs:
+  detect:
+    if: github.repository == 'isokron-ai/mcp-check'
+    name: detect
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.d.outputs.run }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Decide whether the gate runs
+        id: d
+        env:
+          EVENT: ${{ github.event_name }}
+          ACTION: ${{ github.event.action }}
+          LABEL: ${{ github.event.label.name }}
+          LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+        run: |
+          run=false
+          if [ "$EVENT" = workflow_dispatch ]; then run=true
+          elif [ "$ACTION" = labeled ] && [ "$LABEL" != reader-change ]; then run=false
+          elif [[ ",$LABELS," == *",reader-change,"* ]]; then run=true
+          elif git diff --name-only HEAD^1 HEAD | grep -qE '^(src/inputs/|qa/|\.github/workflows/reader-qa\.yml$)'; then run=true; echo "A path the gate guards changed: running without the label."
+          fi
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+
+  shard:
+    needs: detect
+    if: github.repository == 'isokron-ai/mcp-check' && needs.detect.outputs.run == 'true'
+    name: shard ${{ matrix.shard }} of 4
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - name: Check the base reference
+        env:
+          BASE_REF: ${{ inputs.base_ref }}
+        run: |
+          if [ -n "$BASE_REF" ] && [[ ! "$BASE_REF" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]{0,100}$ ]]; then echo "::error title=reader-qa::base_ref is malformed"; exit 1; fi
+      - name: The build under test
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: head
+          persist-credentials: false
+      - name: The base build
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || inputs.base_ref || 'main' }}
+          path: base
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          package-manager-cache: false
+      - name: Read this shard's repositories with the build under test
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node head/qa/run.mjs --label head --bin head/bin/mcp-check.js --out "$RUNNER_TEMP/out" --shard "${{ matrix.shard }}/4"
+      - name: Read them with the base build
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node head/qa/run.mjs --label base --bin base/bin/mcp-check.js --out "$RUNNER_TEMP/out" --shard "${{ matrix.shard }}/4"
+      - name: Keep the outputs
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: reader-qa-out-${{ matrix.shard }}
+          path: ${{ runner.temp }}/out
+          retention-days: 14
+          if-no-files-found: error
+
+  gate:
+    name: gate
+    needs: shard
+    if: ${{ !cancelled() && needs.shard.result != 'skipped' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          package-manager-cache: false
+      - name: Collect the four shards
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          pattern: reader-qa-out-*
+          path: ${{ runner.temp }}/shards
+          merge-multiple: true
+      - name: Score, compare with the base build, apply the gate
+        run: |
+          set +e
+          node qa/score.mjs --label head --base base --out "$RUNNER_TEMP/shards" --gate --md "$RUNNER_TEMP/reader-qa.md" --json "$RUNNER_TEMP/reader-qa.json" > /dev/null
+          rc=$?
+          if [ -f "$RUNNER_TEMP/reader-qa.md" ]; then cat "$RUNNER_TEMP/reader-qa.md" >> "$GITHUB_STEP_SUMMARY"; fi
+          exit $rc
+      - name: Keep the report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: reader-qa-report
+          path: |
+            ${{ runner.temp }}/reader-qa.md
+            ${{ runner.temp }}/reader-qa.json
+          retention-days: 30
+          if-no-files-found: ignore

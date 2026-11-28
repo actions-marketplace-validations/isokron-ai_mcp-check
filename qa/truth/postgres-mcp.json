@@ -1,0 +1,1 @@
+{"id":"postgres-mcp","tools":[{"name":"insert"},{"name":"create_table"},{"name":"create_index"},{"name":"delete"},{"name":"create_schema"},{"name":"unregister"},{"name":"register"},{"name":"drop_index"},{"name":"create_type"},{"name":"drop_table"},{"name":"describe"},{"name":"query"},{"name":"list_tables"},{"name":"update"}],"server_root":""}

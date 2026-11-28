@@ -1,0 +1,20 @@
+{
+  "build": "main bfad0a9, Actions run 46089192021 (27 Nov 2026), 95 non-holdout targets",
+  "note": "Reference for the 95 targets of this set: the reader at main as read by the first Actions run of this gate. It replaces the 26 Nov local run (113 targets, 18 of them private holdout), whose recall was TS 0.89, Python 0.90, Go 0.99, Rust 0.82 on all 113. Printed next to each run for comparison only; the gate thresholds are in qa/score.mjs.",
+  "recall": {
+    "ts": 0.89,
+    "python": 0.92,
+    "go": 1.0,
+    "rust": 0.97,
+    "all": 0.94
+  },
+  "precision": {
+    "all": 1.0
+  },
+  "statuses": {
+    "graded": 81,
+    "no-tools": 7,
+    "refused": 7,
+    "error": 0
+  }
+}

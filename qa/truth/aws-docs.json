@@ -1,0 +1,1 @@
+{"id":"aws-docs","tools":[{"name":"read_documentation"},{"name":"read_sections"},{"name":"search_table"},{"name":"search_documentation"},{"name":"recommend"}],"server_root":"src/aws-documentation-mcp-server"}

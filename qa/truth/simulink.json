@@ -1,0 +1,1 @@
+{"id":"simulink","tools":[{"name":"model_overview"},{"name":"model_read"},{"name":"model_query_params"},{"name":"model_resolve_params"},{"name":"model_edit"},{"name":"model_read_diagnostics"},{"name":"model_check"},{"name":"model_scan"},{"name":"model_test"}],"server_root":""}

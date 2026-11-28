@@ -1,0 +1,1 @@
+{"id":"codanna","tools":[{"name":"find_symbol"},{"name":"get_calls"},{"name":"find_callers"},{"name":"analyze_impact"},{"name":"get_index_info"},{"name":"semantic_search_docs"},{"name":"semantic_search_with_context"},{"name":"search_symbols"},{"name":"search_documents"}],"server_root":""}

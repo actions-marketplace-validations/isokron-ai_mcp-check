@@ -1,0 +1,1 @@
+{"id":"neo4j-cypher","tools":[{"name":"get_neo4j_schema"},{"name":"read_neo4j_cypher"},{"name":"write_neo4j_cypher"}],"server_root":"servers/mcp-neo4j-cypher"}
