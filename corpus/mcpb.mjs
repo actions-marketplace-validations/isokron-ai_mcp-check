@@ -43,7 +43,9 @@ export function allowedUrl(u) {
 
 /**
  * The bundle's bytes: { buf, sha256 }. Throws { detail }: bundle_unavailable (github.com's own 404), rate_limited,
- * upstream_error (another failure of the host, retried), bundle_host_not_allowed (a redirect elsewhere), bundle_too_large.
+ * bundle_fetch_refused (another 4xx but 403, 408 and 425: an answer that does not change, ours and not retried, as
+ * live-probe.mjs httpDetail, R-LP-89), upstream_error (5xx, 403, 408, 425, a network failure or a cut read: retried),
+ * bundle_host_not_allowed (a redirect elsewhere), bundle_too_large.
  */
 export async function fetchBundle(url, { fetch: fetchImpl = globalThis.fetch, cap = MCPB_MAX_BYTES, timeoutMs = 120_000 } = {}) {
   let u = allowedUrl(url);
@@ -62,6 +64,7 @@ export async function fetchBundle(url, { fetch: fetchImpl = globalThis.fetch, ca
     // Only the release page's own 404 says the asset is not there; a 404 from a redirect target is not its answer.
     if (res.status === 404 && u.hostname === 'github.com') throw fail('bundle_unavailable');
     if (res.status === 429 || (res.status === 403 && String(get('x-ratelimit-remaining')) === '0')) throw fail('rate_limited');
+    if (Number.isInteger(res.status) && res.status >= 400 && res.status < 500 && ![403, 408, 425].includes(res.status)) throw fail('bundle_fetch_refused', { status: res.status });
     if (!res.ok) throw fail('upstream_error', { status: res.status });
     const len = Number(get('content-length'));
     if (Number.isFinite(len) && len > cap) throw fail('bundle_too_large');

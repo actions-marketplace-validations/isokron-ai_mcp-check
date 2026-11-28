@@ -1,0 +1,1 @@
+{"id":"context7-mcp","tools":[{"name":"resolve-library-id"},{"name":"query-docs"},{"name":"get-upgrade-guide","default":false},{"name":"submit-docs-feedback","default":false},{"name":"grep-code","default":false},{"name":"glob-code","default":false},{"name":"read-code","default":false},{"name":"find-symbol","default":false}],"server_root":"packages/mcp"}

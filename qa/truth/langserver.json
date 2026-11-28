@@ -1,0 +1,1 @@
+{"id":"langserver","tools":[{"name":"edit_file"},{"name":"definition"},{"name":"references"},{"name":"diagnostics"},{"name":"hover"},{"name":"rename_symbol"}],"server_root":""}

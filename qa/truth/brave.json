@@ -1,0 +1,1 @@
+{"id":"brave","tools":[{"name":"brave_web_search"},{"name":"brave_local_search"},{"name":"brave_video_search"},{"name":"brave_image_search"},{"name":"brave_news_search"},{"name":"brave_summarizer"},{"name":"brave_llm_context"},{"name":"brave_place_search"},{"name":"brave_answers"}],"server_root":""}

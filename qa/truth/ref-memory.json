@@ -1,0 +1,1 @@
+{"id":"ref-memory","tools":[{"name":"create_entities"},{"name":"create_relations"},{"name":"add_observations"},{"name":"delete_entities"},{"name":"delete_observations"},{"name":"delete_relations"},{"name":"read_graph"},{"name":"search_nodes"},{"name":"open_nodes"}],"server_root":"src/memory"}

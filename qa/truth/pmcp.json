@@ -1,0 +1,1 @@
+{"id":"pmcp","tools":[{"name":"test_check"},{"name":"test_generate"},{"name":"test_apps"},{"name":"scaffold"},{"name":"schema_export"}],"server_root":"crates/pmcp-server"}

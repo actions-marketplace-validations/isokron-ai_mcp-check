@@ -10,9 +10,12 @@
  *
  * The Inspector prints the tools it listed, or an error with no stage. To tell a refused initialize from a refused
  * list, and to read the negotiated protocol, the server command runs behind this file's own pass-through
- * (`--pipe <state file> -- <command...>`): bytes go both ways unchanged, and the ids of our initialize and tools/list
+ * (`--pipe <state file> <env file> -- <command...>`): bytes go both ways unchanged, and the ids of our initialize and tools/list
  * requests are matched to the answers, which are recorded in the state file (never their contents beyond the
- * protocol version and the page count).
+ * protocol version and the page count). The Inspector starts its stdio server with a default environment of its own
+ * (HOME, LOGNAME, PATH, SHELL, TERM, USER), which would drop the DOCKER_* variables the lane gives this client
+ * (corpus/oracles/run.mjs oracleEnv): the pass-through starts the server command with the environment this program
+ * was given, written to a file of its own (mode 600) in the session folder (R-ORC-14).
  */
 import { spawn } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -85,13 +88,40 @@ export function watchSession(state, write = () => {}) {
   };
 }
 
+/** The environment the server command gets (R-ORC-14): what this client was given, read back from the env file. */
+export function readServerEnv(file) {
+  try {
+    const j = JSON.parse(readFileSync(file, 'utf8'));
+    if (!j || typeof j !== 'object' || Array.isArray(j)) return null;
+    return Object.fromEntries(Object.entries(j).filter(([k, v]) => /^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(k) && typeof v === 'string'));
+  } catch { return null; }
+}
+
+/**
+ * What the env file holds (R-ORC-14): the environment this client was given, less DOCKER_AUTH_CONFIG (registry
+ * credentials: the server command is a `docker run` of an image already pulled, and a file in the session folder is no
+ * place for them).
+ */
+export function serverEnvOf(env) {
+  const { DOCKER_AUTH_CONFIG: _auth, ...rest } = env || {};
+  return rest;
+}
+
+/** The Inspector's command line: tools/list of this file's pass-through, which starts the server command. */
+export function inspectorArgs(launcher, stateFile, envFile, cmd) {
+  return [launcher, '--cli', '--method', 'tools/list', '--', process.execPath, fileURLToPath(import.meta.url), '--pipe', stateFile, envFile, '--', ...cmd];
+}
+
 /** --pipe: run the server command with our stdin and stdout passed through unchanged, recording the session. */
-function pipe(stateFile, cmd) {
+function pipe(stateFile, envFile, cmd) {
   const state = { initialized: false, protocol: null, server_info: null, init_error_code: null, list_pages: 0, list_error_code: null };
   const save = (s) => { try { writeFileSync(stateFile, JSON.stringify(s)); } catch { /* the parent reads what is there */ } };
   save(state);
   const w = watchSession(state, save);
-  const child = spawn(cmd[0], cmd.slice(1), { stdio: ['pipe', 'pipe', 'inherit'] });
+  // The environment this client was given (with its DOCKER_* variables), not the Inspector's default one.
+  const env = readServerEnv(envFile);
+  if (!env) process.exit(2);
+  const child = spawn(cmd[0], cmd.slice(1), { stdio: ['pipe', 'pipe', 'inherit'], env });
   process.stdin.on('data', (d) => { w.request(d); child.stdin.write(d); });
   process.stdin.on('end', () => child.stdin.end());
   child.stdin.on('error', () => {});
@@ -129,16 +159,18 @@ export function resultOf({ exit, timedOut, stdout, stderr, state, version, ms, l
 }
 
 async function main(argv) {
-  if (argv[0] === '--pipe') { if (argv[2] !== '--' || argv.length < 4) process.exit(2); pipe(argv[1], argv.slice(3)); return; }
+  if (argv[0] === '--pipe') { if (argv[3] !== '--' || argv.length < 5) process.exit(2); pipe(argv[1], argv[2], argv.slice(4)); return; }
   const ms = Number(argv[0]);
   if (!(Number.isInteger(ms) && ms > 0) || argv[1] !== '--' || argv.length < 3) { process.stderr.write('usage: inspector-client.mjs <ms> -- <command...>\n'); process.exit(2); }
   const t0 = Date.now();
   const { launcher, version } = inspectorPaths();
   const work = mkdtempSync(join(tmpdir(), 'oracle-inspector-'));
   const stateFile = join(work, 'session.json');
+  const envFile = join(work, 'server-env.json');
+  writeFileSync(envFile, JSON.stringify(serverEnvOf(process.env)), { mode: 0o600 });
   // The Inspector keeps a catalog and settings under HOME: a folder of its own, removed after.
   const env = { ...process.env, HOME: work, NO_COLOR: '1' };
-  const child = spawn(process.execPath, [launcher, '--cli', '--method', 'tools/list', '--', process.execPath, fileURLToPath(import.meta.url), '--pipe', stateFile, '--', ...argv.slice(2)], { env, cwd: work, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
+  const child = spawn(process.execPath, inspectorArgs(launcher, stateFile, envFile, argv.slice(2)), { env, cwd: work, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
   let stdout = ''; let stderr = ''; let timedOut = false;
   child.stdout.on('data', (d) => { if (stdout.length < OUT_CAP) stdout += d.toString('utf8'); });
   child.stderr.on('data', (d) => { stderr = (stderr + d.toString('utf8')).slice(-8000); });

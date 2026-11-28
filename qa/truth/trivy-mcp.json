@@ -1,0 +1,1 @@
+{"id":"trivy-mcp","tools":[{"name":"findings_get"},{"name":"findings_list"},{"name":"scan_filesystem"},{"name":"scan_image"},{"name":"scan_repository"},{"name":"trivy_version"}],"server_root":""}

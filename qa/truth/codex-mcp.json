@@ -1,0 +1,1 @@
+{"id":"codex-mcp","tools":[{"name":"create_channel"},{"name":"get_channels"},{"name":"list_threads"},{"name":"search_posts"},{"name":"read_thread"},{"name":"read_post"},{"name":"subscribe"},{"name":"unsubscribe"},{"name":"post"}],"server_root":"codex-rs/message-board-mcp"}

@@ -1,0 +1,1 @@
+{"id":"hyper-mcp","tools":[{"name":"hyper_mcp-list_plugins"},{"name":"hyper_mcp-load_plugin","default":false},{"name":"hyper_mcp-unload_plugin","default":false}],"server_root":""}

@@ -1,0 +1,1 @@
+{"id":"goose-autovisualiser","tools":[{"name":"render_sankey"},{"name":"render_radar"},{"name":"render_donut"},{"name":"render_treemap"},{"name":"render_chord"},{"name":"render_map"},{"name":"render_mermaid"},{"name":"show_chart"}],"server_root":"crates/goose-mcp/src/autovisualiser"}

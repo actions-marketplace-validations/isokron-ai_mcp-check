@@ -1,0 +1,1 @@
+{"id":"tavily","tools":[{"name":"tavily_search"},{"name":"tavily_extract"},{"name":"tavily_crawl"},{"name":"tavily_map"},{"name":"tavily_research"},{"name":"tavily_feedback"}],"server_root":""}
