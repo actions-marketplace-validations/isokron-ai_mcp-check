@@ -87,8 +87,8 @@ test('live-probe helpers: repository URLs, OCI references, arguments, env, trans
   assert.deepEqual(LP.packageArgs([{ type: 'positional', value: 'serve' }, { type: 'named', name: '--port', default: '8080' }, { type: 'positional', isRequired: true, valueHint: 'path' }, { type: 'positional', value: '{dir}' }]), { args: ['serve', '--port', '8080'], unfilled: 1 });
   assert.deepEqual(LP.packageEnv([{ name: 'API_KEY', isRequired: true, isSecret: true, default: 'x' }, { name: 'MODE', isRequired: true, default: 'fast' }, { name: 'PATH', isRequired: true }, { name: 'OPT' }]), { env: { API_KEY: null, MODE: 'fast' }, names: ['API_KEY', 'MODE', 'OPT'] });
   assert.deepEqual(LP.transportOf({ type: 'streamable-http', url: 'http://localhost:3001/mcp' }), { transport: 'http', http: { port: 3001, path: '/mcp' } });
-  assert.deepEqual(LP.transportOf({ type: 'sse', url: 'http://localhost:3001/sse' }), { detail: 'unsupported_transport' });
-  assert.deepEqual(LP.transportOf({ type: 'streamable-http', url: 'http://localhost:{port}/mcp' }), { detail: 'unsupported_transport' });
+  assert.deepEqual(LP.transportOf({ type: 'sse', url: 'http://localhost:3001/sse' }), { detail: 'unsupported_transport', why: 'sse' });
+  assert.deepEqual(LP.transportOf({ type: 'streamable-http', url: 'http://localhost:{port}/mcp' }), { detail: 'unsupported_transport', why: 'url_variable' });
   assert.equal(LP.purlOf('npm', '@isokron/mcp-check', '1.3.1'), 'pkg:npm/%40isokron/mcp-check@1.3.1');
   assert.equal(LP.purlOf('pypi', 'MCP_Server.Time', 'latest'), 'pkg:pypi/mcp-server-time');
 });
