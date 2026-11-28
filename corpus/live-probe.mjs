@@ -254,6 +254,12 @@ export const TOOL_LIST_FIELDS = Object.freeze({ tool_count: 'integer', tool_list
  * needs tool-qa's ingest to pin a registry that declares it (INGEST_REF; else the observation is an undeclared_field).
  */
 export const EMIT_TOOL_NAMES_FIELD = false;
+/**
+ * R-LP-81: launch_retry (mcp-results, planned): the change a retry made to the plan's launch when its run is the item's
+ * (mcp<2, a subcommand). Written only while EMIT_LAUNCH_RETRY_FIELD is on, once tool-qa's pinned registry declares it.
+ */
+export const EMIT_LAUNCH_RETRY_FIELD = false;
+export const LAUNCH_RETRY_FIELDS = Object.freeze({ launch_retry: 'object' });
 export const TOOL_NAMES_FIELDS = Object.freeze({ tool_names_sha256: 'hash' });
 /**
  * The fuzz stage's fields (corpus/FUZZ.md): written only while EMIT_FUZZ_FIELDS is on, which needs the mcp-results
@@ -1715,7 +1721,8 @@ export function failureDetail(rec, bare, envp, { deadlineHit = false, records = 
   // tell; only the server's own module can be its crash (R-LP-61, R-LP-62).
   const imp = importCause(failedImport(err), { pydeps, pkg: isObj(launch) ? launch.package : null, err, installedExtras: isObj(launch) && Array.isArray(launch.extras) ? launch.extras : [] });
   if (on('extra') && (EXTRA_HINT.test(err) || imp === 'extra')) return 'start_needs_extra';
-  if (on('drift') && imp === 'drift') return 'start_dependency_drift';
+  // R-LP-81: the MCP SDK's own word that a 1.x server got 2.x is drift, whatever the import looked like.
+  if (on('drift') && (imp === 'drift' || MCP2_TEXT.test(err))) return 'start_dependency_drift';
   if (on('import') && imp === 'env') return 'start_env_limited';
   // The server's own packaging (R-LP-68): its wheel lacks a module of its own package, or its own code imports a module
   // the release neither ships nor declares, and that is not installed. Only with the release's facts in hand.
@@ -1764,7 +1771,7 @@ export function rolledForward(inst) {
 
 /** One observations line, checked against FIELDS. A value of the wrong type is written as null with why. */
 export function obs(field, value, why) {
-  const type = FIELDS[field] || (EMIT_TOOL_LIST_FIELDS ? TOOL_LIST_FIELDS[field] : undefined) || (EMIT_TOOL_NAMES_FIELD ? TOOL_NAMES_FIELDS[field] : undefined) || (EMIT_ORACLE_FIELDS ? ORACLE_FIELDS[field] : undefined) || (EMIT_FUZZ_FIELDS ? FUZZ_FIELDS[field] : undefined);
+  const type = FIELDS[field] || (EMIT_TOOL_LIST_FIELDS ? TOOL_LIST_FIELDS[field] : undefined) || (EMIT_TOOL_NAMES_FIELD ? TOOL_NAMES_FIELDS[field] : undefined) || (EMIT_LAUNCH_RETRY_FIELD ? LAUNCH_RETRY_FIELDS[field] : undefined) || (EMIT_ORACLE_FIELDS ? ORACLE_FIELDS[field] : undefined) || (EMIT_FUZZ_FIELDS ? FUZZ_FIELDS[field] : undefined);
   if (!type) throw new Error('not a field of this lane: ' + field);
   const ok = value !== null && value !== undefined && checkType(type, value);
   return JSON.stringify(ok ? { field, value, stage: STAGE } : { field, value: null, why: why || (value === null || value === undefined ? 'not observed' : 'not of the registry type'), stage: STAGE });
@@ -2085,6 +2092,9 @@ export function buildItem(item, ctx) {
       const won = listed(r2.envp) || listed(r2.bare);
       result.retry = { reason: retry.reason, change: retry.change, ran: !!r2.rec, listed: won, detail: null };
       if (won) {
+        // What ran differs from the plan's launch: say so where the install is described (R-LP-81).
+        if (result.install) result.install.retry = { reason: retry.reason, change: retry.change };
+        lines.push(...(EMIT_LAUNCH_RETRY_FIELD ? [obs('launch_retry', { reason: retry.reason, change: retry.change })] : []));
         other = { prefix: 'raw/first/', dir, rec, bare, envp };
         dir = rdir; rec = r2.rec; bare = r2.bare; envp = r2.envp; stat = readJson(join(rdir, 'static.json')) || stat; telemetryFile = ctx.retryTelemetry;
       } else {
@@ -2122,6 +2132,9 @@ export function buildItem(item, ctx) {
       lines.push(obs('capabilities_flags', capabilityFlags(noTools.initialize.capabilities), 'no capabilities object'));
     } else if (!primary) {
       detail = ociRun && ociRun.outcome === 'disk_low' ? 'disk_low' : failureDetail(rec, bare, envp, { deadlineHit, records: tel.records, stepsLog: readText(join(dir, 'steps.log')), launch: r.launch, argsUnfilled: r.choice ? r.choice.args_unfilled : null, owned: ownedEntry(r.choice), pydeps: r.choice ? r.choice.pydeps : null, crashNotEvidence: crashNotEvidenceOf(r.choice, rec) });
+      // R-LP-81: a retry was planned because the first run's cause was ours to test (an SDK we let float, a subcommand
+      // we did not give): that first run is never the server's fault, whatever its detail would say alone.
+      if (retry && (DETAILS[detail] || [])[3] === 'subject') { result.retry.first_detail = detail; detail = retry.reason === 'mcp_drift' ? 'start_dependency_drift' : 'start_env_limited'; }
     } else {
       const text = listText(primary.lists['tools/list'].raw_pages);
       let g = null;

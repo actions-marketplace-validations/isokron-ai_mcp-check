@@ -113,6 +113,12 @@ test('R-LP-81: the retries are planned from the first runs, each target checked 
   assert.deepEqual(summary.map((s) => [s.status, s.detail]), [['graded', null], ['graded', null], ['skipped', 'start_dependency_drift']]);
   const result = (i) => JSON.parse(readFileSync(join(w, 'out', String(i), 'bundle', LP.RESULT_PATH), 'utf8'));
   assert.deepEqual(result(1).retry, { reason: 'mcp_drift', change: { constraints: ['mcp<2'] }, ran: true, listed: true, detail: null });
+  // The install the result describes says what ran differs from the plan (data honesty); the observation is behind
+  // EMIT_LAUNCH_RETRY_FIELD until tool-qa's pinned registry declares launch_retry.
+  assert.deepEqual(result(1).install.retry, { reason: 'mcp_drift', change: { constraints: ['mcp<2'] } });
+  assert.equal(LP.EMIT_LAUNCH_RETRY_FIELD, false);
+  const obsOf = (i) => readFileSync(join(w, 'out', String(i), 'bundle', 'observations', 'live.ndjson'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  assert.ok(!obsOf(1).some((o) => o.field === 'launch_retry'));
   assert.ok(existsSync(join(w, 'out', '1', 'bundle', 'raw', 'first', 'probe-bare.json')), 'the first run is kept');
   assert.match(readFileSync(join(w, 'out', '1', 'bundle', 'raw', 'steps.txt'), 'utf8'), /mcp-1\.26\.0/, 'the item is the retry\'s run');
   // The failed retry: the first cause and its fault stand (tool); the retry's own detail is recorded.
@@ -141,4 +147,35 @@ test('R-LP-81: the sandbox script plans and runs the retries after every first r
   assert.match(sh, /node "\$here\/live-probe\.mjs" retry "\$work" --msc "\$msc"/);
   assert.match(sh, /drive "\$work\/targets-retry\.json" "\$work\/driver-retry" "\$left" <\/dev\/null; retry_rc=\$\?/);
   assert.match(sh, /retry_rc: n\(v\[17\]\)/);
+});
+
+test('R-LP-81: the MCP SDK\'s own "This is mcp 2.x" is drift (tool) before any crash check, and once a retry is planned the first run is never the server\'s fault', async () => {
+  // A traceback with the SDK's message and no import line we can read: drift, not start_failed.
+  const msg = 'Traceback (most recent call last):\n  File "/work/venv/bin/x-mcp", line 8, in <module>\n    sys.exit(main())\nRuntimeError: FastMCP is gone. This is mcp 2.x; pin mcp<2 or move to mcp-server.\n';
+  const ctx = { launch: pyItem().target.launch, argsUnfilled: 0, owned: true, pydeps: PYDEPS };
+  assert.equal(LP.failureDetail(okRec, crashed(msg), null, ctx), 'start_dependency_drift');
+  assert.deepEqual(LP.DETAILS.start_dependency_drift.slice(-1), ['tool']);
+  const M = await mutant("  if (on('drift') && (imp === 'drift' || MCP2_TEXT.test(err))) return 'start_dependency_drift';", "  if (on('drift') && imp === 'drift') return 'start_dependency_drift';");
+  assert.equal(M.failureDetail(okRec, crashed(msg), null, ctx), 'start_failed', 'without the rule the SDK\'s own message is the server\'s crash');
+  // A first run whose detail alone would be the server's (start_failed), with a retry planned that did not list: tool.
+  const panic = "Traceback (most recent call last):\n  File \"/work/venv/bin/frontend-design-loop-mcp\", line 5, in <module>\nKeyError: 'port'\n";
+  const it = { ...pyItem(), index: 0, run_key: '1'.repeat(64), fence: 1, resolve_ms: 1, resolution: { ...pyItem().resolution, detail: null, registry: null, candidates: [], launch: pyItem().target.launch, subdir: null, seed_packages: 0, choice: { ...pyItem().resolution.choice, identifier: 'frontend-design-loop-mcp', version: '0.4.0', transport: 'stdio', verified_by: 'namespace' } } };
+  const w = workFolder({ items: [it] });
+  const put = (p, x) => { mkdirSync(join(w, p, '..'), { recursive: true }); writeFileSync(join(w, p), typeof x === 'string' ? x : JSON.stringify(x)); };
+  put('driver-subjects/s002/record.json', okRec); put('driver-subjects/s002/probe-bare.json', crashed(panic));
+  assert.equal(LP.failureDetail(okRec, crashed(panic), null, ctx), 'start_failed', 'alone, this first run would be the server\'s');
+  put('retry.json', { format: LP.RETRY_FORMAT, retries: [{ id: 's002', reason: 'mcp_drift', change: { constraints: ['mcp<2'] } }] });
+  put('driver-retry/s002/record.json', okRec); put('driver-retry/s002/probe-bare.json', crashed(panic)); put('driver-retry/_shard/telemetry.jsonl', '');
+  const [one] = LP.bundleShard({ work: w });
+  const res = JSON.parse(readFileSync(join(w, 'out', '0', 'bundle', LP.RESULT_PATH), 'utf8'));
+  assert.deepEqual([one.detail, res.fault, res.retry.first_detail], ['start_dependency_drift', 'tool', 'start_failed']);
+  // Mutation checks: without the guard the planned retry's first run is the server's fault; switched on, the
+  // launch_retry observation is written for a retry whose run is the item's.
+  const G = await mutant("      if (retry && (DETAILS[detail] || [])[3] === 'subject') { result.retry.first_detail = detail; detail = retry.reason === 'mcp_drift' ? 'start_dependency_drift' : 'start_env_limited'; }", '');
+  assert.equal(G.bundleShard({ work: w })[0].detail, 'start_failed');
+  const On = await mutant('export const EMIT_LAUNCH_RETRY_FIELD = false;', 'export const EMIT_LAUNCH_RETRY_FIELD = true;');
+  put('driver-retry/s002/record.json', JSON.parse(fx('record-ok.json'))); put('driver-retry/s002/probe-bare.json', JSON.parse(fx('probe-known.json')));
+  On.bundleShard({ work: w });
+  const o = readFileSync(join(w, 'out', '0', 'bundle', 'observations', 'live.ndjson'), 'utf8').trim().split('\n').map((l) => JSON.parse(l)).find((x) => x.field === 'launch_retry');
+  assert.deepEqual(o.value, { reason: 'mcp_drift', change: { constraints: ['mcp<2'] } });
 });

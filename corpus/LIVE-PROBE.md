@@ -163,7 +163,8 @@ The run is named `shard <shard_id>`.
    (`mcp.server.fastmcp`, a name or attribute of `mcp`, or the SDK's own "This is mcp 2.x"), while its release declares
    `mcp` with no upper bound, runs again with `mcp<2` (a resolve to the release date needs the sandbox to take
    `--uploaded-prior-to`; until then the known cap is the change). A retry that lists tools is the item's run; one that
-   does not leaves the first run's cause and fault as they were. Both runs are in the bundle (`raw/first/` or
+   does not leaves the first run's cause as it was, and its fault is never the server's once a retry was planned
+   (a detail that alone would be is kept as `retry.first_detail`); the SDK's own "This is mcp 2.x" is drift on any run. Both runs are in the bundle (`raw/first/` or
    `raw/retry/`), and `retry` in the result says what was changed and what came of it. Last,
    every container, network and volume is removed, and the upload steps start only when there is no container or
    volume left at all (labelled or not), no labelled network, no host process running as the sandbox user (uid
